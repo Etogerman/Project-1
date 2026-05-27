@@ -248,6 +248,60 @@ class ProcessScenarioStartJobTest extends TestCase
         $this->assertDatabaseCount('messages', 1);
     }
 
+    public function test_job_starts_scenario_even_when_contact_has_legacy_data_collection_state(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $contact = Contact::factory()->create([
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
+            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
+            'data_collection_started_at' => now()->subMinute(),
+            'data_collection_current_field_started_at' => now()->subMinute(),
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'telegram-user-204',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'telegram-chat-304',
+        ]);
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'анкета',
+            'raw_payload' => [],
+        ]);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => 'warmup',
+            'is_active' => true,
+        ]);
+
+        $job = new ProcessScenarioStartJob($message->id, $dialog->id, 'warmup');
+
+        $job->handle($this->startingScenarioRegistry());
+
+        $this->assertDatabaseHas('scenario_runs', [
+            'dialog_id' => $dialog->id,
+            'scenario_code' => 'warmup',
+            'status' => ScenarioRun::STATUS_ACTIVE,
+            'current_step' => 'started',
+        ]);
+    }
+
     private function overlapKey(WithoutOverlapping $middleware): string
     {
         return (new \ReflectionProperty($middleware, 'key'))->getValue($middleware);
@@ -275,6 +329,57 @@ class ProcessScenarioStartJobTest extends TestCase
                 public function start(ScenarioRun $run, Message $message): void
                 {
                     throw new \RuntimeException('Scenario start should not be called when active run already exists.');
+                }
+
+                public function supportsContactShareContinuation(ScenarioRun $run): bool
+                {
+                    return false;
+                }
+
+                public function supportsTelegramCallbackContinuation(ScenarioRun $run, string $callbackData): bool
+                {
+                    return false;
+                }
+
+                public function handleInbound(ScenarioRun $run, Message $message): ScenarioInboundResult
+                {
+                    return new ScenarioInboundResult(
+                        consumed: false,
+                        status: ScenarioRun::STATUS_ACTIVE,
+                        currentStep: null,
+                        statePayload: [],
+                        exitOutcome: null,
+                    );
+                }
+            });
+
+        return $registry;
+    }
+
+    private function startingScenarioRegistry(): ScenarioRegistry
+    {
+        $registry = $this->createMock(ScenarioRegistry::class);
+
+        $registry->expects($this->once())
+            ->method('makeRuntime')
+            ->with('warmup')
+            ->willReturn(new class implements ResolvedScenarioRuntime
+            {
+                public function code(): string
+                {
+                    return 'warmup';
+                }
+
+                public function shouldStart(Message $message): bool
+                {
+                    return true;
+                }
+
+                public function start(ScenarioRun $run, Message $message): void
+                {
+                    $run->forceFill([
+                        'current_step' => 'started',
+                    ])->save();
                 }
 
                 public function supportsContactShareContinuation(ScenarioRun $run): bool

@@ -42,7 +42,7 @@ class AdminPanelProvider extends PanelProvider
                 'staging' => 'favicons/favicon-staging.svg',
                 default => 'favicons/favicon-production.svg',
             }))
-            ->sidebarFullyCollapsibleOnDesktop()
+            ->sidebarCollapsibleOnDesktop()
             ->maxContentWidth('fi-admin-content-wide')
             ->renderHook(
                 PanelsRenderHook::STYLES_AFTER,
@@ -50,13 +50,19 @@ class AdminPanelProvider extends PanelProvider
             )
             ->renderHook(
                 PanelsRenderHook::SIDEBAR_LOGO_AFTER,
+                fn (): string => '',
+            )
+            ->renderHook(
+                PanelsRenderHook::SIDEBAR_FOOTER,
                 fn (): string => view('filament.components.environment-indicator')->render(),
             )
             ->renderHook(
-                PanelsRenderHook::TOPBAR_BEFORE,
-                fn (): string => view('filament.components.environment-indicator', [
-                    'centered' => true,
-                ])->render(),
+                PanelsRenderHook::TOPBAR_LOGO_AFTER,
+                fn (): string => view('filament.components.admin-topbar-start')->render(),
+            )
+            ->renderHook(
+                PanelsRenderHook::GLOBAL_SEARCH_AFTER,
+                fn (): string => view('filament.components.admin-topbar-end')->render(),
             )
             ->navigationGroups([
                 'Аудитория',

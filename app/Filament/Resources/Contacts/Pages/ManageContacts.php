@@ -845,7 +845,7 @@ class ManageContacts extends ManageRecords
 
     public function resumeMountedContactDataCollection(): void
     {
-        if ($this->abortIfContactMutationForbidden('Не удалось возобновить анкету')) {
+        if ($this->abortIfContactMutationForbidden('Не удалось возобновить сбор данных')) {
             return;
         }
 
@@ -854,7 +854,7 @@ class ManageContacts extends ManageRecords
         if (! $record instanceof Contact) {
             Notification::make()
                 ->danger()
-                ->title('Не удалось возобновить анкету')
+                ->title('Не удалось возобновить сбор данных')
                 ->body('Не удалось определить текущий контакт.')
                 ->send();
 
@@ -867,8 +867,8 @@ class ManageContacts extends ManageRecords
             if ($nextField === null) {
                 Notification::make()
                     ->warning()
-                    ->title('Анкета уже заполнена')
-                    ->body('Для этого контакта нет незаполненных шагов анкеты.')
+                    ->title('Сбор данных уже завершён')
+                    ->body('Для этого контакта нет незаполненных шагов сбора данных.')
                     ->send();
 
                 return;
@@ -878,13 +878,13 @@ class ManageContacts extends ManageRecords
 
             Notification::make()
                 ->success()
-                ->title('Анкета возобновлена')
-                ->body(sprintf('Анкета возобновлена с шага: %s.', $this->formatDataCollectionField($nextField)))
+                ->title('Сбор данных возобновлён')
+                ->body(sprintf('Сбор данных возобновлён с шага: %s.', $this->formatDataCollectionField($nextField)))
                 ->send();
         } catch (Throwable $throwable) {
             Notification::make()
                 ->danger()
-                ->title('Не удалось возобновить анкету')
+                ->title('Не удалось возобновить сбор данных')
                 ->body($throwable->getMessage())
                 ->send();
         }

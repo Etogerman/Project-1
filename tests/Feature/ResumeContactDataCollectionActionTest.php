@@ -66,7 +66,7 @@ class ResumeContactDataCollectionActionTest extends TestCase
         ]);
 
         $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('Не удалось определить сообщение для возобновления анкеты.');
+        $this->expectExceptionMessage('Не удалось определить сообщение для возобновления сбора данных.');
 
         try {
             app(ResumeContactDataCollectionAction::class)->handle($contact);

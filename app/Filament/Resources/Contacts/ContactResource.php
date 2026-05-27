@@ -215,7 +215,7 @@ class ContactResource extends Resource
                     ])
                     ->columns(1)
                     ->columnSpanFull(),
-                Section::make('Анкета')
+                Section::make('Сбор данных')
                     ->extraAttributes(['class' => 'ac-contact-modal-section ac-contact-modal-section--collector'])
                     ->schema([
                         ViewEntry::make('contact_collector_status')
@@ -962,6 +962,7 @@ class ContactResource extends Resource
      *     latestInboundPayload: ?string,
      *     routeContextRows: list<array{label:string,key:string,value:string}>,
      *     identityRows: list<array{label:string,key:string,value:string}>,
+     *     technicalContactRows: list<array{label:string,key:string,value:string}>,
      *     dedupRows: list<array{label:string,key:string,value:string}>
      * }
      */
@@ -1075,6 +1076,18 @@ class ContactResource extends Resource
                     'label' => 'Channel ID',
                     'key' => 'channel_id',
                     'value' => $diagnosticsIdentity?->channel_id !== null ? (string) $diagnosticsIdentity->channel_id : '—',
+                ],
+            ],
+            'technicalContactRows' => [
+                [
+                    'label' => 'Источник пола',
+                    'key' => 'gender_source',
+                    'value' => Contact::formatGenderSource($record->gender_source),
+                ],
+                [
+                    'label' => 'Возраст из БД',
+                    'key' => 'age_years',
+                    'value' => $record->age_years !== null ? (string) $record->age_years : '—',
                 ],
             ],
             'dedupRows' => [
@@ -1302,8 +1315,8 @@ class ContactResource extends Resource
             Message::KIND_OUTBOUND_AUTO_REPLY => 'Автоответ',
             Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION => 'Подтверждение телефона',
             Message::KIND_OUTBOUND_MANUAL_REPLY => 'Ручной ответ',
-            Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION => 'Вопрос анкеты',
-            Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION => 'Анкета завершена',
+            Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION => 'Вопрос сбора данных',
+            Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION => 'Сбор данных завершён',
             default => 'Не определен',
         };
     }
@@ -1663,6 +1676,8 @@ class ContactResource extends Resource
      *         channel_label:string,
      *         route_status_label:string,
      *         route_status_tone:string,
+     *         stage_label:string,
+     *         stage_tone:string,
      *         messenger_name_label:string,
      *         phone_label:string,
      *         route_identity_label:string,
@@ -1946,7 +1961,7 @@ class ContactResource extends Resource
             ['label' => 'Контактов', 'value' => $preview->contactsCount],
             ['label' => 'Диалогов', 'value' => $preview->dialogsCount],
             ['label' => 'Сообщений', 'value' => $preview->messagesCount],
-            ['label' => 'Анкет', 'value' => $preview->questionnaireRunsCount],
+            ['label' => 'Сборов данных', 'value' => $preview->questionnaireRunsCount],
             ['label' => 'Телефонов', 'value' => $preview->phonesCount],
             ['label' => 'Идентификаторов', 'value' => $preview->identitiesCount],
         ];

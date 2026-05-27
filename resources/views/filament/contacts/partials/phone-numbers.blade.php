@@ -1,40 +1,25 @@
 @if (($renderSurface ?? true))
-    <section data-role="contact-phone-numbers" class="ac-surface ac-surface--secondary ac-contact-modal-surface ac-contact-modal-surface--secondary-block ac-contact-modal-surface--phones">
-        <div class="ac-surface__header ac-surface__header--centered">
-            <div class="ac-surface__title-group">
-                <p class="ac-surface__eyebrow">Телефоны</p>
-                <h3 class="ac-surface__title">Номера контакта</h3>
-                <p class="ac-surface__subtitle">
-                    Основной номер отмечен отдельно. Остальные остаются в карточке как дополнительные.
-                </p>
-            </div>
+    <section data-role="contact-phone-numbers" class="ac-contact-form-section ac-contact-phone-section">
+        <div class="ac-contact-form-section__header">
+            <h3 class="ac-contact-form-section__title">Телефоны</h3>
         </div>
 
         @if ($phoneNumbers === [])
-            <div class="ac-empty-state ac-surface__divider">
-                Номера телефонов для этого контакта ещё не сохранены.
+            <div class="ac-contact-empty-line">
+                Телефоны не указаны
             </div>
         @else
-            <div class="ac-list-stack ac-surface__divider">
+            <div class="ac-phone-list">
                 @foreach ($phoneNumbers as $phoneNumber)
-                    <article class="ac-list-card ac-list-card--soft">
-                        <div class="ac-inline-split">
-                            <div class="ac-surface__title-group">
-                                <p class="ac-list-card__title">
-                                    {{ $phoneNumber['phone'] }}
-                                </p>
-                                <p class="ac-list-card__body">
-                                    Источник: {{ $phoneNumber['source'] }}
-                                </p>
-                            </div>
-
-                            <span class="ac-pill" data-tone="{{ $phoneNumber['is_primary'] ? 'success' : 'neutral' }}">
-                                {{ $phoneNumber['is_primary'] ? 'Основной' : 'Дополнительный' }}
-                            </span>
-                        </div>
+                    <article class="ac-phone-row" @if ($phoneNumber['is_primary']) data-primary="true" @endif>
+                        <span class="ac-phone-row__number">{{ $phoneNumber['phone'] }}</span>
+                        @if ($phoneNumber['is_primary'])
+                            <span class="ac-phone-row__primary">Основной</span>
+                        @endif
+                        <span class="ac-phone-row__meta">{{ $phoneNumber['source'] }}</span>
 
                         @if ($canEditPhones || $canDeletePhones)
-                            <div class="ac-actions ac-surface__divider">
+                            <div class="ac-phone-row__actions">
                                 @if ($canEditPhones)
                                     <button
                                         data-role="contact-edit-phone"
@@ -42,7 +27,7 @@
                                         wire:click="openEditPhoneDialog({{ $phoneNumber['id'] }})"
                                         wire:loading.attr="disabled"
                                         wire:target="openEditPhoneDialog,saveMountedContactPhone"
-                                        class="ac-button ac-button--primary-soft"
+                                        class="ac-inline-action"
                                     >
                                         Изменить
                                     </button>
@@ -55,7 +40,7 @@
                                         wire:click="openDeletePhoneDialog({{ $phoneNumber['id'] }})"
                                         wire:loading.attr="disabled"
                                         wire:target="openDeletePhoneDialog,deleteMountedContactPhone"
-                                        class="ac-button ac-button--danger-soft"
+                                        class="ac-inline-action ac-inline-action--danger"
                                     >
                                         Удалить
                                     </button>

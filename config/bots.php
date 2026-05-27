@@ -16,7 +16,6 @@ return [
 
     'data_collection' => [
         'enabled' => env('BOT_DATA_COLLECTION_ENABLED', true),
-        'profile_collection_engine' => env('BOT_PROFILE_COLLECTION_ENGINE', 'legacy_collector'),
         'first_question' => env('BOT_DATA_COLLECTION_FIRST_QUESTION', 'Как вас зовут?'),
         'completion_message' => env('BOT_DATA_COLLECTION_COMPLETION_MESSAGE', 'Спасибо, данные сохранили.'),
         'first_name' => [

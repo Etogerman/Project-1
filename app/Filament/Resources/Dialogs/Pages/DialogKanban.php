@@ -3,7 +3,6 @@
 namespace App\Filament\Resources\Dialogs\Pages;
 
 use App\Data\Dialogs\DialogInboxStatusData;
-use App\Data\Dialogs\DialogRouteStatusData;
 use App\Filament\Resources\Dialogs\DialogResource;
 use App\Models\Channel;
 use App\Models\Dialog;
@@ -24,7 +23,15 @@ use Throwable;
 
 class DialogKanban extends Page
 {
-    private const INITIAL_VISIBLE_CARDS = 30;
+    private const INITIAL_VISIBLE_CARDS = 15;
+
+    private const SORT_ACTIVITY_DESC = 'activity_desc';
+
+    private const SORT_ACTIVITY_ASC = 'activity_asc';
+
+    private const SORT_REQUIRES_REPLY_FIRST = 'requires_reply_first';
+
+    private const SORT_UNASSIGNED_FIRST = 'unassigned_first';
 
     protected static string $resource = DialogResource::class;
 
@@ -42,7 +49,11 @@ class DialogKanban extends Page
 
     public string $search = '';
 
+    public string $selectedSort = self::SORT_ACTIVITY_DESC;
+
     public bool $filtersPanelOpen = false;
+
+    public bool $sortPanelOpen = false;
 
     /**
      * @var array<string, int>
@@ -64,11 +75,14 @@ class DialogKanban extends Page
             'selectedRouteStatus' => ['as' => 'route', 'except' => ''],
             'selectedInboxStatus' => ['as' => 'inbox', 'except' => ''],
             'search' => ['except' => ''],
+            'selectedSort' => ['as' => 'sort', 'except' => self::SORT_ACTIVITY_DESC],
         ];
     }
 
     public function mount(): void
     {
+        $this->normalizeSelectedSort();
+
         foreach (Dialog::kanbanStages() as $stage) {
             $this->visibleCardsPerStage[$stage] = self::INITIAL_VISIBLE_CARDS;
         }
@@ -116,8 +130,13 @@ class DialogKanban extends Page
             'selectedRouteStatus',
             'selectedInboxStatus',
             'search',
+            'selectedSort',
         ], true)) {
             return;
+        }
+
+        if ($name === 'selectedSort') {
+            $this->normalizeSelectedSort();
         }
 
         $this->rememberCurrentNavigationUrl();
@@ -145,6 +164,21 @@ class DialogKanban extends Page
     public function toggleFiltersPanel(): void
     {
         $this->filtersPanelOpen = ! $this->filtersPanelOpen;
+    }
+
+    public function toggleSortPanel(): void
+    {
+        $this->sortPanelOpen = ! $this->sortPanelOpen;
+    }
+
+    public function selectKanbanSort(string $sort): void
+    {
+        $this->selectedSort = array_key_exists($sort, $this->sortOptions())
+            ? $sort
+            : self::SORT_ACTIVITY_DESC;
+        $this->sortPanelOpen = false;
+
+        $this->rememberCurrentNavigationUrl();
     }
 
     public function moveDialogCard(int $dialogId, string $targetStage): void
@@ -194,8 +228,6 @@ class DialogKanban extends Page
      */
     protected function getViewData(): array
     {
-        $dialogs = $this->loadFilteredDialogs();
-
         return [
             'filters' => [
                 'channel_options' => $this->channelOptions(),
@@ -203,23 +235,37 @@ class DialogKanban extends Page
                 'route_status_options' => $this->routeStatusOptions(),
                 'inbox_status_options' => $this->inboxStatusOptions(),
             ],
+            'sort_options' => $this->sortOptions(),
+            'sort_state' => [
+                'selected' => $this->selectedSort,
+                'label' => $this->sortOptions()[$this->selectedSort] ?? $this->sortOptions()[self::SORT_ACTIVITY_DESC],
+                'is_default' => $this->selectedSort === self::SORT_ACTIVITY_DESC,
+            ],
             'filter_state' => [
                 'active_count' => $this->activeFilterCount(),
                 'has_active_filters' => $this->hasActiveFilters(),
             ],
-            'columns' => $this->buildColumns($dialogs),
+            'columns' => $this->buildColumns(),
             'can_manage_stages' => $this->canCurrentUserManageDialogStages(),
             'table_url' => DialogResource::getUrl('index'),
         ];
     }
 
-    /**
-     * @return Collection<int, Dialog>
-     */
-    private function loadFilteredDialogs(): Collection
+    private function filteredDialogsQuery(): Builder
     {
-        $query = DialogResource::getTableRecordQuery();
+        return $this->applyCommonFilters(DialogResource::getKanbanRecordQuery());
+    }
 
+    private function filteredDialogIdsQuery(): Builder
+    {
+        return $this->applyCommonFilters(
+            Dialog::query()
+                ->whereHas('contact', fn (Builder $query): Builder => $query->whereNull('merged_into_contact_id')),
+        );
+    }
+
+    private function applyCommonFilters(Builder $query): Builder
+    {
         if ($this->selectedChannelId !== '') {
             $query->where('dialogs.channel_id', (int) $this->selectedChannelId);
         }
@@ -232,20 +278,49 @@ class DialogKanban extends Page
             DialogResource::applyTableSearch($query, $this->search);
         }
 
+        if ($this->selectedRouteStatus === 'ready') {
+            $query->whereRouteReady();
+        }
+
+        if ($this->selectedRouteStatus === 'problem') {
+            $query->whereRouteProblem();
+        }
+
+        if ($this->selectedInboxStatus !== '') {
+            DialogResource::applyInboxStatusFilter($query, $this->selectedInboxStatus);
+        }
+
+        return $query;
+    }
+
+    /**
+     * @return Collection<int, Dialog>
+     */
+    private function loadFilteredDialogs(): Collection
+    {
         /** @var Collection<int, Dialog> $dialogs */
-        $dialogs = $query->get()
-            ->filter(fn (Dialog $dialog): bool => $this->matchesRouteStatusFilter($dialog))
-            ->filter(fn (Dialog $dialog): bool => $this->matchesInboxStatusFilter($dialog))
-            ->values();
+        $dialogs = $this->filteredDialogsQuery()->get()->values();
 
         return $dialogs;
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function buildColumns(): array
+    {
+        if ($this->shouldBuildColumnsFromCollection()) {
+            return $this->buildColumnsFromCollection($this->loadFilteredDialogs());
+        }
+
+        return $this->buildSqlColumns();
     }
 
     /**
      * @param  Collection<int, Dialog>  $dialogs
      * @return list<array<string, mixed>>
      */
-    private function buildColumns(Collection $dialogs): array
+    private function buildColumnsFromCollection(Collection $dialogs): array
     {
         $columns = [];
 
@@ -271,6 +346,139 @@ class DialogKanban extends Page
         }
 
         return $columns;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function buildSqlColumnShell(string $stage): array
+    {
+        $visibleCount = $this->visibleCardsPerStage[$stage] ?? self::INITIAL_VISIBLE_CARDS;
+        $countQuery = $this->filteredDialogIdsQuery();
+        DialogResource::applyStageFilter($countQuery, $stage);
+
+        $count = (int) $countQuery->count('dialogs.id');
+
+        return [
+            'stage' => $stage,
+            'label' => Dialog::stageLabel($stage),
+            'tone' => Dialog::stageTone($stage),
+            'count' => $count,
+            'has_more' => $count > $visibleCount,
+            'visible_ids' => $this->visibleDialogIdsForStage($stage, $visibleCount),
+        ];
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function buildSqlColumns(): array
+    {
+        $columnShells = $this->buildSqlColumnShells();
+        $dialogsById = $this->loadVisibleDialogsById($this->visibleDialogIds($columnShells));
+
+        return array_map(
+            fn (array $column): array => [
+                'stage' => $column['stage'],
+                'label' => $column['label'],
+                'tone' => $column['tone'],
+                'count' => $column['count'],
+                'has_more' => $column['has_more'],
+                'cards' => collect($column['visible_ids'])
+                    ->map(fn (int $dialogId): ?Dialog => $dialogsById[$dialogId] ?? null)
+                    ->filter()
+                    ->map(fn (Dialog $dialog): array => $this->buildCardViewData($dialog, $column['stage']))
+                    ->values()
+                    ->all(),
+            ],
+            $columnShells,
+        );
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function buildSqlColumnShells(): array
+    {
+        return array_map(
+            fn (string $stage): array => $this->buildSqlColumnShell($stage),
+            Dialog::kanbanStages(),
+        );
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function visibleDialogIdsForStage(string $stage, int $visibleCount): array
+    {
+        $query = $this->filteredDialogIdsQuery();
+        DialogResource::applyStageFilter($query, $stage);
+        $this->applySelectedSortToQuery($query);
+
+        return $query
+            ->limit($visibleCount)
+            ->pluck('dialogs.id')
+            ->map(fn (mixed $id): int => (int) $id)
+            ->all();
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $columnShells
+     * @return list<int>
+     */
+    private function visibleDialogIds(array $columnShells): array
+    {
+        return array_values(array_unique(array_merge(
+            ...array_map(
+                fn (array $column): array => $column['visible_ids'],
+                $columnShells,
+            ),
+        )));
+    }
+
+    /**
+     * @param  list<int>  $dialogIds
+     * @return array<int, Dialog>
+     */
+    private function loadVisibleDialogsById(array $dialogIds): array
+    {
+        if ($dialogIds === []) {
+            return [];
+        }
+
+        /** @var Collection<int, Dialog> $dialogs */
+        $dialogs = DialogResource::getKanbanRecordQuery()
+            ->whereIn('dialogs.id', $dialogIds)
+            ->get()
+            ->keyBy('id');
+
+        return $dialogs->all();
+    }
+
+    private function shouldBuildColumnsFromCollection(): bool
+    {
+        return $this->recentMovePromotions !== []
+            || in_array($this->selectedSort, [
+                self::SORT_REQUIRES_REPLY_FIRST,
+                self::SORT_UNASSIGNED_FIRST,
+            ], true);
+    }
+
+    private function applySelectedSortToQuery(Builder $query): void
+    {
+        if ($this->selectedSort === self::SORT_ACTIVITY_ASC) {
+            $query
+                ->orderByRaw('dialogs.last_message_at is not null asc')
+                ->orderBy('dialogs.last_message_at')
+                ->orderBy('dialogs.id');
+
+            return;
+        }
+
+        $query
+            ->orderByRaw('dialogs.last_message_at is null asc')
+            ->orderByDesc('dialogs.last_message_at')
+            ->orderByDesc('dialogs.id');
     }
 
     /**
@@ -317,6 +525,7 @@ class DialogKanban extends Page
             'assignee' => $this->selectedAssignedUserId,
             'route' => $this->selectedRouteStatus,
             'inbox' => $this->selectedInboxStatus,
+            'sort' => $this->selectedSort === self::SORT_ACTIVITY_DESC ? '' : $this->selectedSort,
         ], fn (mixed $value): bool => is_string($value) && $value !== '');
 
         if ($query === []) {
@@ -356,21 +565,83 @@ class DialogKanban extends Page
         $sortedDialogs = $dialogs->all();
 
         usort($sortedDialogs, function (Dialog $left, Dialog $right) use ($columnStage): int {
-            $leftTuple = [
+            $promotionCompare = $this->compareDesc(
                 $this->promotionSequence($left->id, $columnStage),
-                $this->timestampSortKey($left->last_message_at),
-                $left->id,
-            ];
-            $rightTuple = [
                 $this->promotionSequence($right->id, $columnStage),
-                $this->timestampSortKey($right->last_message_at),
-                $right->id,
-            ];
+            );
 
-            return $rightTuple <=> $leftTuple;
+            if ($promotionCompare !== 0) {
+                return $promotionCompare;
+            }
+
+            return $this->compareDialogsBySelectedSort($left, $right);
         });
 
         return collect($sortedDialogs);
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function sortOptions(): array
+    {
+        return [
+            self::SORT_ACTIVITY_DESC => 'Сначала новые',
+            self::SORT_ACTIVITY_ASC => 'Сначала старые',
+            self::SORT_REQUIRES_REPLY_FIRST => 'Сначала требуют ответа',
+            self::SORT_UNASSIGNED_FIRST => 'Свободные сверху',
+        ];
+    }
+
+    private function normalizeSelectedSort(): void
+    {
+        if (! array_key_exists($this->selectedSort, $this->sortOptions())) {
+            $this->selectedSort = self::SORT_ACTIVITY_DESC;
+        }
+    }
+
+    private function compareDialogsBySelectedSort(Dialog $left, Dialog $right): int
+    {
+        return match ($this->selectedSort) {
+            self::SORT_ACTIVITY_ASC => $this->compareAsc(
+                [$this->timestampSortKey($left->last_message_at), $left->id],
+                [$this->timestampSortKey($right->last_message_at), $right->id],
+            ),
+            self::SORT_REQUIRES_REPLY_FIRST => $this->compareDesc(
+                [$this->requiresReplySortKey($left), $this->timestampSortKey($left->last_message_at), $left->id],
+                [$this->requiresReplySortKey($right), $this->timestampSortKey($right->last_message_at), $right->id],
+            ),
+            self::SORT_UNASSIGNED_FIRST => $this->compareDesc(
+                [$this->unassignedSortKey($left), $this->timestampSortKey($left->last_message_at), $left->id],
+                [$this->unassignedSortKey($right), $this->timestampSortKey($right->last_message_at), $right->id],
+            ),
+            default => $this->compareDesc(
+                [$this->timestampSortKey($left->last_message_at), $left->id],
+                [$this->timestampSortKey($right->last_message_at), $right->id],
+            ),
+        };
+    }
+
+    private function compareAsc(mixed $left, mixed $right): int
+    {
+        return $left <=> $right;
+    }
+
+    private function compareDesc(mixed $left, mixed $right): int
+    {
+        return $right <=> $left;
+    }
+
+    private function requiresReplySortKey(Dialog $dialog): int
+    {
+        return app(ResolveDialogInboxStatusAction::class)->handle($dialog)->code === DialogInboxStatusData::CODE_REQUIRES_REPLY
+            ? 1
+            : 0;
+    }
+
+    private function unassignedSortKey(Dialog $dialog): int
+    {
+        return $dialog->contact?->assigned_user_id === null ? 1 : 0;
     }
 
     private function promotionSequence(int $dialogId, string $columnStage): int
@@ -423,30 +694,6 @@ class DialogKanban extends Page
         }
 
         return true;
-    }
-
-    private function matchesRouteStatusFilter(Dialog $dialog): bool
-    {
-        if ($this->selectedRouteStatus === '') {
-            return true;
-        }
-
-        $routeStatus = app(ResolveDialogRouteStatusAction::class)->handle($dialog);
-
-        return match ($this->selectedRouteStatus) {
-            'ready' => $routeStatus->code === DialogRouteStatusData::CODE_READY,
-            'problem' => $routeStatus->code !== DialogRouteStatusData::CODE_READY,
-            default => true,
-        };
-    }
-
-    private function matchesInboxStatusFilter(Dialog $dialog): bool
-    {
-        if ($this->selectedInboxStatus === '') {
-            return true;
-        }
-
-        return app(ResolveDialogInboxStatusAction::class)->handle($dialog)->code === $this->selectedInboxStatus;
     }
 
     /**

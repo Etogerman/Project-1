@@ -295,7 +295,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         $channelActivityLogger->info(
             $channel,
             'contact.data_collection_response_stale_skipped',
-            'Устаревший ответ анкеты пропущен, потому что текущий шаг контакта уже изменился.',
+            'Устаревший ответ сбора данных пропущен, потому что текущий шаг контакта уже изменился.',
             [
                 'platform' => $channel->platform,
                 'message_id' => $message->id,
@@ -1606,7 +1606,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
             channelActivityLogger: $channelActivityLogger,
             activityEvent: 'contact.data_collection_fallback_sent',
-            activityMessage: 'Отправлено безопасное сообщение после ошибки распознавания шага анкеты.',
+            activityMessage: 'Отправлено безопасное сообщение после ошибки распознавания шага сбора данных.',
         );
     }
 

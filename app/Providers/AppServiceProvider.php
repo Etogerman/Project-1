@@ -10,7 +10,6 @@ use App\Models\Channel;
 use App\Models\ChannelConnectionType;
 use App\Models\Contact;
 use App\Models\Dialog;
-use App\Models\QuestionnaireTemplate;
 use App\Models\Scenario;
 use App\Models\User;
 use App\Policies\AutoReplyCategoryPolicy;
@@ -20,7 +19,6 @@ use App\Policies\ChannelConnectionTypePolicy;
 use App\Policies\ChannelPolicy;
 use App\Policies\ContactPolicy;
 use App\Policies\DialogPolicy;
-use App\Policies\QuestionnaireTemplatePolicy;
 use App\Policies\ScenarioPolicy;
 use App\Policies\UserPolicy;
 use Illuminate\Auth\Events\Login;
@@ -55,7 +53,6 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(AutoReplyRule::class, AutoReplyRulePolicy::class);
         Gate::policy(AutoReplyCategory::class, AutoReplyCategoryPolicy::class);
         Gate::policy(Bitrix24Connection::class, Bitrix24ConnectionPolicy::class);
-        Gate::policy(QuestionnaireTemplate::class, QuestionnaireTemplatePolicy::class);
 
         Event::listen(Login::class, RecordAdminUserLogin::class);
 

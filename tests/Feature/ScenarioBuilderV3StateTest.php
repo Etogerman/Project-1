@@ -1016,13 +1016,13 @@ class ScenarioBuilderV3StateTest extends TestCase
         );
     }
 
-    public function test_publish_keeps_questionnaire_action_in_runtime_snapshot(): void
+    public function test_state_rejects_unsupported_legacy_action(): void
     {
         $admin = $this->adminUser();
-        $channel = Channel::factory()->create(['name' => 'Telegram Questionnaire']);
+        $channel = Channel::factory()->create(['name' => 'Telegram Legacy Action']);
         $scenario = app(CreateScenarioAction::class)->handle([
-            'code' => 'v3_questionnaire_action',
-            'name' => 'V3 Questionnaire Action',
+            'code' => 'v3_unsupported_legacy_action',
+            'name' => 'V3 Unsupported Legacy Action',
         ]);
         $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
         $blocks = [
@@ -1036,11 +1036,11 @@ class ScenarioBuilderV3StateTest extends TestCase
             ],
             [
                 'id' => null,
-                'client_key' => 'tmp_questionnaire',
+                'client_key' => 'tmp_legacy_action',
                 'type' => 'state',
-                'title' => 'Профильная анкета',
+                'title' => 'Старое действие',
                 'position' => ['x' => 480, 'y' => 160],
-                'settings_payload' => $this->questionnaireActionSettings('profile'),
+                'settings_payload' => $this->unsupportedActionSettings(),
             ],
         ];
         $edges = [
@@ -1048,36 +1048,17 @@ class ScenarioBuilderV3StateTest extends TestCase
                 'id' => null,
                 'client_key' => 'tmp_start_edge',
                 'source' => ['block_id' => null, 'client_key' => 'tmp_start', 'output_id' => null],
-                'target' => ['block_id' => null, 'client_key' => 'tmp_questionnaire'],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_legacy_action'],
                 'condition_payload' => $this->edgePayload(null, 'Дальше'),
             ],
         ];
 
-        $saved = $this->actingAs($admin)
-            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
-            ->assertOk()
-            ->assertJsonPath('builder.blocks.1.settings_payload.modules.0.payload.actions.0.type', 'questionnaire')
-            ->assertJsonPath('builder.blocks.1.settings_payload.modules.0.payload.actions.0.template_key', 'profile')
-            ->json();
-
         $this->actingAs($admin)
-            ->postJson($this->publishUrl($scenario), [
-                'draft_version_id' => $saved['scenario']['draft_version_id'],
-                'base_revision' => $saved['builder']['revision'],
-            ])
-            ->assertOk();
-
-        $scenario->refresh()->load('publishedVersion');
-        $questionnaireBlockId = (string) $saved['id_map']['blocks']['tmp_questionnaire'];
-
-        $this->assertSame(
-            'questionnaire',
-            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$questionnaireBlockId.actions.0.type"),
-        );
-        $this->assertSame(
-            'profile',
-            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$questionnaireBlockId.actions.0.template_key"),
-        );
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors([
+                'builder.blocks.1.settings_payload.modules.0.payload.actions.0.type',
+            ]);
     }
 
     public function test_publish_keeps_distance_to_moscow_action_outputs_in_runtime_snapshot(): void
@@ -3355,7 +3336,7 @@ class ScenarioBuilderV3StateTest extends TestCase
     /**
      * @return array<string, mixed>
      */
-    private function questionnaireActionSettings(string $templateKey): array
+    private function unsupportedActionSettings(): array
     {
         return [
             'schema_version' => 3,
@@ -3369,8 +3350,7 @@ class ScenarioBuilderV3StateTest extends TestCase
                     'payload' => [
                         'actions' => [
                             [
-                                'type' => 'questionnaire',
-                                'template_key' => $templateKey,
+                                'type' => 'legacy_removed_action',
                             ],
                         ],
                     ],

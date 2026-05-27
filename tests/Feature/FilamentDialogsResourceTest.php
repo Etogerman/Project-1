@@ -17,6 +17,7 @@ use App\Models\Message;
 use App\Models\User;
 use App\Services\Bots\ContactIdentityAvatarStorage;
 use App\Services\Dialogs\BuildDialogMessageSnapshotPayloadAction;
+use App\Services\Dialogs\LoadDialogMessagesPageAction;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
@@ -626,7 +627,7 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('data-role="dialog-stage-step"', false)
             ->assertSee('Новый диалог')
             ->assertSee('Телефон получен')
-            ->assertSee('Анкета заполнена')
+            ->assertSee('Данные собраны')
             ->assertSee('МПЛ взял в работу')
             ->assertSee('Передан в МПП')
             ->assertSee('data-state="current"', false)
@@ -1522,7 +1523,7 @@ class FilamentDialogsResourceTest extends TestCase
             'message_kind' => Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE,
             'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
             'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE,
-            'text' => 'Оператор Герман изменил этап диалога: Анкета заполнена -> МПЛ взял в работу',
+            'text' => 'Оператор Герман изменил этап диалога: Данные собраны -> МПЛ взял в работу',
             'received_at' => now(),
         ]);
 
@@ -1723,15 +1724,21 @@ class FilamentDialogsResourceTest extends TestCase
 
         $queries = collect(DB::getQueryLog())
             ->pluck('query')
-            ->filter(fn (string $query): bool => str_contains($query, '"messages"'));
+            ->filter(fn (string $query): bool => str_contains($query, '"messages"')
+                || str_contains($query, 'from messages'));
 
         $this->assertTrue($queries->isNotEmpty());
         $this->assertFalse($queries->contains(
             fn (string $query): bool => str_contains($query, '"messages"."contact_id"')
+                || str_contains($query, 'messages.contact_id')
         ));
         $this->assertTrue($queries->contains(
             fn (string $query): bool => str_contains($query, '"messages"."dialog_id"')
+                || str_contains($query, '"dialog_id" = "dialogs"."id"')
                 || str_contains($query, 'messages.dialog_id = dialogs.id')
+                || str_contains($query, 'latest_inbound_user.dialog_id = dialogs.id')
+                || str_contains($query, 'newer_inbound_user.dialog_id = dialogs.id')
+                || str_contains($query, 'later_outbound_manual_reply.dialog_id = dialogs.id')
         ));
     }
 
@@ -1800,7 +1807,7 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertDontSee('Сообщение MAX');
     }
 
-    public function test_dialog_view_initially_loads_latest_fifty_messages(): void
+    public function test_dialog_view_initially_loads_latest_twenty_five_messages(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -1813,11 +1820,26 @@ class FilamentDialogsResourceTest extends TestCase
 
         $messages = $component->get('conversationMessages');
 
-        $this->assertCount(50, $messages);
-        $this->assertSame('Сообщение 21', $messages[0]['display_text']);
-        $this->assertSame('Сообщение 70', $messages[49]['display_text']);
+        $this->assertCount(ViewDialog::INITIAL_CONVERSATION_MESSAGE_LIMIT, $messages);
+        $this->assertSame('Сообщение 46', $messages[0]['display_text']);
+        $this->assertSame('Сообщение 70', $messages[24]['display_text']);
         $component->assertSet('hasMoreOlderMessages', true)
             ->assertSee('Показать более ранние');
+    }
+
+    public function test_dialog_message_page_loader_skips_dialog_eager_load_for_feed_rows(): void
+    {
+        $dialog = $this->createDialogWithMessages(3);
+
+        $page = app(LoadDialogMessagesPageAction::class)->handle($dialog);
+
+        $this->assertCount(3, $page->messages);
+        $this->assertTrue($page->messages->every(
+            fn (Message $message): bool => $message->relationLoaded('channel')
+        ));
+        $this->assertFalse($page->messages->contains(
+            fn (Message $message): bool => $message->relationLoaded('dialog')
+        ));
     }
 
     public function test_dialog_view_live_refresh_appends_new_messages_without_losing_local_state(): void
@@ -1955,6 +1977,10 @@ class FilamentDialogsResourceTest extends TestCase
             'is_admin' => true,
         ]);
         $dialog = $this->createDialogWithMessages(70);
+        $firstVisibleMessage = Message::query()
+            ->where('dialog_id', $dialog->id)
+            ->where('text', 'Сообщение 46')
+            ->firstOrFail();
         $twentiethMessage = Message::query()
             ->where('dialog_id', $dialog->id)
             ->where('text', 'Сообщение 20')
@@ -1975,7 +2001,7 @@ class FilamentDialogsResourceTest extends TestCase
         $component = Livewire::actingAs($admin)
             ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
             ->call('refreshDialogViewData')
-            ->assertSet('nextOlderCursor.id', $lateMessage->id)
+            ->assertSet('nextOlderCursor.id', $firstVisibleMessage->id)
             ->call('loadOlderMessages')
             ->assertDispatched('dialog-history-older-messages-loaded');
 

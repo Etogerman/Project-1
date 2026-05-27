@@ -59,7 +59,7 @@ class BuildBitrix24TimelineCommentAction
         return match ($message->sent_by_type) {
             Message::SENT_BY_TYPE_OPERATOR => 'Оператор',
             Message::SENT_BY_TYPE_AUTO_REPLY => 'Автоответ',
-            Message::SENT_BY_TYPE_COLLECTOR => 'Анкета',
+            Message::SENT_BY_TYPE_COLLECTOR => 'Сбор данных',
             Message::SENT_BY_TYPE_SYSTEM => 'Система',
             default => 'Система',
         };

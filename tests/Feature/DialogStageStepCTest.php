@@ -11,8 +11,9 @@ use App\Models\ContactIdentity;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\User;
-use App\Services\Dialogs\UpdateDialogStageAction;
+use App\Services\Dialogs\BuildDialogMessageSnapshotPayloadAction;
 use App\Services\Dialogs\LoadContactDialogsOverviewAction;
+use App\Services\Dialogs\UpdateDialogStageAction;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -322,6 +323,7 @@ class DialogStageStepCTest extends TestCase
                 'occurred_at' => now()->toIso8601String(),
             ],
         ]);
+        $this->refreshDialogMessageSnapshots($dialog);
 
         $response = $this->actingAs($admin)
             ->get(DialogResource::getUrl('index'));
@@ -384,6 +386,7 @@ class DialogStageStepCTest extends TestCase
                 'occurred_at' => now()->toIso8601String(),
             ],
         ]);
+        $this->refreshDialogMessageSnapshots($dialog);
 
         $overview = app(LoadContactDialogsOverviewAction::class)->handle($contact);
 
@@ -466,7 +469,19 @@ class DialogStageStepCTest extends TestCase
             'external_chat_id' => $externalChatId,
             'received_at' => now()->subMinute(),
         ]);
+        $this->refreshDialogMessageSnapshots($dialog);
 
         return $dialog;
+    }
+
+    private function refreshDialogMessageSnapshots(Dialog $dialog): Dialog
+    {
+        $dialog->forceFill(app(BuildDialogMessageSnapshotPayloadAction::class)->fromMessages(
+            Message::query()
+                ->where('dialog_id', $dialog->id)
+                ->get(),
+        ))->save();
+
+        return $dialog->refresh();
     }
 }

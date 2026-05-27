@@ -42,6 +42,12 @@ class ViewDialog extends ViewRecord
 
     public const CONVERSATION_DISPLAY_MODE_HTML = 'html';
 
+    public const INITIAL_CONVERSATION_MESSAGE_LIMIT = 25;
+
+    public const OLDER_CONVERSATION_MESSAGE_LIMIT = 50;
+
+    public const LIVE_REFRESH_MESSAGE_LIMIT = 50;
+
     public const LIVE_REFRESH_INTERVAL_MS = 5000;
 
     protected static string $resource = DialogResource::class;
@@ -133,7 +139,7 @@ class ViewDialog extends ViewRecord
         $page = app(LoadDialogMessagesPageAction::class)->handle(
             $this->getRecord(),
             $this->nextOlderCursor,
-            50,
+            self::OLDER_CONVERSATION_MESSAGE_LIMIT,
         );
 
         $olderMessages = app(BuildConversationFeedViewDataAction::class)->handle($page->messages);
@@ -331,7 +337,11 @@ class ViewDialog extends ViewRecord
 
     protected function initializeConversationHistory(): void
     {
-        $page = app(LoadDialogMessagesPageAction::class)->handle($this->getRecord(), null, 50);
+        $page = app(LoadDialogMessagesPageAction::class)->handle(
+            $this->getRecord(),
+            null,
+            self::INITIAL_CONVERSATION_MESSAGE_LIMIT,
+        );
 
         $this->conversationMessages = app(BuildConversationFeedViewDataAction::class)->handle($page->messages);
         $this->hasMoreOlderMessages = $page->hasMoreOlderMessages;
@@ -700,7 +710,11 @@ class ViewDialog extends ViewRecord
     protected function appendLatestConversationMessages(): int
     {
         if ($this->conversationMessages === []) {
-            $page = app(LoadDialogMessagesPageAction::class)->handle($this->getRecord(), null, 50);
+            $page = app(LoadDialogMessagesPageAction::class)->handle(
+                $this->getRecord(),
+                null,
+                self::INITIAL_CONVERSATION_MESSAGE_LIMIT,
+            );
 
             if ($page->messages->isEmpty()) {
                 $this->hasMoreOlderMessages = false;
@@ -721,7 +735,7 @@ class ViewDialog extends ViewRecord
         $messages = app(LoadDialogMessagesPageAction::class)->loadMessagesAddedAfterId(
             $this->getRecord(),
             $this->latestKnownMessageId,
-            50,
+            self::LIVE_REFRESH_MESSAGE_LIMIT,
         );
 
         return $this->appendConversationMessages($messages);
@@ -764,7 +778,6 @@ class ViewDialog extends ViewRecord
         ];
         $this->conversationMessages = $this->sortConversationMessages($this->conversationMessages);
         $this->latestKnownMessageId = max($this->latestKnownMessageId ?? 0, $this->resolveLatestKnownMessageId($newMessages) ?? 0) ?: null;
-        $this->syncNextOlderCursorToVisibleConversationStart();
 
         return count($newMessageViewData);
     }

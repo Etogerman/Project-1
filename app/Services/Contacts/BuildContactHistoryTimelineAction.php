@@ -96,8 +96,8 @@ class BuildContactHistoryTimelineAction
         if ($contact->data_collection_started_at !== null) {
             $items->push($this->makeItem(
                 type: self::EVENT_DATA_COLLECTION_STARTED,
-                title: 'Анкета начата',
-                description: 'Запущен сбор данных по анкете контакта.',
+                title: 'Сбор данных начат',
+                description: 'Запущен сбор данных по контакту.',
                 timestamp: $contact->data_collection_started_at,
                 sortPriority: 30,
                 sortId: (int) $contact->id,
@@ -107,8 +107,8 @@ class BuildContactHistoryTimelineAction
         if ($contact->data_collection_completed_at !== null) {
             $items->push($this->makeItem(
                 type: self::EVENT_DATA_COLLECTION_COMPLETED,
-                title: 'Анкета завершена',
-                description: 'Сбор данных по анкете завершён.',
+                title: 'Сбор данных завершён',
+                description: 'Сбор данных по контакту завершён.',
                 timestamp: $contact->data_collection_completed_at,
                 sortPriority: 40,
                 sortId: (int) $contact->id,

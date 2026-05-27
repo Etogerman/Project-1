@@ -1414,8 +1414,8 @@ class ChannelResource extends Resource
             Message::KIND_OUTBOUND_AUTO_REPLY => 'Автоответ',
             Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION => 'Подтверждение телефона',
             Message::KIND_OUTBOUND_MANUAL_REPLY => 'Ручной ответ',
-            Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION => 'Вопрос анкеты',
-            Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION => 'Анкета завершена',
+            Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION => 'Вопрос сбора данных',
+            Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION => 'Сбор данных завершён',
             default => 'Не определен',
         };
     }

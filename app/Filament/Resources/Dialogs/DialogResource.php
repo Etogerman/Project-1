@@ -14,8 +14,8 @@ use App\Models\Message;
 use App\Services\Contacts\ResolveContactDisplayNameAction;
 use App\Services\Dialogs\BuildConversationFeedViewDataAction;
 use App\Services\Dialogs\MessageChronology;
-use App\Services\Dialogs\ResolveDialogStageAction;
 use App\Services\Dialogs\ResolveDialogRouteStatusAction;
+use App\Services\Dialogs\ResolveDialogStageAction;
 use BackedEnum;
 use Closure;
 use Filament\Resources\Resource;
@@ -54,7 +54,7 @@ class DialogResource extends Resource
     {
         return parent::getEloquentQuery()
             ->with([
-                'channel',
+                'channel.connectionTypeDefinition',
                 'currentContactIdentity',
                 'contact.assignedUser',
                 'contact.phoneNumbers',
@@ -87,28 +87,30 @@ class DialogResource extends Resource
 
     public static function getTableRecordQuery(bool $excludeMerged = true): Builder
     {
-        $query = parent::getEloquentQuery()
-            ->addSelect([
-                'latest_inbound_user_message_id' => static::buildLatestMessageIdSubquery(
-                    fn (Builder $query): Builder => $query->where('message_kind', Message::KIND_INBOUND_USER),
-                ),
-                'latest_inbound_user_message_sort_at' => static::buildLatestMessageSortAtSubquery(
-                    fn (Builder $query): Builder => $query->where('message_kind', Message::KIND_INBOUND_USER),
-                ),
-                'latest_outbound_manual_reply_message_id' => static::buildLatestMessageIdSubquery(
-                    fn (Builder $query): Builder => $query->where('message_kind', Message::KIND_OUTBOUND_MANUAL_REPLY),
-                ),
-                'latest_outbound_manual_reply_message_sort_at' => static::buildLatestMessageSortAtSubquery(
-                    fn (Builder $query): Builder => $query->where('message_kind', Message::KIND_OUTBOUND_MANUAL_REPLY),
-                ),
-            ])
+        $query = static::addInboxStatusProjection(parent::getEloquentQuery())
             ->with([
-                'channel',
+                'channel.connectionTypeDefinition',
                 'currentContactIdentity',
                 'contact.assignedUser',
                 'contact.primaryIdentity',
-                'lastMessage.channel',
+                'lastMessage.channel.connectionTypeDefinition',
                 'lastMessage.sentByUser',
+            ]);
+
+        if ($excludeMerged) {
+            $query->whereHas('contact', fn (Builder $query): Builder => $query->whereNull('merged_into_contact_id'));
+        }
+
+        return $query;
+    }
+
+    public static function getKanbanRecordQuery(bool $excludeMerged = true): Builder
+    {
+        $query = static::addInboxStatusProjection(parent::getEloquentQuery())
+            ->with([
+                'channel.connectionTypeDefinition',
+                'currentContactIdentity',
+                'contact.assignedUser',
             ]);
 
         if ($excludeMerged) {
@@ -508,7 +510,7 @@ class DialogResource extends Resource
         return app(ResolveDialogStageAction::class)->handle($record);
     }
 
-    protected static function applyStageFilter(Builder $query, string $stage): void
+    public static function applyStageFilter(Builder $query, string $stage): void
     {
         if (Dialog::isServiceStage($stage)) {
             $query->where('dialogs.stage', $stage);
@@ -562,42 +564,37 @@ class DialogResource extends Resource
 
     protected static function applyRequiresManualReplyFilter(Builder $query): Builder
     {
-        [
-            'latestInboundUserMessageId' => $latestInboundUserMessageId,
-            'latestOutboundManualReplyMessageId' => $latestOutboundManualReplyMessageId,
-            'latestInboundAfterOutboundManualReply' => $latestInboundAfterOutboundManualReply,
-        ] = static::buildInboxStatusFilterFragments();
-
-        return $query
-            ->whereRaw(
-                $latestInboundUserMessageId['sql'].' is not null',
-                $latestInboundUserMessageId['bindings'],
-            )
-            ->where(function (Builder $query) use (
-                $latestOutboundManualReplyMessageId,
-                $latestInboundAfterOutboundManualReply,
-            ): Builder {
-                return $query
-                    ->whereRaw(
-                        $latestOutboundManualReplyMessageId['sql'].' is null',
-                        $latestOutboundManualReplyMessageId['bindings'],
-                    )
-                    ->orWhereRaw(
-                        $latestInboundAfterOutboundManualReply['sql'],
-                        $latestInboundAfterOutboundManualReply['bindings'],
-                    );
-            })
-            ->where(function (Builder $query) use ($latestInboundUserMessageId): Builder {
-                return $query
-                    ->whereNull('dialogs.manual_reply_dismissed_source_message_id')
-                    ->orWhereRaw(
-                        $latestInboundUserMessageId['sql'].' <> dialogs.manual_reply_dismissed_source_message_id',
-                        $latestInboundUserMessageId['bindings'],
-                    );
+        return $query->whereExists(function (QueryBuilder $inbound): void {
+            $inbound
+                ->selectRaw('1')
+                ->from('messages as latest_inbound_user')
+                ->whereColumn('latest_inbound_user.dialog_id', 'dialogs.id')
+                ->where('latest_inbound_user.message_kind', Message::KIND_INBOUND_USER)
+                ->whereNotExists(function (QueryBuilder $newerInbound): void {
+                    $newerInbound
+                        ->selectRaw('1')
+                        ->from('messages as newer_inbound_user')
+                        ->whereColumn('newer_inbound_user.dialog_id', 'dialogs.id')
+                        ->where('newer_inbound_user.message_kind', Message::KIND_INBOUND_USER)
+                        ->whereRaw(static::messageIsAfterSql('newer_inbound_user', 'latest_inbound_user'));
+                })
+                ->where(function (QueryBuilder $query): void {
+                    $query
+                        ->whereNull('dialogs.manual_reply_dismissed_source_message_id')
+                        ->orWhereColumn('dialogs.manual_reply_dismissed_source_message_id', '<>', 'latest_inbound_user.id');
+                })
+                ->whereNotExists(function (QueryBuilder $outbound): void {
+                    $outbound
+                        ->selectRaw('1')
+                        ->from('messages as later_outbound_manual_reply')
+                        ->whereColumn('later_outbound_manual_reply.dialog_id', 'dialogs.id')
+                        ->where('later_outbound_manual_reply.message_kind', Message::KIND_OUTBOUND_MANUAL_REPLY)
+                        ->whereRaw(static::messageIsAfterSql('later_outbound_manual_reply', 'latest_inbound_user'));
+                });
             });
     }
 
-    protected static function applyInboxStatusFilter(Builder $query, string $status): Builder
+    public static function applyInboxStatusFilter(Builder $query, string $status): Builder
     {
         if ($status === DialogInboxStatusData::CODE_REQUIRES_REPLY) {
             return static::applyRequiresManualReplyFilter($query);
@@ -660,6 +657,20 @@ class DialogResource extends Resource
             }),
             default => $query,
         };
+    }
+
+    protected static function messageIsAfterSql(string $leftAlias, string $rightAlias): string
+    {
+        $leftSortAt = static::messageChronology()->sqlSortAt($leftAlias);
+        $rightSortAt = static::messageChronology()->sqlSortAt($rightAlias);
+
+        return sprintf(
+            '((%1$s > %2$s) or ((%1$s = %2$s) and (%3$s.id > %4$s.id)))',
+            $leftSortAt,
+            $rightSortAt,
+            $leftAlias,
+            $rightAlias,
+        );
     }
 
     protected static function applyAssignedToMeFilter(Builder $query): Builder
@@ -772,6 +783,24 @@ class DialogResource extends Resource
             'dialogs.id',
             $scope,
         );
+    }
+
+    protected static function addInboxStatusProjection(Builder $query): Builder
+    {
+        return $query->addSelect([
+            'latest_inbound_user_message_id' => static::buildLatestMessageIdSubquery(
+                fn (Builder $query): Builder => $query->where('message_kind', Message::KIND_INBOUND_USER),
+            ),
+            'latest_inbound_user_message_sort_at' => static::buildLatestMessageSortAtSubquery(
+                fn (Builder $query): Builder => $query->where('message_kind', Message::KIND_INBOUND_USER),
+            ),
+            'latest_outbound_manual_reply_message_id' => static::buildLatestMessageIdSubquery(
+                fn (Builder $query): Builder => $query->where('message_kind', Message::KIND_OUTBOUND_MANUAL_REPLY),
+            ),
+            'latest_outbound_manual_reply_message_sort_at' => static::buildLatestMessageSortAtSubquery(
+                fn (Builder $query): Builder => $query->where('message_kind', Message::KIND_OUTBOUND_MANUAL_REPLY),
+            ),
+        ]);
     }
 
     protected static function messageChronology(): MessageChronology
@@ -888,7 +917,7 @@ class DialogResource extends Resource
 
     protected static function resolveContactLabel(Dialog $dialog): string
     {
-        if (! $dialog->contact instanceof \App\Models\Contact) {
+        if (! $dialog->contact instanceof Contact) {
             return 'Контакт не найден';
         }
 

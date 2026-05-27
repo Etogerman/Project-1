@@ -209,7 +209,7 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
                 $channelActivityLogger->info(
                     $channel,
                     'contact.phone_capture_follow_up_continued_after_skipped_confirmation',
-                    'После пропуска подтверждения из-за blocked dialog анкета продолжена через pending collector flow.',
+                    'После пропуска подтверждения из-за blocked dialog сбор данных продолжен через pending collector flow.',
                     $this->baseContext($message, $channel, $routeDialog?->id) + [
                         'phone_capture_status' => $this->phoneCaptureStatus,
                     ],
@@ -225,7 +225,7 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
             $channelActivityLogger->info(
                 $channel,
                 'contact.phone_capture_follow_up_continued_after_skipped_confirmation',
-                'После пропуска подтверждения из-за blocked dialog анкета продолжена через pending collector flow.',
+                'После пропуска подтверждения из-за blocked dialog сбор данных продолжен через pending collector flow.',
                 $this->baseContext($message, $channel, $routeDialog?->id) + [
                     'phone_capture_status' => $this->phoneCaptureStatus,
                 ],

@@ -276,13 +276,6 @@ class CompileScenarioBuilderV3RuntimeAction
                     ];
                 }
 
-                if ($type === 'questionnaire') {
-                    return [
-                        'type' => 'questionnaire',
-                        'template_key' => (string) ($item['template_key'] ?? 'profile'),
-                    ];
-                }
-
                 if ($type === 'calculate_distance_to_moscow') {
                     return [
                         'type' => 'calculate_distance_to_moscow',
@@ -309,7 +302,6 @@ class CompileScenarioBuilderV3RuntimeAction
                     || (($item['operation'] ?? '') === 'delete_message'
                         && ($item['target'] ?? '') === 'last_current_run_outbound')
                 ),
-                'questionnaire' => filled($item['template_key'] ?? null),
                 'calculate_distance_to_moscow' => true,
                 default => (($item['target_field'] ?? '') !== ''
                     && (($item['source_type'] ?? '') === 'static_value'

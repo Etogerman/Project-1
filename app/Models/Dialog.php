@@ -43,7 +43,7 @@ class Dialog extends Model
         return [
             self::STAGE_NEW_DIALOG => 'Новый диалог',
             self::STAGE_PHONE_RECEIVED => 'Телефон получен',
-            self::STAGE_QUESTIONNAIRE_COMPLETED => 'Анкета заполнена',
+            self::STAGE_QUESTIONNAIRE_COMPLETED => 'Данные собраны',
             self::STAGE_TRANSFERRED_TO_MPL => 'МПЛ взял в работу',
             self::STAGE_TRANSFERRED_TO_MPP => 'Передан в МПП',
         ];

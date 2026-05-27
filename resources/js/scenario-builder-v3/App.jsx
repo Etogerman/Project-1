@@ -79,7 +79,6 @@ const EDGE_CONTACT_CONDITION_FIELD_OPTIONS = [
 const ACTION_TYPE_WRITE_CONTACT_FIELD = 'write_contact_field';
 const ACTION_TYPE_CHECK_DATA = 'check_data';
 const ACTION_TYPE_EDIT_MESSAGE = 'edit_message';
-const ACTION_TYPE_QUESTIONNAIRE = 'questionnaire';
 const ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW = 'calculate_distance_to_moscow';
 const ACTION_EDIT_MESSAGE_OPERATION_REMOVE_BUTTONS = 'remove_buttons';
 const ACTION_EDIT_MESSAGE_OPERATION_DELETE_MESSAGE = 'delete_message';
@@ -125,19 +124,6 @@ const ACTION_CHECK_SOURCE_OPTIONS = [
 const ACTION_DICTIONARY_OPTIONS = [
     ['names', 'Имена'],
 ];
-const ACTION_QUESTIONNAIRE_TEMPLATE_OPTIONS = [
-    ['profile', 'Профильная анкета'],
-];
-const ACTION_QUESTIONNAIRE_OUTPUTS = [
-    { id: 'started', label: 'Запущена', source: 'action', action_result_id: 'started' },
-    { id: 'waiting', label: 'Ждёт ответ', source: 'action', action_result_id: 'waiting' },
-    { id: 'completed', label: 'Завершена', source: 'action', action_result_id: 'completed' },
-    { id: 'failed', label: 'Не удалось', source: 'action', action_result_id: 'failed' },
-    { id: 'already_completed', label: 'Уже завершена', source: 'action', action_result_id: 'already_completed' },
-    { id: 'cancelled', label: 'Отменена', source: 'action', action_result_id: 'cancelled' },
-    { id: 'operator_requested', label: 'Запрошен оператор', source: 'action', action_result_id: 'operator_requested' },
-    { id: 'blocked_by_active_questionnaire', label: 'Уже ждём другую анкету', source: 'action', action_result_id: 'blocked_by_active_questionnaire' },
-];
 const ACTION_DISTANCE_TO_MOSCOW_OUTPUTS = [
     { id: 'distance_resolved', label: 'Рассчитано', source: 'action', action_result_id: 'distance_resolved' },
     { id: 'distance_pending', label: 'Ждёт данных', source: 'action', action_result_id: 'distance_pending' },
@@ -147,7 +133,6 @@ const ACTION_DISTANCE_TO_MOSCOW_OUTPUTS = [
 ];
 const ACTION_RESULT_OUTPUTS = [
     ...ACTION_CHECK_DATA_OUTPUTS,
-    ...ACTION_QUESTIONNAIRE_OUTPUTS,
     ...ACTION_DISTANCE_TO_MOSCOW_OUTPUTS,
 ];
 const FIRST_NAME_SOURCE_CONDITION_OPTIONS = [
@@ -769,11 +754,6 @@ export default function App({
         if (kind === 'ai') {
             block.title = `ИИ-анализ ${index}`;
             block.settings_payload = aiSettingsPayload();
-        }
-
-        if (kind === 'questionnaire') {
-            block.title = `Анкета ${index}`;
-            block.settings_payload = questionnaireSettingsPayload();
         }
 
         updateBlocks([...blocks, blockWithSheet(block, activeSheet.id)]);
@@ -1520,12 +1500,10 @@ export default function App({
 
         if (type === 'action' && Array.isArray(patch.actions)) {
             const hasCheckData = patch.actions.some((item) => item?.type === ACTION_TYPE_CHECK_DATA);
-            const hasQuestionnaire = patch.actions.some((item) => item?.type === ACTION_TYPE_QUESTIONNAIRE);
             const hasDistanceToMoscow = patch.actions.some((item) => item?.type === ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW);
             const allActionOutputIds = new Set(ACTION_RESULT_OUTPUTS.map((output) => output.id));
             const nextActionOutputIds = new Set([
                 ...(hasCheckData ? ACTION_CHECK_DATA_OUTPUTS : []),
-                ...(hasQuestionnaire ? ACTION_QUESTIONNAIRE_OUTPUTS : []),
                 ...(hasDistanceToMoscow ? ACTION_DISTANCE_TO_MOSCOW_OUTPUTS : []),
             ].map((output) => output.id));
 
@@ -2879,9 +2857,6 @@ function ToolRail({ tool, onTool, onAddBlock }) {
             </button>
             <button type="button" title="Создать ИИ-анализ" onClick={() => onAddBlock('ai')}>
                 <SparkleIcon />
-            </button>
-            <button type="button" title="Создать анкету" onClick={() => onAddBlock('questionnaire')}>
-                <QuestionnaireIcon />
             </button>
         </aside>
     );
@@ -4462,7 +4437,6 @@ function ActionFields({ action, blockKey, onUpdateModulePayload }) {
                             <option value="write_contact_field">Изменить данные</option>
                             <option value="check_data">Проверить данные</option>
                             <option value="edit_message">Изменить сообщение</option>
-                            <option value="questionnaire">Запустить анкету</option>
                             <option value="calculate_distance_to_moscow">Рассчитать расстояние до Москвы</option>
                         </select>
                     </label>
@@ -4471,27 +4445,6 @@ function ActionFields({ action, blockKey, onUpdateModulePayload }) {
                             <span>Что рассчитать</span>
                             <input value="Расстояние от города контакта до Москвы" readOnly />
                         </label>
-                    ) : item.type === ACTION_TYPE_QUESTIONNAIRE ? (
-                        <>
-                            <label>
-                                <span>Шаблон анкеты</span>
-                                <select
-                                    value={item.template_key}
-                                    onChange={(event) => updateItem(index, normalizeActionItemForType({
-                                        ...item,
-                                        template_key: event.target.value,
-                                    }))}
-                                >
-                                    {ACTION_QUESTIONNAIRE_TEMPLATE_OPTIONS.map(([value, label]) => (
-                                        <option key={value} value={value}>{label}</option>
-                                    ))}
-                                </select>
-                            </label>
-                            <label>
-                                <span>Режим</span>
-                                <input value="Запустить или продолжить" readOnly />
-                            </label>
-                        </>
                     ) : item.type === ACTION_TYPE_EDIT_MESSAGE ? (
                         <>
                             <label>
@@ -6167,27 +6120,6 @@ function aiSettingsPayload() {
     });
 }
 
-function questionnaireSettingsPayload() {
-    return syncOutputs({
-        ...messageSettingsPayload(''),
-        modules: [
-            {
-                id: 'mod_action',
-                type: 'action',
-                enabled: true,
-                payload: {
-                    actions: [
-                        {
-                            type: ACTION_TYPE_QUESTIONNAIRE,
-                            template_key: 'profile',
-                        },
-                    ],
-                },
-            },
-        ],
-    });
-}
-
 function sortModules(modules) {
     return [...modules].sort((left, right) => MODULE_ORDER.indexOf(left.type) - MODULE_ORDER.indexOf(right.type));
 }
@@ -6232,12 +6164,6 @@ function actionItemSummary(item) {
         }
 
         return 'Сообщение → убрать кнопки';
-    }
-
-    if (item.type === ACTION_TYPE_QUESTIONNAIRE) {
-        const template = ACTION_QUESTIONNAIRE_TEMPLATE_OPTIONS.find(([value]) => value === item.template_key)?.[1] ?? item.template_key;
-
-        return `Анкета → ${template}`;
     }
 
     if (item.type === ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW) {
@@ -6391,7 +6317,6 @@ function actionItems(actionModule) {
         .filter((item) => (
             item.type === ACTION_TYPE_CHECK_DATA
             || item.type === ACTION_TYPE_EDIT_MESSAGE
-            || item.type === ACTION_TYPE_QUESTIONNAIRE
             || item.type === ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW
             || item.target_field !== ''
         ));
@@ -6404,11 +6329,9 @@ function normalizeActionItemForType(item) {
         ? ACTION_TYPE_CHECK_DATA
         : (item.type === ACTION_TYPE_EDIT_MESSAGE
             ? ACTION_TYPE_EDIT_MESSAGE
-            : (item.type === ACTION_TYPE_QUESTIONNAIRE
-                ? ACTION_TYPE_QUESTIONNAIRE
-                : (item.type === ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW
-                    ? ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW
-                    : ACTION_TYPE_WRITE_CONTACT_FIELD)));
+            : (item.type === ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW
+                ? ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW
+                : ACTION_TYPE_WRITE_CONTACT_FIELD));
 
     if (type === ACTION_TYPE_EDIT_MESSAGE) {
         const operation = item.operation === ACTION_EDIT_MESSAGE_OPERATION_DELETE_MESSAGE
@@ -6444,17 +6367,6 @@ function normalizeActionItemForType(item) {
             lookup_field: 'lookup_value',
             result_field: 'result_value',
             target_variable_key: normalizeAiExtractFieldKey(item.target_variable_key || item.source_field_key || 'first_name'),
-        };
-    }
-
-    if (type === ACTION_TYPE_QUESTIONNAIRE) {
-        const templateKey = ACTION_QUESTIONNAIRE_TEMPLATE_OPTIONS.some(([value]) => value === item.template_key)
-            ? item.template_key
-            : 'profile';
-
-        return {
-            type,
-            template_key: templateKey,
         };
     }
 
@@ -6586,7 +6498,6 @@ function syncOutputs(settingsPayload) {
     const actionDefinitions = actionItems(action);
     const actionOutputs = [
         ...(actionDefinitions.some((item) => item.type === ACTION_TYPE_CHECK_DATA) ? ACTION_CHECK_DATA_OUTPUTS : []),
-        ...(actionDefinitions.some((item) => item.type === ACTION_TYPE_QUESTIONNAIRE) ? ACTION_QUESTIONNAIRE_OUTPUTS : []),
         ...(actionDefinitions.some((item) => item.type === ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW) ? ACTION_DISTANCE_TO_MOSCOW_OUTPUTS : []),
     ].map((output) => ({
         ...output,
@@ -6988,15 +6899,6 @@ function SparkleIcon() {
         <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
             <path d="M7.5 2.2 8.6 5.4l3.2 1.1-3.2 1.1-1.1 3.2-1.1-3.2-3.2-1.1 3.2-1.1 1.1-3.2Z" stroke="currentColor" strokeWidth="1.25" strokeLinejoin="round" />
             <path d="M12.3 9.7 12.8 11l1.3.5-1.3.5-.5 1.3-.5-1.3-1.3-.5 1.3-.5.5-1.3Z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
-        </svg>
-    );
-}
-
-function QuestionnaireIcon() {
-    return (
-        <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-            <rect x="3" y="2.2" width="10" height="11.6" rx="1.6" stroke="currentColor" strokeWidth="1.3" />
-            <path d="M5.2 5h5.6M5.2 8h5.6M5.2 11h3.7" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
         </svg>
     );
 }

@@ -55,6 +55,14 @@ class Contact extends Model
 
     public const FIRST_NAME_RESOLUTION_METHOD_OPERATOR_MANUAL = 'operator_manual';
 
+    public const GENDER_SOURCE_CLIENT = 'client';
+
+    public const GENDER_SOURCE_OPERATOR = 'operator';
+
+    public const GENDER_SOURCE_DICTIONARY = 'dictionary';
+
+    public const GENDER_SOURCE_AI = 'ai';
+
     public const REGION_STATUS_RESOLVED = 'resolved';
 
     public const REGION_STATUS_CLARIFICATION_PENDING = 'clarification_pending';
@@ -121,6 +129,7 @@ class Contact extends Model
         'first_name_resolution_method',
         'last_name',
         'gender',
+        'gender_source',
         'age_years',
         'age_range',
         'birth_date',
@@ -211,6 +220,36 @@ class Contact extends Model
             'female' => 'Женский',
             'unknown' => 'Непонятно',
         ];
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public static function genderSourceOptions(): array
+    {
+        return [
+            self::GENDER_SOURCE_CLIENT => 'Клиент указал',
+            self::GENDER_SOURCE_OPERATOR => 'Оператор',
+            self::GENDER_SOURCE_DICTIONARY => 'Справочник',
+            self::GENDER_SOURCE_AI => 'ИИ',
+        ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    public static function allowedGenderSources(): array
+    {
+        return array_keys(self::genderSourceOptions());
+    }
+
+    public static function formatGenderSource(?string $value): string
+    {
+        if (! filled($value)) {
+            return '—';
+        }
+
+        return self::genderSourceOptions()[$value] ?? '—';
     }
 
     /**

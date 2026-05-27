@@ -14,6 +14,7 @@ class LoadContactDialogsOverviewAction
     public function __construct(
         protected BuildConversationFeedViewDataAction $buildConversationFeedViewDataAction,
         protected ResolveDialogRouteStatusAction $resolveDialogRouteStatusAction,
+        protected ResolveDialogStageAction $resolveDialogStageAction,
     ) {}
 
     /**
@@ -23,6 +24,8 @@ class LoadContactDialogsOverviewAction
      *     channel_label:string,
      *     route_status_label:string,
      *     route_status_tone:string,
+     *     stage_label:string,
+     *     stage_tone:string,
      *     messenger_name_label:string,
      *     phone_label:string,
      *     route_identity_label:string,
@@ -61,7 +64,7 @@ class LoadContactDialogsOverviewAction
         )->keyBy('id');
 
         return $dialogs
-            ->map(function (Dialog $dialog) use ($previewFeedByMessageId): array {
+            ->map(function (Dialog $dialog) use ($contact, $previewFeedByMessageId): array {
                 $previewMessage = $dialog->lastMessage;
                 $previewFeed = $previewMessage instanceof Message
                     ? $previewFeedByMessageId->get($previewMessage->id)
@@ -71,6 +74,11 @@ class LoadContactDialogsOverviewAction
                     : null;
                 $sortAt = $previewSortAt ?? $dialog->last_message_at;
                 $routeStatus = $this->resolveDialogRouteStatus($dialog);
+                $stage = $this->resolveDialogStageAction->forAttributes(
+                    currentStage: $dialog->stage,
+                    contact: $contact,
+                    phoneConfirmedAt: $dialog->phone_confirmed_at,
+                );
 
                 return [
                     'id' => $dialog->id,
@@ -78,6 +86,8 @@ class LoadContactDialogsOverviewAction
                     'channel_label' => $this->formatChannelLabel($dialog),
                     'route_status_label' => $routeStatus->label,
                     'route_status_tone' => $routeStatus->tone,
+                    'stage_label' => Dialog::stageLabel($stage),
+                    'stage_tone' => Dialog::stageTone($stage),
                     'messenger_name_label' => $this->formatDialogMessengerNameLabel($dialog),
                     'phone_label' => $this->formatDialogPhoneLabel($dialog),
                     'route_identity_label' => $this->formatDialogRouteIdentityLabel($dialog),

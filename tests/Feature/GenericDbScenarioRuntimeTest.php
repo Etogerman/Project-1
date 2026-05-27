@@ -19,8 +19,6 @@ use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
-use App\Models\ContactQuestionnaireAttempt;
-use App\Models\ContactQuestionnaireRun;
 use App\Models\DataDictionaryEntry;
 use App\Models\Dialog;
 use App\Models\Message;
@@ -45,7 +43,6 @@ use App\Services\Dialogs\DeleteLastOutboundDialogMessageAction;
 use App\Services\Scenarios\DispatchStoredInboundScenarioAction;
 use App\Services\Scenarios\GenericDbScenarioRuntime;
 use App\Services\Scenarios\ScenarioRegistry;
-use Database\Seeders\ProfileQuestionnaireSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -1265,301 +1262,8 @@ class GenericDbScenarioRuntimeTest extends TestCase
             && $request['text'] === 'Расстояние рассчитано');
     }
 
-    public function test_v3_questionnaire_action_starts_profile_questionnaire_and_stops_current_execution(): void
+    public function test_v3_unsupported_legacy_action_uses_failed_output(): void
     {
-        $this->seed(ProfileQuestionnaireSeeder::class);
-
-        Http::fake([
-            'https://api.telegram.org/*' => Http::response([
-                'ok' => true,
-                'result' => ['message_id' => 9701],
-            ]),
-        ]);
-
-        $channel = $this->createTelegramChannel();
-        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
-        $scenario = $this->createPublishedScenario(
-            'v3_profile_questionnaire',
-            $this->v3QuestionnaireRuntimeSchema($channel->id),
-        );
-
-        ScenarioChannelBinding::query()->create([
-            'channel_id' => $channel->id,
-            'scenario_code' => $scenario->code,
-            'is_active' => true,
-        ]);
-
-        $startMessage = Message::factory()->create([
-            'contact_id' => $contact->id,
-            'contact_identity_id' => $identity->id,
-            'channel_id' => $channel->id,
-            'dialog_id' => $dialog->id,
-            'direction' => Message::DIRECTION_INBOUND,
-            'message_kind' => Message::KIND_INBOUND_USER,
-            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
-            'external_chat_id' => $dialog->external_chat_id,
-            'text' => 'старт',
-        ]);
-
-        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
-            ->handle(app(ScenarioRegistry::class));
-
-        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
-        $questionnaireRun = ContactQuestionnaireRun::query()->where('contact_id', $contact->id)->sole();
-        $runtime = app(ScenarioRegistry::class)->makeRuntime($scenario->code);
-
-        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
-        $this->assertSame('questionnaire', $run->current_step);
-        $this->assertSame('waiting_input', data_get($run->state_payload, 'v3.status'));
-        $this->assertSame('waiting', data_get($run->state_payload, 'v3.questionnaires.questionnaire.outcome'));
-        $this->assertSame('gender', data_get($run->state_payload, 'v3.questionnaires.questionnaire.current_field_key'));
-        $this->assertSame([
-            'q_030ef4a52619b493' => ['label' => 'Мужской', 'value' => 'male'],
-            'q_96a1a08dcded48b7' => ['label' => 'Женский', 'value' => 'female'],
-        ], data_get($run->state_payload, 'v3.questionnaires.questionnaire.option_map'));
-
-        $this->assertSame(ContactQuestionnaireRun::STATUS_AWAITING_ANSWER, $questionnaireRun->status);
-        $this->assertSame('gender', $questionnaireRun->current_field_key);
-        $this->assertSame($dialog->id, $questionnaireRun->started_dialog_id);
-        $this->assertSame($dialog->id, $questionnaireRun->last_dialog_id);
-        $this->assertSame('questionnaire', $questionnaireRun->awaiting_block_id);
-        $this->assertSame($run->id, $questionnaireRun->scenario_run_id);
-        $this->assertNotNull($runtime);
-        $this->assertTrue($runtime->supportsTelegramCallbackContinuation($run, 'v3b:questionnaire:q_030ef4a52619b493'));
-
-        Http::assertSentCount(3);
-        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
-            && data_get($request->data(), 'reply_markup.remove_keyboard') === true
-            && ($request['disable_notification'] ?? false) === true);
-        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/deleteMessage'
-            && $request['chat_id'] === $dialog->external_chat_id
-            && (string) $request['message_id'] === '9701');
-        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
-            && $request['text'] === 'Укажи свой пол'
-            && data_get($request->data(), 'reply_markup.inline_keyboard.0.0.text') === 'Мужской'
-            && data_get($request->data(), 'reply_markup.inline_keyboard.0.1.text') === 'Женский');
-    }
-
-    public function test_inbound_questionnaire_answer_completes_profile_and_resumes_v3_completed_edge(): void
-    {
-        config()->set('bots.data_collection.profile_collection_engine', 'questionnaires');
-        $this->seed(ProfileQuestionnaireSeeder::class);
-
-        Http::fake([
-            'https://api.telegram.org/*sendMessage' => Http::response([
-                'ok' => true,
-                'result' => ['message_id' => 9701],
-            ]),
-            'https://api.telegram.org/*editMessageReplyMarkup' => Http::response([
-                'ok' => true,
-                'result' => true,
-            ]),
-        ]);
-
-        $channel = $this->createTelegramChannel();
-        [$contact, $identity, $dialog] = $this->createDialogContext($channel, [
-            'gender' => 'unknown',
-            'first_name' => 'Герман',
-            'first_name_source' => Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
-            'first_name_resolution_method' => null,
-            'country' => 'RU',
-            'city' => 'Москва',
-            'region' => 'Московская область',
-            'age_range' => '30_39',
-            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
-            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
-        ]);
-        $scenario = $this->createPublishedScenario(
-            'v3_profile_questionnaire_answer',
-            $this->v3QuestionnaireRuntimeSchema($channel->id),
-        );
-
-        ScenarioChannelBinding::query()->create([
-            'channel_id' => $channel->id,
-            'scenario_code' => $scenario->code,
-            'is_active' => true,
-        ]);
-
-        $startMessage = Message::factory()->create([
-            'contact_id' => $contact->id,
-            'contact_identity_id' => $identity->id,
-            'channel_id' => $channel->id,
-            'dialog_id' => $dialog->id,
-            'direction' => Message::DIRECTION_INBOUND,
-            'message_kind' => Message::KIND_INBOUND_USER,
-            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
-            'external_chat_id' => $dialog->external_chat_id,
-            'text' => 'старт',
-        ]);
-
-        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
-            ->handle(app(ScenarioRegistry::class));
-
-        $callbackData = 'v3b:questionnaire:q_030ef4a52619b493';
-        $answerMessage = Message::factory()->create([
-            'contact_id' => $contact->id,
-            'contact_identity_id' => $identity->id,
-            'channel_id' => $channel->id,
-            'dialog_id' => $dialog->id,
-            'direction' => Message::DIRECTION_INBOUND,
-            'message_kind' => Message::KIND_INBOUND_USER,
-            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
-            'external_chat_id' => $dialog->external_chat_id,
-            'text' => $callbackData,
-            'raw_payload' => [
-                'callback_query' => [
-                    'data' => $callbackData,
-                    'message' => ['message_id' => 9701],
-                ],
-            ],
-        ]);
-
-        app(DispatchStoredInboundBotMessageAction::class)->handle(
-            $channel,
-            new StoredInboundMessageResult($answerMessage->fresh(['contact', 'channel', 'dialog'])),
-        );
-
-        $contact->refresh();
-        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
-        $questionnaireRun = ContactQuestionnaireRun::query()->where('contact_id', $contact->id)->sole();
-        $outboundTexts = Message::query()
-            ->where('direction', Message::DIRECTION_OUTBOUND)
-            ->where('message_kind', Message::KIND_OUTBOUND_SCENARIO_MESSAGE)
-            ->orderBy('id')
-            ->pluck('text')
-            ->all();
-
-        $this->assertSame('male', $contact->gender);
-        $this->assertSame(Contact::DATA_COLLECTION_STATUS_COMPLETED, $contact->data_collection_status);
-        $this->assertSame(ContactQuestionnaireRun::STATUS_COMPLETED, $questionnaireRun->status);
-        $this->assertSame('after_completed', $run->fresh()->current_step);
-        $this->assertSame('completed', data_get($run->fresh()->state_payload, 'v3.questionnaires.questionnaire.outcome'));
-        $this->assertSame([
-            'Укажи свой пол',
-            'Анкета завершена',
-        ], $outboundTexts);
-
-        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/editMessageReplyMarkup'
-            && $request['chat_id'] === $dialog->external_chat_id
-            && $request['message_id'] === '9701');
-        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
-            && $request['text'] === 'Анкета завершена');
-    }
-
-    public function test_inbound_questionnaire_full_profile_flow_retries_unknown_city_and_resumes_after_age(): void
-    {
-        config()->set('bots.data_collection.profile_collection_engine', 'questionnaires');
-        $this->seed(ProfileQuestionnaireSeeder::class);
-
-        DataDictionaryEntry::query()->create([
-            'dictionary_key' => DataDictionaryEntry::DICTIONARY_NAMES,
-            'lookup_value' => 'Коля',
-            'result_value' => 'Николай',
-            'gender' => DataDictionaryEntry::GENDER_MALE,
-            'variant_type' => DataDictionaryEntry::VARIANT_TYPE_SHORT,
-            'auto_apply' => true,
-            'is_active' => true,
-        ]);
-
-        Http::fake([
-            'https://api.telegram.org/*sendMessage' => Http::response([
-                'ok' => true,
-                'result' => ['message_id' => 9711],
-            ]),
-            'https://api.telegram.org/*editMessageReplyMarkup' => Http::response([
-                'ok' => true,
-                'result' => true,
-            ]),
-        ]);
-
-        $channel = $this->createTelegramChannel();
-        [$contact, $identity, $dialog] = $this->createDialogContext($channel, [
-            'gender' => 'unknown',
-            'first_name' => null,
-            'country' => null,
-            'city' => null,
-            'region' => null,
-            'age_range' => null,
-            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
-            'data_collection_current_field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
-        ]);
-        $scenario = $this->createPublishedScenario(
-            'v3_profile_questionnaire_full_flow',
-            $this->v3QuestionnaireRuntimeSchema($channel->id),
-        );
-
-        ScenarioChannelBinding::query()->create([
-            'channel_id' => $channel->id,
-            'scenario_code' => $scenario->code,
-            'is_active' => true,
-        ]);
-
-        $startMessage = Message::factory()->create([
-            'contact_id' => $contact->id,
-            'contact_identity_id' => $identity->id,
-            'channel_id' => $channel->id,
-            'dialog_id' => $dialog->id,
-            'direction' => Message::DIRECTION_INBOUND,
-            'message_kind' => Message::KIND_INBOUND_USER,
-            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
-            'external_chat_id' => $dialog->external_chat_id,
-            'text' => 'старт',
-        ]);
-
-        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
-            ->handle(app(ScenarioRegistry::class));
-
-        $this->dispatchStoredInboundText($channel, $contact, $identity, $dialog, 'v3b:questionnaire:q_030ef4a52619b493', [
-            'callback_query' => [
-                'data' => 'v3b:questionnaire:q_030ef4a52619b493',
-                'message' => ['message_id' => 9711],
-            ],
-        ]);
-        $this->dispatchStoredInboundText($channel, $contact, $identity, $dialog, 'Коля');
-        $this->dispatchStoredInboundText($channel, $contact, $identity, $dialog, 'анкета');
-
-        $contact->refresh();
-        $this->assertNull($contact->city);
-        $this->assertNull($contact->country);
-        $this->assertNull($contact->region);
-
-        $this->dispatchStoredInboundText($channel, $contact, $identity, $dialog, 'Мурманск');
-        $this->dispatchStoredInboundText($channel, $contact, $identity, $dialog, 'v3b:questionnaire:q_f3e9e66431fec3bd', [
-            'callback_query' => [
-                'data' => 'v3b:questionnaire:q_f3e9e66431fec3bd',
-                'message' => ['message_id' => 9711],
-            ],
-        ]);
-
-        $contact->refresh();
-        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
-        $questionnaireRun = ContactQuestionnaireRun::query()->where('contact_id', $contact->id)->sole();
-        $outboundTexts = Message::query()
-            ->where('direction', Message::DIRECTION_OUTBOUND)
-            ->where('message_kind', Message::KIND_OUTBOUND_SCENARIO_MESSAGE)
-            ->orderBy('id')
-            ->pluck('text')
-            ->all();
-
-        $this->assertSame('male', $contact->gender);
-        $this->assertSame('Николай', $contact->first_name);
-        $this->assertSame('RU', $contact->country);
-        $this->assertSame('Мурманск', $contact->city);
-        $this->assertSame('Мурманская область', $contact->region);
-        $this->assertSame('18_23', $contact->age_range);
-        $this->assertSame(Contact::DATA_COLLECTION_STATUS_COMPLETED, $contact->data_collection_status);
-        $this->assertSame(ContactQuestionnaireRun::STATUS_COMPLETED, $questionnaireRun->status);
-        $this->assertSame('after_completed', $run->fresh()->current_step);
-        $this->assertSame('completed', data_get($run->fresh()->state_payload, 'v3.questionnaires.questionnaire.outcome'));
-        $this->assertContains('Укажи свой возраст', $outboundTexts);
-        $this->assertSame('Анкета завершена', $outboundTexts[array_key_last($outboundTexts)]);
-    }
-
-    public function test_priority_start_pauses_awaiting_questionnaire_when_new_path_does_not_continue_it(): void
-    {
-        config()->set('bots.data_collection.profile_collection_engine', 'questionnaires');
-        $this->seed(ProfileQuestionnaireSeeder::class);
-
         Http::fake([
             'https://api.telegram.org/*sendMessage' => Http::response([
                 'ok' => true,
@@ -1576,22 +1280,28 @@ class GenericDbScenarioRuntimeTest extends TestCase
             'region' => null,
             'age_range' => null,
         ]);
-        $schema = $this->v3QuestionnaireRuntimeSchema($channel->id);
-        $schema['builder_v3_runtime']['entrypoints'][] = [
-            'block_id' => 'interrupt',
-            'channel_ids' => [$channel->id],
-            'match' => 'strict',
-            'values' => ['удалить'],
-            'priority' => 100,
+        $schema = $this->v3UnsupportedActionRuntimeSchema($channel->id);
+        $failedEdge = [
+            'id' => 'edge_failed',
+            'edge_key' => 'edge_failed',
+            'mode' => 'action_result',
+            'priority' => 10,
+            'transition_limit' => 0,
+            'source_block_id' => 'legacy_action',
+            'target_block_id' => 'after_failed',
+            'from_output_id' => 'failed',
+            'label' => 'Старое действие отключено',
         ];
-        $schema['builder_v3_runtime']['blocks']['interrupt'] = [
-            'id' => 'interrupt',
+        $schema['builder_v3_runtime']['blocks']['legacy_action']['action_result_edges'][] = $failedEdge;
+        $schema['builder_v3_runtime']['edges'][] = $failedEdge;
+        $schema['builder_v3_runtime']['blocks']['after_failed'] = [
+            'id' => 'after_failed',
             'db_id' => 99,
             'kind' => 'state',
-            'title' => 'Перехват',
+            'title' => 'Старое действие отключено',
             'actions' => null,
             'message' => [
-                'text' => 'Команда выполнена',
+                'text' => 'Старое действие отключено',
                 'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
             ],
             'buttons' => null,
@@ -1600,7 +1310,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
             'action_result_edges' => [],
             'default_target_block_id' => null,
         ];
-        $scenario = $this->createPublishedScenario('v3_questionnaire_priority_pause', $schema);
+        $scenario = $this->createPublishedScenario('v3_unsupported_legacy_action', $schema);
 
         ScenarioChannelBinding::query()->create([
             'channel_id' => $channel->id,
@@ -1623,12 +1333,6 @@ class GenericDbScenarioRuntimeTest extends TestCase
         (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
             ->handle(app(ScenarioRegistry::class));
 
-        $questionnaireRun = ContactQuestionnaireRun::query()->where('contact_id', $contact->id)->sole();
-        $this->assertSame(ContactQuestionnaireRun::STATUS_AWAITING_ANSWER, $questionnaireRun->status);
-
-        $this->dispatchStoredInboundText($channel, $contact, $identity, $dialog, 'удалить');
-
-        $questionnaireRun->refresh();
         $scenarioRuns = ScenarioRun::query()
             ->where('scenario_code', $scenario->code)
             ->orderBy('id')
@@ -1640,17 +1344,9 @@ class GenericDbScenarioRuntimeTest extends TestCase
             ->pluck('text')
             ->all();
 
-        $this->assertCount(2, $scenarioRuns);
-        $this->assertSame(ScenarioRun::STATUS_CANCELLED, $scenarioRuns[0]->status);
-        $this->assertSame('interrupted_by_v3_start', $scenarioRuns[0]->exit_outcome);
-        $this->assertSame(ContactQuestionnaireRun::STATUS_PAUSED, $questionnaireRun->status);
-        $this->assertSame('gender', $questionnaireRun->current_field_key);
-        $this->assertNull($questionnaireRun->scenario_run_id);
-        $this->assertNull($questionnaireRun->awaiting_block_id);
-        $this->assertSame(0, ContactQuestionnaireAttempt::query()->where('questionnaire_run_id', $questionnaireRun->id)->count());
+        $this->assertCount(1, $scenarioRuns);
         $this->assertSame([
-            'Укажи свой пол',
-            'Команда выполнена',
+            'Старое действие отключено',
         ], $outboundTexts);
     }
 
@@ -8675,7 +8371,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
     /**
      * @return array<string, mixed>
      */
-    private function v3QuestionnaireRuntimeSchema(int $channelId): array
+    private function v3UnsupportedActionRuntimeSchema(int $channelId): array
     {
         $waitingEdge = [
             'id' => 'edge_waiting',
@@ -8683,7 +8379,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
             'mode' => 'action_result',
             'priority' => 10,
             'transition_limit' => 0,
-            'source_block_id' => 'questionnaire',
+            'source_block_id' => 'legacy_action',
             'target_block_id' => 'after_waiting',
             'from_output_id' => 'waiting',
             'label' => 'Ждёт ответ',
@@ -8694,7 +8390,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
             'mode' => 'action_result',
             'priority' => 10,
             'transition_limit' => 0,
-            'source_block_id' => 'questionnaire',
+            'source_block_id' => 'legacy_action',
             'target_block_id' => 'after_completed',
             'from_output_id' => 'completed',
             'label' => 'Заполнена',
@@ -8707,21 +8403,20 @@ class GenericDbScenarioRuntimeTest extends TestCase
                 'source_revision' => 'v3:test',
                 'compiled_at' => now()->toISOString(),
                 'entrypoints' => [[
-                    'block_id' => 'questionnaire',
+                    'block_id' => 'legacy_action',
                     'channel_ids' => [$channelId],
                     'match' => 'strict',
                     'values' => ['старт'],
                     'priority' => 10,
                 ]],
                 'blocks' => [
-                    'questionnaire' => [
-                        'id' => 'questionnaire',
+                    'legacy_action' => [
+                        'id' => 'legacy_action',
                         'db_id' => 1,
                         'kind' => 'state',
-                        'title' => 'Анкета',
+                        'title' => 'Старое действие',
                         'actions' => [[
-                            'type' => 'questionnaire',
-                            'template_key' => 'profile',
+                            'type' => 'legacy_removed_action',
                         ]],
                         'message' => null,
                         'buttons' => null,
@@ -8748,9 +8443,9 @@ class GenericDbScenarioRuntimeTest extends TestCase
                         'id' => 'after_completed',
                         'db_id' => 3,
                         'kind' => 'state',
-                        'title' => 'Анкета завершена',
+                        'title' => 'Старое действие завершено',
                         'message' => [
-                            'text' => 'Анкета завершена',
+                            'text' => 'Старое действие завершено',
                             'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
                         ],
                         'buttons' => null,

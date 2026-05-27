@@ -13,12 +13,11 @@ use App\Models\Contact;
 use App\Models\Message;
 use App\Models\Scenario;
 use App\Services\DataCollection\DataCollectionPromptHelper;
-use App\Services\Questionnaires\HandleContactQuestionnaireAnswerAction;
 use App\Services\Scenarios\DispatchStoredInboundScenarioAction;
 
 class DispatchStoredInboundBotMessageAction
 {
-    private const VIP_IBIZA_BUSY_STATE_REPLY = 'У тебя уже есть активная анкета. Сначала заверши её.';
+    private const VIP_IBIZA_BUSY_STATE_REPLY = 'У тебя уже идёт сбор данных. Сначала заверши его.';
 
     public function __construct(
         protected ChannelActivityLogger $channelActivityLogger,
@@ -26,7 +25,6 @@ class DispatchStoredInboundBotMessageAction
         protected SendBotDialogTextAction $sendBotDialogTextAction,
         protected StoreOutboundAutoReplyMessageAction $storeOutboundAutoReplyMessageAction,
         protected DataCollectionPromptHelper $dataCollectionPromptHelper,
-        protected HandleContactQuestionnaireAnswerAction $handleContactQuestionnaireAnswerAction,
     ) {}
 
     public function handle(
@@ -119,21 +117,17 @@ class DispatchStoredInboundBotMessageAction
             return;
         }
 
-        if ($this->handleContactQuestionnaireAnswerAction->handle($storedMessage)) {
-            return;
-        }
-
         if ($this->dispatchStoredInboundScenarioAction->continueActiveRun($storedMessage)) {
             return;
         }
 
         $storedMessage->loadMissing('contact');
 
-        if (! $storedMessage->wasRecentlyCreated && $this->usesLegacyCollector() && $storedMessage->contact?->isInDataCollection()) {
+        if (! $storedMessage->wasRecentlyCreated && $storedMessage->contact?->isInDataCollection()) {
             $this->channelActivityLogger->info(
                 $channel,
                 'webhook.duplicate_ignored',
-                'Повторный webhook с ответом анкеты проигнорирован, чтобы не переиграть уже сохранённый ответ.',
+                'Повторный webhook с ответом сбора данных проигнорирован, чтобы не переиграть уже сохранённый ответ.',
                 $duplicateContext + [
                     'contact_id' => $storedMessage->contact_id,
                     'current_field' => $storedMessage->contact?->data_collection_current_field,
@@ -143,7 +137,7 @@ class DispatchStoredInboundBotMessageAction
             return;
         }
 
-        if ($this->usesLegacyCollector() && $storedMessage->contact?->isInDataCollection()) {
+        if ($storedMessage->contact?->isInDataCollection()) {
             if ($this->currentDataCollectionFieldIsPendingPrompt($channel, $storedMessage)) {
                 ProcessDataCollectionQuestionJob::dispatch(
                     $storedMessage->id,
@@ -155,7 +149,7 @@ class DispatchStoredInboundBotMessageAction
                 $this->channelActivityLogger->info(
                     $channel,
                     'contact.data_collection_pending_question_queued',
-                    'Текущий шаг анкеты ещё не был задан пользователю: вместо обработки ответа поставлена в очередь повторная отправка вопроса.',
+                    'Текущий шаг сбора данных ещё не был задан пользователю: вместо обработки ответа поставлена в очередь повторная отправка вопроса.',
                     [
                         'platform' => $channel->platform,
                         'message_id' => $storedMessage->id,
@@ -215,11 +209,6 @@ class DispatchStoredInboundBotMessageAction
         }
 
         return $contact->data_collection_last_prompted_field !== $currentField;
-    }
-
-    protected function usesLegacyCollector(): bool
-    {
-        return config('bots.data_collection.profile_collection_engine') !== 'questionnaires';
     }
 
     protected function contactAlreadyHasPromptForCurrentField(Channel $channel, Contact $contact, string $currentField): bool
@@ -511,7 +500,7 @@ class DispatchStoredInboundBotMessageAction
         $this->channelActivityLogger->info(
             $channel,
             'scenario.vip_ibiza_start_blocked_busy_state',
-            'Deep link VIP Ibiza отклонён: в диалоге уже есть активный процесс или активная анкета.',
+            'Deep link VIP Ibiza отклонён: в диалоге уже есть активный процесс или активный сбор данных.',
             $duplicateContext + [
                 'outbound_message_id' => $outboundMessage->id,
                 'dialog_id' => $storedMessage->dialog_id,
