@@ -149,6 +149,10 @@ const EDGE_DELAY_TYPE_OPTIONS = [
     ['relative', 'Через время'],
     ['scheduled', 'В дату и время'],
 ];
+const EDGE_LABEL_MODE_AUTO = 'auto';
+const EDGE_LABEL_MODE_MANUAL = 'manual';
+const EDGE_CANVAS_LABEL_LIMIT = 52;
+const EDGE_TOOLTIP_LABEL_LIMIT = 300;
 const PANEL_WIDTH_STORAGE_KEY = 'scenario-builder-v3-panel-width';
 const PANEL_WIDTH_DEFAULT = 420;
 const PANEL_WIDTH_MIN = 320;
@@ -3037,10 +3041,11 @@ function EdgePath({ edge, blocks, anchors, selected, onSelect, onOpenSettings, o
     const markerId = selected ? 'ac-v3-arrow-selected' : `ac-v3-arrow-${visualKind}`;
     const label = edgeLabel(edge, isButton);
     const title = edgeVisualTitle(visualKind);
+    const fullLabel = edgeFullLabel(edge);
 
     return (
         <g className={edgeClassName}>
-            <title>{title}: {label}</title>
+            <title>{title}: {fullLabel}</title>
             <path data-edge-action d={d} className="ac-v3-builder__edge-hit" onClick={onSelect} />
             {selected ? <path d={d} className="ac-v3-builder__edge-selection" /> : null}
             <path d={d} className="ac-v3-builder__edge" markerEnd={`url(#${markerId})`} />
@@ -3238,13 +3243,209 @@ function defaultEdgeForBlock(block, edges) {
 }
 
 function edgeLabel(edge, isButton = isButtonEdge(edge)) {
-    const label = String(edge?.condition_payload?.label ?? '').trim();
+    const label = edgeFullLabel(edge, isButton);
 
-    if (isButton) {
+    if (edgeUsesOutputLabel(edge, isButton)) {
         return label;
     }
 
-    return label || 'Дальше';
+    return truncate(label, EDGE_CANVAS_LABEL_LIMIT);
+}
+
+function edgeFullLabel(edge, isButton = isButtonEdge(edge)) {
+    const label = String(edge?.condition_payload?.label ?? '').trim();
+
+    if (edgeUsesOutputLabel(edge, isButton)) {
+        return truncate(label, EDGE_TOOLTIP_LABEL_LIMIT);
+    }
+
+    if (edgeLabelMode(edge) === EDGE_LABEL_MODE_MANUAL) {
+        return truncate(label || DEFAULT_OUTPUT.label, EDGE_TOOLTIP_LABEL_LIMIT);
+    }
+
+    return truncate(edgeAutoLabel(edge) || DEFAULT_OUTPUT.label, EDGE_TOOLTIP_LABEL_LIMIT);
+}
+
+function edgeUsesOutputLabel(edge, isButton = isButtonEdge(edge)) {
+    return isButton
+        || isAiEdge(edge)
+        || isActionResultEdge(edge)
+        || Boolean(edge?.source?.output_id ?? edge?.condition_payload?.from_output_id);
+}
+
+function edgeLabelMode(edge) {
+    const mode = edge?.condition_payload?.ui?.label_mode;
+
+    if ([EDGE_LABEL_MODE_AUTO, EDGE_LABEL_MODE_MANUAL].includes(mode)) {
+        return mode;
+    }
+
+    const label = String(edge?.condition_payload?.label ?? '').trim();
+
+    return label && label !== DEFAULT_OUTPUT.label ? EDGE_LABEL_MODE_MANUAL : EDGE_LABEL_MODE_AUTO;
+}
+
+function edgeAutoLabel(edge) {
+    const payload = edge?.condition_payload ?? {};
+    const parts = [];
+    const expression = String(payload.expression ?? '').trim();
+
+    if (expression) {
+        parts.push(`Условие: ${expression}`);
+    }
+
+    const fieldConditionLabel = edgeFieldConditionLabel(payload.field_condition ?? {});
+
+    if (fieldConditionLabel) {
+        parts.push(fieldConditionLabel);
+    }
+
+    if (payload.contact_phone_condition) {
+        parts.push(`Телефон контакта: ${optionLabel(PHONE_CONDITION_OPTIONS, payload.contact_phone_condition)}`);
+    }
+
+    if (payload.dialog_phone_condition) {
+        parts.push(`Телефон мессенджера: ${optionLabel(PHONE_CONDITION_OPTIONS, payload.dialog_phone_condition)}`);
+    }
+
+    const mode = payload.mode === 'automatic' ? 'automatic' : 'wait_reply';
+
+    if (mode === 'wait_reply') {
+        const matchLabel = edgeMatchLabel(payload.match ?? {});
+
+        if (matchLabel) {
+            parts.push(matchLabel);
+        }
+
+        const captureLabel = edgeCaptureLabel(payload.input_capture ?? {});
+
+        if (captureLabel) {
+            parts.push(captureLabel);
+        }
+    }
+
+    if (mode === 'automatic') {
+        const delayLabel = edgeDelayLabel(payload.delay);
+
+        if (delayLabel) {
+            parts.push(delayLabel);
+        }
+    }
+
+    const transitionLimit = Math.max(0, Number(payload.transition_limit) || 0);
+
+    if (transitionLimit > 0) {
+        parts.push(`Лимит: ${transitionLimit}`);
+    }
+
+    return parts.join(' · ');
+}
+
+function edgeFieldConditionLabel(fieldCondition) {
+    if (fieldCondition?.enabled !== true) {
+        return '';
+    }
+
+    const scope = fieldCondition.field_scope === 'contact' ? 'contact' : 'dialog';
+    const field = scope === 'contact'
+        ? contactConditionField(fieldCondition.field_key)
+        : [fieldCondition.field_key, `dialog.${fieldCondition.field_key}`];
+    const fieldLabel = field[1] ?? field[0] ?? 'Поле';
+    const operator = optionLabel(EDGE_FIELD_CONDITION_OPERATOR_OPTIONS, fieldCondition.operator || 'filled');
+    const hasValue = ['equals', 'not_equals'].includes(fieldCondition.operator);
+    const value = hasValue ? edgeFieldConditionValueLabel(fieldCondition, field[0]) : '';
+
+    return `${fieldLabel}: ${operator}${value ? ` ${value}` : ''}`;
+}
+
+function edgeFieldConditionValueLabel(fieldCondition, fieldKey) {
+    const value = String(fieldCondition.value ?? '').trim();
+
+    if (! value) {
+        return '""';
+    }
+
+    if (fieldKey === 'first_name_source') {
+        return optionLabel(FIRST_NAME_SOURCE_CONDITION_OPTIONS, value);
+    }
+
+    return value;
+}
+
+function edgeMatchLabel(match) {
+    const type = EDGE_MATCH_OPTIONS.some(([value]) => value === match.type) ? match.type : 'any_inbound';
+
+    if (type === 'any_inbound') {
+        return 'Любое входящее';
+    }
+
+    const value = String(match.text ?? '').trim();
+
+    if (type === 'contains_text') {
+        return `Содержит: ${value || '—'}`;
+    }
+
+    return `${optionLabel(EDGE_MATCH_OPTIONS, type)}: ${value || '—'}`;
+}
+
+function edgeCaptureLabel(capture) {
+    if (capture?.enabled !== true) {
+        return '';
+    }
+
+    const scope = capture.field_scope === 'contact' ? 'contact' : 'dialog';
+    const field = scope === 'contact'
+        ? contactCaptureField(capture.field_key)
+        : [capture.field_key, `dialog.${capture.field_key}`];
+    const fieldLabel = field[1] ?? field[0] ?? 'поле';
+
+    return `Записать: ${fieldLabel}`;
+}
+
+function edgeDelayLabel(delay) {
+    const normalized = normalizedEdgeDelay(delay);
+
+    if (normalized.type === 'relative') {
+        return `Через ${normalized.value} ${edgeDelayUnitLabel(normalized.value, normalized.unit)}`;
+    }
+
+    if (normalized.type === 'scheduled') {
+        return 'В дату и время';
+    }
+
+    return '';
+}
+
+function edgeDelayUnitLabel(value, unit) {
+    const number = Math.abs(Number(value) || 0);
+    const lastTwo = number % 100;
+    const last = number % 10;
+
+    if (unit === 'min') {
+        if (lastTwo >= 11 && lastTwo <= 14) {
+            return 'минут';
+        }
+
+        if (last === 1) {
+            return 'минута';
+        }
+
+        return [2, 3, 4].includes(last) ? 'минуты' : 'минут';
+    }
+
+    if (lastTwo >= 11 && lastTwo <= 14) {
+        return 'секунд';
+    }
+
+    if (last === 1) {
+        return 'секунда';
+    }
+
+    return [2, 3, 4].includes(last) ? 'секунды' : 'секунд';
+}
+
+function optionLabel(options, value) {
+    return options.find(([optionValue]) => optionValue === value)?.[1] ?? String(value ?? '');
 }
 
 function shortBlockId(block) {
@@ -5022,11 +5223,35 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
         : 'filled';
     const delay = normalizedEdgeDelay(payload.delay);
     const scheduledTransitions = edgeScheduledTransitions(edge);
+    const showsAutoLabelControls = ! edgeUsesOutputLabel(edge, isButton);
+    const labelMode = edgeLabelMode(edge);
+    const canvasLabelPreview = edgeLabel(edge, isButton);
 
     function updatePayload(patch) {
         onUpdateConditionPayload((current) => ({
             ...current,
             ...patch,
+        }));
+    }
+
+    function updateEdgeLabel(value) {
+        onUpdateConditionPayload((current) => ({
+            ...current,
+            label: value,
+            ui: {
+                ...(current.ui ?? {}),
+                label_mode: EDGE_LABEL_MODE_MANUAL,
+            },
+        }));
+    }
+
+    function updateEdgeLabelMode(mode) {
+        onUpdateConditionPayload((current) => ({
+            ...current,
+            ui: {
+                ...(current.ui ?? {}),
+                label_mode: mode,
+            },
         }));
     }
 
@@ -5138,6 +5363,38 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                         </button>
                     </div>
                 )}
+                {showsAutoLabelControls ? (
+                    <>
+                        <label>
+                            <span>Название стрелки</span>
+                            <input
+                                value={payload.label ?? ''}
+                                placeholder="Авто: по условиям"
+                                onChange={(event) => updateEdgeLabel(event.target.value)}
+                            />
+                        </label>
+                        <span>Подпись на холсте</span>
+                        <div className="ac-v3-builder__edge-mode" role="group" aria-label="Подпись на холсте">
+                            <button
+                                type="button"
+                                className={labelMode === EDGE_LABEL_MODE_AUTO ? 'is-active' : ''}
+                                onClick={() => updateEdgeLabelMode(EDGE_LABEL_MODE_AUTO)}
+                            >
+                                Авто
+                            </button>
+                            <button
+                                type="button"
+                                className={labelMode === EDGE_LABEL_MODE_MANUAL ? 'is-active' : ''}
+                                onClick={() => updateEdgeLabelMode(EDGE_LABEL_MODE_MANUAL)}
+                            >
+                                Вручную
+                            </button>
+                        </div>
+                        <p className="ac-v3-builder__field-hint">
+                            На холсте: {canvasLabelPreview}
+                        </p>
+                    </>
+                ) : null}
                 <label className="ac-v3-builder__field-row">
                     <span>Телефон контакта</span>
                     <select
@@ -6627,6 +6884,7 @@ function edgePayload(outputId, label, kind = null) {
             user_input: false,
         },
         ui: {
+            label_mode: isButton ? EDGE_LABEL_MODE_MANUAL : EDGE_LABEL_MODE_AUTO,
             from_anchor: null,
             to_anchor: { side: 'left', t: 0.5 },
             waypoints: [],
