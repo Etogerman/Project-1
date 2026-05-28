@@ -774,6 +774,41 @@ class ChannelResource extends Resource
                     ->using(function (array $data, Channel $record): void {
                         static::updateChannelRecord($record, static::mutateChannelData($data, $record));
                     }),
+                Action::make('delete')
+                    ->label('Удалить')
+                    ->icon(Heroicon::OutlinedTrash)
+                    ->iconButton()
+                    ->color('danger')
+                    ->tooltip(fn (Channel $record): string => static::channelDeleteBlockers($record) === []
+                        ? 'Удалить канал'
+                        : 'Удаление недоступно: '.implode('; ', static::channelDeleteBlockers($record)))
+                    ->visible(fn (Channel $record): bool => static::canDeleteChannel($record))
+                    ->disabled(fn (Channel $record): bool => static::channelDeleteBlockers($record) !== [])
+                    ->requiresConfirmation()
+                    ->modalHeading(fn (Channel $record): string => "Удалить канал «{$record->name}»?")
+                    ->modalDescription('Канал будет удалён только если он ещё не используется в диалогах, сообщениях, сценариях, автоответах или Bitrix24-маршрутах.')
+                    ->action(function (Channel $record): void {
+                        static::authorizeChannelDelete($record);
+
+                        $blockers = static::channelDeleteBlockers($record);
+
+                        if ($blockers !== []) {
+                            Notification::make()
+                                ->warning()
+                                ->title('Канал нельзя удалить')
+                                ->body('Сначала уберите связанные данные: '.implode('; ', $blockers).'.')
+                                ->send();
+
+                            return;
+                        }
+
+                        DB::transaction(fn (): ?bool => $record->delete());
+
+                        Notification::make()
+                            ->success()
+                            ->title('Канал удалён')
+                            ->send();
+                    }),
             ], position: RecordActionsPosition::BeforeColumns)
             ->toolbarActions([]);
     }
@@ -786,6 +821,61 @@ class ChannelResource extends Resource
     protected static function authorizeChannelUpdate(Channel $record): void
     {
         abort_unless(static::canUpdateChannel($record), 403);
+    }
+
+    protected static function canDeleteChannel(Channel $record): bool
+    {
+        return (bool) auth()->user()?->can('delete', $record);
+    }
+
+    protected static function authorizeChannelDelete(Channel $record): void
+    {
+        abort_unless(static::canDeleteChannel($record), 403);
+    }
+
+    /**
+     * @return list<string>
+     */
+    protected static function channelDeleteBlockers(Channel $record): array
+    {
+        $channelId = (int) $record->getKey();
+        $checks = [
+            'диалоги' => $record->dialogs()->count(),
+            'сообщения' => $record->messages()->count(),
+            'идентификаторы контактов' => $record->contactIdentities()->count(),
+            'Bitrix24-маршруты' => $record->bitrix24OpenLineRoutes()->count(),
+            'сценарии канала' => $record->scenarioBindings()->count(),
+            'правила автоответа' => DB::table('auto_reply_rules')
+                ->where('channel_id', $channelId)
+                ->count(),
+            'привязки правил автоответа' => DB::table('auto_reply_rule_channels')
+                ->where('channel_id', $channelId)
+                ->count(),
+            'блоки старого конструктора' => DB::table('bot_constructor_block_channels')
+                ->where('channel_id', $channelId)
+                ->count(),
+            'блоки V3-конструктора' => DB::table('scenario_builder_block_channels')
+                ->where('channel_id', $channelId)
+                ->count(),
+            'запуски старого конструктора' => DB::table('bot_constructor_executions')
+                ->where('channel_id', $channelId)
+                ->count(),
+            'шаги старого конструктора' => DB::table('bot_constructor_execution_block_runs')
+                ->where('channel_id', $channelId)
+                ->count(),
+            'исходящие сообщения Telegram account' => DB::table('telegram_account_outgoing_messages')
+                ->where('channel_id', $channelId)
+                ->count(),
+            'исходящие сообщения V3' => DB::table('scenario_v3_outbound_messages')
+                ->where('channel_id', $channelId)
+                ->count(),
+        ];
+
+        return collect($checks)
+            ->filter(fn (int $count): bool => $count > 0)
+            ->map(fn (int $count, string $label): string => "{$label}: {$count}")
+            ->values()
+            ->all();
     }
 
     public static function getPages(): array

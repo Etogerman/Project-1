@@ -138,6 +138,13 @@ class DialogResource extends Resource
                     ->badge()
                     ->color(fn (Dialog $record): string => static::getInboxStatusColor($record))
                     ->toggleable(),
+                TextColumn::make('preview_text')
+                    ->label('Последнее сообщение')
+                    ->state(fn (Dialog $record): string => static::resolvePreviewText($record))
+                    ->description(fn (Dialog $record): ?string => static::formatPreviewMetaSummary($record))
+                    ->tooltip(fn (Dialog $record): string => static::resolvePreviewText($record))
+                    ->limit(80)
+                    ->toggleable(),
                 TextColumn::make('stage')
                     ->label('Этап')
                     ->state(fn (Dialog $record): string => static::formatStageLabel($record))
@@ -166,14 +173,7 @@ class DialogResource extends Resource
                     ->badge()
                     ->color(fn (Dialog $record): string => static::resolvePreviewSenderTone($record))
                     ->placeholder('—')
-                    ->toggleable(),
-                TextColumn::make('preview_text')
-                    ->label('Последнее сообщение')
-                    ->state(fn (Dialog $record): string => static::resolvePreviewText($record))
-                    ->description(fn (Dialog $record): ?string => static::formatPreviewMetaSummary($record))
-                    ->tooltip(fn (Dialog $record): string => static::resolvePreviewText($record))
-                    ->limit(80)
-                    ->toggleable(),
+                    ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('last_message_at')
                     ->label('Активность')
                     ->dateTime('d.m.Y H:i')
@@ -185,7 +185,7 @@ class DialogResource extends Resource
                 TextColumn::make('id')
                     ->label('ID')
                     ->sortable()
-                    ->toggleable(),
+                    ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('external_user_id')
                     ->label('Внешний ID')
                     ->state(fn (Dialog $record): ?string => static::resolveDialogExternalUserId($record))

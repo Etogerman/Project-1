@@ -9,6 +9,7 @@ use App\Models\ChannelActivityLog;
 use App\Models\ChannelRuntimeState;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
+use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\Scenario;
 use App\Models\ScenarioChannelBinding;
@@ -130,7 +131,8 @@ class FilamentChannelsResourceTest extends TestCase
             ->assertTableActionHidden('registerWebhook', $channel)
             ->assertTableActionHidden('checkConnection', $channel)
             ->assertTableActionHidden('syncBotMetadata', $channel)
-            ->assertTableActionHidden('manageScenarios', $channel);
+            ->assertTableActionHidden('manageScenarios', $channel)
+            ->assertTableActionHidden('delete', $channel);
     }
 
     public function test_employee_with_channel_edit_can_see_channel_mutation_actions(): void
@@ -158,7 +160,8 @@ class FilamentChannelsResourceTest extends TestCase
             ->assertTableActionVisible('registerWebhook', $channel)
             ->assertTableActionVisible('checkConnection', $channel)
             ->assertTableActionVisible('syncBotMetadata', $channel)
-            ->assertTableActionVisible('manageScenarios', $channel);
+            ->assertTableActionVisible('manageScenarios', $channel)
+            ->assertTableActionVisible('delete', $channel);
     }
 
     public function test_channel_update_guard_rejects_employee_without_channel_edit_permission(): void
@@ -695,16 +698,79 @@ class FilamentChannelsResourceTest extends TestCase
             ->assertTableColumnStateSet('last_error_message', 'Актуальная account runtime ошибка', $channel->fresh('runtimeState'));
     }
 
-    public function test_delete_and_bulk_delete_are_forbidden_by_policy(): void
+    public function test_channel_delete_policy_uses_channel_edit_permission_and_bulk_delete_stays_forbidden(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
             'is_admin' => true,
         ]);
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
         $channel = Channel::factory()->create();
 
-        $this->assertFalse(Gate::forUser($admin)->allows('delete', $channel));
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'channels.edit', false);
+
+        $this->assertTrue(Gate::forUser($admin)->allows('delete', $channel));
+        $this->assertFalse(Gate::forUser($employee)->allows('delete', $channel));
         $this->assertFalse(Gate::forUser($admin)->allows('deleteAny', Channel::class));
+
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'channels.edit', true);
+
+        $this->assertTrue(Gate::forUser($employee->fresh())->allows('delete', $channel));
+        $this->assertFalse(Gate::forUser($employee->fresh())->allows('deleteAny', Channel::class));
+    }
+
+    public function test_admin_can_delete_unused_channel_from_resource_table(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Unused Telegram Bot',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->assertTableActionVisible('delete', $channel)
+            ->assertTableActionEnabled('delete', $channel)
+            ->callTableAction('delete', $channel)
+            ->assertHasNoTableActionErrors();
+
+        $this->assertModelMissing($channel);
+    }
+
+    public function test_used_channel_delete_action_is_disabled(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'channel_id' => $channel->id,
+        ]);
+
+        Dialog::factory()->create([
+            'current_contact_identity_id' => $identity->id,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->assertTableActionVisible('delete', $channel)
+            ->assertTableActionDisabled('delete', $channel);
+
+        $this->assertDatabaseHas('channels', [
+            'id' => $channel->id,
+        ]);
     }
 
     public function test_channel_defaults_to_rules_only_when_not_explicitly_set(): void

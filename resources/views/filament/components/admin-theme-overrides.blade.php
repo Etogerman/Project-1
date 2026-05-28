@@ -8081,6 +8081,7 @@
     .fi-resource-dialogs .fi-ta-content-ctn {
         overflow-x: auto;
         border-top: 1px solid var(--ac-border);
+        border-inline-end: 1px solid var(--ac-border);
     }
 
     .fi-resource-dialogs .fi-ta-content-ctn::-webkit-scrollbar {
@@ -8098,7 +8099,7 @@
     }
 
     .fi-resource-dialogs .fi-ta-table {
-        min-width: 78rem;
+        min-width: max(100%, 88rem);
         table-layout: fixed;
         border-collapse: separate;
         border-spacing: 0;
@@ -8116,6 +8117,88 @@
         vertical-align: middle;
     }
 
+    .fi-resource-dialogs .fi-ta-header-cell-contact-label,
+    .fi-resource-dialogs .fi-ta-cell-contact-label {
+        width: 8rem;
+        min-width: 8rem;
+    }
+
+    .fi-resource-dialogs .fi-ta-header-cell-inbox-status,
+    .fi-resource-dialogs .fi-ta-cell-inbox-status {
+        width: 7.5rem;
+        min-width: 7.5rem;
+    }
+
+    .fi-resource-dialogs .fi-ta-header-cell-stage,
+    .fi-resource-dialogs .fi-ta-cell-stage {
+        width: 8.5rem;
+        min-width: 8.5rem;
+    }
+
+    .fi-resource-dialogs .fi-ta-header-cell-assigned-user,
+    .fi-resource-dialogs .fi-ta-cell-assigned-user {
+        width: 7rem;
+        min-width: 7rem;
+    }
+
+    .fi-resource-dialogs .fi-ta-header-cell-channel-label,
+    .fi-resource-dialogs .fi-ta-cell-channel-label {
+        width: 13rem;
+        min-width: 13rem;
+    }
+
+    .fi-resource-dialogs .fi-ta-header-cell-route-status,
+    .fi-resource-dialogs .fi-ta-cell-route-status {
+        width: 9.5rem;
+        min-width: 9.5rem;
+    }
+
+    .fi-resource-dialogs .fi-ta-header-cell-preview-sender-label,
+    .fi-resource-dialogs .fi-ta-cell-preview-sender-label {
+        width: 6.5rem;
+        min-width: 6.5rem;
+    }
+
+    .fi-resource-dialogs .fi-ta-header-cell-preview-text,
+    .fi-resource-dialogs .fi-ta-cell-preview-text {
+        width: 22rem;
+        min-width: 22rem;
+    }
+
+    .fi-resource-dialogs .fi-ta-header-cell-last-message-at,
+    .fi-resource-dialogs .fi-ta-cell-last-message-at {
+        width: 8.5rem;
+        min-width: 8.5rem;
+    }
+
+    .fi-resource-dialogs .fi-ta-header-cell-id,
+    .fi-resource-dialogs .fi-ta-cell-id {
+        width: 4.5rem;
+        min-width: 4.5rem;
+    }
+
+    .fi-resource-dialogs .fi-ta-header-cell-external-user-id,
+    .fi-resource-dialogs .fi-ta-cell-external-user-id,
+    .fi-resource-dialogs .fi-ta-header-cell-external-chat-id,
+    .fi-resource-dialogs .fi-ta-cell-external-chat-id {
+        width: 8rem;
+        min-width: 8rem;
+    }
+
+    .fi-resource-dialogs .fi-ta-header-cell-external-username,
+    .fi-resource-dialogs .fi-ta-cell-external-username,
+    .fi-resource-dialogs .fi-ta-header-cell-phone-label,
+    .fi-resource-dialogs .fi-ta-cell-phone-label,
+    .fi-resource-dialogs .fi-ta-header-cell-route-source,
+    .fi-resource-dialogs .fi-ta-cell-route-source {
+        width: 10rem;
+        min-width: 10rem;
+    }
+
+    .fi-resource-dialogs .fi-ta-table :is(th, td):last-child {
+        border-inline-end: 1px solid var(--ac-border);
+    }
+
     .fi-resource-dialogs .fi-ta-table th {
         color: var(--ac-text-muted);
         font-size: 0.72rem;
@@ -8127,6 +8210,41 @@
         color: var(--ac-text);
         font-size: 0.82rem;
         line-height: 1.3;
+    }
+
+    .fi-resource-dialogs .fi-ta-table .fi-ta-text,
+    .fi-resource-dialogs .fi-ta-table .fi-ta-text-item,
+    .fi-resource-dialogs .fi-ta-table .fi-ta-text-description {
+        min-width: 0;
+        max-width: 100%;
+    }
+
+    .fi-resource-dialogs .fi-ta-table .fi-ta-col {
+        min-height: 0;
+    }
+
+    .fi-resource-dialogs .fi-ta-table .fi-ta-text {
+        gap: 0.12rem;
+        padding-block: 0 !important;
+    }
+
+    .fi-resource-dialogs .fi-ta-table .fi-ta-text-item,
+    .fi-resource-dialogs .fi-ta-table .fi-ta-text-description {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .fi-resource-dialogs .fi-ta-cell-preview-text .fi-ta-text-item {
+        display: -webkit-box;
+        overflow: hidden;
+        white-space: normal;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+    }
+
+    .fi-resource-dialogs .fi-ta-cell-preview-text .fi-ta-text-description {
+        margin-top: 0.12rem;
     }
 
     .fi-resource-dialogs .fi-ta-table td a {
