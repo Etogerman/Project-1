@@ -13,6 +13,7 @@ use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
+use App\Models\FieldDictionaryField;
 use App\Models\Message;
 use App\Models\User;
 use App\Services\Bots\ContactIdentityAvatarStorage;
@@ -85,6 +86,17 @@ class FilamentDialogsResourceTest extends TestCase
                 ],
             ],
         ])->save();
+        FieldDictionaryField::query()->create([
+            'entity' => FieldDictionaryField::ENTITY_DIALOG,
+            'field_key' => 'client_city',
+            'name' => 'Город клиента',
+            'type' => FieldDictionaryField::TYPE_TEXT,
+            'options' => [],
+            'source_field_key' => null,
+            'sort_order' => 1000,
+            'is_multiple' => false,
+            'is_system' => false,
+        ]);
 
         Livewire::actingAs($admin)
             ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
@@ -94,6 +106,7 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('data-field-key="client_city"', false)
             ->assertSee('data-field-value-type="scalar"', false)
             ->assertSee('data-role="dialog-field-copy-key"', false)
+            ->assertSee('Город клиента')
             ->assertSee('client_city')
             ->assertSee('Москва')
             ->assertSee('test1')
@@ -164,6 +177,112 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertOk()
             ->assertSee('Диалоги')
             ->assertSee($dialog->contact->display_name);
+    }
+
+    public function test_dialogs_inbox_table_uses_field_dictionary_labels(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createInboxDialog();
+
+        FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_DIALOG)
+            ->where('field_key', 'contact_id')
+            ->firstOrFail()
+            ->update(['name' => 'Клиент диалога']);
+        FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_DIALOG)
+            ->where('field_key', 'channel_id')
+            ->firstOrFail()
+            ->update(['name' => 'Линия связи']);
+        FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_DIALOG)
+            ->where('field_key', 'stage')
+            ->firstOrFail()
+            ->update(['name' => 'Этап диалога']);
+        FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_DIALOG)
+            ->where('field_key', 'last_message_at')
+            ->firstOrFail()
+            ->update(['name' => 'Сообщение диалога']);
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->assertTableColumnExists(
+                'contact_label',
+                fn ($column): bool => $column->getLabel() === 'Клиент диалога',
+                $dialog,
+            )
+            ->assertTableColumnExists(
+                'channel_label',
+                fn ($column): bool => $column->getLabel() === 'Линия связи',
+                $dialog,
+            )
+            ->assertTableColumnExists(
+                'stage',
+                fn ($column): bool => $column->getLabel() === 'Этап диалога',
+                $dialog,
+            )
+            ->assertTableColumnExists(
+                'preview_text',
+                fn ($column): bool => $column->getLabel() === 'Сообщение диалога',
+                $dialog,
+            );
+    }
+
+    public function test_dialogs_inbox_table_uses_field_dictionary_stage_option_label(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createInboxDialog();
+        $dialog->forceFill(['stage' => Dialog::STAGE_TRANSFERRED_TO_MPP])->save();
+        $dialog = $dialog->fresh();
+
+        $stage = FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_DIALOG)
+            ->where('field_key', 'stage')
+            ->firstOrFail();
+        $options = $stage->options;
+        $options[4]['label'] = 'МПП из справочника';
+        $stage->update(['options' => $options]);
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->assertSee('МПП из справочника');
+    }
+
+    public function test_dialogs_kanban_uses_field_dictionary_labels_and_stage_option_label(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createInboxDialog();
+        $dialog->forceFill(['stage' => Dialog::STAGE_TRANSFERRED_TO_MPP])->save();
+
+        FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_DIALOG)
+            ->where('field_key', 'channel_id')
+            ->firstOrFail()
+            ->update(['name' => 'Линия связи']);
+
+        $stage = FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_DIALOG)
+            ->where('field_key', 'stage')
+            ->firstOrFail();
+        $options = $stage->options;
+        $options[4]['label'] = 'МПП из справочника';
+        $stage->update(['options' => $options]);
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('kanban'))
+            ->assertOk()
+            ->assertSee('Линия связи')
+            ->assertSee('МПП из справочника');
     }
 
     public function test_dialogs_inbox_record_link_contains_back_to_dialogs_list(): void
@@ -700,7 +819,7 @@ class FilamentDialogsResourceTest extends TestCase
         );
     }
 
-    public function test_dialog_view_renders_current_dialog_messenger_name_in_technical_context(): void
+    public function test_dialog_view_uses_field_dictionary_labels_in_side_panel(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -708,17 +827,39 @@ class FilamentDialogsResourceTest extends TestCase
         ]);
         [$telegramDialog] = $this->createMultiChannelDialogsForContactLabel();
 
+        FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_DIALOG)
+            ->where('field_key', 'contact_id')
+            ->firstOrFail()
+            ->update(['name' => 'Клиент диалога']);
+        FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_DIALOG)
+            ->where('field_key', 'channel_id')
+            ->firstOrFail()
+            ->update(['name' => 'Канал обращения']);
+        $stage = FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_DIALOG)
+            ->where('field_key', 'stage')
+            ->firstOrFail();
+        $options = $stage->options;
+        $options[4]['label'] = 'МПП из справочника';
+        $stage->update(['options' => $options]);
+        $telegramDialog->forceFill(['stage' => Dialog::STAGE_TRANSFERRED_TO_MPP])->save();
+
         $this->actingAs($admin)
             ->get(DialogResource::getUrl('view', ['record' => $telegramDialog]))
             ->assertOk()
-            ->assertSee('Имя из мессенджера')
-            ->assertSee('data-role="dialog-messenger-name"', false)
+            ->assertSee('Клиент диалога')
+            ->assertSee('Канал обращения')
+            ->assertSee('МПП из справочника')
+            ->assertSee('data-role="dialog-contact-label"', false)
             ->assertSee('data-role="dialog-channel-label"', false)
+            ->assertDontSee('Имя из мессенджера')
             ->assertDontSee('<p class="ac-surface__subtitle">', false)
             ->assertSee('Telegram Клиент');
     }
 
-    public function test_dialog_view_renders_messenger_phone_and_contact_phones_separately(): void
+    public function test_dialog_view_renders_dialog_phone_from_dictionary_without_contact_phone_mix(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -742,11 +883,11 @@ class FilamentDialogsResourceTest extends TestCase
         $this->actingAs($admin)
             ->get(DialogResource::getUrl('view', ['record' => $dialog]))
             ->assertOk()
-            ->assertSee('Телефон мессенджера')
+            ->assertSee('Телефон')
             ->assertSee('+7 999 000 00 01')
-            ->assertSee('Телефоны контакта')
-            ->assertSee('+7 926 352 71 11')
-            ->assertSee('+7 900 111 22 33')
+            ->assertDontSee('Телефоны контакта')
+            ->assertDontSee('+7 926 352 71 11')
+            ->assertDontSee('+7 900 111 22 33')
             ->assertDontSee('<p class="ac-dialog-summary__section-title">Диалог</p>', false)
             ->assertDontSee('<p class="ac-dialog-summary__section-title">Контакт и канал</p>', false);
     }

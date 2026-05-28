@@ -12,6 +12,7 @@ use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
 use App\Models\ContactStartTag;
 use App\Models\Dialog;
+use App\Models\FieldDictionaryField;
 use App\Models\Message;
 use App\Models\Tag;
 use App\Models\User;
@@ -336,6 +337,9 @@ class ContactResource extends Resource
 
     public static function table(Table $table): Table
     {
+        $contactFieldLabels = FieldDictionaryField::labelsFor(FieldDictionaryField::ENTITY_CONTACT);
+        $contactFieldLabel = static fn (string $fieldKey, string $fallback): string => FieldDictionaryField::labelFrom($contactFieldLabels, $fieldKey, $fallback);
+
         return $table
             ->recordUrl(fn (Contact $record): string => static::getUrl('view', ['record' => $record]))
             ->splitSearchTerms(false)
@@ -363,7 +367,7 @@ class ContactResource extends Resource
                     ->html()
                     ->state(fn (Contact $record): HtmlString => static::renderContactTableTags($record)),
                 TextColumn::make('primary_phone_raw')
-                    ->label('Телефон')
+                    ->label($contactFieldLabel('phones', 'Телефон'))
                     ->toggleable()
                     ->placeholder('—')
                     ->description(fn (Contact $record): ?string => static::formatPhoneCountSummary($record))
@@ -394,7 +398,7 @@ class ContactResource extends Resource
                     ->color(fn (Contact $record): string => static::getDedupStatusColor($record))
                     ->toggleable(),
                 TextColumn::make('id')
-                    ->label('ID')
+                    ->label($contactFieldLabel('id', 'ID'))
                     ->sortable()
                     ->copyable()
                     ->toggleable(),
@@ -432,13 +436,13 @@ class ContactResource extends Resource
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('phone_count')
-                    ->label('Телефонов')
+                    ->label($contactFieldLabel('phones', 'Телефонов'))
                     ->state(fn (Contact $record): int => (int) ($record->getAttribute('phone_count') ?? 0))
                     ->badge()
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('created_at')
-                    ->label('Создан')
+                    ->label($contactFieldLabel('created_at', 'Создан'))
                     ->dateTime('d.m.Y H:i')
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
@@ -896,6 +900,8 @@ class ContactResource extends Resource
         $ageSourceLabel = $record->birth_date !== null
             ? 'из даты рождения'
             : ($record->age_years !== null ? 'указан вручную' : null);
+        $genderOptionLabels = FieldDictionaryField::optionLabelsFor(FieldDictionaryField::ENTITY_CONTACT, 'gender');
+        $ageRangeOptionLabels = FieldDictionaryField::optionLabelsFor(FieldDictionaryField::ENTITY_CONTACT, 'age_range');
 
         $effectiveAgeLabel = $effectiveAgeYears !== null
             ? sprintf('%d лет%s', $effectiveAgeYears, $ageSourceLabel !== null ? ' ('.$ageSourceLabel.')' : '')
@@ -904,9 +910,9 @@ class ContactResource extends Resource
         return [
             'firstName' => $record->first_name,
             'lastName' => $record->last_name,
-            'genderLabel' => Contact::formatGender($record->gender),
+            'genderLabel' => FieldDictionaryField::optionLabelFrom($genderOptionLabels, $record->gender, Contact::formatGender($record->gender)),
             'effectiveAgeLabel' => $effectiveAgeLabel,
-            'ageRangeLabel' => Contact::formatAgeRange($record->age_range),
+            'ageRangeLabel' => FieldDictionaryField::optionLabelFrom($ageRangeOptionLabels, $record->age_range, Contact::formatAgeRange($record->age_range)),
             'birthDateLabel' => $record->birth_date?->format('d.m.Y') ?? '—',
             'country' => $record->country ?? '—',
             'city' => $record->city ?? '—',
@@ -916,11 +922,25 @@ class ContactResource extends Resource
                 ? $record->distance_to_moscow_km.' км'
                 : '—',
             'distanceToMoscowStatusLabel' => Contact::formatDistanceToMoscowStatus($record->distance_to_moscow_status),
-            'genderOptions' => Contact::genderOptions(),
-            'ageRangeOptions' => Contact::ageRangeOptions(),
+            'genderOptions' => static::applyDictionaryOptionLabels(Contact::genderOptions(), $genderOptionLabels),
+            'ageRangeOptions' => static::applyDictionaryOptionLabels(Contact::ageRangeOptions(), $ageRangeOptionLabels),
             'regionOptions' => Contact::russianRegionOptions(),
             'canEditProfile' => static::canCurrentUserManageContactProfile(),
         ];
+    }
+
+    /**
+     * @param  array<string, string>  $fallbackOptions
+     * @param  array<string, string>  $dictionaryLabels
+     * @return array<string, string>
+     */
+    protected static function applyDictionaryOptionLabels(array $fallbackOptions, array $dictionaryLabels): array
+    {
+        return collect($fallbackOptions)
+            ->mapWithKeys(fn (string $label, string $value): array => [
+                $value => FieldDictionaryField::optionLabelFrom($dictionaryLabels, $value, $label),
+            ])
+            ->all();
     }
 
     /**
@@ -1697,6 +1717,7 @@ class ContactResource extends Resource
     {
         return [
             'dialogs' => app(LoadContactDialogsOverviewAction::class)->handle($record)->all(),
+            'fieldLabels' => FieldDictionaryField::labelsFor(FieldDictionaryField::ENTITY_DIALOG),
         ];
     }
 

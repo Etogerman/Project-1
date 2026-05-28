@@ -6,6 +6,7 @@ use App\Data\Dialogs\DialogInboxStatusData;
 use App\Filament\Resources\Dialogs\DialogResource;
 use App\Models\Channel;
 use App\Models\Dialog;
+use App\Models\FieldDictionaryField;
 use App\Models\User;
 use App\Services\Contacts\ResolveContactDisplayNameAction;
 use App\Services\Dialogs\ResolveDialogInboxStatusAction;
@@ -66,6 +67,16 @@ class DialogKanban extends Page
     public array $recentMovePromotions = [];
 
     public int $moveSequence = 0;
+
+    /**
+     * @var array<string, string>|null
+     */
+    protected ?array $dialogFieldLabels = null;
+
+    /**
+     * @var array<string, array<string, string>>
+     */
+    protected array $dialogOptionLabels = [];
 
     protected function queryString(): array
     {
@@ -246,6 +257,7 @@ class DialogKanban extends Page
                 'has_active_filters' => $this->hasActiveFilters(),
             ],
             'columns' => $this->buildColumns(),
+            'field_labels' => $this->getDialogFieldLabels(),
             'can_manage_stages' => $this->canCurrentUserManageDialogStages(),
             'table_url' => DialogResource::getUrl('index'),
         ];
@@ -333,7 +345,7 @@ class DialogKanban extends Page
 
             $columns[] = [
                 'stage' => $stage,
-                'label' => Dialog::stageLabel($stage),
+                'label' => $this->dialogOptionLabel('stage', $stage, Dialog::stageLabel($stage)),
                 'tone' => Dialog::stageTone($stage),
                 'count' => $dialogsInColumn->count(),
                 'has_more' => $dialogsInColumn->count() > $visibleCount,
@@ -361,7 +373,7 @@ class DialogKanban extends Page
 
         return [
             'stage' => $stage,
-            'label' => Dialog::stageLabel($stage),
+            'label' => $this->dialogOptionLabel('stage', $stage, Dialog::stageLabel($stage)),
             'tone' => Dialog::stageTone($stage),
             'count' => $count,
             'has_more' => $count > $visibleCount,
@@ -745,6 +757,21 @@ class DialogKanban extends Page
             DialogInboxStatusData::CODE_NOT_REQUIRED => 'Не требует ответа',
             DialogInboxStatusData::CODE_NO_NEW => 'Нет новых',
         ];
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function getDialogFieldLabels(): array
+    {
+        return $this->dialogFieldLabels ??= FieldDictionaryField::labelsFor(FieldDictionaryField::ENTITY_DIALOG);
+    }
+
+    private function dialogOptionLabel(string $fieldKey, mixed $value, string $fallback): string
+    {
+        $this->dialogOptionLabels[$fieldKey] ??= FieldDictionaryField::optionLabelsFor(FieldDictionaryField::ENTITY_DIALOG, $fieldKey);
+
+        return FieldDictionaryField::optionLabelFrom($this->dialogOptionLabels[$fieldKey], $value, $fallback);
     }
 
     private function canCurrentUserManageDialogStages(): bool

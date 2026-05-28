@@ -6,6 +6,7 @@ use App\Filament\Resources\Contacts\ContactResource;
 use App\Filament\Resources\Contacts\Pages\Concerns\InteractsWithContactWorkspace;
 use App\Models\Contact;
 use App\Models\Dialog;
+use App\Models\FieldDictionaryField;
 use App\Services\Contacts\AddContactTimelineCommentAction;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
@@ -42,6 +43,21 @@ class ViewContact extends ViewRecord
     public int $historyVisibleCount = 20;
 
     public string $historyCommentBody = '';
+
+    /**
+     * @var array<string, string>|null
+     */
+    protected ?array $contactFieldLabels = null;
+
+    /**
+     * @var array<string, array<string, string>>
+     */
+    protected array $contactOptionLabels = [];
+
+    /**
+     * @var array<string, array<string, string>>
+     */
+    protected array $dialogOptionLabels = [];
 
     public function mount(int|string $record): void
     {
@@ -195,6 +211,7 @@ class ViewContact extends ViewRecord
                 'canEditPhones' => false,
                 'canDeletePhones' => false,
             ];
+        $phoneNumbersViewData['sectionTitle'] = $this->contactFieldLabel('phones', 'Телефоны');
         $showDedupStatus = $isGeneralTab && ContactResource::shouldShowDedupStatusSection($record);
         $diagnosticsViewData = $isDiagnosticsTab
             ? ContactResource::buildDiagnosticsViewData($record)
@@ -333,7 +350,7 @@ class ViewContact extends ViewRecord
         $lastContactMeta = $latestDialog instanceof Dialog
             ? trim(sprintf(
                 '%s · %s',
-                Dialog::stageLabel($latestDialog->stage),
+                $this->dialogOptionLabel('stage', $latestDialog->stage, Dialog::stageLabel($latestDialog->stage)),
                 $latestDialog->last_inbound_at !== null ? 'входящее' : 'нет входящих'
             ))
             : 'Диалогов пока нет';
@@ -416,15 +433,15 @@ class ViewContact extends ViewRecord
             : null;
 
         return [
-            $this->makeRow('Имя', 'first_name', $record->first_name ?? '—', $profileAction, edit: $this->makeInlineEdit('editingFirstName', 'text', $canEditProfile)),
-            $this->makeRow('Откуда знаем', 'first_name_source', $this->resolveFirstNameSourceValue($record)),
-            $this->makeRow('Фамилия', 'last_name', $record->last_name ?? '—', $profileAction, edit: $this->makeInlineEdit('editingLastName', 'text', $canEditProfile)),
-            $this->makeRow('Обработали', 'first_name_resolution_method', $this->resolveFirstNameResolutionMethodValue($record)),
-            $this->makeRow('Пол', 'gender', $this->resolveGenderValue($record), $profileAction, edit: $this->makeInlineEdit('editingGender', 'select', $canEditProfile, $profileViewData['genderOptions'] ?? [])),
-            $this->makeRow('Откуда знаем', 'gender_source', Contact::formatGenderSource($record->gender_source)),
-            $this->makeRow('Дата рождения', 'birth_date', $this->formatDate($record->birth_date), $profileAction, edit: $this->makeInlineEdit('editingBirthDate', 'date', $canEditProfile)),
+            $this->makeRow($this->contactFieldLabel('first_name', 'Имя'), 'first_name', $record->first_name ?? '—', $profileAction, edit: $this->makeInlineEdit('editingFirstName', 'text', $canEditProfile)),
+            $this->makeRow($this->contactFieldLabel('first_name_source', 'Откуда знаем'), 'first_name_source', $this->resolveFirstNameSourceValue($record)),
+            $this->makeRow($this->contactFieldLabel('last_name', 'Фамилия'), 'last_name', $record->last_name ?? '—', $profileAction, edit: $this->makeInlineEdit('editingLastName', 'text', $canEditProfile)),
+            $this->makeRow($this->contactFieldLabel('first_name_resolution_method', 'Обработали'), 'first_name_resolution_method', $this->resolveFirstNameResolutionMethodValue($record)),
+            $this->makeRow($this->contactFieldLabel('gender', 'Пол'), 'gender', $this->resolveGenderValue($record), $profileAction, edit: $this->makeInlineEdit('editingGender', 'select', $canEditProfile, $profileViewData['genderOptions'] ?? [])),
+            $this->makeRow($this->contactFieldLabel('gender_source', 'Откуда знаем'), 'gender_source', $this->contactOptionLabel('gender_source', $record->gender_source, Contact::formatGenderSource($record->gender_source))),
+            $this->makeRow($this->contactFieldLabel('birth_date', 'Дата рождения'), 'birth_date', $this->formatDate($record->birth_date), $profileAction, edit: $this->makeInlineEdit('editingBirthDate', 'date', $canEditProfile)),
             $this->makeRow('Возраст', 'effective_age_years', $record->effective_age_years !== null ? (string) $record->effective_age_years : '—'),
-            $this->makeRow('Возрастной диапазон', 'age_range', Contact::formatAgeRange($record->age_range), $profileAction, edit: $this->makeInlineEdit('editingAgeRange', 'select', $canEditProfile, $profileViewData['ageRangeOptions'] ?? []), wide: true),
+            $this->makeRow($this->contactFieldLabel('age_range', 'Возрастной диапазон'), 'age_range', $this->contactOptionLabel('age_range', $record->age_range, Contact::formatAgeRange($record->age_range)), $profileAction, edit: $this->makeInlineEdit('editingAgeRange', 'select', $canEditProfile, $profileViewData['ageRangeOptions'] ?? []), wide: true),
         ];
     }
 
@@ -442,11 +459,11 @@ class ViewContact extends ViewRecord
             : null;
 
         return [
-            $this->makeRow('Страна', 'country', $record->country ?? '—', $locationAction, edit: $this->makeInlineEdit('editingCountry', 'text', $canEditProfile)),
-            $this->makeRow('Город', 'city', $record->city ?? '—', $locationAction, edit: $this->makeInlineEdit('editingCity', 'text', $canEditProfile)),
-            $this->makeRow('Регион', 'region', $record->region ?? '—', $locationAction, edit: $this->makeInlineEdit('editingRegion', 'select', $canEditProfile, $profileViewData['regionOptions'] ?? [])),
+            $this->makeRow($this->contactFieldLabel('country', 'Страна'), 'country', $record->country ?? '—', $locationAction, edit: $this->makeInlineEdit('editingCountry', 'text', $canEditProfile)),
+            $this->makeRow($this->contactFieldLabel('city', 'Город'), 'city', $record->city ?? '—', $locationAction, edit: $this->makeInlineEdit('editingCity', 'text', $canEditProfile)),
+            $this->makeRow($this->contactFieldLabel('region', 'Регион'), 'region', $record->region ?? '—', $locationAction, edit: $this->makeInlineEdit('editingRegion', 'select', $canEditProfile, $profileViewData['regionOptions'] ?? [])),
             $this->makeRow('Статус региона', 'region_status', Contact::formatRegionStatus($record->region_status)),
-            $this->makeRow('Источник региона', 'region_source', $this->formatRegionSource($record->region_source)),
+            $this->makeRow($this->contactFieldLabel('location_source', 'Источник региона'), 'region_source', $this->formatRegionSource($record->region_source)),
             $this->makeRow('Кандидаты региона', 'pending_region_candidates', $this->formatArrayValue($record->pending_region_candidates)),
             $this->makeRow('Расстояние до Москвы', 'distance_to_moscow_km', $record->distance_to_moscow_km !== null ? $record->distance_to_moscow_km.' км' : '—'),
             $this->makeRow('Статус расчёта', 'distance_to_moscow_status', Contact::formatDistanceToMoscowStatus($record->distance_to_moscow_status)),
@@ -491,6 +508,27 @@ class ViewContact extends ViewRecord
                     ->exists() ? 'Да' : 'Нет',
             ),
         ];
+    }
+
+    protected function contactFieldLabel(string $fieldKey, string $fallback): string
+    {
+        $this->contactFieldLabels ??= FieldDictionaryField::labelsFor(FieldDictionaryField::ENTITY_CONTACT);
+
+        return $this->contactFieldLabels[$fieldKey] ?? $fallback;
+    }
+
+    protected function contactOptionLabel(string $fieldKey, mixed $value, string $fallback): string
+    {
+        $this->contactOptionLabels[$fieldKey] ??= FieldDictionaryField::optionLabelsFor(FieldDictionaryField::ENTITY_CONTACT, $fieldKey);
+
+        return FieldDictionaryField::optionLabelFrom($this->contactOptionLabels[$fieldKey], $value, $fallback);
+    }
+
+    protected function dialogOptionLabel(string $fieldKey, mixed $value, string $fallback): string
+    {
+        $this->dialogOptionLabels[$fieldKey] ??= FieldDictionaryField::optionLabelsFor(FieldDictionaryField::ENTITY_DIALOG, $fieldKey);
+
+        return FieldDictionaryField::optionLabelFrom($this->dialogOptionLabels[$fieldKey], $value, $fallback);
     }
 
     /**
@@ -685,7 +723,7 @@ class ViewContact extends ViewRecord
             return 'Источник не определён';
         }
 
-        return $label;
+        return $this->contactOptionLabel('first_name_source', $record->first_name_source, $label);
     }
 
     protected function resolveFirstNameResolutionMethodValue(Contact $record): string
@@ -700,7 +738,7 @@ class ViewContact extends ViewRecord
             return 'Не указано';
         }
 
-        return $label;
+        return $this->contactOptionLabel('first_name_resolution_method', $record->first_name_resolution_method, $label);
     }
 
     protected function resolveGenderValue(Contact $record): string
@@ -709,7 +747,7 @@ class ViewContact extends ViewRecord
             return '—';
         }
 
-        return Contact::formatGender($record->gender);
+        return $this->contactOptionLabel('gender', $record->gender, Contact::formatGender($record->gender));
     }
 
     protected function formatDate(mixed $value): string

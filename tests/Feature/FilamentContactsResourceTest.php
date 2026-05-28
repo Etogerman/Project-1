@@ -24,6 +24,7 @@ use App\Models\ContactQuestionnaireRun;
 use App\Models\ContactStartTag;
 use App\Models\ContactTimelineEvent;
 use App\Models\Dialog;
+use App\Models\FieldDictionaryField;
 use App\Models\Message;
 use App\Models\QuestionnaireTemplate;
 use App\Models\QuestionnaireTemplateVersion;
@@ -2636,6 +2637,112 @@ class FilamentContactsResourceTest extends TestCase
             ->assertSee('Удалить');
     }
 
+    public function test_contact_view_uses_field_dictionary_labels(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'first_name' => 'Пётр',
+            'city' => 'Москва',
+        ]);
+
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 999 123 45 67',
+            'phone_normalized' => '+79991234567',
+            'is_primary' => true,
+        ]);
+
+        FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_CONTACT)
+            ->where('field_key', 'first_name')
+            ->firstOrFail()
+            ->update(['name' => 'Имя клиента']);
+        FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_CONTACT)
+            ->where('field_key', 'city')
+            ->firstOrFail()
+            ->update(['name' => 'Город клиента']);
+        FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_CONTACT)
+            ->where('field_key', 'phones')
+            ->firstOrFail()
+            ->update(['name' => 'Номера связи']);
+
+        Livewire::actingAs($admin)
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->assertSee('Имя клиента')
+            ->assertSee('Город клиента')
+            ->assertSee('Номера связи')
+            ->assertSee('+7 999 123 45 67');
+    }
+
+    public function test_contacts_table_uses_field_dictionary_phone_label(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create();
+
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 999 123 45 67',
+            'phone_normalized' => '+79991234567',
+            'is_primary' => true,
+        ]);
+
+        FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_CONTACT)
+            ->where('field_key', 'phones')
+            ->firstOrFail()
+            ->update(['name' => 'Номера клиента']);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->assertTableColumnExists(
+                'primary_phone_raw',
+                fn ($column): bool => $column->getLabel() === 'Номера клиента',
+                $contact,
+            );
+    }
+
+    public function test_contact_view_uses_field_dictionary_option_labels(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'first_name' => 'Галя',
+            'gender' => 'female',
+            'age_range' => '30_39',
+        ]);
+
+        $gender = FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_CONTACT)
+            ->where('field_key', 'gender')
+            ->firstOrFail();
+        $genderOptions = $gender->options;
+        $genderOptions[1]['label'] = 'Женщина из справочника';
+        $gender->update(['options' => $genderOptions]);
+
+        $ageRange = FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_CONTACT)
+            ->where('field_key', 'age_range')
+            ->firstOrFail();
+        $ageOptions = $ageRange->options;
+        $ageOptions[3]['label'] = '30-39 из справочника';
+        $ageRange->update(['options' => $ageOptions]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->assertSee('Женщина из справочника')
+            ->assertSee('30-39 из справочника');
+    }
+
     public function test_admin_can_delete_contact_from_table_actions_column(): void
     {
         $admin = User::factory()->create([
@@ -3581,6 +3688,67 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertStringContainsString('data-role="contact-dialogs"', $dialogsHtml);
         $this->assertStringContainsString('data-role="contact-dialogs-empty"', $dialogsHtml);
         $this->assertStringContainsString('Диалоги ещё не появились.', $dialogsHtml);
+    }
+
+    public function test_contact_dialogs_renderer_uses_dialog_field_dictionary_labels(): void
+    {
+        $contact = Contact::factory()->create();
+        $channel = Channel::factory()->create([
+            'name' => 'Telegram Labels',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'telegram-labels-dialog',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'labels-chat',
+            'last_message_at' => now(),
+        ]);
+
+        Message::query()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'labels-chat',
+            'text' => 'Проверяем подписи таблицы диалогов',
+            'raw_payload' => ['provider' => 'telegram'],
+            'received_at' => now(),
+        ]);
+        $this->refreshDialogMessageSnapshots($dialog);
+
+        FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_DIALOG)
+            ->where('field_key', 'channel_id')
+            ->firstOrFail()
+            ->update(['name' => 'Канал из справочника']);
+        FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_DIALOG)
+            ->where('field_key', 'phone')
+            ->firstOrFail()
+            ->update(['name' => 'Телефон из справочника']);
+        FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_DIALOG)
+            ->where('field_key', 'last_message_at')
+            ->firstOrFail()
+            ->update(['name' => 'Сообщение из справочника']);
+
+        $dialogsBuilder = new ReflectionMethod(ContactResource::class, 'buildDialogsViewData');
+        $dialogsBuilder->setAccessible(true);
+
+        $dialogsHtml = view('filament.contacts.partials.contact-dialogs', $dialogsBuilder->invoke(null, $contact))->render();
+
+        $this->assertStringContainsString('Канал из справочника', $dialogsHtml);
+        $this->assertStringContainsString('Телефон из справочника', $dialogsHtml);
+        $this->assertStringContainsString('Сообщение из справочника', $dialogsHtml);
     }
 
     public function test_contact_dialogs_renderer_shows_missing_token_route_status(): void

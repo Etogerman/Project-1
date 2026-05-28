@@ -1,0 +1,878 @@
+/* =====================================================================
+   AB Connector — Base components (.ac-*)
+   ===================================================================== */
+
+/* ---------- Глобальный лэйаут ---------- */
+
+.ac-app {
+  display: grid;
+  grid-template-columns: var(--ac-sidebar-w) 1fr;
+  grid-template-rows: var(--ac-topbar-h) 1fr;
+  grid-template-areas:
+    "sidebar topbar"
+    "sidebar main";
+  min-height: 100vh;
+}
+.ac-app.is-sidebar-collapsed { grid-template-columns: var(--ac-sidebar-collapsed) 1fr; }
+
+/* ---------- Topbar ---------- */
+
+.ac-topbar {
+  grid-area: topbar;
+  display: flex;
+  align-items: center;
+  gap: var(--ac-sp-3);
+  padding: 0 var(--ac-sp-4);
+  background: var(--ac-surface);
+  border-bottom: 1px solid var(--ac-border);
+  z-index: var(--ac-z-topbar);
+  position: sticky;
+  top: 0;
+}
+.ac-topbar__search {
+  flex: 0 0 280px;
+  max-width: 280px;
+  position: relative;
+  margin-left: auto;
+}
+.ac-topbar__search input {
+  width: 100%;
+  height: 30px;
+  padding: 0 10px 0 30px;
+  background: var(--ac-surface-2);
+  border: 1px solid transparent;
+  border-radius: var(--ac-radius-2);
+  color: var(--ac-text);
+  font-size: var(--ac-fs-13);
+  outline: none;
+  transition: background var(--ac-dur-fast) var(--ac-ease),
+              border-color var(--ac-dur-fast) var(--ac-ease);
+}
+.ac-topbar__search input::placeholder { color: var(--ac-text-3); }
+.ac-topbar__search input:focus {
+  background: var(--ac-surface);
+  border-color: var(--ac-border-strong);
+  box-shadow: 0 0 0 3px var(--ac-accent-ring);
+}
+.ac-topbar__search-icon {
+  position: absolute;
+  left: 9px; top: 50%;
+  transform: translateY(-50%);
+  color: var(--ac-text-3);
+  pointer-events: none;
+}
+.ac-topbar__search-kbd {
+  position: absolute;
+  right: 8px; top: 50%;
+  transform: translateY(-50%);
+  font-size: 10px;
+  color: var(--ac-text-3);
+  background: var(--ac-surface);
+  border: 1px solid var(--ac-border);
+  border-radius: 3px;
+  padding: 1px 5px;
+  pointer-events: none;
+  font-family: var(--ac-font-mono);
+}
+.ac-topbar__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.ac-icon-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px; height: 30px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--ac-radius-2);
+  color: var(--ac-text-2);
+  cursor: pointer;
+  position: relative;
+  transition: background var(--ac-dur-fast) var(--ac-ease),
+              color var(--ac-dur-fast) var(--ac-ease);
+}
+[data-theme="dark"] .ac-icon-btn { color: var(--ac-text-2); }
+.ac-icon-btn:hover { background: var(--ac-surface-2); color: var(--ac-text); }
+.ac-icon-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--ac-accent-ring); }
+.ac-icon-btn .ac-dot {
+  position: absolute;
+  top: 5px; right: 5px;
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--ac-danger);
+  border: 1.5px solid var(--ac-surface);
+}
+
+/* ---------- Avatar ----------
+   Приоритет рендера:
+     1. Реальное фото (фон через background-image)
+     2. Инициалы (цветной фон по hash имени)
+     3. Брендовый placeholder (нейтральный фон + наш мини-силуэт)
+   Размеры: 24 / 32 / 40 / 56 (sm / md (default) / lg / xl)
+*/
+.ac-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  background-color: var(--ac-surface-2);
+  background-size: cover;
+  background-position: center;
+  color: var(--ac-text-inverse);
+  font-size: 12px;
+  font-weight: var(--ac-fw-semi);
+  letter-spacing: 0.01em;
+  flex-shrink: 0;
+  position: relative;
+  overflow: hidden;
+  user-select: none;
+  /* тонкое кольцо для отрыва от фона на любых поверхностях */
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.06);
+}
+[data-theme="dark"] .ac-avatar { box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06); }
+
+.ac-avatar--sm { width: 24px; height: 24px; font-size: 10px; }
+.ac-avatar--md { width: 32px; height: 32px; font-size: 12px; }
+.ac-avatar--lg { width: 40px; height: 40px; font-size: 14px; }
+.ac-avatar--xl { width: 56px; height: 56px; font-size: 20px; }
+
+/* Тона для инициалов — палитра 6 спокойных цветов.
+   Выбирается стабильно по хэшу имени на бэке: tone-1..tone-6 */
+.ac-avatar--tone-1 { background-color: #4F46E5; color: #fff; }   /* индиго */
+.ac-avatar--tone-2 { background-color: #0891B2; color: #fff; }   /* циан */
+.ac-avatar--tone-3 { background-color: #16A34A; color: #fff; }   /* зелёный */
+.ac-avatar--tone-4 { background-color: #CA8A04; color: #fff; }   /* охра */
+.ac-avatar--tone-5 { background-color: #DB2777; color: #fff; }   /* малиновый */
+.ac-avatar--tone-6 { background-color: #7C3AED; color: #fff; }   /* фиолетовый */
+
+/* Tinted (приглушённые) варианты — для плотных таблиц, чтобы аватар не «горел» */
+.ac-avatar--muted.ac-avatar--tone-1 { background-color: #E0E7FF; color: #4338CA; }
+.ac-avatar--muted.ac-avatar--tone-2 { background-color: #CFFAFE; color: #0E7490; }
+.ac-avatar--muted.ac-avatar--tone-3 { background-color: #DCFCE7; color: #166534; }
+.ac-avatar--muted.ac-avatar--tone-4 { background-color: #FEF3C7; color: #92400E; }
+.ac-avatar--muted.ac-avatar--tone-5 { background-color: #FCE7F3; color: #9D174D; }
+.ac-avatar--muted.ac-avatar--tone-6 { background-color: #EDE9FE; color: #5B21B6; }
+[data-theme="dark"] .ac-avatar--muted { color: var(--ac-text); }
+[data-theme="dark"] .ac-avatar--muted.ac-avatar--tone-1 { background-color: rgba(129,140,248,0.18); color: #A5B4FC; }
+[data-theme="dark"] .ac-avatar--muted.ac-avatar--tone-2 { background-color: rgba(34,211,238,0.18);  color: #67E8F9; }
+[data-theme="dark"] .ac-avatar--muted.ac-avatar--tone-3 { background-color: rgba(74,222,128,0.18);  color: #86EFAC; }
+[data-theme="dark"] .ac-avatar--muted.ac-avatar--tone-4 { background-color: rgba(251,191,36,0.18);  color: #FCD34D; }
+[data-theme="dark"] .ac-avatar--muted.ac-avatar--tone-5 { background-color: rgba(244,114,182,0.18); color: #F9A8D4; }
+[data-theme="dark"] .ac-avatar--muted.ac-avatar--tone-6 { background-color: rgba(167,139,250,0.18); color: #C4B5FD; }
+
+/* Брендовый placeholder — когда нет ни фото, ни имени.
+   Не generic Heroicon UserCircle: спокойный фон + наш минимальный силуэт
+   (точка-голова + дуга-плечи). Выглядит «нейтрально», не как иконка-заглушка. */
+.ac-avatar--placeholder {
+  background:
+    radial-gradient(110% 110% at 50% 0%, var(--ac-surface) 0%, var(--ac-surface-2) 70%);
+  color: var(--ac-text-3);
+}
+[data-theme="dark"] .ac-avatar--placeholder {
+  background:
+    radial-gradient(110% 110% at 50% 0%, var(--ac-surface-2) 0%, var(--ac-surface) 80%);
+}
+.ac-avatar--placeholder::before,
+.ac-avatar--placeholder::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  background: currentColor;
+  opacity: 0.55;
+  transform: translateX(-50%);
+  border-radius: 50%;
+}
+/* "голова" */
+.ac-avatar--placeholder::before {
+  width: 30%;
+  aspect-ratio: 1;
+  top: 22%;
+}
+/* "плечи" — половина круга, обрезанная нижней рамкой аватара */
+.ac-avatar--placeholder::after {
+  width: 78%;
+  aspect-ratio: 1;
+  bottom: -42%;
+  border-radius: 50% 50% 0 0 / 100% 100% 0 0;
+}
+
+/* Канальный индикатор-точка (мини-чип под аватаром, для списков диалогов) */
+.ac-avatar-wrap { position: relative; display: inline-flex; flex-shrink: 0; }
+.ac-avatar-wrap__channel {
+  position: absolute;
+  right: -2px; bottom: -2px;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--ac-surface);
+  background: var(--ac-channel-tg);
+  display: inline-flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 7px; font-weight: 700;
+}
+.ac-avatar-wrap__channel--max   { background: var(--ac-channel-max); }
+.ac-avatar-wrap__channel--tgacc { background: var(--ac-channel-tgacc); }
+.ac-avatar-wrap__channel--b24   { background: var(--ac-channel-b24); }
+
+/* ---------- Sidebar ---------- */
+
+.ac-sidebar {
+  grid-area: sidebar;
+  background: var(--ac-surface);
+  border-right: 1px solid var(--ac-border);
+  display: flex;
+  flex-direction: column;
+  z-index: var(--ac-z-sidebar);
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.ac-sidebar__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--ac-sp-2);
+  height: var(--ac-topbar-h);
+  padding: 0 var(--ac-sp-4);
+  border-bottom: 1px solid var(--ac-border);
+  flex-shrink: 0;
+}
+.ac-brand-mark {
+  width: 26px; height: 26px;
+  border-radius: 7px;
+  background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%);
+  color: white;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+}
+.ac-brand-name {
+  font-size: 14px;
+  font-weight: var(--ac-fw-semi);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.ac-nav {
+  flex: 1;
+  padding: var(--ac-sp-3) var(--ac-sp-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ac-sp-4);
+}
+.ac-nav__group-label {
+  padding: 0 var(--ac-sp-3);
+  font-size: var(--ac-fs-10);
+  font-weight: var(--ac-fw-semi);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ac-text-3);
+  margin-bottom: var(--ac-sp-1);
+}
+.ac-nav__items { display: flex; flex-direction: column; gap: 1px; }
+.ac-nav__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: var(--ac-radius-2);
+  font-size: var(--ac-fs-13);
+  font-weight: var(--ac-fw-medium);
+  color: var(--ac-text-2);
+  cursor: pointer;
+  user-select: none;
+  text-decoration: none;
+  transition: background var(--ac-dur-fast) var(--ac-ease),
+              color var(--ac-dur-fast) var(--ac-ease);
+}
+.ac-nav__item:hover { background: var(--ac-surface-2); color: var(--ac-text); }
+.ac-nav__item.is-active {
+  background: var(--ac-accent-soft);
+  color: var(--ac-accent);
+  font-weight: var(--ac-fw-semi);
+}
+[data-theme="dark"] .ac-nav__item.is-active { color: var(--ac-accent-hover); }
+.ac-nav__item-icon {
+  width: 16px; height: 16px;
+  flex-shrink: 0;
+  color: currentColor;
+  opacity: 0.85;
+}
+.ac-nav__item-count {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: var(--ac-fw-medium);
+  color: var(--ac-text-3);
+  background: var(--ac-surface-2);
+  padding: 1px 6px;
+  border-radius: var(--ac-radius-pill);
+}
+.ac-nav__item.is-active .ac-nav__item-count {
+  background: var(--ac-surface);
+  color: var(--ac-accent);
+}
+
+.ac-sidebar__footer {
+  padding: var(--ac-sp-3);
+  border-top: 1px solid var(--ac-border);
+  flex-shrink: 0;
+}
+
+/* ---------- Main / page ---------- */
+
+.ac-main {
+  grid-area: main;
+  min-width: 0;
+  background: var(--ac-bg);
+}
+.ac-page {
+  max-width: var(--ac-content-max);
+  margin: 0 auto;
+  padding: var(--ac-page-pad-y) var(--ac-page-pad-x) 48px;
+}
+
+/* Хлебные крошки */
+.ac-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--ac-fs-12);
+  color: var(--ac-text-3);
+  margin-bottom: 10px;
+}
+.ac-breadcrumb a {
+  color: var(--ac-text-2);
+  text-decoration: none;
+  border-radius: 3px;
+}
+.ac-breadcrumb a:hover { color: var(--ac-text); text-decoration: underline; }
+.ac-breadcrumb__sep { color: var(--ac-text-3); opacity: 0.6; }
+.ac-topbar__crumb {
+  margin: 0;
+  font-size: var(--ac-fs-13);
+  color: var(--ac-text-2);
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ac-topbar__crumb a { color: var(--ac-text-2); }
+.ac-topbar__crumb > span:last-child { color: var(--ac-text); font-weight: var(--ac-fw-semi); }
+
+/* Шапка страницы */
+.ac-page-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ac-sp-4);
+  margin-bottom: var(--ac-sp-5);
+}
+.ac-page-head__title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--ac-sp-3);
+  flex-wrap: wrap;
+}
+.ac-page-head__main { min-width: 0; flex: 1; }
+.ac-page-head h1 {
+  margin: 0;
+  font-size: var(--ac-fs-22);
+  line-height: var(--ac-lh-tight);
+  font-weight: var(--ac-fw-bold);
+  letter-spacing: -0.015em;
+  color: var(--ac-text);
+}
+.ac-page-head__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ac-sp-3);
+  margin-top: 6px;
+  font-size: var(--ac-fs-12);
+  color: var(--ac-text-2);
+}
+.ac-page-head__meta .ac-mono { color: var(--ac-text-3); }
+.ac-page-head__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--ac-sp-2);
+  flex-shrink: 0;
+}
+
+/* ---------- Tabs ---------- */
+
+.ac-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-bottom: 1px solid var(--ac-border);
+  margin-bottom: var(--ac-sp-5);
+  margin-top: var(--ac-sp-1);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.ac-tabs::-webkit-scrollbar { display: none; }
+.ac-tab {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 8px 12px 10px;
+  font-size: var(--ac-fs-13);
+  font-weight: var(--ac-fw-medium);
+  color: var(--ac-text-2);
+  cursor: pointer;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--ac-radius-2) var(--ac-radius-2) 0 0;
+  transition: color var(--ac-dur-fast) var(--ac-ease),
+              background var(--ac-dur-fast) var(--ac-ease);
+  white-space: nowrap;
+}
+.ac-tab:hover { color: var(--ac-text); background: var(--ac-surface-2); }
+.ac-tab.is-active { color: var(--ac-text); font-weight: var(--ac-fw-semi); }
+.ac-tab.is-active::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; bottom: -1px;
+  height: 2px;
+  background: var(--ac-accent);
+  border-radius: 2px 2px 0 0;
+}
+.ac-tab__count {
+  font-size: 11px;
+  background: var(--ac-surface-2);
+  color: var(--ac-text-2);
+  padding: 1px 6px;
+  border-radius: var(--ac-radius-pill);
+}
+.ac-tab.is-active .ac-tab__count {
+  background: var(--ac-accent-soft);
+  color: var(--ac-accent);
+}
+
+/* ---------- Кнопки ---------- */
+
+.ac-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  background: var(--ac-surface);
+  border: 1px solid var(--ac-border-input);
+  border-radius: var(--ac-radius-2);
+  color: var(--ac-text);
+  font-size: var(--ac-fs-13);
+  font-weight: var(--ac-fw-medium);
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background var(--ac-dur-fast) var(--ac-ease),
+              border-color var(--ac-dur-fast) var(--ac-ease),
+              color var(--ac-dur-fast) var(--ac-ease);
+}
+.ac-btn:hover { background: var(--ac-surface-2); border-color: var(--ac-border-strong); }
+.ac-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--ac-accent-ring); }
+.ac-btn:active { background: var(--ac-surface-3); }
+.ac-btn[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+.ac-btn--sm { height: 26px; padding: 0 10px; font-size: var(--ac-fs-12); }
+.ac-btn--lg { height: 36px; padding: 0 16px; font-size: var(--ac-fs-14); }
+
+.ac-btn--primary {
+  background: var(--ac-accent);
+  border-color: var(--ac-accent);
+  color: var(--ac-text-inverse);
+}
+.ac-btn--primary:hover { background: var(--ac-accent-hover); border-color: var(--ac-accent-hover); }
+.ac-btn--primary:active { background: var(--ac-accent-active); border-color: var(--ac-accent-active); }
+
+.ac-btn--ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--ac-text-2);
+}
+.ac-btn--ghost:hover { background: var(--ac-surface-2); color: var(--ac-text); }
+
+.ac-btn--danger {
+  color: var(--ac-danger);
+  border-color: var(--ac-border-input);
+  background: var(--ac-surface);
+}
+.ac-btn--danger:hover {
+  background: var(--ac-danger-soft);
+  border-color: var(--ac-danger);
+  color: var(--ac-danger-hover);
+}
+
+.ac-btn--success {
+  background: var(--ac-success);
+  border-color: var(--ac-success);
+  color: #fff;
+}
+.ac-btn--success:hover {
+  background: var(--ac-success);
+  border-color: var(--ac-success);
+  color: #fff;
+  filter: brightness(1.08);
+}
+.ac-btn--success:active {
+  background: var(--ac-success);
+  border-color: var(--ac-success);
+  filter: brightness(0.94);
+}
+[data-theme="dark"] .ac-btn--success { color: #0F172A; }
+[data-theme="dark"] .ac-btn--success:hover { color: #0F172A; }
+
+.ac-btn__icon { width: 14px; height: 14px; flex-shrink: 0; }
+
+/* ---------- Бейджи / статусы ---------- */
+
+.ac-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--ac-radius-pill);
+  font-size: var(--ac-fs-11);
+  font-weight: var(--ac-fw-semi);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  background: var(--ac-surface-2);
+  color: var(--ac-text-2);
+}
+.ac-badge__dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+.ac-badge--success { color: var(--ac-success); background: var(--ac-success-soft); }
+.ac-badge--warning { color: var(--ac-warning); background: var(--ac-warning-soft); }
+.ac-badge--danger  { color: var(--ac-danger);  background: var(--ac-danger-soft); }
+.ac-badge--info    { color: var(--ac-info);    background: var(--ac-info-soft); }
+.ac-badge--accent  { color: var(--ac-accent);  background: var(--ac-accent-soft); }
+
+/* Тег-чип (с цветной точкой и закруглением) */
+.ac-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 9px 0 8px;
+  border-radius: var(--ac-radius-pill);
+  font-size: var(--ac-fs-12);
+  font-weight: var(--ac-fw-medium);
+  color: var(--ac-text);
+  background: var(--ac-surface-2);
+  border: 1px solid var(--ac-border);
+}
+.ac-tag__dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ac-tag-gray); }
+.ac-tag--gray   { background: var(--ac-tag-gray-soft); }   .ac-tag--gray   .ac-tag__dot { background: var(--ac-tag-gray); }
+.ac-tag--blue   { background: var(--ac-tag-blue-soft); }   .ac-tag--blue   .ac-tag__dot { background: var(--ac-tag-blue); }
+.ac-tag--green  { background: var(--ac-tag-green-soft); }  .ac-tag--green  .ac-tag__dot { background: var(--ac-tag-green); }
+.ac-tag--yellow { background: var(--ac-tag-yellow-soft); } .ac-tag--yellow .ac-tag__dot { background: var(--ac-tag-yellow); }
+.ac-tag--red    { background: var(--ac-tag-red-soft); }    .ac-tag--red    .ac-tag__dot { background: var(--ac-tag-red); }
+.ac-tag--purple { background: var(--ac-tag-purple-soft); } .ac-tag--purple .ac-tag__dot { background: var(--ac-tag-purple); }
+.ac-tag[data-removable]:hover { border-color: var(--ac-border-strong); }
+
+/* Канальный чип */
+.ac-channel {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 8px 0 6px;
+  border-radius: var(--ac-radius-pill);
+  font-size: var(--ac-fs-11);
+  font-weight: var(--ac-fw-semi);
+}
+.ac-channel__icon {
+  width: 12px; height: 12px;
+  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-size: 9px;
+  font-weight: 700;
+}
+.ac-channel--tg     { color: var(--ac-channel-tg);    background: var(--ac-channel-tg-soft); }
+.ac-channel--tg     .ac-channel__icon { background: var(--ac-channel-tg); }
+.ac-channel--max    { color: var(--ac-channel-max);   background: var(--ac-channel-max-soft); }
+.ac-channel--max    .ac-channel__icon { background: var(--ac-channel-max); }
+.ac-channel--tgacc  { color: var(--ac-channel-tgacc); background: var(--ac-channel-tgacc-soft); }
+.ac-channel--tgacc  .ac-channel__icon { background: var(--ac-channel-tgacc); }
+.ac-channel--b24    { color: var(--ac-channel-b24);   background: var(--ac-channel-b24-soft); }
+.ac-channel--b24    .ac-channel__icon { background: var(--ac-channel-b24); }
+
+/* ---------- Section / card ---------- */
+
+.ac-section {
+  background: var(--ac-surface);
+  border: 1px solid var(--ac-border);
+  border-radius: var(--ac-radius-4);
+  overflow: hidden;
+}
+.ac-section__head {
+  display: flex;
+  align-items: center;
+  gap: var(--ac-sp-2);
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--ac-border);
+  min-height: 40px;
+}
+.ac-section__title {
+  font-size: var(--ac-fs-13);
+  font-weight: var(--ac-fw-semi);
+  color: var(--ac-text);
+  letter-spacing: -0.005em;
+}
+.ac-section__hint {
+  font-size: var(--ac-fs-12);
+  color: var(--ac-text-3);
+}
+.ac-section__actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.ac-section__body { padding: 4px 0; }
+.ac-section__body--pad { padding: 12px 14px; }
+
+/* Field-row: плотная строка label : value с inline-edit */
+.ac-field-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 200px) 1fr;
+  align-items: center;
+  gap: var(--ac-sp-3);
+  min-height: var(--ac-row-h);
+  padding: 4px 14px;
+  border-radius: 0;
+  cursor: text;
+  transition: background var(--ac-dur-fast) var(--ac-ease);
+}
+.ac-field-row + .ac-field-row { border-top: 1px solid var(--ac-border); }
+.ac-field-row:hover { background: var(--ac-surface-2); }
+
+.ac-field-row__label {
+  font-size: var(--ac-fs-12);
+  color: var(--ac-text-2);
+  font-weight: var(--ac-fw-medium);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ac-field-row__value {
+  font-size: var(--ac-fs-13);
+  color: var(--ac-text);
+  font-weight: var(--ac-fw-regular);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.ac-field-row__value.is-empty,
+.ac-field-row__value .ac-empty {
+  color: var(--ac-text-3);
+}
+.ac-field-row__value .ac-empty::before { content: "—"; }
+
+/* Inline-edit affordance: на hover вокруг значения подсвечивается контур */
+.ac-field-row__value[data-editable] {
+  position: relative;
+  padding: 3px 6px;
+  margin: -3px -6px;
+  border-radius: var(--ac-radius-2);
+  border: 1px solid transparent;
+  cursor: text;
+  transition: border-color var(--ac-dur-fast) var(--ac-ease),
+              background var(--ac-dur-fast) var(--ac-ease);
+}
+.ac-field-row:hover .ac-field-row__value[data-editable] {
+  border-color: var(--ac-border);
+  background: var(--ac-surface);
+}
+.ac-field-row__value[data-editable]:focus,
+.ac-field-row__value[data-editable].is-editing {
+  outline: none;
+  border-color: var(--ac-accent);
+  background: var(--ac-surface);
+  box-shadow: 0 0 0 3px var(--ac-accent-ring);
+}
+
+/* Источник значения — мелкая мета справа */
+.ac-field-row__source {
+  font-size: var(--ac-fs-11);
+  color: var(--ac-text-3);
+  white-space: nowrap;
+  margin-left: auto;
+  padding-left: 8px;
+  flex-shrink: 0;
+}
+
+/* Технические значения моноширинно */
+.ac-mono {
+  font-family: var(--ac-font-mono);
+  font-size: 12px;
+  color: var(--ac-text-2);
+  background: var(--ac-surface-2);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+/* Сетка двух колонок секций */
+.ac-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--ac-sp-4);
+  align-items: start;
+}
+@media (max-width: 1100px) {
+  .ac-grid-2 { grid-template-columns: 1fr; }
+}
+
+/* ---------- Список телефонов ---------- */
+
+.ac-phone-list { display: flex; flex-direction: column; }
+.ac-phone-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: var(--ac-sp-3);
+  padding: 8px 14px;
+  min-height: 44px;
+  transition: background var(--ac-dur-fast) var(--ac-ease);
+}
+.ac-phone-row + .ac-phone-row { border-top: 1px solid var(--ac-border); }
+.ac-phone-row:hover { background: var(--ac-surface-2); }
+.ac-phone-row__main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ac-phone-row__num {
+  font-size: var(--ac-fs-14);
+  font-weight: var(--ac-fw-medium);
+  font-family: var(--ac-font-mono);
+  color: var(--ac-text);
+}
+.ac-phone-row__src {
+  font-size: var(--ac-fs-11);
+  color: var(--ac-text-3);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.ac-phone-row__actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--ac-dur-fast) var(--ac-ease);
+}
+.ac-phone-row:hover .ac-phone-row__actions { opacity: 1; }
+.ac-phone-row[data-primary] .ac-phone-row__num::after {
+  content: "основной";
+  margin-left: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ac-accent);
+  background: var(--ac-accent-soft);
+  padding: 1px 6px;
+  border-radius: var(--ac-radius-pill);
+  vertical-align: middle;
+  font-family: var(--ac-font);
+}
+
+/* ---------- Save bar (sticky bottom-center) ----------
+   Появляется при редактировании поля. Плывёт над контентом, не скроллится. */
+.ac-savebar {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%) translateY(8px);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 6px 6px 14px;
+  background: var(--ac-surface);
+  border: 1px solid var(--ac-border-strong);
+  border-radius: var(--ac-radius-pill);
+  box-shadow: var(--ac-shadow-pop);
+  z-index: var(--ac-z-popover);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--ac-dur-base) var(--ac-ease),
+              transform var(--ac-dur-base) var(--ac-ease);
+}
+.ac-savebar.is-visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+  pointer-events: auto;
+}
+.ac-savebar__hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--ac-text-2);
+  font-size: var(--ac-fs-13);
+  font-weight: var(--ac-fw-medium);
+}
+.ac-savebar__dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--ac-warning);
+  box-shadow: 0 0 0 0 var(--ac-warning-ring);
+  animation: ac-savebar-pulse 1.6s ease-in-out infinite;
+}
+@keyframes ac-savebar-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(180, 83, 9, 0.35); }
+  50%      { box-shadow: 0 0 0 6px rgba(180, 83, 9, 0.0); }
+}
+.ac-savebar__divider {
+  width: 1px; height: 16px;
+  background: var(--ac-border);
+}
+.ac-savebar__actions { display: flex; gap: 4px; align-items: center; }
+
+/* ---------- Footer-bar (для удалить-кнопки в конце страницы) ---------- */
+
+.ac-page-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: var(--ac-sp-6);
+  padding-top: var(--ac-sp-4);
+  border-top: 1px dashed var(--ac-border);
+}
+.ac-page-footer__hint {
+  font-size: var(--ac-fs-12);
+  color: var(--ac-text-3);
+}
+
+/* ---------- Утилиты ---------- */
+
+.ac-stack    { display: flex; flex-direction: column; gap: var(--ac-sp-4); }
+.ac-stack-3  { display: flex; flex-direction: column; gap: var(--ac-sp-3); }
+.ac-stack-2  { display: flex; flex-direction: column; gap: var(--ac-sp-2); }
+.ac-row      { display: flex; align-items: center; gap: var(--ac-sp-2); }
+.ac-row-wrap { display: flex; align-items: center; gap: var(--ac-sp-2); flex-wrap: wrap; }
+.ac-spacer   { flex: 1; }
+.ac-hide-mobile { }
+@media (max-width: 768px) { .ac-hide-mobile { display: none !important; } }

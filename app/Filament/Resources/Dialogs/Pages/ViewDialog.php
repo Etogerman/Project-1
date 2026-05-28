@@ -11,6 +11,7 @@ use App\Models\ChannelPeerSyncState;
 use App\Models\Contact;
 use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
+use App\Models\FieldDictionaryField;
 use App\Models\Message;
 use App\Models\User;
 use App\Services\Bots\ContactIdentityAvatarStorage;
@@ -81,6 +82,16 @@ class ViewDialog extends ViewRecord
     public ?int $latestKnownMessageId = null;
 
     public ?string $dialogsBackUrl = null;
+
+    /**
+     * @var array<string, string>|null
+     */
+    protected ?array $dialogFieldLabels = null;
+
+    /**
+     * @var array<string, array<string, string>>
+     */
+    protected array $dialogOptionLabels = [];
 
     public function mount(int|string $record): void
     {
@@ -324,6 +335,7 @@ class ViewDialog extends ViewRecord
             'peerSyncState' => $this->getPeerSyncStateViewData(),
             'contactSummary' => $this->getContactSummaryViewData(),
             'dialogFields' => $this->getDialogFieldsViewData(),
+            'dialogFieldLabels' => $this->getDialogFieldLabels(),
             'dialogBreadcrumbs' => $this->getDialogBreadcrumbsViewData(),
             'kanbanBackUrl' => $this->resolveDialogsBackUrl(),
             'contactUrl' => $this->getContactViewUrl(),
@@ -447,17 +459,17 @@ class ViewDialog extends ViewRecord
         $currentIndex = array_search($currentStage, $workingStages, true);
 
         return [
-            'current_label' => Dialog::stageLabel($currentStage),
+            'current_label' => $this->dialogOptionLabel('stage', $currentStage, Dialog::stageLabel($currentStage)),
             'current_tone' => Dialog::stageTone($currentStage),
             'is_editable' => $isEditable,
             'blocked_reason' => $this->getDialogStageBlockedReason(),
             'stage_model' => 'dialogStageSelection',
             'update_method' => 'updateDialogStage',
-            'options' => Dialog::manualTransitionOptions($currentStage),
+            'options' => $this->applyDialogDictionaryOptionLabels('stage', Dialog::manualTransitionOptions($currentStage)),
             'steps' => collect($workingStages)
                 ->map(fn (string $stage, int $index): array => [
                     'value' => $stage,
-                    'label' => Dialog::stageLabel($stage),
+                    'label' => $this->dialogOptionLabel('stage', $stage, Dialog::stageLabel($stage)),
                     'tone' => Dialog::stageTone($stage),
                     'is_current' => $stage === $currentStage,
                     'is_clickable' => $isEditable && in_array($stage, $allowedTargets, true),
@@ -592,7 +604,7 @@ class ViewDialog extends ViewRecord
     /**
      * @return array{
      *     is_visible: bool,
-     *     fields: list<array{key: string, value: string, value_type: string, is_truncated: bool}>
+     *     fields: list<array{key: string, label: string, value: string, value_type: string, is_truncated: bool}>
      * }
      */
     protected function getDialogFieldsViewData(): array
@@ -614,6 +626,7 @@ class ViewDialog extends ViewRecord
 
                 return [
                     'key' => $key,
+                    'label' => $this->dialogFieldLabel($key, $key),
                     'value' => $formattedValue['value'],
                     'value_type' => $formattedValue['type'],
                     'is_truncated' => $formattedValue['is_truncated'],
@@ -627,6 +640,41 @@ class ViewDialog extends ViewRecord
             'is_visible' => true,
             'fields' => $fields,
         ];
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    protected function getDialogFieldLabels(): array
+    {
+        return $this->dialogFieldLabels ??= FieldDictionaryField::labelsFor(FieldDictionaryField::ENTITY_DIALOG);
+    }
+
+    protected function dialogFieldLabel(string $fieldKey, string $fallback): string
+    {
+        return FieldDictionaryField::labelFrom($this->getDialogFieldLabels(), $fieldKey, $fallback);
+    }
+
+    protected function dialogOptionLabel(string $fieldKey, mixed $value, string $fallback): string
+    {
+        $this->dialogOptionLabels[$fieldKey] ??= FieldDictionaryField::optionLabelsFor(FieldDictionaryField::ENTITY_DIALOG, $fieldKey);
+
+        return FieldDictionaryField::optionLabelFrom($this->dialogOptionLabels[$fieldKey], $value, $fallback);
+    }
+
+    /**
+     * @param  array<string, string>  $fallbackOptions
+     * @return array<string, string>
+     */
+    protected function applyDialogDictionaryOptionLabels(string $fieldKey, array $fallbackOptions): array
+    {
+        $this->dialogOptionLabels[$fieldKey] ??= FieldDictionaryField::optionLabelsFor(FieldDictionaryField::ENTITY_DIALOG, $fieldKey);
+
+        return collect($fallbackOptions)
+            ->mapWithKeys(fn (string $label, string $value): array => [
+                $value => FieldDictionaryField::optionLabelFrom($this->dialogOptionLabels[$fieldKey], $value, $label),
+            ])
+            ->all();
     }
 
     /**

@@ -1,4 +1,13 @@
 <x-filament-panels::page>
+    @php
+        $dialogFieldLabels = $field_labels ?? [];
+        $dialogFieldLabel = static function (string $fieldKey, string $fallback) use ($dialogFieldLabels): string {
+            $label = trim((string) ($dialogFieldLabels[$fieldKey] ?? ''));
+
+            return $label !== '' ? $label : $fallback;
+        };
+    @endphp
+
     <div
         data-role="dialog-kanban-page"
         class="ac-panel-stack ac-panel-stack--relaxed"
@@ -128,22 +137,22 @@
                                 <label class="ac-kanban-fields-popover__row">
                                     <input type="checkbox" data-kanban-card-field="id" checked>
                                     <span class="ac-kanban-fields-popover__box"></span>
-                                    <span>ID диалога</span>
+                                    <span>{{ $dialogFieldLabel('id', 'ID диалога') }}</span>
                                 </label>
                                 <label class="ac-kanban-fields-popover__row">
                                     <input type="checkbox" data-kanban-card-field="channel" checked>
                                     <span class="ac-kanban-fields-popover__box"></span>
-                                    <span>Канал</span>
+                                    <span>{{ $dialogFieldLabel('channel_id', 'Канал') }}</span>
                                 </label>
                                 <label class="ac-kanban-fields-popover__row">
                                     <input type="checkbox" data-kanban-card-field="status" checked>
                                     <span class="ac-kanban-fields-popover__box"></span>
-                                    <span>Статус ответа</span>
+                                    <span>{{ $dialogFieldLabel('status', 'Статус ответа') }}</span>
                                 </label>
                                 <label class="ac-kanban-fields-popover__row">
                                     <input type="checkbox" data-kanban-card-field="preview" checked>
                                     <span class="ac-kanban-fields-popover__box"></span>
-                                    <span>Последнее сообщение</span>
+                                    <span>{{ $dialogFieldLabel('last_message_at', 'Последнее сообщение') }}</span>
                                 </label>
                                 <label class="ac-kanban-fields-popover__row">
                                     <input type="checkbox" data-kanban-card-field="route" checked>

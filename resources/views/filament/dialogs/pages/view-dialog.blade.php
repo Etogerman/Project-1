@@ -1,4 +1,13 @@
 <x-filament-panels::page>
+    @php
+        $dialogFieldLabels = $dialogFieldLabels ?? [];
+        $dialogFieldLabel = static function (string $fieldKey, string $fallback) use ($dialogFieldLabels): string {
+            $label = trim((string) ($dialogFieldLabels[$fieldKey] ?? ''));
+
+            return $label !== '' ? $label : $fallback;
+        };
+    @endphp
+
     <div data-role="dialog-page" class="ac-panel-stack ac-panel-stack--relaxed">
         <nav
             data-role="dialog-top-breadcrumbs"
@@ -111,7 +120,7 @@
                     data-current-tone="{{ $dialogStage['current_tone'] }}"
                     class="ac-dialog-stage-strip ac-dialog-summary__stage"
                 >
-                    <div class="ac-dialog-stage-strip__track" role="group" aria-label="Этап диалога">
+                    <div class="ac-dialog-stage-strip__track" role="group" aria-label="{{ $dialogFieldLabel('stage', 'Этап') }} диалога">
                         @foreach ($dialogStage['steps'] as $stageStep)
                             @php
                                 $stageState = $stageStep['is_current']
@@ -306,7 +315,7 @@
                     <div class="ac-dialog-side-list">
                         <div class="ac-meta">
                             <label for="dialog-inbox-status" class="ac-meta__label">
-                                Статус диалога
+                                {{ $dialogFieldLabel('status', 'Статус') }}
                             </label>
                             <select
                                 id="dialog-inbox-status"
@@ -323,14 +332,6 @@
                                 @endforeach
                             </select>
                         </div>
-                        <div class="ac-meta">
-                            <p class="ac-meta__label">
-                                Ответственный
-                            </p>
-                            <p class="ac-meta__value ac-meta__value--emphasis">
-                                {{ $contactSummary['assigned_user_label'] }}
-                            </p>
-                        </div>
                     </div>
                 </section>
 
@@ -339,26 +340,18 @@
                     <div class="ac-dialog-side-list">
                         <div class="ac-meta">
                             <p class="ac-meta__label">
-                                Имя из мессенджера
+                                {{ $dialogFieldLabel('contact_id', 'Контакт') }}
                             </p>
-                            <p data-role="dialog-messenger-name" class="ac-meta__value">
-                                {{ $dialogHeader['messenger_name_label'] }}
+                            <p data-role="dialog-contact-label" class="ac-meta__value">
+                                {{ $contactSummary['contact_label'] }}
                             </p>
                         </div>
                         <div class="ac-meta">
                             <p class="ac-meta__label">
-                                Телефон мессенджера
+                                {{ $dialogFieldLabel('phone', 'Телефон') }}
                             </p>
                             <p class="ac-meta__value">
                                 {{ $dialogHeader['phone_label'] }}
-                            </p>
-                        </div>
-                        <div class="ac-meta">
-                            <p class="ac-meta__label">
-                                Телефоны контакта
-                            </p>
-                            <p class="ac-meta__value">
-                                {{ $contactSummary['phones_label'] }}
                             </p>
                         </div>
                     </div>
@@ -369,26 +362,10 @@
                     <div class="ac-dialog-side-list">
                         <div class="ac-meta">
                             <p class="ac-meta__label">
-                                Канал
+                                {{ $dialogFieldLabel('channel_id', 'Канал') }}
                             </p>
                             <p data-role="dialog-channel-label" class="ac-meta__value">
                                 {{ $dialogHeader['channel_label'] }}
-                            </p>
-                        </div>
-                        <div class="ac-meta">
-                            <p class="ac-meta__label">
-                                Источник маршрута
-                            </p>
-                            <p class="ac-meta__value">
-                                {{ $dialogHeader['route_source_label'] }}
-                            </p>
-                        </div>
-                        <div class="ac-meta">
-                            <p class="ac-meta__label">
-                                ID чата
-                            </p>
-                            <p class="ac-meta__value">
-                                {{ $dialogHeader['external_chat_id_label'] }}
                             </p>
                         </div>
                     </div>
@@ -425,7 +402,7 @@
                                     >
                                         <div class="ac-dialog-field-row__content">
                                             <p class="ac-meta__label" data-role="dialog-field-key">
-                                                {{ $field['key'] }}
+                                                {{ $field['label'] }}
                                             </p>
                                             <p class="ac-meta__value" data-role="dialog-field-value">
                                                 {{ $field['value'] }}

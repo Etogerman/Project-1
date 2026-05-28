@@ -1,12 +1,12 @@
 @if (($renderSurface ?? true))
     <section data-role="contact-phone-numbers" class="ac-contact-form-section ac-contact-phone-section">
         <div class="ac-contact-form-section__header">
-            <h3 class="ac-contact-form-section__title">Телефоны</h3>
+            <h3 class="ac-contact-form-section__title">{{ $sectionTitle ?? 'Телефоны' }}</h3>
         </div>
 
         @if ($phoneNumbers === [])
             <div class="ac-contact-empty-line">
-                Телефоны не указаны
+                {{ $sectionTitle ?? 'Телефоны' }} не указаны
             </div>
         @else
             <div class="ac-phone-list">

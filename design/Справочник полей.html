@@ -1,0 +1,1417 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=1440, initial-scale=1" />
+<title>Справочник полей — AB Connector</title>
+<link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="base.css" />
+<style>
+  /* =====================================================================
+     Локальные стили только для этого экрана (префикс sp-)
+     Все цвета, отступы, радиусы, тени — из tokens.css.
+     ===================================================================== */
+
+  /* ---------- Toolbar над таблицей ---------- */
+  .sp-toolbar {
+    display: flex;
+    align-items: center;
+    gap: var(--ac-sp-2);
+    margin-bottom: var(--ac-sp-3);
+  }
+  .sp-search {
+    position: relative;
+    flex: 0 0 320px;
+  }
+  .sp-search input {
+    width: 100%;
+    height: 30px;
+    padding: 0 28px 0 30px;
+    background: var(--ac-surface);
+    border: 1px solid var(--ac-border-input);
+    border-radius: var(--ac-radius-2);
+    font-size: var(--ac-fs-13);
+    color: var(--ac-text);
+    outline: none;
+    transition: border-color var(--ac-dur-fast) var(--ac-ease),
+                box-shadow var(--ac-dur-fast) var(--ac-ease);
+  }
+  .sp-search input::placeholder { color: var(--ac-text-3); }
+  .sp-search input:focus {
+    border-color: var(--ac-accent);
+    box-shadow: 0 0 0 3px var(--ac-accent-ring);
+  }
+  .sp-search__icon {
+    position: absolute; left: 9px; top: 50%;
+    transform: translateY(-50%);
+    color: var(--ac-text-3);
+    pointer-events: none;
+  }
+  .sp-search__kbd {
+    position: absolute; right: 8px; top: 50%;
+    transform: translateY(-50%);
+    font-size: 10px;
+    font-family: var(--ac-font-mono);
+    color: var(--ac-text-3);
+    background: var(--ac-surface-2);
+    border: 1px solid var(--ac-border);
+    padding: 1px 5px;
+    border-radius: 3px;
+    pointer-events: none;
+  }
+  .sp-count {
+    font-size: var(--ac-fs-12);
+    color: var(--ac-text-3);
+    white-space: nowrap;
+  }
+  .sp-count b { color: var(--ac-text); font-weight: 600; }
+
+  /* Кнопка-фильтр с шевроном (использует ac-btn) */
+  .sp-filter-btn .sp-chev {
+    width: 12px; height: 12px;
+    color: var(--ac-text-3);
+    margin-left: 2px;
+  }
+  .sp-filter-btn .sp-filter-val {
+    color: var(--ac-text);
+    font-weight: var(--ac-fw-medium);
+  }
+
+  /* ---------- Чипы-группы ---------- */
+  .sp-groups {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 4px;
+    background: var(--ac-surface-2);
+    border-radius: var(--ac-radius-3);
+    margin-bottom: var(--ac-sp-3);
+  }
+  .sp-group-chip {
+    appearance: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 26px;
+    padding: 0 10px;
+    background: transparent;
+    border: 0;
+    border-radius: var(--ac-radius-2);
+    font-size: var(--ac-fs-13);
+    font-weight: var(--ac-fw-medium);
+    color: var(--ac-text-2);
+    cursor: pointer;
+    transition: background var(--ac-dur-fast) var(--ac-ease),
+                color var(--ac-dur-fast) var(--ac-ease);
+  }
+  .sp-group-chip > span {
+    font-size: 11px;
+    font-weight: var(--ac-fw-medium);
+    color: var(--ac-text-3);
+  }
+  .sp-group-chip:hover { color: var(--ac-text); }
+  .sp-group-chip.is-active {
+    background: var(--ac-surface);
+    color: var(--ac-text);
+    font-weight: var(--ac-fw-semi);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+  }
+  .sp-group-chip.is-active > span {
+    color: var(--ac-accent);
+    background: var(--ac-accent-soft);
+    padding: 0 6px;
+    border-radius: var(--ac-radius-pill);
+    line-height: 16px;
+  }
+  .sp-group-chip--add {
+    color: var(--ac-text-3);
+    border: 1px dashed transparent;
+    margin-left: auto;
+  }
+  .sp-group-chip--add:hover {
+    color: var(--ac-accent);
+    background: transparent;
+    border-color: var(--ac-accent);
+  }
+
+  /* ---------- Таблица полей ---------- */
+  .sp-table-section { background: var(--ac-surface); padding: 0; }
+  .sp-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: var(--ac-fs-13);
+    table-layout: fixed;
+  }
+  .sp-table th, .sp-table td {
+    text-align: left;
+    padding: 0 10px;
+    vertical-align: middle;
+    color: var(--ac-text);
+    background: var(--ac-surface);
+  }
+  .sp-table thead th {
+    height: 32px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: var(--ac-fw-semi);
+    color: var(--ac-text-3);
+    background: var(--ac-surface);
+    border-bottom: 1px solid var(--ac-border);
+    position: sticky; top: 0;
+    z-index: 1;
+  }
+  .sp-table tbody tr { transition: background var(--ac-dur-fast) var(--ac-ease); }
+  .sp-table tbody td {
+    height: 40px;
+    border-bottom: 1px solid var(--ac-border);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .sp-table tbody tr:last-child td { border-bottom: 0; }
+  .sp-table tbody tr:hover td { background: var(--ac-surface-2); }
+  .sp-table tbody tr:hover .sp-drag,
+  .sp-table tbody tr:hover .sp-kebab,
+  .sp-table tbody tr:hover .sp-key-copy { opacity: 1; }
+  .sp-table tbody tr.is-selected td {
+    background: var(--ac-accent-soft);
+  }
+  .sp-table tbody tr.is-selected td:first-child {
+    box-shadow: inset 3px 0 0 var(--ac-accent);
+  }
+
+  /* Колонки */
+  .sp-col-drag      { width: 28px; padding: 0 4px 0 8px; }
+  .sp-col-key       { width: 180px; }
+  .sp-col-label     { width: auto; }
+  .sp-col-type      { width: 130px; }
+  .sp-col-group     { width: 130px; }
+  .sp-col-source    { width: 130px; }
+  .sp-col-required  { width: 90px; text-align: center !important; }
+  .sp-col-visibility{ width: 138px; }
+  .sp-col-usage     { width: 110px; text-align: right !important; padding-right: 14px !important; }
+  .sp-col-menu      { width: 36px; padding: 0 8px 0 0; }
+
+  /* Drag-handle */
+  .sp-drag {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px; height: 20px;
+    color: var(--ac-text-3);
+    opacity: 0;
+    cursor: grab;
+    border-radius: 3px;
+    transition: opacity var(--ac-dur-fast) var(--ac-ease),
+                background var(--ac-dur-fast) var(--ac-ease);
+  }
+  .sp-drag:hover { background: var(--ac-surface-3); color: var(--ac-text-2); }
+  .sp-drag svg { width: 12px; height: 12px; }
+
+  /* Ключ — моноширинно, мелко */
+  .sp-key {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--ac-font-mono);
+    font-size: 12px;
+    color: var(--ac-text-2);
+    max-width: 100%;
+  }
+  .sp-key-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .sp-key-copy {
+    width: 18px; height: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 3px;
+    color: var(--ac-text-3);
+    opacity: 0;
+    cursor: pointer;
+    transition: opacity var(--ac-dur-fast) var(--ac-ease),
+                background var(--ac-dur-fast) var(--ac-ease);
+  }
+  .sp-key-copy:hover { background: var(--ac-surface-3); color: var(--ac-text-2); }
+  .sp-key-copy svg { width: 11px; height: 11px; }
+
+  /* Label */
+  .sp-label-main {
+    font-size: var(--ac-fs-13);
+    font-weight: var(--ac-fw-medium);
+    color: var(--ac-text);
+  }
+  .sp-label-sub {
+    margin-left: 8px;
+    font-size: 11px;
+    color: var(--ac-text-3);
+  }
+  .sp-label-lock {
+    margin-left: 6px;
+    color: var(--ac-text-3);
+    vertical-align: -2px;
+  }
+
+  /* Type chip — спокойный цветной токен */
+  .sp-type {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 22px;
+    padding: 0 8px 0 7px;
+    border-radius: var(--ac-radius-pill);
+    font-size: var(--ac-fs-12);
+    font-weight: var(--ac-fw-medium);
+    color: var(--ac-text);
+    background: var(--ac-tag-gray-soft);
+  }
+  .sp-type__icon {
+    width: 12px; height: 12px;
+    color: var(--ac-text-2);
+    flex-shrink: 0;
+  }
+  .sp-type--text     { background: var(--ac-tag-gray-soft);  color: var(--ac-tag-gray); }
+  .sp-type--longtext { background: var(--ac-tag-gray-soft);  color: var(--ac-tag-gray); }
+  .sp-type--number   { background: var(--ac-tag-blue-soft);  color: var(--ac-tag-blue); }
+  .sp-type--date     { background: var(--ac-tag-purple-soft);color: var(--ac-tag-purple); }
+  .sp-type--select   { background: var(--ac-tag-yellow-soft);color: var(--ac-tag-yellow); }
+  .sp-type--multi    { background: var(--ac-tag-yellow-soft);color: var(--ac-tag-yellow); }
+  .sp-type--bool     { background: var(--ac-tag-green-soft); color: var(--ac-tag-green); }
+  .sp-type--phone    { background: var(--ac-channel-tg-soft);color: var(--ac-channel-tg); }
+  .sp-type--email    { background: var(--ac-tag-blue-soft);  color: var(--ac-tag-blue); }
+  .sp-type--url      { background: var(--ac-tag-blue-soft);  color: var(--ac-tag-blue); }
+  .sp-type--ref      { background: var(--ac-tag-purple-soft);color: var(--ac-tag-purple); }
+  .sp-type--computed { background: var(--ac-tag-red-soft);   color: var(--ac-tag-red); }
+  .sp-type__icon { color: currentColor; opacity: 0.85; }
+
+  /* Group chip (внутри строки) */
+  .sp-row-group {
+    font-size: var(--ac-fs-12);
+    color: var(--ac-text-2);
+  }
+
+  /* Источник */
+  .sp-source {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: var(--ac-fs-12);
+    color: var(--ac-text-2);
+  }
+  .sp-source__dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--ac-text-3);
+    flex-shrink: 0;
+  }
+  .sp-source--manual .sp-source__dot { background: var(--ac-text-3); }
+  .sp-source--ai     .sp-source__dot { background: var(--ac-accent); }
+  .sp-source--anketa .sp-source__dot { background: var(--ac-tag-yellow); }
+  .sp-source--api    .sp-source__dot { background: var(--ac-tag-blue); }
+  .sp-source--b24    .sp-source__dot { background: var(--ac-channel-b24); }
+  .sp-source--system .sp-source__dot { background: var(--ac-tag-red); }
+
+  /* Обязательное — точка-индикатор */
+  .sp-req {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--ac-danger);
+    box-shadow: 0 0 0 3px var(--ac-danger-soft);
+  }
+  .sp-req--no {
+    background: transparent;
+    box-shadow: inset 0 0 0 1.5px var(--ac-border-strong);
+  }
+
+  /* Видимость — три иконки-таблетки */
+  .sp-vis {
+    display: inline-flex;
+    gap: 3px;
+    align-items: center;
+  }
+  .sp-vis__chip {
+    width: 24px; height: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 5px;
+    background: var(--ac-surface-2);
+    color: var(--ac-text-3);
+    border: 1px solid transparent;
+  }
+  .sp-vis__chip.is-on {
+    background: var(--ac-accent-soft);
+    color: var(--ac-accent);
+  }
+  .sp-vis__chip svg { width: 12px; height: 12px; }
+
+  /* Использования */
+  .sp-usage {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: var(--ac-fs-12);
+    color: var(--ac-text-2);
+    font-variant-numeric: tabular-nums;
+  }
+  .sp-usage__num {
+    font-weight: var(--ac-fw-semi);
+    color: var(--ac-text);
+  }
+  .sp-usage--empty { color: var(--ac-text-3); }
+  .sp-usage--empty .sp-usage__num { color: var(--ac-text-3); font-weight: 500; }
+
+  /* Меню (кебаб) */
+  .sp-kebab {
+    appearance: none;
+    width: 24px; height: 24px;
+    border: 0;
+    background: transparent;
+    border-radius: var(--ac-radius-2);
+    color: var(--ac-text-3);
+    cursor: pointer;
+    opacity: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: opacity var(--ac-dur-fast) var(--ac-ease),
+                background var(--ac-dur-fast) var(--ac-ease);
+  }
+  .sp-kebab:hover { background: var(--ac-surface-3); color: var(--ac-text); }
+
+  /* ---------- Drawer справа: детали выбранного поля ---------- */
+  .sp-drawer {
+    position: fixed;
+    top: var(--ac-topbar-h);
+    right: 0;
+    bottom: 0;
+    width: 420px;
+    background: var(--ac-surface);
+    border-left: 1px solid var(--ac-border);
+    box-shadow: -8px 0 24px rgba(15, 23, 42, 0.04);
+    z-index: var(--ac-z-popover);
+    display: flex;
+    flex-direction: column;
+  }
+  .sp-drawer__head {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--ac-sp-3);
+    padding: 14px 16px 12px;
+    border-bottom: 1px solid var(--ac-border);
+  }
+  .sp-drawer__title {
+    flex: 1; min-width: 0;
+  }
+  .sp-drawer__title h2 {
+    margin: 0;
+    font-size: var(--ac-fs-15);
+    font-weight: var(--ac-fw-semi);
+    letter-spacing: -0.01em;
+  }
+  .sp-drawer__title .sp-key {
+    margin-top: 4px;
+  }
+  .sp-drawer__close {
+    flex-shrink: 0;
+  }
+  .sp-drawer__body {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--ac-sp-4) var(--ac-sp-4) var(--ac-sp-6);
+    display: flex;
+    flex-direction: column;
+    gap: var(--ac-sp-4);
+  }
+  .sp-drawer__foot {
+    display: flex;
+    align-items: center;
+    gap: var(--ac-sp-2);
+    padding: 10px 14px;
+    border-top: 1px solid var(--ac-border);
+    background: var(--ac-surface);
+  }
+  .sp-drawer__foot .sp-foot-spacer { flex: 1; }
+
+  /* Формы внутри drawer */
+  .sp-form-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .sp-form-row__label {
+    font-size: var(--ac-fs-12);
+    font-weight: var(--ac-fw-medium);
+    color: var(--ac-text-2);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .sp-form-row__hint {
+    font-size: 11px;
+    color: var(--ac-text-3);
+    line-height: 1.4;
+  }
+  .sp-input, .sp-select, .sp-textarea {
+    appearance: none;
+    width: 100%;
+    height: 32px;
+    padding: 0 10px;
+    background: var(--ac-surface);
+    border: 1px solid var(--ac-border-input);
+    border-radius: var(--ac-radius-2);
+    color: var(--ac-text);
+    font-size: var(--ac-fs-13);
+    font-family: inherit;
+    outline: none;
+    transition: border-color var(--ac-dur-fast) var(--ac-ease),
+                box-shadow var(--ac-dur-fast) var(--ac-ease);
+  }
+  .sp-select {
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 20 20' fill='none' stroke='%2394A3B8' stroke-width='1.8'><path d='m5 8 5 5 5-5'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    padding-right: 28px;
+  }
+  .sp-textarea {
+    height: auto;
+    padding: 8px 10px;
+    min-height: 64px;
+    line-height: 1.45;
+    resize: vertical;
+  }
+  .sp-input:focus, .sp-select:focus, .sp-textarea:focus {
+    border-color: var(--ac-accent);
+    box-shadow: 0 0 0 3px var(--ac-accent-ring);
+  }
+  .sp-input--mono { font-family: var(--ac-font-mono); font-size: 12px; }
+  .sp-input.is-locked {
+    background: var(--ac-surface-2);
+    color: var(--ac-text-2);
+    cursor: not-allowed;
+  }
+
+  /* Toggle */
+  .sp-toggle {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .sp-toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
+  .sp-toggle__track {
+    width: 32px; height: 18px;
+    background: var(--ac-surface-3);
+    border-radius: 999px;
+    position: relative;
+    transition: background var(--ac-dur-base) var(--ac-ease);
+    flex-shrink: 0;
+  }
+  .sp-toggle__track::after {
+    content: "";
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: var(--ac-surface);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.18);
+    transition: transform var(--ac-dur-base) var(--ac-ease);
+  }
+  .sp-toggle input:checked + .sp-toggle__track { background: var(--ac-accent); }
+  .sp-toggle input:checked + .sp-toggle__track::after { transform: translateX(14px); }
+  .sp-toggle__label {
+    font-size: var(--ac-fs-13);
+    color: var(--ac-text);
+  }
+
+  /* Чекбоксы видимости */
+  .sp-checks {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+    background: var(--ac-surface-2);
+    border-radius: var(--ac-radius-3);
+  }
+  .sp-check {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    user-select: none;
+    font-size: var(--ac-fs-13);
+    color: var(--ac-text);
+  }
+  .sp-check input { position: absolute; opacity: 0; pointer-events: none; }
+  .sp-check__box {
+    width: 16px; height: 16px;
+    border-radius: 4px;
+    border: 1.5px solid var(--ac-border-strong);
+    background: var(--ac-surface);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: transparent;
+    transition: border-color var(--ac-dur-fast) var(--ac-ease),
+                background var(--ac-dur-fast) var(--ac-ease);
+    flex-shrink: 0;
+  }
+  .sp-check input:checked + .sp-check__box {
+    border-color: var(--ac-accent);
+    background: var(--ac-accent);
+    color: white;
+  }
+  .sp-check__box svg { width: 11px; height: 11px; }
+  .sp-check__hint {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--ac-text-3);
+  }
+
+  /* Список значений (для типа Выбор) */
+  .sp-options {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    border: 1px solid var(--ac-border);
+    border-radius: var(--ac-radius-3);
+    background: var(--ac-surface);
+    padding: 4px;
+  }
+  .sp-option-row {
+    display: grid;
+    grid-template-columns: 16px 1fr 90px 24px;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px;
+    border-radius: var(--ac-radius-2);
+  }
+  .sp-option-row:hover { background: var(--ac-surface-2); }
+  .sp-option-row svg.handle { color: var(--ac-text-3); cursor: grab; }
+  .sp-option-row .sp-option-key {
+    font-family: var(--ac-font-mono);
+    font-size: 11px;
+    color: var(--ac-text-3);
+    text-align: right;
+  }
+  .sp-option-row .sp-option-label {
+    font-size: var(--ac-fs-13);
+    color: var(--ac-text);
+    background: transparent;
+    border: 0;
+    outline: none;
+    width: 100%;
+  }
+  .sp-option-add {
+    margin: 4px 2px 2px;
+    font-size: var(--ac-fs-12);
+    color: var(--ac-accent);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 6px;
+    border-radius: var(--ac-radius-2);
+  }
+  .sp-option-add:hover { background: var(--ac-accent-soft); }
+
+  /* «Используется в» */
+  .sp-usage-block {
+    border: 1px solid var(--ac-border);
+    border-radius: var(--ac-radius-3);
+    overflow: hidden;
+  }
+  .sp-usage-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    font-size: var(--ac-fs-13);
+    color: var(--ac-text);
+    border-bottom: 1px solid var(--ac-border);
+    cursor: pointer;
+    transition: background var(--ac-dur-fast) var(--ac-ease);
+  }
+  .sp-usage-item:last-child { border-bottom: 0; }
+  .sp-usage-item:hover { background: var(--ac-surface-2); }
+  .sp-usage-item svg { width: 14px; height: 14px; color: var(--ac-text-3); flex-shrink: 0; }
+  .sp-usage-item .sp-usage-item__sub {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--ac-text-3);
+  }
+
+  /* Подсказки и эмоджи-free hint */
+  .sp-hint-card {
+    display: flex;
+    gap: 10px;
+    padding: 10px 12px;
+    background: var(--ac-info-soft);
+    border: 1px solid color-mix(in oklab, var(--ac-info) 18%, transparent);
+    border-radius: var(--ac-radius-3);
+    font-size: var(--ac-fs-12);
+    color: var(--ac-text);
+    line-height: 1.5;
+  }
+  .sp-hint-card svg { color: var(--ac-info); flex-shrink: 0; }
+
+  /* Поджим основной области под drawer */
+  .ac-page { padding-right: calc(420px + var(--ac-page-pad-x)); }
+  @media (max-width: 1280px) {
+    .sp-drawer { width: 360px; }
+    .ac-page { padding-right: calc(360px + var(--ac-page-pad-x)); }
+  }
+</style>
+</head>
+<body>
+
+<div class="ac-app">
+
+  <!-- =================== SIDEBAR =================== -->
+  <aside class="ac-sidebar">
+    <div class="ac-sidebar__brand">
+      <span class="ac-brand-mark">AB</span>
+      <span class="ac-brand-name">AB Connector</span>
+    </div>
+    <nav class="ac-nav">
+      <div>
+        <div class="ac-nav__group-label">Работа</div>
+        <div class="ac-nav__items">
+          <a class="ac-nav__item" href="#">
+            <svg class="ac-nav__item-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="14" height="14" rx="2"/><path d="M3 8h14"/></svg>
+            <span>Диалоги</span>
+            <span class="ac-nav__item-count">38</span>
+          </a>
+          <a class="ac-nav__item" href="#">
+            <svg class="ac-nav__item-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="10" cy="7" r="3"/><path d="M3 17c0-3.5 3-6 7-6s7 2.5 7 6"/></svg>
+            <span>Контакты</span>
+            <span class="ac-nav__item-count">412</span>
+          </a>
+          <a class="ac-nav__item" href="#">
+            <svg class="ac-nav__item-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="14" height="12" rx="2"/><path d="M7 8h6M7 12h4"/></svg>
+            <span>Конструктор</span>
+          </a>
+          <a class="ac-nav__item" href="#">
+            <svg class="ac-nav__item-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 16V8M8 16V4M13 16v-7M18 16v-3"/></svg>
+            <span>Аналитика</span>
+          </a>
+        </div>
+      </div>
+
+      <div>
+        <div class="ac-nav__group-label">Команда</div>
+        <div class="ac-nav__items">
+          <a class="ac-nav__item" href="#">
+            <svg class="ac-nav__item-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="7" cy="7" r="3"/><circle cx="14" cy="9" r="2.4"/><path d="M2 16c.5-2.5 2.5-4 5-4s4.5 1.5 5 4M12 16c.5-2 2-3 4-3s3 1 3.5 3"/></svg>
+            <span>Сотрудники</span>
+          </a>
+          <a class="ac-nav__item" href="#">
+            <svg class="ac-nav__item-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 2.5 3.5 5v4.5c0 4 2.7 7.4 6.5 8.5 3.8-1.1 6.5-4.5 6.5-8.5V5L10 2.5z"/></svg>
+            <span>Права доступа</span>
+          </a>
+        </div>
+      </div>
+
+      <div>
+        <div class="ac-nav__group-label">Настройки</div>
+        <div class="ac-nav__items">
+          <a class="ac-nav__item" href="#">
+            <svg class="ac-nav__item-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m12 8 4.5-4.5a3 3 0 014 4L16 12M8 12l-4.5 4.5a3 3 0 01-4-4L4 8"/></svg>
+            <span>Каналы связи</span>
+          </a>
+          <a class="ac-nav__item" href="#">
+            <svg class="ac-nav__item-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="14" height="14" rx="2"/><path d="M3 7h14M7 3v14"/></svg>
+            <span>Bitrix24</span>
+          </a>
+          <a class="ac-nav__item is-active" href="#" aria-current="page">
+            <svg class="ac-nav__item-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 4a2 2 0 012-2h6l4 4v10a2 2 0 01-2 2H6a2 2 0 01-2-2V4z"/><path d="M12 2v4h4M7 11h6M7 14h4"/></svg>
+            <span>Справочники</span>
+          </a>
+          <a class="ac-nav__item" href="#">
+            <svg class="ac-nav__item-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="4" width="12" height="12" rx="2"/><rect x="7" y="7" width="6" height="6"/></svg>
+            <span>ИИ-обработчики</span>
+          </a>
+        </div>
+      </div>
+    </nav>
+
+    <div class="ac-sidebar__footer">
+      <div style="display:flex; align-items:center; gap:8px; font-size:11px; color:var(--ac-text-3);">
+        <span class="ac-mono" style="font-size:10px; padding:1px 5px;">rev 24d52a9</span>
+        <span style="margin-left:auto;">v3.2.1</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- =================== TOPBAR =================== -->
+  <header class="ac-topbar">
+    <div class="ac-topbar__crumb">
+      <a href="#">Настройки</a>
+      <span class="ac-breadcrumb__sep"> › </span>
+      <a href="#">Справочники</a>
+      <span class="ac-breadcrumb__sep"> › </span>
+      <span>Поля</span>
+    </div>
+    <div class="ac-topbar__search">
+      <svg class="ac-topbar__search-icon" width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="9" r="6"/><path d="m18 18-4-4"/></svg>
+      <input placeholder="Поиск по системе…" />
+      <span class="ac-topbar__search-kbd">⌘K</span>
+    </div>
+    <div class="ac-topbar__actions">
+      <button class="ac-icon-btn" aria-label="Подсказки">
+        <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="10" cy="10" r="7.5"/><path d="M10 14v.01M7.5 8a2.5 2.5 0 015 0c0 1.5-1.5 1.8-2.5 3"/></svg>
+      </button>
+      <button class="ac-icon-btn" aria-label="Уведомления">
+        <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 15h10l-1.5-2V9a3.5 3.5 0 10-7 0v4L5 15z"/><path d="M8 17a2 2 0 004 0"/></svg>
+        <span class="ac-dot"></span>
+      </button>
+      <div style="width:1px; height:18px; background:var(--ac-border); margin: 0 6px;"></div>
+      <button class="ac-icon-btn" aria-label="Профиль">
+        <span class="ac-avatar ac-avatar--sm ac-avatar--tone-2">АБ</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- =================== MAIN =================== -->
+  <main class="ac-main">
+    <div class="ac-page">
+
+      <!-- Page head -->
+      <div class="ac-page-head">
+        <div class="ac-page-head__main">
+          <div class="ac-page-head__title-row">
+            <h1>Справочник полей</h1>
+          </div>
+          <div class="ac-page-head__meta">
+            <span>Поля карточек контакта и диалога. Используются в анкетах, фильтрах и API.</span>
+            <a href="#" style="color:var(--ac-accent); text-decoration:none;">Документация →</a>
+          </div>
+        </div>
+        <div class="ac-page-head__actions">
+          <button class="ac-btn">
+            <svg class="ac-btn__icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 3v10m0 0-4-4m4 4 4-4M4 17h12"/></svg>
+            Импорт CSV
+          </button>
+          <button class="ac-btn ac-btn--primary">
+            <svg class="ac-btn__icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 4v12M4 10h12"/></svg>
+            Новое поле
+          </button>
+        </div>
+      </div>
+
+      <!-- Tabs: контакт / диалог -->
+      <div class="ac-tabs" role="tablist">
+        <button class="ac-tab is-active" role="tab" aria-selected="true">
+          <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="10" cy="7" r="3"/><path d="M3 17c0-3.5 3-6 7-6s7 2.5 7 6"/></svg>
+          Поля контакта
+          <span class="ac-tab__count">24</span>
+        </button>
+        <button class="ac-tab" role="tab">
+          <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="14" height="11" rx="2"/><path d="M7 17l-1 1M13 17l1 1M3 9h14"/></svg>
+          Поля диалога
+          <span class="ac-tab__count">12</span>
+        </button>
+        <button class="ac-tab" role="tab">
+          <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 4a2 2 0 012-2h6l4 4v10a2 2 0 01-2 2H6a2 2 0 01-2-2V4z"/><path d="M12 2v4h4"/></svg>
+          Глобальные переменные
+          <span class="ac-tab__count">8</span>
+        </button>
+      </div>
+
+      <!-- Toolbar -->
+      <div class="sp-toolbar">
+        <div class="sp-search">
+          <svg class="sp-search__icon" width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="9" r="6"/><path d="m18 18-4-4"/></svg>
+          <input placeholder="Найти поле по названию или ключу…" />
+          <span class="sp-search__kbd">/</span>
+        </div>
+        <button class="ac-btn ac-btn--sm sp-filter-btn">
+          Тип: <span class="sp-filter-val">все</span>
+          <svg class="sp-chev" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m5 8 5 5 5-5"/></svg>
+        </button>
+        <button class="ac-btn ac-btn--sm sp-filter-btn">
+          Источник: <span class="sp-filter-val">все</span>
+          <svg class="sp-chev" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m5 8 5 5 5-5"/></svg>
+        </button>
+        <button class="ac-btn ac-btn--sm sp-filter-btn">
+          Видно в: <span class="sp-filter-val">любом месте</span>
+          <svg class="sp-chev" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m5 8 5 5 5-5"/></svg>
+        </button>
+        <div class="ac-spacer"></div>
+        <span class="sp-count"><b>24</b> поля · 21 используется</span>
+      </div>
+
+      <!-- Группы (тогглер-таблетки) -->
+      <div class="sp-groups">
+        <button class="sp-group-chip is-active">Все <span>24</span></button>
+        <button class="sp-group-chip">Основное <span>6</span></button>
+        <button class="sp-group-chip">Адрес <span>4</span></button>
+        <button class="sp-group-chip">Контакты <span>5</span></button>
+        <button class="sp-group-chip">Маркетинг <span>4</span></button>
+        <button class="sp-group-chip">Системные <span>5</span></button>
+        <button class="sp-group-chip sp-group-chip--add">
+          <svg width="11" height="11" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 4v12M4 10h12"/></svg>
+          Новая группа
+        </button>
+      </div>
+
+      <!-- Таблица -->
+      <section class="ac-section sp-table-section">
+        <table class="sp-table">
+          <colgroup>
+            <col class="sp-col-drag"/>
+            <col class="sp-col-key"/>
+            <col class="sp-col-label"/>
+            <col class="sp-col-type"/>
+            <col class="sp-col-group"/>
+            <col class="sp-col-source"/>
+            <col class="sp-col-required"/>
+            <col class="sp-col-visibility"/>
+            <col class="sp-col-usage"/>
+            <col class="sp-col-menu"/>
+          </colgroup>
+          <thead>
+            <tr>
+              <th></th>
+              <th>Ключ</th>
+              <th>Название</th>
+              <th>Тип</th>
+              <th>Группа</th>
+              <th>Источник</th>
+              <th style="text-align:center;">Обяз.</th>
+              <th>Видно в</th>
+              <th style="text-align:right;">Использ.</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <!-- ===== row: first_name (selected) ===== -->
+            <tr class="is-selected">
+              <td><span class="sp-drag"><svg viewBox="0 0 16 16" fill="currentColor"><circle cx="6" cy="4" r="1"/><circle cx="6" cy="8" r="1"/><circle cx="6" cy="12" r="1"/><circle cx="10" cy="4" r="1"/><circle cx="10" cy="8" r="1"/><circle cx="10" cy="12" r="1"/></svg></span></td>
+              <td><span class="sp-key"><span class="sp-key-text">first_name</span><span class="sp-key-copy" title="Скопировать ключ"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="5" y="5" width="8" height="9" rx="1.5"/><path d="M3 11V3.5C3 2.7 3.7 2 4.5 2H11"/></svg></span></span></td>
+              <td><span class="sp-label-main">Имя</span> <span class="sp-label-sub">определяется ИИ из переписки</span></td>
+              <td><span class="sp-type sp-type--text"><svg class="sp-type__icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 5h10M8 5v8M6 13h4"/></svg>Текст</span></td>
+              <td><span class="sp-row-group">Основное</span></td>
+              <td><span class="sp-source sp-source--ai"><span class="sp-source__dot"></span>ИИ-распознавание</span></td>
+              <td style="text-align:center;"><span class="sp-req" title="Обязательное"></span></td>
+              <td>
+                <div class="sp-vis">
+                  <span class="sp-vis__chip is-on" title="В карточке"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M5 6h6M5 9h4"/></svg></span>
+                  <span class="sp-vis__chip is-on" title="В таблице"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3.5" width="11" height="9" rx="1"/><path d="M2.5 7h11M6 3.5v9"/></svg></span>
+                  <span class="sp-vis__chip is-on" title="В фильтрах"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 4h11l-4 5v4l-3-1V9z"/></svg></span>
+                </div>
+              </td>
+              <td><span class="sp-usage"><span class="sp-usage__num">12</span> мест</span></td>
+              <td><button class="sp-kebab" aria-label="Меню"><svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="5" r="1.5"/><circle cx="10" cy="10" r="1.5"/><circle cx="10" cy="15" r="1.5"/></svg></button></td>
+            </tr>
+
+            <!-- last_name -->
+            <tr>
+              <td><span class="sp-drag"><svg viewBox="0 0 16 16" fill="currentColor"><circle cx="6" cy="4" r="1"/><circle cx="6" cy="8" r="1"/><circle cx="6" cy="12" r="1"/><circle cx="10" cy="4" r="1"/><circle cx="10" cy="8" r="1"/><circle cx="10" cy="12" r="1"/></svg></span></td>
+              <td><span class="sp-key"><span class="sp-key-text">last_name</span><span class="sp-key-copy"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="5" y="5" width="8" height="9" rx="1.5"/><path d="M3 11V3.5C3 2.7 3.7 2 4.5 2H11"/></svg></span></span></td>
+              <td><span class="sp-label-main">Фамилия</span></td>
+              <td><span class="sp-type sp-type--text"><svg class="sp-type__icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 5h10M8 5v8M6 13h4"/></svg>Текст</span></td>
+              <td><span class="sp-row-group">Основное</span></td>
+              <td><span class="sp-source sp-source--manual"><span class="sp-source__dot"></span>Ручной ввод</span></td>
+              <td style="text-align:center;"><span class="sp-req sp-req--no" title="Необязательное"></span></td>
+              <td>
+                <div class="sp-vis">
+                  <span class="sp-vis__chip is-on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M5 6h6M5 9h4"/></svg></span>
+                  <span class="sp-vis__chip"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3.5" width="11" height="9" rx="1"/><path d="M2.5 7h11M6 3.5v9"/></svg></span>
+                  <span class="sp-vis__chip is-on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 4h11l-4 5v4l-3-1V9z"/></svg></span>
+                </div>
+              </td>
+              <td><span class="sp-usage"><span class="sp-usage__num">8</span> мест</span></td>
+              <td><button class="sp-kebab"><svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="5" r="1.5"/><circle cx="10" cy="10" r="1.5"/><circle cx="10" cy="15" r="1.5"/></svg></button></td>
+            </tr>
+
+            <!-- gender -->
+            <tr>
+              <td><span class="sp-drag"><svg viewBox="0 0 16 16" fill="currentColor"><circle cx="6" cy="4" r="1"/><circle cx="6" cy="8" r="1"/><circle cx="6" cy="12" r="1"/><circle cx="10" cy="4" r="1"/><circle cx="10" cy="8" r="1"/><circle cx="10" cy="12" r="1"/></svg></span></td>
+              <td><span class="sp-key"><span class="sp-key-text">gender</span><span class="sp-key-copy"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="5" y="5" width="8" height="9" rx="1.5"/><path d="M3 11V3.5C3 2.7 3.7 2 4.5 2H11"/></svg></span></span></td>
+              <td><span class="sp-label-main">Пол</span> <span class="sp-label-sub">2 значения</span></td>
+              <td><span class="sp-type sp-type--select"><svg class="sp-type__icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2.5" y="4" width="11" height="8" rx="1.5"/><path d="m5 7 2 2 3-3"/></svg>Выбор</span></td>
+              <td><span class="sp-row-group">Основное</span></td>
+              <td><span class="sp-source sp-source--ai"><span class="sp-source__dot"></span>ИИ-распознавание</span></td>
+              <td style="text-align:center;"><span class="sp-req sp-req--no"></span></td>
+              <td>
+                <div class="sp-vis">
+                  <span class="sp-vis__chip is-on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M5 6h6M5 9h4"/></svg></span>
+                  <span class="sp-vis__chip"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3.5" width="11" height="9" rx="1"/><path d="M2.5 7h11M6 3.5v9"/></svg></span>
+                  <span class="sp-vis__chip is-on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 4h11l-4 5v4l-3-1V9z"/></svg></span>
+                </div>
+              </td>
+              <td><span class="sp-usage"><span class="sp-usage__num">3</span> места</span></td>
+              <td><button class="sp-kebab"><svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="5" r="1.5"/><circle cx="10" cy="10" r="1.5"/><circle cx="10" cy="15" r="1.5"/></svg></button></td>
+            </tr>
+
+            <!-- birthdate -->
+            <tr>
+              <td><span class="sp-drag"><svg viewBox="0 0 16 16" fill="currentColor"><circle cx="6" cy="4" r="1"/><circle cx="6" cy="8" r="1"/><circle cx="6" cy="12" r="1"/><circle cx="10" cy="4" r="1"/><circle cx="10" cy="8" r="1"/><circle cx="10" cy="12" r="1"/></svg></span></td>
+              <td><span class="sp-key"><span class="sp-key-text">birthdate</span><span class="sp-key-copy"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="5" y="5" width="8" height="9" rx="1.5"/><path d="M3 11V3.5C3 2.7 3.7 2 4.5 2H11"/></svg></span></span></td>
+              <td><span class="sp-label-main">Дата рождения</span></td>
+              <td><span class="sp-type sp-type--date"><svg class="sp-type__icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2.5" y="4" width="11" height="9" rx="1.5"/><path d="M2.5 7h11M6 2.5v3M10 2.5v3"/></svg>Дата</span></td>
+              <td><span class="sp-row-group">Основное</span></td>
+              <td><span class="sp-source sp-source--anketa"><span class="sp-source__dot"></span>Анкета</span></td>
+              <td style="text-align:center;"><span class="sp-req sp-req--no"></span></td>
+              <td>
+                <div class="sp-vis">
+                  <span class="sp-vis__chip is-on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M5 6h6M5 9h4"/></svg></span>
+                  <span class="sp-vis__chip"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3.5" width="11" height="9" rx="1"/><path d="M2.5 7h11M6 3.5v9"/></svg></span>
+                  <span class="sp-vis__chip is-on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 4h11l-4 5v4l-3-1V9z"/></svg></span>
+                </div>
+              </td>
+              <td><span class="sp-usage"><span class="sp-usage__num">2</span> места</span></td>
+              <td><button class="sp-kebab"><svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="5" r="1.5"/><circle cx="10" cy="10" r="1.5"/><circle cx="10" cy="15" r="1.5"/></svg></button></td>
+            </tr>
+
+            <!-- age (computed) -->
+            <tr>
+              <td><span class="sp-drag"><svg viewBox="0 0 16 16" fill="currentColor"><circle cx="6" cy="4" r="1"/><circle cx="6" cy="8" r="1"/><circle cx="6" cy="12" r="1"/><circle cx="10" cy="4" r="1"/><circle cx="10" cy="8" r="1"/><circle cx="10" cy="12" r="1"/></svg></span></td>
+              <td><span class="sp-key"><span class="sp-key-text">age</span><span class="sp-key-copy"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="5" y="5" width="8" height="9" rx="1.5"/><path d="M3 11V3.5C3 2.7 3.7 2 4.5 2H11"/></svg></span></span></td>
+              <td><span class="sp-label-main">Возраст</span> <span class="sp-label-sub">из birthdate</span>
+                <svg class="sp-label-lock" width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" title="Только чтение"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5 7V5a3 3 0 016 0v2"/></svg>
+              </td>
+              <td><span class="sp-type sp-type--computed"><svg class="sp-type__icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 3v4l4 1-4 1v4M13 3v4l-4 1 4 1v4"/></svg>Вычисляемое</span></td>
+              <td><span class="sp-row-group">Основное</span></td>
+              <td><span class="sp-source sp-source--system"><span class="sp-source__dot"></span>Формула</span></td>
+              <td style="text-align:center;"><span class="sp-req sp-req--no"></span></td>
+              <td>
+                <div class="sp-vis">
+                  <span class="sp-vis__chip is-on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M5 6h6M5 9h4"/></svg></span>
+                  <span class="sp-vis__chip"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3.5" width="11" height="9" rx="1"/><path d="M2.5 7h11M6 3.5v9"/></svg></span>
+                  <span class="sp-vis__chip is-on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 4h11l-4 5v4l-3-1V9z"/></svg></span>
+                </div>
+              </td>
+              <td><span class="sp-usage"><span class="sp-usage__num">4</span> места</span></td>
+              <td><button class="sp-kebab"><svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="5" r="1.5"/><circle cx="10" cy="10" r="1.5"/><circle cx="10" cy="15" r="1.5"/></svg></button></td>
+            </tr>
+
+            <!-- city -->
+            <tr>
+              <td><span class="sp-drag"><svg viewBox="0 0 16 16" fill="currentColor"><circle cx="6" cy="4" r="1"/><circle cx="6" cy="8" r="1"/><circle cx="6" cy="12" r="1"/><circle cx="10" cy="4" r="1"/><circle cx="10" cy="8" r="1"/><circle cx="10" cy="12" r="1"/></svg></span></td>
+              <td><span class="sp-key"><span class="sp-key-text">city</span><span class="sp-key-copy"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="5" y="5" width="8" height="9" rx="1.5"/><path d="M3 11V3.5C3 2.7 3.7 2 4.5 2H11"/></svg></span></span></td>
+              <td><span class="sp-label-main">Город</span></td>
+              <td><span class="sp-type sp-type--ref"><svg class="sp-type__icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 13s5-4 5-7a5 5 0 10-10 0c0 3 5 7 5 7z"/><circle cx="8" cy="6" r="1.6"/></svg>Справочник</span></td>
+              <td><span class="sp-row-group">Адрес</span></td>
+              <td><span class="sp-source sp-source--ai"><span class="sp-source__dot"></span>ИИ-распознавание</span></td>
+              <td style="text-align:center;"><span class="sp-req sp-req--no"></span></td>
+              <td>
+                <div class="sp-vis">
+                  <span class="sp-vis__chip is-on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M5 6h6M5 9h4"/></svg></span>
+                  <span class="sp-vis__chip is-on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3.5" width="11" height="9" rx="1"/><path d="M2.5 7h11M6 3.5v9"/></svg></span>
+                  <span class="sp-vis__chip is-on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 4h11l-4 5v4l-3-1V9z"/></svg></span>
+                </div>
+              </td>
+              <td><span class="sp-usage"><span class="sp-usage__num">6</span> мест</span></td>
+              <td><button class="sp-kebab"><svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="5" r="1.5"/><circle cx="10" cy="10" r="1.5"/><circle cx="10" cy="15" r="1.5"/></svg></button></td>
+            </tr>
+
+            <!-- distance_msk -->
+            <tr>
+              <td><span class="sp-drag"><svg viewBox="0 0 16 16" fill="currentColor"><circle cx="6" cy="4" r="1"/><circle cx="6" cy="8" r="1"/><circle cx="6" cy="12" r="1"/><circle cx="10" cy="4" r="1"/><circle cx="10" cy="8" r="1"/><circle cx="10" cy="12" r="1"/></svg></span></td>
+              <td><span class="sp-key"><span class="sp-key-text">distance_msk</span><span class="sp-key-copy"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="5" y="5" width="8" height="9" rx="1.5"/><path d="M3 11V3.5C3 2.7 3.7 2 4.5 2H11"/></svg></span></span></td>
+              <td><span class="sp-label-main">Расстояние до Москвы</span> <span class="sp-label-sub">км, из city</span></td>
+              <td><span class="sp-type sp-type--number"><svg class="sp-type__icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6h8M4 10h6M9 2v12M12 4l-2 10"/></svg>Число</span></td>
+              <td><span class="sp-row-group">Адрес</span></td>
+              <td><span class="sp-source sp-source--system"><span class="sp-source__dot"></span>Формула</span></td>
+              <td style="text-align:center;"><span class="sp-req sp-req--no"></span></td>
+              <td>
+                <div class="sp-vis">
+                  <span class="sp-vis__chip is-on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M5 6h6M5 9h4"/></svg></span>
+                  <span class="sp-vis__chip"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3.5" width="11" height="9" rx="1"/><path d="M2.5 7h11M6 3.5v9"/></svg></span>
+                  <span class="sp-vis__chip is-on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 4h11l-4 5v4l-3-1V9z"/></svg></span>
+                </div>
+              </td>
+              <td><span class="sp-usage"><span class="sp-usage__num">2</span> места</span></td>
+              <td><button class="sp-kebab"><svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="5" r="1.5"/><circle cx="10" cy="10" r="1.5"/><circle cx="10" cy="15" r="1.5"/></svg></button></td>
+            </tr>
+
+            <!-- phone -->
+            <tr>
+              <td><span class="sp-drag"><svg viewBox="0 0 16 16" fill="currentColor"><circle cx="6" cy="4" r="1"/><circle cx="6" cy="8" r="1"/><circle cx="6" cy="12" r="1"/><circle cx="10" cy="4" r="1"/><circle cx="10" cy="8" r="1"/><circle cx="10" cy="12" r="1"/></svg></span></td>
+              <td><span class="sp-key"><span class="sp-key-text">phone</span><span class="sp-key-copy"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="5" y="5" width="8" height="9" rx="1.5"/><path d="M3 11V3.5C3 2.7 3.7 2 4.5 2H11"/></svg></span></span></td>
+              <td><span class="sp-label-main">Телефон</span> <span class="sp-label-sub">основной</span></td>
+              <td><span class="sp-type sp-type--phone"><svg class="sp-type__icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 4a1.5 1.5 0 011.5-1.5h1.5l1.5 3-1.5.8c.6 1.6 2 3 3.6 3.6l.8-1.5 3 1.5v1.5A1.5 1.5 0 0111.5 13C7 13 3 9 3 4z"/></svg>Телефон</span></td>
+              <td><span class="sp-row-group">Контакты</span></td>
+              <td><span class="sp-source sp-source--anketa"><span class="sp-source__dot"></span>Анкета</span></td>
+              <td style="text-align:center;"><span class="sp-req" title="Обязательное"></span></td>
+              <td>
+                <div class="sp-vis">
+                  <span class="sp-vis__chip is-on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M5 6h6M5 9h4"/></svg></span>
+                  <span class="sp-vis__chip is-on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3.5" width="11" height="9" rx="1"/><path d="M2.5 7h11M6 3.5v9"/></svg></span>
+                  <span class="sp-vis__chip is-on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 4h11l-4 5v4l-3-1V9z"/></svg></span>
+                </div>
+              </td>
+              <td><span class="sp-usage"><span class="sp-usage__num">21</span> место</span></td>
+              <td><button class="sp-kebab"><svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="5" r="1.5"/><circle cx="10" cy="10" r="1.5"/><circle cx="10" cy="15" r="1.5"/></svg></button></td>
+            </tr>
+
+            <!-- email -->
+            <tr>
+              <td><span class="sp-drag"><svg viewBox="0 0 16 16" fill="currentColor"><circle cx="6" cy="4" r="1"/><circle cx="6" cy="8" r="1"/><circle cx="6" cy="12" r="1"/><circle cx="10" cy="4" r="1"/><circle cx="10" cy="8" r="1"/><circle cx="10" cy="12" r="1"/></svg></span></td>
+              <td><span class="sp-key"><span class="sp-key-text">email</span><span class="sp-key-copy"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="5" y="5" width="8" height="9" rx="1.5"/><path d="M3 11V3.5C3 2.7 3.7 2 4.5 2H11"/></svg></span></span></td>
+              <td><span class="sp-label-main">Email</span></td>
+              <td><span class="sp-type sp-type--email"><svg class="sp-type__icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="4" width="12" height="9" rx="1.5"/><path d="m2.5 5 5.5 4 5.5-4"/></svg>Email</span></td>
+              <td><span class="sp-row-group">Контакты</span></td>
+              <td><span class="sp-source sp-source--manual"><span class="sp-source__dot"></span>Ручной ввод</span></td>
+              <td style="text-align:center;"><span class="sp-req sp-req--no"></span></td>
+              <td>
+                <div class="sp-vis">
+                  <span class="sp-vis__chip is-on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M5 6h6M5 9h4"/></svg></span>
+                  <span class="sp-vis__chip"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3.5" width="11" height="9" rx="1"/><path d="M2.5 7h11M6 3.5v9"/></svg></span>
+                  <span class="sp-vis__chip is-on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 4h11l-4 5v4l-3-1V9z"/></svg></span>
+                </div>
+              </td>
+              <td><span class="sp-usage"><span class="sp-usage__num">5</span> мест</span></td>
+              <td><button class="sp-kebab"><svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="5" r="1.5"/><circle cx="10" cy="10" r="1.5"/><circle cx="10" cy="15" r="1.5"/></svg></button></td>
+            </tr>
+
+            <!-- utm_source -->
+            <tr>
+              <td><span class="sp-drag"><svg viewBox="0 0 16 16" fill="currentColor"><circle cx="6" cy="4" r="1"/><circle cx="6" cy="8" r="1"/><circle cx="6" cy="12" r="1"/><circle cx="10" cy="4" r="1"/><circle cx="10" cy="8" r="1"/><circle cx="10" cy="12" r="1"/></svg></span></td>
+              <td><span class="sp-key"><span class="sp-key-text">utm_source</span><span class="sp-key-copy"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="5" y="5" width="8" height="9" rx="1.5"/><path d="M3 11V3.5C3 2.7 3.7 2 4.5 2H11"/></svg></span></span></td>
+              <td><span class="sp-label-main">UTM-источник</span></td>
+              <td><span class="sp-type sp-type--text"><svg class="sp-type__icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 5h10M8 5v8M6 13h4"/></svg>Текст</span></td>
+              <td><span class="sp-row-group">Маркетинг</span></td>
+              <td><span class="sp-source sp-source--api"><span class="sp-source__dot"></span>API</span></td>
+              <td style="text-align:center;"><span class="sp-req sp-req--no"></span></td>
+              <td>
+                <div class="sp-vis">
+                  <span class="sp-vis__chip"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M5 6h6M5 9h4"/></svg></span>
+                  <span class="sp-vis__chip"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3.5" width="11" height="9" rx="1"/><path d="M2.5 7h11M6 3.5v9"/></svg></span>
+                  <span class="sp-vis__chip is-on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 4h11l-4 5v4l-3-1V9z"/></svg></span>
+                </div>
+              </td>
+              <td><span class="sp-usage"><span class="sp-usage__num">3</span> места</span></td>
+              <td><button class="sp-kebab"><svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="5" r="1.5"/><circle cx="10" cy="10" r="1.5"/><circle cx="10" cy="15" r="1.5"/></svg></button></td>
+            </tr>
+
+            <!-- tags -->
+            <tr>
+              <td><span class="sp-drag"><svg viewBox="0 0 16 16" fill="currentColor"><circle cx="6" cy="4" r="1"/><circle cx="6" cy="8" r="1"/><circle cx="6" cy="12" r="1"/><circle cx="10" cy="4" r="1"/><circle cx="10" cy="8" r="1"/><circle cx="10" cy="12" r="1"/></svg></span></td>
+              <td><span class="sp-key"><span class="sp-key-text">tags</span><span class="sp-key-copy"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="5" y="5" width="8" height="9" rx="1.5"/><path d="M3 11V3.5C3 2.7 3.7 2 4.5 2H11"/></svg></span></span></td>
+              <td><span class="sp-label-main">Теги</span> <span class="sp-label-sub">множественный</span></td>
+              <td><span class="sp-type sp-type--multi"><svg class="sp-type__icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="3" width="7" height="7" rx="1.5"/><rect x="7" y="6" width="7" height="7" rx="1.5"/></svg>Множ.</span></td>
+              <td><span class="sp-row-group">Маркетинг</span></td>
+              <td><span class="sp-source sp-source--manual"><span class="sp-source__dot"></span>Ручной ввод</span></td>
+              <td style="text-align:center;"><span class="sp-req sp-req--no"></span></td>
+              <td>
+                <div class="sp-vis">
+                  <span class="sp-vis__chip is-on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M5 6h6M5 9h4"/></svg></span>
+                  <span class="sp-vis__chip is-on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3.5" width="11" height="9" rx="1"/><path d="M2.5 7h11M6 3.5v9"/></svg></span>
+                  <span class="sp-vis__chip is-on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 4h11l-4 5v4l-3-1V9z"/></svg></span>
+                </div>
+              </td>
+              <td><span class="sp-usage"><span class="sp-usage__num">9</span> мест</span></td>
+              <td><button class="sp-kebab"><svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="5" r="1.5"/><circle cx="10" cy="10" r="1.5"/><circle cx="10" cy="15" r="1.5"/></svg></button></td>
+            </tr>
+
+            <!-- responsible (system) -->
+            <tr>
+              <td><span class="sp-drag"><svg viewBox="0 0 16 16" fill="currentColor"><circle cx="6" cy="4" r="1"/><circle cx="6" cy="8" r="1"/><circle cx="6" cy="12" r="1"/><circle cx="10" cy="4" r="1"/><circle cx="10" cy="8" r="1"/><circle cx="10" cy="12" r="1"/></svg></span></td>
+              <td><span class="sp-key"><span class="sp-key-text">responsible_id</span><span class="sp-key-copy"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="5" y="5" width="8" height="9" rx="1.5"/><path d="M3 11V3.5C3 2.7 3.7 2 4.5 2H11"/></svg></span></span></td>
+              <td><span class="sp-label-main">Ответственный</span>
+                <svg class="sp-label-lock" width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5 7V5a3 3 0 016 0v2"/></svg>
+              </td>
+              <td><span class="sp-type sp-type--ref"><svg class="sp-type__icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="6" r="2.5"/><path d="M3 13c0-2 2-3.5 5-3.5s5 1.5 5 3.5"/></svg>Сотрудник</span></td>
+              <td><span class="sp-row-group">Системные</span></td>
+              <td><span class="sp-source sp-source--system"><span class="sp-source__dot"></span>Системное</span></td>
+              <td style="text-align:center;"><span class="sp-req sp-req--no"></span></td>
+              <td>
+                <div class="sp-vis">
+                  <span class="sp-vis__chip is-on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M5 6h6M5 9h4"/></svg></span>
+                  <span class="sp-vis__chip is-on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3.5" width="11" height="9" rx="1"/><path d="M2.5 7h11M6 3.5v9"/></svg></span>
+                  <span class="sp-vis__chip is-on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 4h11l-4 5v4l-3-1V9z"/></svg></span>
+                </div>
+              </td>
+              <td><span class="sp-usage"><span class="sp-usage__num">15</span> мест</span></td>
+              <td><button class="sp-kebab"><svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="5" r="1.5"/><circle cx="10" cy="10" r="1.5"/><circle cx="10" cy="15" r="1.5"/></svg></button></td>
+            </tr>
+
+            <!-- created_at (system, read-only) -->
+            <tr>
+              <td><span class="sp-drag"><svg viewBox="0 0 16 16" fill="currentColor"><circle cx="6" cy="4" r="1"/><circle cx="6" cy="8" r="1"/><circle cx="6" cy="12" r="1"/><circle cx="10" cy="4" r="1"/><circle cx="10" cy="8" r="1"/><circle cx="10" cy="12" r="1"/></svg></span></td>
+              <td><span class="sp-key"><span class="sp-key-text">created_at</span><span class="sp-key-copy"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="5" y="5" width="8" height="9" rx="1.5"/><path d="M3 11V3.5C3 2.7 3.7 2 4.5 2H11"/></svg></span></span></td>
+              <td><span class="sp-label-main">Создан</span>
+                <svg class="sp-label-lock" width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5 7V5a3 3 0 016 0v2"/></svg>
+              </td>
+              <td><span class="sp-type sp-type--date"><svg class="sp-type__icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2.5" y="4" width="11" height="9" rx="1.5"/><path d="M2.5 7h11M6 2.5v3M10 2.5v3"/></svg>Дата/время</span></td>
+              <td><span class="sp-row-group">Системные</span></td>
+              <td><span class="sp-source sp-source--system"><span class="sp-source__dot"></span>Системное</span></td>
+              <td style="text-align:center;"><span class="sp-req sp-req--no"></span></td>
+              <td>
+                <div class="sp-vis">
+                  <span class="sp-vis__chip is-on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M5 6h6M5 9h4"/></svg></span>
+                  <span class="sp-vis__chip"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3.5" width="11" height="9" rx="1"/><path d="M2.5 7h11M6 3.5v9"/></svg></span>
+                  <span class="sp-vis__chip is-on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 4h11l-4 5v4l-3-1V9z"/></svg></span>
+                </div>
+              </td>
+              <td><span class="sp-usage sp-usage--empty"><span class="sp-usage__num">0</span> мест</span></td>
+              <td><button class="sp-kebab"><svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="5" r="1.5"/><circle cx="10" cy="10" r="1.5"/><circle cx="10" cy="15" r="1.5"/></svg></button></td>
+            </tr>
+
+            <!-- subscribed -->
+            <tr>
+              <td><span class="sp-drag"><svg viewBox="0 0 16 16" fill="currentColor"><circle cx="6" cy="4" r="1"/><circle cx="6" cy="8" r="1"/><circle cx="6" cy="12" r="1"/><circle cx="10" cy="4" r="1"/><circle cx="10" cy="8" r="1"/><circle cx="10" cy="12" r="1"/></svg></span></td>
+              <td><span class="sp-key"><span class="sp-key-text">subscribed</span><span class="sp-key-copy"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="5" y="5" width="8" height="9" rx="1.5"/><path d="M3 11V3.5C3 2.7 3.7 2 4.5 2H11"/></svg></span></span></td>
+              <td><span class="sp-label-main">Согласие на рассылку</span></td>
+              <td><span class="sp-type sp-type--bool"><svg class="sp-type__icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2.5" y="4" width="11" height="8" rx="2"/><circle cx="10.5" cy="8" r="2.5" fill="currentColor"/></svg>Да/Нет</span></td>
+              <td><span class="sp-row-group">Маркетинг</span></td>
+              <td><span class="sp-source sp-source--anketa"><span class="sp-source__dot"></span>Анкета</span></td>
+              <td style="text-align:center;"><span class="sp-req sp-req--no"></span></td>
+              <td>
+                <div class="sp-vis">
+                  <span class="sp-vis__chip is-on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M5 6h6M5 9h4"/></svg></span>
+                  <span class="sp-vis__chip"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3.5" width="11" height="9" rx="1"/><path d="M2.5 7h11M6 3.5v9"/></svg></span>
+                  <span class="sp-vis__chip is-on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 4h11l-4 5v4l-3-1V9z"/></svg></span>
+                </div>
+              </td>
+              <td><span class="sp-usage"><span class="sp-usage__num">4</span> места</span></td>
+              <td><button class="sp-kebab"><svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="5" r="1.5"/><circle cx="10" cy="10" r="1.5"/><circle cx="10" cy="15" r="1.5"/></svg></button></td>
+            </tr>
+
+            <!-- b24_contact_id -->
+            <tr>
+              <td><span class="sp-drag"><svg viewBox="0 0 16 16" fill="currentColor"><circle cx="6" cy="4" r="1"/><circle cx="6" cy="8" r="1"/><circle cx="6" cy="12" r="1"/><circle cx="10" cy="4" r="1"/><circle cx="10" cy="8" r="1"/><circle cx="10" cy="12" r="1"/></svg></span></td>
+              <td><span class="sp-key"><span class="sp-key-text">b24_contact_id</span><span class="sp-key-copy"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="5" y="5" width="8" height="9" rx="1.5"/><path d="M3 11V3.5C3 2.7 3.7 2 4.5 2H11"/></svg></span></span></td>
+              <td><span class="sp-label-main">Bitrix24 ID</span>
+                <svg class="sp-label-lock" width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5 7V5a3 3 0 016 0v2"/></svg>
+              </td>
+              <td><span class="sp-type sp-type--number"><svg class="sp-type__icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6h8M4 10h6M9 2v12M12 4l-2 10"/></svg>Число</span></td>
+              <td><span class="sp-row-group">Системные</span></td>
+              <td><span class="sp-source sp-source--b24"><span class="sp-source__dot"></span>Bitrix24</span></td>
+              <td style="text-align:center;"><span class="sp-req sp-req--no"></span></td>
+              <td>
+                <div class="sp-vis">
+                  <span class="sp-vis__chip"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M5 6h6M5 9h4"/></svg></span>
+                  <span class="sp-vis__chip"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="3.5" width="11" height="9" rx="1"/><path d="M2.5 7h11M6 3.5v9"/></svg></span>
+                  <span class="sp-vis__chip"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 4h11l-4 5v4l-3-1V9z"/></svg></span>
+                </div>
+              </td>
+              <td><span class="sp-usage sp-usage--empty"><span class="sp-usage__num">0</span> мест</span></td>
+              <td><button class="sp-kebab"><svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="5" r="1.5"/><circle cx="10" cy="10" r="1.5"/><circle cx="10" cy="15" r="1.5"/></svg></button></td>
+            </tr>
+
+          </tbody>
+        </table>
+      </section>
+
+      <!-- Page footer hint -->
+      <div class="ac-page-footer">
+        <span class="ac-page-footer__hint">
+          Системные поля (с замком) нельзя удалить, но можно скрыть из карточки и таблицы.
+        </span>
+        <button class="ac-btn ac-btn--ghost ac-btn--sm">
+          <svg class="ac-btn__icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 10h14M10 3l-7 7 7 7M17 3l-7 7 7 7"/></svg>
+          Экспорт JSON-схемы
+        </button>
+      </div>
+
+    </div>
+  </main>
+
+  <!-- =================== DRAWER: выбранное поле =================== -->
+  <aside class="sp-drawer" role="dialog" aria-label="Поле first_name">
+    <div class="sp-drawer__head">
+      <div class="sp-drawer__title">
+        <h2>Имя</h2>
+        <div class="sp-key">
+          <span class="sp-key-text">first_name</span>
+          <span class="sp-key-copy" style="opacity:.7;"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="5" y="5" width="8" height="9" rx="1.5"/><path d="M3 11V3.5C3 2.7 3.7 2 4.5 2H11"/></svg></span>
+        </div>
+      </div>
+      <button class="ac-icon-btn sp-drawer__close" aria-label="Закрыть">
+        <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m5 5 10 10M15 5 5 15"/></svg>
+      </button>
+    </div>
+
+    <div class="sp-drawer__body">
+
+      <div class="sp-form-row">
+        <label class="sp-form-row__label">Название поля</label>
+        <input type="text" class="sp-input" value="Имя" />
+        <span class="sp-form-row__hint">Так поле подписано в карточках и таблицах.</span>
+      </div>
+
+      <div class="sp-form-row">
+        <label class="sp-form-row__label">Ключ <span style="color:var(--ac-text-3); font-weight:400;">(в API и формулах)</span></label>
+        <input type="text" class="sp-input sp-input--mono" value="first_name" />
+      </div>
+
+      <div class="sp-form-row" style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+        <div>
+          <label class="sp-form-row__label" style="margin-bottom:6px;">Тип</label>
+          <select class="sp-select">
+            <option>Текст</option>
+            <option>Длинный текст</option>
+            <option>Число</option>
+            <option>Дата</option>
+            <option>Выбор</option>
+            <option>Множественный выбор</option>
+            <option>Да/Нет</option>
+            <option>Телефон</option>
+            <option>Email</option>
+            <option>Ссылка</option>
+            <option>Справочник</option>
+            <option>Вычисляемое</option>
+          </select>
+        </div>
+        <div>
+          <label class="sp-form-row__label" style="margin-bottom:6px;">Группа</label>
+          <select class="sp-select">
+            <option>Основное</option>
+            <option>Адрес</option>
+            <option>Контакты</option>
+            <option>Маркетинг</option>
+            <option>Системные</option>
+          </select>
+        </div>
+      </div>
+
+      <div style="display:flex; align-items:center; justify-content:space-between; padding:8px 0; border-top:1px solid var(--ac-border); border-bottom:1px solid var(--ac-border);">
+        <label class="sp-toggle">
+          <input type="checkbox" />
+          <span class="sp-toggle__track"></span>
+          <span class="sp-toggle__label">Обязательное</span>
+        </label>
+        <label class="sp-toggle">
+          <input type="checkbox" checked />
+          <span class="sp-toggle__track"></span>
+          <span class="sp-toggle__label">Уникальное</span>
+        </label>
+      </div>
+
+      <div class="sp-form-row">
+        <label class="sp-form-row__label">Видимость</label>
+        <div class="sp-checks">
+          <label class="sp-check">
+            <input type="checkbox" checked/>
+            <span class="sp-check__box"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m3.5 8.5 3 3 6-7"/></svg></span>
+            <span>Карточка контакта</span>
+            <span class="sp-check__hint">секция «Данные клиента»</span>
+          </label>
+          <label class="sp-check">
+            <input type="checkbox" checked/>
+            <span class="sp-check__box"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m3.5 8.5 3 3 6-7"/></svg></span>
+            <span>Список контактов (таблица)</span>
+          </label>
+          <label class="sp-check">
+            <input type="checkbox" checked/>
+            <span class="sp-check__box"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m3.5 8.5 3 3 6-7"/></svg></span>
+            <span>Фильтры и сортировка</span>
+          </label>
+          <label class="sp-check">
+            <input type="checkbox"/>
+            <span class="sp-check__box"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m3.5 8.5 3 3 6-7"/></svg></span>
+            <span>Карточка диалога в канбане</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="sp-form-row">
+        <label class="sp-form-row__label">Источник значения</label>
+        <select class="sp-select">
+          <option>ИИ-распознавание из переписки</option>
+          <option>Ручной ввод</option>
+          <option>Анкета</option>
+          <option>API / вебхук</option>
+          <option>Bitrix24</option>
+        </select>
+        <span class="sp-form-row__hint">
+          ИИ-обработчик «Распознавание имени» будет заполнять это поле автоматически, если значение пустое.
+        </span>
+      </div>
+
+      <div class="sp-form-row">
+        <label class="sp-form-row__label">Описание <span style="color:var(--ac-text-3); font-weight:400;">для сотрудников</span></label>
+        <textarea class="sp-textarea" rows="2">Как клиент себя называет. Заполняется автоматически из первых сообщений.</textarea>
+      </div>
+
+      <div class="sp-form-row">
+        <label class="sp-form-row__label">Используется в</label>
+        <div class="sp-usage-block">
+          <div class="sp-usage-item">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="14" height="12" rx="2"/><path d="M7 8h6M7 12h4"/></svg>
+            Анкета «Знакомство»
+            <span class="sp-usage-item__sub">шаг 1</span>
+          </div>
+          <div class="sp-usage-item">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="14" height="12" rx="2"/><path d="M7 8h6M7 12h4"/></svg>
+            Анкета «Подтверждение заказа»
+          </div>
+          <div class="sp-usage-item">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 5h14l-5 6v5l-4-1v-4z"/></svg>
+            Фильтр «Новые без имени»
+          </div>
+          <div class="sp-usage-item">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="14" height="14" rx="2"/><path d="M3 8h14"/></svg>
+            Колонка таблицы диалогов
+          </div>
+          <div class="sp-usage-item" style="color:var(--ac-text-2);">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="14" height="14" rx="2"/><path d="m6 10 3 3 5-6"/></svg>
+            Ещё 8 мест
+            <span class="sp-usage-item__sub">показать все</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="sp-hint-card">
+        <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="10" cy="10" r="7.5"/><path d="M10 6v5M10 14v.01"/></svg>
+        Поле используется в 12 местах. При удалении эти места покажут «—» и могут перестать работать корректно. Сначала отключите поле в «Видимость», убедитесь, что ничего не сломалось, и только потом удаляйте.
+      </div>
+
+    </div>
+
+    <div class="sp-drawer__foot">
+      <button class="ac-btn ac-btn--danger ac-btn--sm">
+        <svg class="ac-btn__icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 6h14M8 9v6M12 9v6M5 6V4a1 1 0 011-1h8a1 1 0 011 1v2M6 6l1 11a1 1 0 001 1h4a1 1 0 001-1l1-11"/></svg>
+        Удалить
+      </button>
+      <div class="sp-foot-spacer"></div>
+      <button class="ac-btn ac-btn--ghost ac-btn--sm">Отмена</button>
+      <button class="ac-btn ac-btn--primary ac-btn--sm">Сохранить</button>
+    </div>
+  </aside>
+
+</div>
+
+<script>
+  // ── Мини-интерактивность ────────────────────────────────
+  // 1. Клик по строке таблицы → выделение и заполнение drawer
+  const rows = document.querySelectorAll('.sp-table tbody tr');
+  rows.forEach(tr => {
+    tr.addEventListener('click', (e) => {
+      if (e.target.closest('.sp-kebab, .sp-key-copy, .sp-drag')) return;
+      rows.forEach(r => r.classList.remove('is-selected'));
+      tr.classList.add('is-selected');
+    });
+  });
+
+  // 2. Tabs (контакт / диалог / переменные) — визуальный тоггл
+  document.querySelectorAll('.ac-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.ac-tab').forEach(t => t.classList.remove('is-active'));
+      tab.classList.add('is-active');
+    });
+  });
+
+  // 3. Group chips
+  document.querySelectorAll('.sp-group-chip').forEach(chip => {
+    if (chip.classList.contains('sp-group-chip--add')) return;
+    chip.addEventListener('click', () => {
+      document.querySelectorAll('.sp-group-chip').forEach(c => c.classList.remove('is-active'));
+      chip.classList.add('is-active');
+    });
+  });
+</script>
+</body>
+</html>

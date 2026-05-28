@@ -10,6 +10,7 @@ use App\Filament\Resources\Dialogs\Pages\ViewDialog;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\Dialog;
+use App\Models\FieldDictionaryField;
 use App\Models\Message;
 use App\Services\Contacts\ResolveContactDisplayNameAction;
 use App\Services\Dialogs\BuildConversationFeedViewDataAction;
@@ -122,32 +123,36 @@ class DialogResource extends Resource
 
     public static function table(Table $table): Table
     {
+        $dialogFieldLabels = FieldDictionaryField::labelsFor(FieldDictionaryField::ENTITY_DIALOG);
+        $dialogStageOptionLabels = FieldDictionaryField::optionLabelsFor(FieldDictionaryField::ENTITY_DIALOG, 'stage');
+        $dialogFieldLabel = static fn (string $fieldKey, string $fallback): string => FieldDictionaryField::labelFrom($dialogFieldLabels, $fieldKey, $fallback);
+
         return $table
             ->poll('10s')
             ->splitSearchTerms(false)
             ->searchPlaceholder('Поиск диалога')
             ->columns([
                 TextColumn::make('contact_label')
-                    ->label('Контакт')
+                    ->label($dialogFieldLabel('contact_id', 'Контакт'))
                     ->state(fn (Dialog $record): string => static::resolveContactLabel($record))
                     ->searchable(query: fn (Builder $query, string $search): Builder => static::applyTableSearch($query, $search))
                     ->toggleable(),
                 TextColumn::make('inbox_status')
-                    ->label('Статус')
+                    ->label($dialogFieldLabel('status', 'Статус'))
                     ->state(fn (Dialog $record): string => static::formatInboxStatus($record))
                     ->badge()
                     ->color(fn (Dialog $record): string => static::getInboxStatusColor($record))
                     ->toggleable(),
                 TextColumn::make('preview_text')
-                    ->label('Последнее сообщение')
+                    ->label($dialogFieldLabel('last_message_at', 'Последнее сообщение'))
                     ->state(fn (Dialog $record): string => static::resolvePreviewText($record))
                     ->description(fn (Dialog $record): ?string => static::formatPreviewMetaSummary($record))
                     ->tooltip(fn (Dialog $record): string => static::resolvePreviewText($record))
                     ->limit(80)
                     ->toggleable(),
                 TextColumn::make('stage')
-                    ->label('Этап')
-                    ->state(fn (Dialog $record): string => static::formatStageLabel($record))
+                    ->label($dialogFieldLabel('stage', 'Этап'))
+                    ->state(fn (Dialog $record): string => static::formatStageLabel($record, $dialogStageOptionLabels))
                     ->badge()
                     ->color(fn (Dialog $record): string => static::getStageColor($record))
                     ->toggleable(),
@@ -158,7 +163,7 @@ class DialogResource extends Resource
                         : 'Свободен')
                     ->toggleable(),
                 TextColumn::make('channel_label')
-                    ->label('Канал')
+                    ->label($dialogFieldLabel('channel_id', 'Канал'))
                     ->state(fn (Dialog $record): string => static::formatChannelLabel($record))
                     ->toggleable(),
                 TextColumn::make('route_status')
@@ -183,7 +188,7 @@ class DialogResource extends Resource
                         ->orderBy('dialogs.id', $direction))
                     ->toggleable(),
                 TextColumn::make('id')
-                    ->label('ID')
+                    ->label($dialogFieldLabel('id', 'ID'))
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('external_user_id')
@@ -197,7 +202,7 @@ class DialogResource extends Resource
                     ->placeholder('—')
                     ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('phone_label')
-                    ->label('Номер телефона')
+                    ->label($dialogFieldLabel('phone', 'Номер телефона'))
                     ->state(fn (Dialog $record): ?string => static::resolveDialogPhoneValue($record))
                     ->placeholder('—')
                     ->toggleable(isToggledHiddenByDefault: true),
@@ -240,8 +245,8 @@ class DialogResource extends Resource
                         ->mapWithKeys(fn (Channel $channel): array => [$channel->id => $channel->display_title])
                         ->all()),
                 SelectFilter::make('stage')
-                    ->label('Этап')
-                    ->options(fn (): array => Dialog::stageLabels())
+                    ->label($dialogFieldLabel('stage', 'Этап'))
+                    ->options(fn (): array => static::applyDictionaryOptionLabels(Dialog::stageLabels(), $dialogStageOptionLabels))
                     ->query(function (Builder $query, array $data): void {
                         $stage = $data['value'] ?? null;
 
@@ -288,6 +293,25 @@ class DialogResource extends Resource
             'kanban' => DialogKanban::route('/kanban'),
             'view' => ViewDialog::route('/{record}'),
         ];
+    }
+
+    protected static function dialogFieldLabel(string $fieldKey, string $fallback): string
+    {
+        return FieldDictionaryField::labelFor(FieldDictionaryField::ENTITY_DIALOG, $fieldKey, $fallback);
+    }
+
+    /**
+     * @param  array<string, string>  $fallbackOptions
+     * @param  array<string, string>  $dictionaryLabels
+     * @return array<string, string>
+     */
+    protected static function applyDictionaryOptionLabels(array $fallbackOptions, array $dictionaryLabels): array
+    {
+        return collect($fallbackOptions)
+            ->mapWithKeys(fn (string $label, string $value): array => [
+                $value => FieldDictionaryField::optionLabelFrom($dictionaryLabels, $value, $label),
+            ])
+            ->all();
     }
 
     protected static function isDialogsBrowsingUrl(string $url): bool
@@ -496,9 +520,11 @@ class DialogResource extends Resource
         };
     }
 
-    protected static function formatStageLabel(Dialog $record): string
+    protected static function formatStageLabel(Dialog $record, array $stageOptionLabels = []): string
     {
-        return Dialog::stageLabel(static::resolveEffectiveStage($record));
+        $stage = static::resolveEffectiveStage($record);
+
+        return FieldDictionaryField::optionLabelFrom($stageOptionLabels, $stage, Dialog::stageLabel($stage));
     }
 
     protected static function getStageColor(Dialog $record): string

@@ -1,13 +1,20 @@
 @php
+    $fieldLabels = $fieldLabels ?? [];
+    $dialogFieldLabel = static function (string $fieldKey, string $fallback) use ($fieldLabels): string {
+        $label = trim((string) ($fieldLabels[$fieldKey] ?? ''));
+
+        return $label !== '' ? $label : $fallback;
+    };
+
     $dialogColumns = [
-        ['key' => 'id', 'label' => 'ID', 'width' => 72, 'min' => 52],
-        ['key' => 'channel', 'label' => 'Канал', 'width' => 304, 'min' => 150],
+        ['key' => 'id', 'label' => $dialogFieldLabel('id', 'ID'), 'width' => 72, 'min' => 52],
+        ['key' => 'channel', 'label' => $dialogFieldLabel('channel_id', 'Канал'), 'width' => 304, 'min' => 150],
         ['key' => 'name', 'label' => 'Имя в мессенджере', 'width' => 220, 'min' => 120],
-        ['key' => 'phone', 'label' => 'Телефон канала', 'width' => 200, 'min' => 104],
-        ['key' => 'stage', 'label' => 'Стадия', 'width' => 176, 'min' => 96],
-        ['key' => 'message', 'label' => 'Последнее сообщение', 'width' => 420, 'min' => 160],
+        ['key' => 'phone', 'label' => $dialogFieldLabel('phone', 'Телефон канала'), 'width' => 200, 'min' => 104],
+        ['key' => 'stage', 'label' => $dialogFieldLabel('stage', 'Стадия'), 'width' => 176, 'min' => 96],
+        ['key' => 'message', 'label' => $dialogFieldLabel('last_message_at', 'Последнее сообщение'), 'width' => 420, 'min' => 160],
         ['key' => 'date', 'label' => 'Дата', 'width' => 176, 'min' => 96],
-        ['key' => 'status', 'label' => 'Статус', 'width' => 168, 'min' => 96],
+        ['key' => 'status', 'label' => $dialogFieldLabel('status', 'Статус'), 'width' => 168, 'min' => 96],
     ];
     $dialogsCount = count($dialogs);
 @endphp
