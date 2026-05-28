@@ -184,6 +184,41 @@ class FieldDictionaryField extends Model
         return $label !== '' ? $label : $fallback;
     }
 
+    /**
+     * @return array{contact: list<array<string, mixed>>, dialog: list<array<string, mixed>>}
+     */
+    public static function constructorCatalog(): array
+    {
+        $catalog = [
+            self::ENTITY_CONTACT => [],
+            self::ENTITY_DIALOG => [],
+        ];
+
+        static::query()
+            ->whereIn('entity', [self::ENTITY_CONTACT, self::ENTITY_DIALOG])
+            ->ordered()
+            ->get(['id', 'entity', 'field_key', 'name', 'type', 'options', 'source_field_key', 'sort_order', 'is_multiple', 'is_system'])
+            ->each(function (FieldDictionaryField $field) use (&$catalog): void {
+                $catalog[$field->entity][] = [
+                    'id' => (int) $field->id,
+                    'entity' => (string) $field->entity,
+                    'key' => (string) $field->field_key,
+                    'label' => (string) $field->name,
+                    'type' => (string) $field->type,
+                    'options' => self::normalizeOptions($field->options ?? []),
+                    'source_field_key' => filled($field->source_field_key) ? (string) $field->source_field_key : null,
+                    'sort_order' => (int) $field->sort_order,
+                    'is_multiple' => (bool) $field->is_multiple,
+                    'is_system' => (bool) $field->is_system,
+                ];
+            });
+
+        return [
+            'contact' => $catalog[self::ENTITY_CONTACT],
+            'dialog' => $catalog[self::ENTITY_DIALOG],
+        ];
+    }
+
     public function scopeOrdered(Builder $query): Builder
     {
         return $query
@@ -304,6 +339,7 @@ class FieldDictionaryField extends Model
                 ['value' => 'unknown', 'label' => 'Непонятно', 'is_system' => true],
             ], 'gender_source'),
             self::definition(self::ENTITY_CONTACT, 'birth_date', 'Дата рождения', self::TYPE_DATE, 40),
+            self::definition(self::ENTITY_CONTACT, 'age_years', 'Возраст', self::TYPE_NUMBER, 42),
             self::definition(self::ENTITY_CONTACT, 'age_range', 'Возрастной диапазон', self::TYPE_SELECT, 45, [
                 ['value' => 'under_18', 'label' => 'До 18 лет', 'is_system' => true],
                 ['value' => '18_23', 'label' => '18 - 23 года', 'is_system' => true],

@@ -108,6 +108,39 @@ const ACTION_FIELD_VALUE_OPTIONS = {
         ],
     },
 };
+const FIELD_DICTIONARY_ENTITY_CONTACT = 'contact';
+const FIELD_DICTIONARY_ENTITY_DIALOG = 'dialog';
+const FIELD_DICTIONARY_MISSING_LABEL = 'нет в справочнике';
+const CONTACT_RUNTIME_WRITABLE_FIELD_KEYS = new Set([
+    'phone',
+    'first_name',
+    'last_name',
+    'country',
+    'city',
+    'gender',
+    'age_years',
+    'age_range',
+]);
+const CONTACT_RUNTIME_CONDITION_FIELD_KEYS = new Set([
+    'phone',
+    'first_name',
+    'first_name_source',
+    'last_name',
+    'country',
+    'city',
+    'gender',
+    'age_years',
+    'age_range',
+]);
+const FIELD_TYPE_DATA_TYPE = {
+    phone: 'phone',
+    email: 'email',
+    number: 'number',
+    text: 'any_text',
+    select: 'any_text',
+    boolean: 'any_text',
+    date: 'any_text',
+};
 const ACTION_CHECK_DATA_OUTPUTS = [
     { id: 'data_found', label: 'Найдено', source: 'action', action_result_id: 'data_found' },
     {
@@ -189,6 +222,7 @@ const BUTTON_PLACEMENT_OPTIONS = [
     [BUTTON_PLACEMENT_REPLY, 'Клавиатура'],
     [BUTTON_PLACEMENT_INLINE, 'В сообщении'],
 ];
+let activeFieldDictionary = null;
 const REQUEST_PHONE_BUTTON_TEXT = 'Поделиться номером телефона';
 const BUTTON_COLOR_OPTIONS = [
     [null, 'Без цвета', null],
@@ -483,6 +517,11 @@ export default function App({
     const allBlocks = builder?.blocks ?? [];
     const allEdges = builder?.edges ?? [];
     const channels = state?.catalogs?.channels ?? [];
+    const fieldDictionary = useMemo(
+        () => normalizeFieldDictionary(state?.catalogs?.field_dictionary),
+        [state?.catalogs?.field_dictionary],
+    );
+    activeFieldDictionary = fieldDictionary;
     const scheduledTransitions = builder?.diagnostics?.scheduled_transitions ?? [];
     const sheets = sheetsFrom(builder);
     const activeSheet = activeSheetFrom(builder);
@@ -495,7 +534,7 @@ export default function App({
     const edges = useMemo(() => filterEdgesForBlocks(allEdges, blocks), [allEdges, blocks]);
     const selectedBlock = blocks.find((block) => block.client_key === selectedBlockKey) ?? null;
     const selectedEdge = edges.find((edge) => edge.client_key === selectedEdgeKey) ?? null;
-    const dialogFieldKeys = useMemo(() => dialogFieldKeysFromEdges(edges), [edges]);
+    const dialogFieldKeys = useMemo(() => dialogFieldKeysFromEdges(edges, fieldDictionary), [edges, fieldDictionary]);
     const blockSearchMatches = useMemo(() => searchBlocks(blocks, blockSearchQuery), [blocks, blockSearchQuery]);
     const canSave = state?.permissions?.can_update === true
         && status === 'ready'
@@ -2429,6 +2468,7 @@ export default function App({
                                 block={selectedBlock}
                                 channels={channels}
                                 blocks={blocks}
+                                dialogFieldKeys={dialogFieldKeys}
                                 onCollapse={collapsePanel}
                                 onClose={closePanelSelection}
                                 onSelectBlock={selectBlock}
@@ -3349,27 +3389,23 @@ function edgeFieldConditionLabel(fieldCondition) {
     const scope = fieldCondition.field_scope === 'contact' ? 'contact' : 'dialog';
     const field = scope === 'contact'
         ? contactConditionField(fieldCondition.field_key)
-        : [fieldCondition.field_key, `dialog.${fieldCondition.field_key}`];
+        : [fieldCondition.field_key, dictionaryFieldLabel(FIELD_DICTIONARY_ENTITY_DIALOG, fieldCondition.field_key, `dialog.${fieldCondition.field_key}`)];
     const fieldLabel = field[1] ?? field[0] ?? 'Поле';
     const operator = optionLabel(EDGE_FIELD_CONDITION_OPERATOR_OPTIONS, fieldCondition.operator || 'filled');
     const hasValue = ['equals', 'not_equals'].includes(fieldCondition.operator);
-    const value = hasValue ? edgeFieldConditionValueLabel(fieldCondition, field[0]) : '';
+    const value = hasValue ? edgeFieldConditionValueLabel(fieldCondition, scope, field[0]) : '';
 
     return `${fieldLabel}: ${operator}${value ? ` ${value}` : ''}`;
 }
 
-function edgeFieldConditionValueLabel(fieldCondition, fieldKey) {
+function edgeFieldConditionValueLabel(fieldCondition, scope, fieldKey) {
     const value = String(fieldCondition.value ?? '').trim();
 
     if (! value) {
         return '""';
     }
 
-    if (fieldKey === 'first_name_source') {
-        return optionLabel(FIRST_NAME_SOURCE_CONDITION_OPTIONS, value);
-    }
-
-    return value;
+    return dictionaryFieldValueLabel(scope, fieldKey, value, value);
 }
 
 function edgeMatchLabel(match) {
@@ -3396,7 +3432,7 @@ function edgeCaptureLabel(capture) {
     const scope = capture.field_scope === 'contact' ? 'contact' : 'dialog';
     const field = scope === 'contact'
         ? contactCaptureField(capture.field_key)
-        : [capture.field_key, `dialog.${capture.field_key}`];
+        : [capture.field_key, dictionaryFieldLabel(FIELD_DICTIONARY_ENTITY_DIALOG, capture.field_key, `dialog.${capture.field_key}`)];
     const fieldLabel = field[1] ?? field[0] ?? 'поле';
 
     return `Записать: ${fieldLabel}`;
@@ -3675,6 +3711,7 @@ function BlockPanel({
     block,
     channels,
     blocks,
+    dialogFieldKeys,
     onCollapse,
     onClose,
     onSelectBlock,
@@ -3899,6 +3936,7 @@ function BlockPanel({
                                         action={action}
                                         blockKey={block.client_key}
                                         onUpdateModulePayload={onUpdateModulePayload}
+                                        dialogFieldKeys={dialogFieldKeys}
                                     />
                                 ) : null}
                             </ModuleConfigCard>
@@ -4309,6 +4347,7 @@ function AiFields({ ai, blockKey, onUpdateModulePayload, onRemoveAiVariant }) {
     const variants = aiVariantDefinitions(ai);
     const extractFields = aiExtractFieldDefinitions(ai);
     const [isVariableHelpOpen, setIsVariableHelpOpen] = useState(false);
+    const variableGroups = aiPromptVariableGroups();
 
     function updateVariant(variantId, patch) {
         onUpdateModulePayload(blockKey, 'ai', {
@@ -4392,7 +4431,7 @@ function AiFields({ ai, blockKey, onUpdateModulePayload, onRemoveAiVariant }) {
                             </button>
                         </div>
                         <div className="ac-v3-builder__ai-variable-popover-body">
-                            {AI_PROMPT_VARIABLE_GROUPS.map((group) => (
+                            {variableGroups.map((group) => (
                                 <div key={group.title} className="ac-v3-builder__ai-variable-group">
                                     <strong>{group.title}</strong>
                                     {group.items.map((item) => (
@@ -4485,6 +4524,8 @@ function AiFields({ ai, blockKey, onUpdateModulePayload, onRemoveAiVariant }) {
 }
 
 function VariableHelpPopover({ title, ariaLabel, onClose, onInsert = null }) {
+    const variableGroups = aiPromptVariableGroups();
+
     return (
         <div className="ac-v3-builder__ai-variable-popover" aria-label={ariaLabel}>
             <div className="ac-v3-builder__ai-variable-popover-head">
@@ -4498,7 +4539,7 @@ function VariableHelpPopover({ title, ariaLabel, onClose, onInsert = null }) {
                 </button>
             </div>
             <div className="ac-v3-builder__ai-variable-popover-body">
-                {AI_PROMPT_VARIABLE_GROUPS.map((group) => (
+                {variableGroups.map((group) => (
                     <div key={group.title} className="ac-v3-builder__ai-variable-group">
                         <strong>{group.title}</strong>
                         {group.items.map((item) => (
@@ -4587,7 +4628,7 @@ function MessageFields({ message, blockKey, onUpdateModulePayload }) {
     );
 }
 
-function ActionFields({ action, blockKey, onUpdateModulePayload }) {
+function ActionFields({ action, blockKey, onUpdateModulePayload, dialogFieldKeys = [] }) {
     const items = actionItems(action);
 
     function updateItem(index, patch) {
@@ -4734,7 +4775,14 @@ function ActionFields({ action, blockKey, onUpdateModulePayload }) {
                                 <span>Где изменить</span>
                                 <select
                                     value={item.target_scope}
-                                    onChange={(event) => updateChangeDataItem(index, { target_scope: event.target.value })}
+                                    onChange={(event) => {
+                                        const targetScope = event.target.value;
+
+                                        updateChangeDataItem(index, {
+                                            target_scope: targetScope,
+                                            target_field: targetScope === 'contact' ? defaultWritableContactFieldKey() : 'field',
+                                        });
+                                    }}
                                 >
                                     {ACTION_TARGET_SCOPE_OPTIONS.map(([value, label]) => (
                                         <option key={value} value={value}>{label}</option>
@@ -4748,20 +4796,22 @@ function ActionFields({ action, blockKey, onUpdateModulePayload }) {
                                         value={item.target_field}
                                         onChange={(event) => updateChangeDataItem(index, { target_field: event.target.value })}
                                     >
-                                        {EDGE_CONTACT_FIELD_OPTIONS.map(([value, label]) => (
-                                            <option key={value} value={value}>{label}</option>
+                                        {contactActionFieldOptions(item.target_field).map((option) => (
+                                            <option key={option.key} value={option.key} disabled={option.disabled}>
+                                                {option.label}{option.disabled ? ' · только отображение' : ''}
+                                            </option>
                                         ))}
                                     </select>
                                 </label>
                             ) : (
                                 <label>
                                     <span>Поле диалога</span>
-                                    <input
+                                    <DialogFieldKeyInput
                                         value={item.target_field}
                                         placeholder="name_attempts"
-                                        onChange={(event) => updateChangeDataItem(index, {
-                                            target_field: normalizeDialogFieldKey(event.target.value),
-                                        })}
+                                        onChange={(fieldKey) => updateChangeDataItem(index, { target_field: normalizeDialogFieldKey(fieldKey) })}
+                                        suggestions={dialogFieldKeys}
+                                        purpose="action"
                                     />
                                 </label>
                             )}
@@ -5118,8 +5168,281 @@ function isValidDialogFieldKey(value) {
     return DIALOG_FIELD_KEY_PATTERN.test(normalizeDialogFieldKey(value));
 }
 
-function dialogFieldKeysFromEdges(edges) {
+function currentFieldDictionary() {
+    if (! activeFieldDictionary) {
+        activeFieldDictionary = normalizeFieldDictionary(null);
+    }
+
+    return activeFieldDictionary;
+}
+
+function normalizeFieldDictionary(catalog) {
+    const byEntity = {
+        [FIELD_DICTIONARY_ENTITY_CONTACT]: new Map(),
+        [FIELD_DICTIONARY_ENTITY_DIALOG]: new Map(),
+    };
+
+    EDGE_CONTACT_CONDITION_FIELD_OPTIONS.forEach(([key, label, dataType]) => {
+        byEntity[FIELD_DICTIONARY_ENTITY_CONTACT].set(key, {
+            key,
+            label,
+            type: dataType === 'number' ? 'number' : (dataType === 'phone' ? 'phone' : 'text'),
+            dataType,
+            options: fallbackFieldOptions(FIELD_DICTIONARY_ENTITY_CONTACT, key),
+            sourceFieldKey: null,
+            isMultiple: false,
+            isSystem: true,
+            isFallback: true,
+            sortOrder: 1000,
+        });
+    });
+
+    const rowsByEntity = catalog && typeof catalog === 'object' ? catalog : {};
+
+    [FIELD_DICTIONARY_ENTITY_CONTACT, FIELD_DICTIONARY_ENTITY_DIALOG].forEach((entity) => {
+        const rows = Array.isArray(rowsByEntity[entity]) ? rowsByEntity[entity] : [];
+
+        rows.forEach((row) => {
+            const key = normalizeDictionaryFieldKey(row?.key ?? row?.field_key);
+
+            if (! key) {
+                return;
+            }
+
+            const type = String(row?.type ?? 'text').trim() || 'text';
+            const label = String(row?.label ?? row?.name ?? key).trim() || key;
+            const options = Array.isArray(row?.options)
+                ? row.options
+                    .map((option) => ({
+                        value: String(option?.value ?? '').trim(),
+                        label: String(option?.label ?? '').trim(),
+                        isSystem: option?.is_system === true,
+                    }))
+                    .filter((option) => option.value !== '' && option.label !== '')
+                : [];
+
+            byEntity[entity].set(key, {
+                key,
+                label,
+                type,
+                dataType: fieldTypeDataType(type),
+                options,
+                sourceFieldKey: normalizeDictionaryFieldKey(row?.source_field_key),
+                isMultiple: row?.is_multiple === true,
+                isSystem: row?.is_system === true,
+                isFallback: false,
+                sortOrder: Number(row?.sort_order) || 1000,
+            });
+        });
+    });
+
+    const contact = Array.from(byEntity[FIELD_DICTIONARY_ENTITY_CONTACT].values())
+        .sort(dictionaryFieldSort);
+    const dialog = Array.from(byEntity[FIELD_DICTIONARY_ENTITY_DIALOG].values())
+        .sort(dictionaryFieldSort);
+
+    return {
+        contact,
+        dialog,
+        contactByKey: byEntity[FIELD_DICTIONARY_ENTITY_CONTACT],
+        dialogByKey: byEntity[FIELD_DICTIONARY_ENTITY_DIALOG],
+    };
+}
+
+function normalizeDictionaryFieldKey(value) {
+    return String(value ?? '').trim();
+}
+
+function dictionaryFieldSort(left, right) {
+    if ((left.sortOrder ?? 1000) !== (right.sortOrder ?? 1000)) {
+        return (left.sortOrder ?? 1000) - (right.sortOrder ?? 1000);
+    }
+
+    return String(left.label ?? left.key).localeCompare(String(right.label ?? right.key), 'ru');
+}
+
+function fieldTypeDataType(type) {
+    return FIELD_TYPE_DATA_TYPE[String(type ?? '').trim()] ?? 'any_text';
+}
+
+function fallbackFieldOptions(entity, fieldKey) {
+    if (entity === FIELD_DICTIONARY_ENTITY_CONTACT && fieldKey === 'first_name_source') {
+        return FIRST_NAME_SOURCE_CONDITION_OPTIONS.map(([value, label]) => ({ value, label, isSystem: true }));
+    }
+
+    return (ACTION_FIELD_VALUE_OPTIONS[entity]?.[fieldKey] ?? [])
+        .map(([value, label]) => ({ value, label, isSystem: true }));
+}
+
+function dictionaryField(entity, fieldKey) {
+    const dictionary = currentFieldDictionary();
+    const key = normalizeDictionaryFieldKey(fieldKey);
+
+    return entity === FIELD_DICTIONARY_ENTITY_CONTACT
+        ? dictionary.contactByKey.get(key)
+        : dictionary.dialogByKey.get(key);
+}
+
+function dictionaryFieldLabel(entity, fieldKey, fallback = null) {
+    const key = normalizeDictionaryFieldKey(fieldKey);
+    const field = dictionaryField(entity, key);
+    const label = String(field?.label ?? '').trim();
+
+    if (label) {
+        return label;
+    }
+
+    const base = String(fallback ?? key).trim() || 'Поле';
+
+    return `${base} · ${FIELD_DICTIONARY_MISSING_LABEL}`;
+}
+
+function dictionaryFieldValueOptions(entity, fieldKey, currentValue = null) {
+    const field = dictionaryField(entity, fieldKey);
+    const options = Array.isArray(field?.options) ? [...field.options] : fallbackFieldOptions(entity, fieldKey);
+    const value = String(currentValue ?? '').trim();
+
+    if (value && options.length > 0 && ! options.some((option) => option.value === value)) {
+        options.push({
+            value,
+            label: `${value} · ${FIELD_DICTIONARY_MISSING_LABEL}`,
+            isSystem: false,
+        });
+    }
+
+    return options;
+}
+
+function dictionaryFieldValueLabel(entity, fieldKey, value, fallback = null) {
+    const normalizedValue = String(value ?? '').trim();
+
+    if (! normalizedValue) {
+        return fallback ?? '""';
+    }
+
+    const option = dictionaryFieldValueOptions(entity, fieldKey, normalizedValue)
+        .find((candidate) => candidate.value === normalizedValue);
+
+    return option?.label ?? String(fallback ?? normalizedValue);
+}
+
+function contactCaptureFields() {
+    return currentFieldDictionary().contact
+        .filter((field) => CONTACT_RUNTIME_WRITABLE_FIELD_KEYS.has(field.key))
+        .map((field) => [field.key, field.label, field.dataType]);
+}
+
+function contactConditionFields() {
+    return currentFieldDictionary().contact
+        .filter((field) => CONTACT_RUNTIME_CONDITION_FIELD_KEYS.has(field.key))
+        .map((field) => [field.key, field.label, field.dataType]);
+}
+
+function contactActionFieldOptions(currentFieldKey = '') {
+    const currentKey = normalizeDictionaryFieldKey(currentFieldKey);
+    const options = currentFieldDictionary().contact.map((field) => ({
+        key: field.key,
+        label: field.label,
+        disabled: ! CONTACT_RUNTIME_WRITABLE_FIELD_KEYS.has(field.key),
+    }));
+
+    if (currentKey && ! options.some((option) => option.key === currentKey)) {
+        options.unshift({
+            key: currentKey,
+            label: `${currentKey} · ${FIELD_DICTIONARY_MISSING_LABEL}`,
+            disabled: true,
+        });
+    }
+
+    return options;
+}
+
+function defaultWritableContactFieldKey() {
+    return contactCaptureFields()[0]?.[0] ?? 'first_name';
+}
+
+function aiPromptVariableGroups() {
+    const dictionary = currentFieldDictionary();
+    const contactItems = dictionary.contact
+        .filter((field) => ! ['id', 'created_at', 'updated_at'].includes(field.key))
+        .map((field) => ({
+            token: `{{contact.${field.key}}}`,
+            label: field.label,
+            source: `Поле “${field.label}” в карточке контакта.`,
+            type: variableTypeLabel(field),
+        }));
+    const dialogItems = dictionary.dialog
+        .filter((field) => ! ['id', 'created_at', 'updated_at'].includes(field.key))
+        .map((field) => ({
+            token: `{{dialog.${field.key}}}`,
+            label: field.label,
+            source: `Поле “${field.label}” в карточке диалога.`,
+            type: variableTypeLabel(field),
+        }));
+
+    return AI_PROMPT_VARIABLE_GROUPS.map((group) => {
+        if (group.title === 'Карточка контакта') {
+            return { ...group, items: contactItems.length > 0 ? contactItems : group.items };
+        }
+
+        if (group.title === 'Карточка диалога') {
+            return { ...group, items: dialogItems.length > 0 ? dialogItems : group.items };
+        }
+
+        return group;
+    });
+}
+
+function variableTypeLabel(field) {
+    if (Array.isArray(field.options) && field.options.length > 0) {
+        return field.options.map((option) => option.value).join(' / ');
+    }
+
+    if (field.isMultiple) {
+        return `${fieldTypeLabel(field.type)}, несколько значений`;
+    }
+
+    return fieldTypeLabel(field.type);
+}
+
+function fieldTypeLabel(type) {
+    const normalized = String(type ?? '').trim();
+
+    if (normalized === 'number') {
+        return 'Число';
+    }
+
+    if (normalized === 'phone') {
+        return 'Телефон';
+    }
+
+    if (normalized === 'email') {
+        return 'Email';
+    }
+
+    if (normalized === 'date') {
+        return 'Дата';
+    }
+
+    if (normalized === 'boolean') {
+        return 'Да/нет';
+    }
+
+    if (normalized === 'select') {
+        return 'Список';
+    }
+
+    return 'Текст';
+}
+
+function dialogFieldKeysFromEdges(edges, fieldDictionary = currentFieldDictionary()) {
     const keys = new Set();
+
+    fieldDictionary.dialog.forEach((field) => {
+        if (isValidDialogFieldKey(field.key)) {
+            keys.add(field.key);
+        }
+    });
 
     edges.forEach((edge) => {
         const payload = edge.condition_payload ?? {};
@@ -5193,11 +5516,15 @@ function DialogFieldKeyInput({ value, onChange, placeholder, suggestions = [], p
 }
 
 function contactCaptureField(fieldKey) {
-    return EDGE_CONTACT_FIELD_OPTIONS.find(([value]) => value === fieldKey) ?? EDGE_CONTACT_FIELD_OPTIONS[0];
+    const fields = contactCaptureFields();
+
+    return fields.find(([value]) => value === fieldKey) ?? fields[0] ?? EDGE_CONTACT_FIELD_OPTIONS[0];
 }
 
 function contactConditionField(fieldKey) {
-    return EDGE_CONTACT_CONDITION_FIELD_OPTIONS.find(([value]) => value === fieldKey) ?? EDGE_CONTACT_CONDITION_FIELD_OPTIONS[0];
+    const fields = contactConditionFields();
+
+    return fields.find(([value]) => value === fieldKey) ?? fields[0] ?? EDGE_CONTACT_CONDITION_FIELD_OPTIONS[0];
 }
 
 function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateConditionPayload, onCopyEdgeId, onRefreshDiagnostics, timezone, timezoneLabel, dialogFieldKeys }) {
@@ -5221,6 +5548,15 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
     const fieldConditionOperator = EDGE_FIELD_CONDITION_OPERATOR_OPTIONS.some(([value]) => value === fieldCondition.operator)
         ? fieldCondition.operator
         : 'filled';
+    const fieldConditionEntity = fieldConditionScope === 'contact'
+        ? FIELD_DICTIONARY_ENTITY_CONTACT
+        : FIELD_DICTIONARY_ENTITY_DIALOG;
+    const fieldConditionKey = fieldConditionScope === 'contact'
+        ? selectedFieldConditionContactField[0]
+        : normalizeDialogFieldKey(fieldCondition.field_key ?? '');
+    const fieldConditionValueOptions = ['equals', 'not_equals'].includes(fieldConditionOperator)
+        ? dictionaryFieldValueOptions(fieldConditionEntity, fieldConditionKey, fieldCondition.value)
+        : [];
     const delay = normalizedEdgeDelay(payload.delay);
     const scheduledTransitions = edgeScheduledTransitions(edge);
     const showsAutoLabelControls = ! edgeUsesOutputLabel(edge, isButton);
@@ -5471,19 +5807,20 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                                     onChange={(event) => {
                                         const fieldKey = event.target.value;
                                         const patch = { field_scope: 'contact', field_key: fieldKey };
+                                        const valueOptions = dictionaryFieldValueOptions(FIELD_DICTIONARY_ENTITY_CONTACT, fieldKey, fieldCondition.value);
 
                                         if (
-                                            fieldKey === 'first_name_source'
-                                            && ['equals', 'not_equals'].includes(fieldConditionOperator)
-                                            && ! FIRST_NAME_SOURCE_CONDITION_OPTIONS.some(([value]) => value === fieldCondition.value)
+                                            ['equals', 'not_equals'].includes(fieldConditionOperator)
+                                            && valueOptions.length > 0
+                                            && ! valueOptions.some((option) => option.value === fieldCondition.value)
                                         ) {
-                                            patch.value = FIRST_NAME_SOURCE_CONDITION_OPTIONS[0][0];
+                                            patch.value = valueOptions[0].value;
                                         }
 
                                         updateFieldCondition(patch);
                                     }}
                                 >
-                                    {EDGE_CONTACT_CONDITION_FIELD_OPTIONS.map(([value, label]) => (
+                                    {contactConditionFields().map(([value, label]) => (
                                         <option key={value} value={value}>{label}</option>
                                     ))}
                                 </select>
@@ -5507,14 +5844,14 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                                 onChange={(event) => {
                                     const operator = event.target.value;
                                     const patch = { operator };
+                                    const nextValueOptions = dictionaryFieldValueOptions(fieldConditionEntity, fieldConditionKey, fieldCondition.value);
 
                                     if (
-                                        fieldConditionScope === 'contact'
-                                        && selectedFieldConditionContactField[0] === 'first_name_source'
-                                        && ['equals', 'not_equals'].includes(operator)
-                                        && ! FIRST_NAME_SOURCE_CONDITION_OPTIONS.some(([value]) => value === fieldCondition.value)
+                                        ['equals', 'not_equals'].includes(operator)
+                                        && nextValueOptions.length > 0
+                                        && ! nextValueOptions.some((option) => option.value === fieldCondition.value)
                                     ) {
-                                        patch.value = FIRST_NAME_SOURCE_CONDITION_OPTIONS[0][0];
+                                        patch.value = nextValueOptions[0].value;
                                     }
 
                                     updateFieldCondition(patch);
@@ -5525,17 +5862,17 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                                 ))}
                             </select>
                         </label>
-                        {['equals', 'not_equals'].includes(fieldConditionOperator) && fieldConditionScope === 'contact' && selectedFieldConditionContactField[0] === 'first_name_source' ? (
+                        {['equals', 'not_equals'].includes(fieldConditionOperator) && fieldConditionValueOptions.length > 0 ? (
                             <label>
                                 <span>Значение</span>
                                 <select
-                                    value={FIRST_NAME_SOURCE_CONDITION_OPTIONS.some(([value]) => value === fieldCondition.value)
+                                    value={fieldConditionValueOptions.some((option) => option.value === fieldCondition.value)
                                         ? fieldCondition.value
-                                        : FIRST_NAME_SOURCE_CONDITION_OPTIONS[0][0]}
+                                        : fieldConditionValueOptions[0].value}
                                     onChange={(event) => updateFieldCondition({ value: event.target.value })}
                                 >
-                                    {FIRST_NAME_SOURCE_CONDITION_OPTIONS.map(([value, label]) => (
-                                        <option key={value} value={value}>{label}</option>
+                                    {fieldConditionValueOptions.map((option) => (
+                                        <option key={option.value} value={option.value}>{option.label}</option>
                                     ))}
                                 </select>
                             </label>
@@ -5675,7 +6012,7 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                                                     updateCapture({ field_scope: 'contact', field_key: fieldKey, data_type: dataType });
                                                 }}
                                             >
-                                                {EDGE_CONTACT_FIELD_OPTIONS.map(([value, label]) => (
+                                                {contactCaptureFields().map(([value, label]) => (
                                                     <option key={value} value={value}>{label}</option>
                                                 ))}
                                             </select>
@@ -6436,8 +6773,8 @@ function actionItemSummary(item) {
     if (item.type === ACTION_TYPE_WRITE_CONTACT_FIELD) {
         const scope = ACTION_TARGET_SCOPE_OPTIONS.find(([value]) => value === item.target_scope)?.[1] ?? 'Данные';
         const field = item.target_scope === 'contact'
-            ? (EDGE_CONTACT_FIELD_OPTIONS.find(([value]) => value === item.target_field)?.[1] ?? item.target_field)
-            : item.target_field;
+            ? dictionaryFieldLabel(FIELD_DICTIONARY_ENTITY_CONTACT, item.target_field, item.target_field)
+            : dictionaryFieldLabel(FIELD_DICTIONARY_ENTITY_DIALOG, item.target_field, item.target_field);
 
         return `${scope} → ${field}`;
     }
@@ -6635,7 +6972,7 @@ function normalizeActionItemForType(item) {
         ? item.target_scope
         : 'contact';
     const targetField = targetScope === 'contact'
-        ? (EDGE_CONTACT_FIELD_OPTIONS.some(([value]) => value === item.target_field) ? item.target_field : 'first_name')
+        ? (normalizeDictionaryFieldKey(item.target_field) || defaultWritableContactFieldKey())
         : normalizeDialogFieldKey(item.target_field || 'field');
     const sourceType = ACTION_VALUE_SOURCE_OPTIONS.some(([value]) => value === item.source_type)
         ? item.source_type
@@ -6676,7 +7013,12 @@ function defaultActionItem() {
 }
 
 function actionStaticValueOptions(item) {
-    return ACTION_FIELD_VALUE_OPTIONS[item.target_scope]?.[item.target_field] ?? [];
+    const entity = item.target_scope === 'dialog'
+        ? FIELD_DICTIONARY_ENTITY_DIALOG
+        : FIELD_DICTIONARY_ENTITY_CONTACT;
+
+    return dictionaryFieldValueOptions(entity, item.target_field, item.static_value)
+        .map((option) => [option.value, option.label]);
 }
 
 function nextAiVariantId(variants) {

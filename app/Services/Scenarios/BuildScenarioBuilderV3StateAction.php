@@ -3,6 +3,7 @@
 namespace App\Services\Scenarios;
 
 use App\Models\Channel;
+use App\Models\FieldDictionaryField;
 use App\Models\Scenario;
 use App\Models\ScenarioBuilderBlock;
 use App\Models\ScenarioBuilderCondition;
@@ -50,6 +51,7 @@ class BuildScenarioBuilderV3StateAction
             'builder' => $builder,
             'catalogs' => [
                 'channels' => $this->channelsCatalog($user),
+                'field_dictionary' => FieldDictionaryField::constructorCatalog(),
                 'module_types' => ['start_condition', 'message', 'buttons'],
             ],
             'permissions' => [

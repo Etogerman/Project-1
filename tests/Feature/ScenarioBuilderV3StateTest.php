@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\Channel;
 use App\Models\Dialog;
+use App\Models\FieldDictionaryField;
 use App\Models\Message;
 use App\Models\Scenario;
 use App\Models\ScenarioBuilderBlock;
@@ -42,6 +43,38 @@ class ScenarioBuilderV3StateTest extends TestCase
             ->assertJsonPath('builder.edges', [])
             ->assertJsonPath('builder.visible_scope.block_ids', [])
             ->assertJsonPath('server.timezone', config('app.timezone', 'UTC'));
+    }
+
+    public function test_get_state_includes_field_dictionary_catalog_for_constructor_ui(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_field_dictionary',
+            'name' => 'V3 Field Dictionary',
+        ]);
+
+        FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_CONTACT)
+            ->where('field_key', 'gender')
+            ->firstOrFail()
+            ->update(['name' => 'Пол клиента']);
+
+        $state = $this->actingAs($admin)
+            ->getJson($this->stateUrl($scenario))
+            ->assertOk()
+            ->json();
+
+        $contactFields = collect($state['catalogs']['field_dictionary']['contact'] ?? []);
+        $dialogFields = collect($state['catalogs']['field_dictionary']['dialog'] ?? []);
+        $gender = $contactFields->firstWhere('key', 'gender');
+        $ageYears = $contactFields->firstWhere('key', 'age_years');
+        $stage = $dialogFields->firstWhere('key', 'stage');
+
+        $this->assertSame('Пол клиента', $gender['label'] ?? null);
+        $this->assertSame(FieldDictionaryField::TYPE_SELECT, $gender['type'] ?? null);
+        $this->assertSame('male', $gender['options'][0]['value'] ?? null);
+        $this->assertSame('age_years', $ageYears['key'] ?? null);
+        $this->assertSame(FieldDictionaryField::TYPE_SELECT, $stage['type'] ?? null);
     }
 
     public function test_get_state_adapts_existing_start_block_without_writing_database(): void
