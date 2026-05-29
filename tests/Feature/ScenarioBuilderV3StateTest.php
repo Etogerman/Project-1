@@ -422,6 +422,115 @@ class ScenarioBuilderV3StateTest extends TestCase
         $this->assertSame($edgeDisplayId, data_get($savedAgain, 'builder.edges.0.condition_payload.ui.edge_id'));
     }
 
+    public function test_edge_waypoints_are_saved_as_ui_only_payload(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['is_active' => true]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_edge_waypoints',
+            'name' => 'V3 Edge Waypoints',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_source',
+                'type' => 'state',
+                'title' => 'Источник',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->startSettings('/start', [(int) $channel->id]),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_target',
+                'type' => 'state',
+                'title' => 'Цель',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Принято'),
+            ],
+        ];
+        $conditionPayload = $this->edgePayload(null, 'Дальше');
+        data_set($conditionPayload, 'ui.waypoints', [
+            ['id' => 'wp_one', 'x' => 240.123, 'y' => 180.456],
+            ['id' => 'wp_two', 'x' => 310, 'y' => 260],
+        ]);
+        $edges = [[
+            'id' => null,
+            'client_key' => 'tmp_edge',
+            'source' => ['block_id' => null, 'client_key' => 'tmp_source', 'output_id' => null],
+            'target' => ['block_id' => null, 'client_key' => 'tmp_target'],
+            'condition_payload' => $conditionPayload,
+        ]];
+
+        $saved = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
+            ->assertOk()
+            ->assertJsonPath('builder.edges.0.condition_payload.ui.waypoints.0.id', 'wp_one')
+            ->assertJsonPath('builder.edges.0.condition_payload.ui.waypoints.0.x', 240.12)
+            ->assertJsonPath('builder.edges.0.condition_payload.ui.waypoints.0.y', 180.46)
+            ->json();
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $saved['scenario']['draft_version_id'],
+                'base_revision' => $saved['builder']['revision'],
+            ])
+            ->assertOk();
+
+        $scenario->refresh()->load('publishedVersion');
+        $sourceBlockId = (string) $saved['id_map']['blocks']['tmp_source'];
+        $runtimeEdge = data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$sourceBlockId.wait_reply_edges.0");
+
+        $this->assertNull(data_get($runtimeEdge, 'ui'));
+        $this->assertNull(data_get($runtimeEdge, 'waypoints'));
+    }
+
+    public function test_put_state_rejects_invalid_edge_waypoints(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_edge_waypoints_invalid',
+            'name' => 'V3 Edge Waypoints Invalid',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_source',
+                'type' => 'state',
+                'title' => 'Источник',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Напишите код'),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_target',
+                'type' => 'state',
+                'title' => 'Цель',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Принято'),
+            ],
+        ];
+        $conditionPayload = $this->edgePayload(null, 'Дальше');
+        data_set($conditionPayload, 'ui.waypoints', collect(range(1, 6))->map(fn (int $index): array => [
+            'id' => "wp_$index",
+            'x' => 200 + $index,
+            'y' => 250 + $index,
+        ])->all());
+        $edges = [[
+            'id' => null,
+            'client_key' => 'tmp_edge',
+            'source' => ['block_id' => null, 'client_key' => 'tmp_source', 'output_id' => null],
+            'target' => ['block_id' => null, 'client_key' => 'tmp_target'],
+            'condition_payload' => $conditionPayload,
+        ]];
+
+        $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['builder.edges.0.condition_payload.ui.waypoints']);
+    }
+
     public function test_put_state_allows_multiple_wait_reply_edges_from_one_block(): void
     {
         $admin = $this->adminUser();

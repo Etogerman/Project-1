@@ -201,6 +201,8 @@ const EDGE_LABEL_MODE_AUTO = 'auto';
 const EDGE_LABEL_MODE_MANUAL = 'manual';
 const EDGE_CANVAS_LABEL_LIMIT = 52;
 const EDGE_TOOLTIP_LABEL_LIMIT = 300;
+const EDGE_MAX_WAYPOINTS = 5;
+const EDGE_WAYPOINT_ID_LIMIT = 40;
 const PANEL_WIDTH_STORAGE_KEY = 'scenario-builder-v3-panel-width';
 const PANEL_WIDTH_DEFAULT = 420;
 const PANEL_WIDTH_MIN = 320;
@@ -424,6 +426,8 @@ export default function App({
     const [blockSearchIndex, setBlockSearchIndex] = useState(0);
     const [selectedBlockKey, setSelectedBlockKey] = useState(null);
     const [selectedEdgeKey, setSelectedEdgeKey] = useState(null);
+    const [selectedWaypoint, setSelectedWaypoint] = useState(null);
+    const [waypointPreview, setWaypointPreview] = useState(null);
     const [isPanelCollapsed, setIsPanelCollapsed] = useState(false);
     const [pendingButtonFocus, setPendingButtonFocus] = useState(null);
     const [pendingConnection, setPendingConnection] = useState(null);
@@ -574,7 +578,7 @@ export default function App({
         && Boolean(sheetExportUrl)
         && Boolean(sheetImportPreviewUrl)
         && Boolean(sheetImportApplyUrl);
-    const canvasBounds = useMemo(() => graphBounds(blocks), [blocks]);
+    const canvasBounds = useMemo(() => graphBounds(blocks, edges), [blocks, edges]);
     const hasPanelSelection = Boolean(selectedBlock || selectedEdge);
     const isPanelOpen = mode === 'design' && hasPanelSelection && ! isPanelCollapsed;
 
@@ -625,10 +629,44 @@ export default function App({
 
         setSelectedEdgeKey(null);
         setSelectedBlockKey(null);
+        setSelectedWaypoint(null);
         setIsPanelCollapsed(false);
         setPendingConnection(null);
         setRewireTargetKey(null);
     }, [status, activeSheet.id, blocks, edges, selectedBlockKey, selectedEdgeKey]);
+
+    useEffect(() => {
+        if (! selectedWaypoint) {
+            return;
+        }
+
+        const edge = edges.find((item) => item.client_key === selectedWaypoint.edgeKey);
+
+        if (! edge || ! edgeWaypoints(edge).some((waypoint) => waypoint.id === selectedWaypoint.waypointId)) {
+            setSelectedWaypoint(null);
+        }
+    }, [edges, selectedWaypoint]);
+
+    useEffect(() => {
+        if (! selectedWaypoint) {
+            return undefined;
+        }
+
+        const handleKeyDown = (event) => {
+            if (! ['Delete', 'Backspace'].includes(event.key) || isTextEditingTarget(event.target)) {
+                return;
+            }
+
+            event.preventDefault();
+            removeEdgeWaypoint(selectedWaypoint.edgeKey, selectedWaypoint.waypointId);
+        };
+
+        document.addEventListener('keydown', handleKeyDown);
+
+        return () => {
+            document.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [selectedWaypoint]);
 
     useEffect(() => {
         if (blockSearchMatches.length === 0 || blockSearchIndex < blockSearchMatches.length) {
@@ -746,6 +784,7 @@ export default function App({
         updateBuilder({ active_sheet_id: sheetId });
         setSelectedBlockKey(null);
         setSelectedEdgeKey(null);
+        setSelectedWaypoint(null);
         setIsPanelCollapsed(false);
         setPendingConnection(null);
         setRewireTargetKey(null);
@@ -755,6 +794,7 @@ export default function App({
     function selectBlock(clientKey) {
         setSelectedBlockKey(clientKey);
         setSelectedEdgeKey(null);
+        setSelectedWaypoint(null);
         setIsPanelCollapsed(false);
         setRewireTargetKey(null);
         cancelConnection();
@@ -763,6 +803,7 @@ export default function App({
     function selectEdge(clientKey, { openPanel = false } = {}) {
         setSelectedEdgeKey(clientKey);
         setSelectedBlockKey(null);
+        setSelectedWaypoint(null);
         setIsPanelCollapsed(! openPanel);
         setPendingConnection(null);
         setRewireTargetKey(null);
@@ -771,6 +812,7 @@ export default function App({
     function closePanelSelection() {
         setSelectedBlockKey(null);
         setSelectedEdgeKey(null);
+        setSelectedWaypoint(null);
         setIsPanelCollapsed(false);
         setRewireTargetKey(null);
     }
@@ -878,6 +920,7 @@ export default function App({
         });
         setSelectedBlockKey((current) => (current === clientKey ? null : current));
         setSelectedEdgeKey(null);
+        setSelectedWaypoint(null);
         setIsPanelCollapsed(false);
         cancelConnection();
         setNotice('Блок удалён');
@@ -901,6 +944,7 @@ export default function App({
         };
         setSelectedBlockKey(clientKey);
         setSelectedEdgeKey(null);
+        setSelectedWaypoint(null);
         setIsPanelCollapsed(false);
         cancelConnection();
 
@@ -921,6 +965,7 @@ export default function App({
         };
         setSelectedBlockKey(null);
         setSelectedEdgeKey(null);
+        setSelectedWaypoint(null);
         setIsPanelCollapsed(false);
         setRewireTargetKey(null);
 
@@ -948,6 +993,103 @@ export default function App({
         setNotice(null);
         window.addEventListener('pointermove', handleGlobalPointerMove);
         window.addEventListener('pointerup', stopGlobalDrag, { once: true });
+    }
+
+    function addEdgeWaypoint(event, edgeKey, routePoints) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        const point = worldPointFromEvent(event);
+        const edge = edges.find((item) => item.client_key === edgeKey);
+
+        if (! point || ! edge) {
+            return;
+        }
+
+        const waypoints = edgeWaypoints(edge);
+
+        if (waypoints.length >= EDGE_MAX_WAYPOINTS) {
+            setSelectedBlockKey(null);
+            setSelectedEdgeKey(edgeKey);
+            setSelectedWaypoint(null);
+            setNotice(`На одной стрелке можно поставить до ${EDGE_MAX_WAYPOINTS} точек`);
+
+            return;
+        }
+
+        const waypoint = {
+            id: nextEdgeWaypointId(waypoints),
+            x: roundWaypointCoordinate(point.x),
+            y: roundWaypointCoordinate(point.y),
+        };
+        const insertAt = nearestRouteSegmentIndex(routePoints, point);
+        const nextWaypoints = [...waypoints];
+
+        nextWaypoints.splice(insertAt, 0, waypoint);
+        updateEdges((currentEdges) => currentEdges.map((item) => (
+            item.client_key === edgeKey ? edgeWithWaypoints(item, nextWaypoints) : item
+        )));
+
+        setSelectedBlockKey(null);
+        setSelectedEdgeKey(edgeKey);
+        setSelectedWaypoint({ edgeKey, waypointId: waypoint.id });
+        setPendingConnection(null);
+        setRewireTargetKey(null);
+        setNotice(null);
+    }
+
+    function startEdgeWaypointDrag(event, edgeKey, waypointId) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        const edge = edges.find((item) => item.client_key === edgeKey);
+        const waypoint = edgeWaypoints(edge).find((item) => item.id === waypointId);
+
+        if (! waypoint) {
+            return;
+        }
+
+        dragRef.current = {
+            type: 'edge-waypoint',
+            edgeKey,
+            waypointId,
+        };
+
+        setSelectedBlockKey(null);
+        setSelectedEdgeKey(edgeKey);
+        setSelectedWaypoint({ edgeKey, waypointId });
+        setPendingConnection(null);
+        setRewireTargetKey(null);
+        setNotice(null);
+        setWaypointPreview({
+            edgeKey,
+            waypointId,
+            point: { x: waypoint.x, y: waypoint.y },
+        });
+
+        window.addEventListener('pointermove', handleGlobalPointerMove);
+        window.addEventListener('pointerup', stopGlobalDrag, { once: true });
+    }
+
+    function removeEdgeWaypoint(edgeKey, waypointId) {
+        updateEdges((currentEdges) => currentEdges.map((edge) => {
+            if (edge.client_key !== edgeKey) {
+                return edge;
+            }
+
+            return edgeWithWaypoints(
+                edge,
+                edgeWaypoints(edge).filter((waypoint) => waypoint.id !== waypointId),
+            );
+        }));
+        setSelectedWaypoint(null);
+    }
+
+    function resetEdgeWaypoints(edgeKey) {
+        updateEdges((currentEdges) => currentEdges.map((edge) => (
+            edge.client_key === edgeKey ? edgeWithWaypoints(edge, []) : edge
+        )));
+        setSelectedWaypoint(null);
     }
 
     function startPanelResize(event) {
@@ -1022,6 +1164,25 @@ export default function App({
             return;
         }
 
+        if (drag.type === 'edge-waypoint') {
+            const point = worldPointFromEvent(event);
+
+            if (point) {
+                setWaypointPreview({
+                    edgeKey: drag.edgeKey,
+                    waypointId: drag.waypointId,
+                    point: {
+                        x: roundWaypointCoordinate(point.x),
+                        y: roundWaypointCoordinate(point.y),
+                    },
+                });
+            }
+
+            event.preventDefault();
+
+            return;
+        }
+
         updateView({
             ...drag.origin,
             tx: Math.round(drag.origin.tx + event.clientX - drag.start.x),
@@ -1036,7 +1197,12 @@ export default function App({
             finishEdgeRewire(drag, event);
         }
 
+        if (drag?.type === 'edge-waypoint') {
+            finishEdgeWaypointDrag(drag, event);
+        }
+
         dragRef.current = null;
+        setWaypointPreview(null);
         setRewireTargetKey(null);
         window.removeEventListener('pointermove', handleGlobalPointerMove);
         document.body.classList.remove('ac-v3-builder-is-resizing-panel');
@@ -1266,6 +1432,31 @@ export default function App({
         selectEdge(edge.client_key);
     }
 
+    function finishEdgeWaypointDrag(drag, event) {
+        const point = worldPointFromEvent(event) ?? waypointPreview?.point;
+
+        if (! point) {
+            return;
+        }
+
+        updateEdges((currentEdges) => currentEdges.map((edge) => {
+            if (edge.client_key !== drag.edgeKey) {
+                return edge;
+            }
+
+            return edgeWithWaypoints(edge, edgeWaypoints(edge).map((waypoint) => (
+                waypoint.id === drag.waypointId
+                    ? {
+                        ...waypoint,
+                        x: roundWaypointCoordinate(point.x),
+                        y: roundWaypointCoordinate(point.y),
+                    }
+                    : waypoint
+            )));
+        }));
+        setSelectedWaypoint({ edgeKey: drag.edgeKey, waypointId: drag.waypointId });
+    }
+
     function handleWheel(event) {
         if (! (event.ctrlKey || event.metaKey)) {
             return;
@@ -1323,6 +1514,7 @@ export default function App({
         setTool('select');
         setSelectedBlockKey(block.client_key);
         setSelectedEdgeKey(null);
+        setSelectedWaypoint(null);
         setIsPanelCollapsed(false);
         setPendingConnection(null);
         setRewireTargetKey(null);
@@ -1375,6 +1567,7 @@ export default function App({
         setPendingConnection(connection);
         setSelectedBlockKey(block.client_key);
         setSelectedEdgeKey(null);
+        setSelectedWaypoint(null);
         setIsPanelCollapsed(false);
         setNotice(null);
     }
@@ -1428,6 +1621,7 @@ export default function App({
         ]);
         setSelectedEdgeKey(edge.client_key);
         setSelectedBlockKey(null);
+        setSelectedWaypoint(null);
         setIsPanelCollapsed(false);
         cancelConnection();
     }
@@ -1439,6 +1633,7 @@ export default function App({
     function removeEdge(edgeKey) {
         updateEdges(edges.filter((edge) => edge.client_key !== edgeKey));
         setSelectedEdgeKey(null);
+        setSelectedWaypoint(null);
         setIsPanelCollapsed(false);
     }
 
@@ -1805,6 +2000,7 @@ export default function App({
             setState(response);
             setSelectedBlockKey(resolveReturnedKey(selectedBefore, response.id_map?.blocks, 'block'));
             setSelectedEdgeKey(resolveReturnedKey(edgeBefore, response.id_map?.edges, 'edge'));
+            setSelectedWaypoint(null);
             cancelConnection();
             setStatus('ready');
             if (successNotice) {
@@ -1882,6 +2078,7 @@ export default function App({
             setState(response);
             setSelectedBlockKey(selection.blockKey);
             setSelectedEdgeKey(selection.edgeKey);
+            setSelectedWaypoint(null);
             setPendingPublishWarning(null);
             cancelConnection();
             setStatus('ready');
@@ -2027,6 +2224,7 @@ export default function App({
             setState(focusedState);
             setSelectedBlockKey(focusKey);
             setSelectedEdgeKey(null);
+            setSelectedWaypoint(null);
             cancelConnection();
             setStatus('ready');
             setNotice('Активный лист импортирован и сохранён в черновик.');
@@ -2084,6 +2282,7 @@ export default function App({
         setMode('design');
         setSelectedEdgeKey(edge.client_key);
         setSelectedBlockKey(null);
+        setSelectedWaypoint(null);
         setIsPanelCollapsed(false);
         setPendingConnection(null);
         setError(null);
@@ -2093,6 +2292,7 @@ export default function App({
     function openValidationIssueBlock(issue) {
         setSelectedBlockKey(issue.blockKey);
         setSelectedEdgeKey(null);
+        setSelectedWaypoint(null);
         setIsPanelCollapsed(false);
         setTool('select');
         setPendingButtonFocus({ blockKey: issue.blockKey, buttonId: issue.buttonId });
@@ -2410,9 +2610,22 @@ export default function App({
                                         blocks={blocks}
                                         anchors={anchors}
                                         selected={edge.client_key === selectedEdgeKey}
+                                        selectedWaypointId={selectedWaypoint?.edgeKey === edge.client_key ? selectedWaypoint.waypointId : null}
+                                        waypointPreview={waypointPreview?.edgeKey === edge.client_key ? waypointPreview : null}
                                         onSelect={() => selectEdge(edge.client_key)}
                                         onOpenSettings={() => selectEdge(edge.client_key, { openPanel: true })}
                                         onStartRewire={(event, endpoint) => startEdgeRewire(event, edge.client_key, endpoint)}
+                                        onAddWaypoint={(event, routePoints) => addEdgeWaypoint(event, edge.client_key, routePoints)}
+                                        onSelectWaypoint={(waypointId) => {
+                                            setSelectedBlockKey(null);
+                                            setSelectedEdgeKey(edge.client_key);
+                                            setSelectedWaypoint({ edgeKey: edge.client_key, waypointId });
+                                            setIsPanelCollapsed(false);
+                                            setPendingConnection(null);
+                                            setRewireTargetKey(null);
+                                        }}
+                                        onRemoveWaypoint={(waypointId) => removeEdgeWaypoint(edge.client_key, waypointId)}
+                                        onStartWaypointDrag={(event, waypointId) => startEdgeWaypointDrag(event, edge.client_key, waypointId)}
                                     />
                                 ))}
                             </svg>
@@ -2472,6 +2685,7 @@ export default function App({
                                 onClose={closePanelSelection}
                                 onRemove={() => removeEdge(selectedEdge.client_key)}
                                 onUpdateConditionPayload={(nextPayload) => updateEdgeConditionPayload(selectedEdge.client_key, nextPayload)}
+                                onResetWaypoints={() => resetEdgeWaypoints(selectedEdge.client_key)}
                                 onCopyEdgeId={copyEdgeId}
                                 onRefreshDiagnostics={refreshBuilderDiagnostics}
                                 timezone={serverTimezone}
@@ -3075,7 +3289,21 @@ function ModulePreview({ type, label, value }) {
     );
 }
 
-function EdgePath({ edge, blocks, anchors, selected, onSelect, onOpenSettings, onStartRewire }) {
+function EdgePath({
+    edge,
+    blocks,
+    anchors,
+    selected,
+    selectedWaypointId,
+    waypointPreview,
+    onSelect,
+    onOpenSettings,
+    onStartRewire,
+    onAddWaypoint,
+    onSelectWaypoint,
+    onRemoveWaypoint,
+    onStartWaypointDrag,
+}) {
     const sourceBlock = blocks.find((block) => block.client_key === edge.source?.client_key);
     const targetBlock = blocks.find((block) => block.client_key === edge.target?.client_key);
 
@@ -3085,8 +3313,10 @@ function EdgePath({ edge, blocks, anchors, selected, onSelect, onOpenSettings, o
 
     const source = edgeSourceAnchor(edge, sourceBlock, targetBlock, anchors);
     const target = edgeTargetAnchor(targetBlock, source, anchors);
-    const d = edgeCurvePath(source, target);
-    const labelPoint = edgeCurveLabelPoint(source, target);
+    const waypoints = edgeWaypoints(edge, waypointPreview);
+    const routePoints = edgeRoutePoints(source, target, waypoints);
+    const d = edgeRoutePath(routePoints);
+    const labelPoint = edgeRouteLabelPoint(routePoints, source, target);
     const isButton = isButtonEdge(edge);
     const visualKind = edgeVisualKind(edge);
     const edgeClassName = [
@@ -3101,7 +3331,13 @@ function EdgePath({ edge, blocks, anchors, selected, onSelect, onOpenSettings, o
     return (
         <g className={edgeClassName}>
             <title>{title}: {fullLabel}</title>
-            <path data-edge-action d={d} className="ac-v3-builder__edge-hit" onClick={onSelect} />
+            <path
+                data-edge-action
+                d={d}
+                className="ac-v3-builder__edge-hit"
+                onClick={onSelect}
+                onDoubleClick={(event) => onAddWaypoint(event, routePoints)}
+            />
             {selected ? <path d={d} className="ac-v3-builder__edge-selection" /> : null}
             <path d={d} className="ac-v3-builder__edge" markerEnd={`url(#${markerId})`} />
             {selected ? (
@@ -3134,6 +3370,32 @@ function EdgePath({ edge, blocks, anchors, selected, onSelect, onOpenSettings, o
                         <circle r="14" />
                         <text textAnchor="middle" dominantBaseline="central">⚙</text>
                     </g>
+                    {waypoints.map((waypoint) => (
+                        <circle
+                            key={waypoint.id}
+                            data-edge-action
+                            cx={waypoint.x}
+                            cy={waypoint.y}
+                            r={waypoint.id === selectedWaypointId ? 7 : 6}
+                            className={[
+                                'ac-v3-builder__edge-waypoint',
+                                waypoint.id === selectedWaypointId ? 'is-selected' : '',
+                            ].filter(Boolean).join(' ')}
+                            onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                onSelectWaypoint(waypoint.id);
+                            }}
+                            onDoubleClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                onRemoveWaypoint(waypoint.id);
+                            }}
+                            onPointerDown={(event) => onStartWaypointDrag(event, waypoint.id)}
+                        >
+                            <title>Перетащить. Двойной клик — удалить</title>
+                        </circle>
+                    ))}
                 </>
             ) : ! isButton ? (
                 <circle
@@ -3150,6 +3412,15 @@ function EdgePath({ edge, blocks, anchors, selected, onSelect, onOpenSettings, o
                     className="ac-v3-builder__edge-label"
                     textAnchor="middle"
                     dominantBaseline="central"
+                    data-edge-action
+                    onClick={(event) => {
+                        event.stopPropagation();
+                        onSelect();
+                    }}
+                    onDoubleClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                    }}
                 >
                     {label}
                 </text>
@@ -3179,6 +3450,34 @@ function edgeTargetAnchor(targetBlock, source, anchors) {
     return shiftAnchorOutside(nearestBlockSideAnchor(targetBlock, source, anchors), EDGE_TARGET_CLEARANCE);
 }
 
+function edgeRoutePoints(source, target, waypoints) {
+    return [source, ...waypoints, target];
+}
+
+function edgeRoutePath(points) {
+    if (points.length < 2) {
+        return '';
+    }
+
+    const segments = edgeRouteSegments(points);
+    const [first] = points;
+    let path = `M ${first.x} ${first.y}`;
+
+    segments.forEach((segment) => {
+        path += ` C ${segment.c1.x} ${segment.c1.y}, ${segment.c2.x} ${segment.c2.y}, ${segment.end.x} ${segment.end.y}`;
+    });
+
+    return path;
+}
+
+function edgeRouteLabelPoint(points, source, target) {
+    if (points.length <= 2) {
+        return edgeCurveLabelPoint(source, target);
+    }
+
+    return routeCurveMidpoint(edgeRouteSegments(points));
+}
+
 function edgeCurvePath(source, target) {
     const { c1, c2 } = edgeCurveControlPoints(source, target);
 
@@ -3206,6 +3505,309 @@ function edgeCurveControlPoints(source, target) {
     };
 
     return { c1, c2 };
+}
+
+function edgeRouteControlPoints(source, target) {
+    const routeSource = {
+        ...source,
+        side: source.side ?? sideFromDelta(target.x - source.x, target.y - source.y),
+    };
+    const routeTarget = {
+        ...target,
+        side: target.side ?? sideFromDelta(source.x - target.x, source.y - target.y),
+    };
+
+    return edgeCurveControlPoints(routeSource, routeTarget);
+}
+
+function edgeRouteSegments(points) {
+    if (points.length < 2) {
+        return [];
+    }
+
+    if (points.length === 2) {
+        const [source, target] = points;
+        const { c1, c2 } = edgeRouteControlPoints(source, target);
+
+        return [{ start: source, c1, c2, end: target }];
+    }
+
+    const tangents = points.map((point, index) => edgeRouteTangent(points, index));
+
+    return points.slice(0, -1).map((start, index) => {
+        const end = points[index + 1];
+        const length = Math.hypot(end.x - start.x, end.y - start.y);
+        const handle = Math.min(length * 0.34, 150);
+        const startTangent = tangents[index];
+        const endTangent = tangents[index + 1];
+
+        return {
+            start,
+            c1: {
+                x: start.x + (startTangent.x * handle),
+                y: start.y + (startTangent.y * handle),
+            },
+            c2: {
+                x: end.x - (endTangent.x * handle),
+                y: end.y - (endTangent.y * handle),
+            },
+            end,
+        };
+    });
+}
+
+function edgeRouteTangent(points, index) {
+    const point = points[index];
+    const previous = points[index - 1] ?? null;
+    const next = points[index + 1] ?? null;
+
+    if (index === 0 && point.side) {
+        return sideVector(point.side);
+    }
+
+    if (index === points.length - 1 && point.side) {
+        const vector = sideVector(point.side);
+
+        return { x: -vector.x, y: -vector.y };
+    }
+
+    if (previous && next) {
+        return normalizedVector(next.x - previous.x, next.y - previous.y)
+            ?? normalizedVector(next.x - point.x, next.y - point.y)
+            ?? normalizedVector(point.x - previous.x, point.y - previous.y)
+            ?? { x: 1, y: 0 };
+    }
+
+    if (next) {
+        return normalizedVector(next.x - point.x, next.y - point.y) ?? { x: 1, y: 0 };
+    }
+
+    if (previous) {
+        return normalizedVector(point.x - previous.x, point.y - previous.y) ?? { x: 1, y: 0 };
+    }
+
+    return { x: 1, y: 0 };
+}
+
+function normalizedVector(dx, dy) {
+    const length = Math.hypot(dx, dy);
+
+    if (length <= 0) {
+        return null;
+    }
+
+    return {
+        x: dx / length,
+        y: dy / length,
+    };
+}
+
+function sideFromDelta(dx, dy) {
+    if (Math.abs(dx) >= Math.abs(dy)) {
+        return dx >= 0 ? 'right' : 'left';
+    }
+
+    return dy >= 0 ? 'bottom' : 'top';
+}
+
+function polylineMidpoint(points) {
+    const segments = [];
+    let total = 0;
+
+    for (let index = 0; index < points.length - 1; index += 1) {
+        const start = points[index];
+        const end = points[index + 1];
+        const length = Math.hypot(end.x - start.x, end.y - start.y);
+
+        segments.push({ start, end, length });
+        total += length;
+    }
+
+    if (total <= 0) {
+        return points[0] ?? { x: 0, y: 0 };
+    }
+
+    let remaining = total / 2;
+
+    for (const segment of segments) {
+        if (remaining > segment.length) {
+            remaining -= segment.length;
+
+            continue;
+        }
+
+        const t = segment.length <= 0 ? 0 : remaining / segment.length;
+
+        return {
+            x: segment.start.x + ((segment.end.x - segment.start.x) * t),
+            y: segment.start.y + ((segment.end.y - segment.start.y) * t),
+        };
+    }
+
+    return points[points.length - 1] ?? { x: 0, y: 0 };
+}
+
+function routeCurveMidpoint(segments) {
+    const samples = [];
+    let total = 0;
+
+    segments.forEach((segment) => {
+        let previous = segment.start;
+
+        for (let step = 1; step <= 18; step += 1) {
+            const point = cubicBezierPoint(segment.start, segment.c1, segment.c2, segment.end, step / 18);
+            const length = Math.hypot(point.x - previous.x, point.y - previous.y);
+
+            total += length;
+            samples.push({ start: previous, end: point, length });
+            previous = point;
+        }
+    });
+
+    if (total <= 0) {
+        return segments[0]?.start ?? { x: 0, y: 0 };
+    }
+
+    let remaining = total / 2;
+
+    for (const sample of samples) {
+        if (remaining > sample.length) {
+            remaining -= sample.length;
+
+            continue;
+        }
+
+        const t = sample.length <= 0 ? 0 : remaining / sample.length;
+
+        return {
+            x: sample.start.x + ((sample.end.x - sample.start.x) * t),
+            y: sample.start.y + ((sample.end.y - sample.start.y) * t),
+        };
+    }
+
+    return segments[segments.length - 1]?.end ?? { x: 0, y: 0 };
+}
+
+function edgeWaypoints(edge, preview = null) {
+    const rawWaypoints = edge?.condition_payload?.ui?.waypoints;
+
+    if (! Array.isArray(rawWaypoints)) {
+        return [];
+    }
+
+    return rawWaypoints
+        .filter((waypoint) => (
+            waypoint
+            && typeof waypoint === 'object'
+            && typeof waypoint.id === 'string'
+            && waypoint.id.length > 0
+            && waypoint.id.length <= EDGE_WAYPOINT_ID_LIMIT
+            && Number.isFinite(Number(waypoint.x))
+            && Number.isFinite(Number(waypoint.y))
+        ))
+        .slice(0, EDGE_MAX_WAYPOINTS)
+        .map((waypoint) => {
+            if (preview?.waypointId === waypoint.id && preview?.point) {
+                return {
+                    id: waypoint.id,
+                    x: roundWaypointCoordinate(preview.point.x),
+                    y: roundWaypointCoordinate(preview.point.y),
+                };
+            }
+
+            return {
+                id: waypoint.id,
+                x: roundWaypointCoordinate(Number(waypoint.x)),
+                y: roundWaypointCoordinate(Number(waypoint.y)),
+            };
+        });
+}
+
+function edgeWithWaypoints(edge, waypoints) {
+    const ui = {
+        ...(edge.condition_payload?.ui ?? {}),
+        waypoints: waypoints.slice(0, EDGE_MAX_WAYPOINTS).map((waypoint) => ({
+            id: waypoint.id,
+            x: roundWaypointCoordinate(waypoint.x),
+            y: roundWaypointCoordinate(waypoint.y),
+        })),
+    };
+
+    return {
+        ...edge,
+        condition_payload: {
+            ...(edge.condition_payload ?? {}),
+            ui,
+        },
+    };
+}
+
+function nextEdgeWaypointId(waypoints) {
+    const used = new Set(waypoints.map((waypoint) => waypoint.id));
+
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+        const id = `wp_${Date.now().toString(36)}_${attempt.toString(36)}`;
+
+        if (! used.has(id) && id.length <= EDGE_WAYPOINT_ID_LIMIT) {
+            return id;
+        }
+    }
+
+    return `wp_${Math.random().toString(36).slice(2, 12)}`;
+}
+
+function nearestRouteSegmentIndex(routePoints, point) {
+    if (! Array.isArray(routePoints) || routePoints.length < 2) {
+        return 0;
+    }
+
+    let bestIndex = 0;
+    let bestDistance = Number.POSITIVE_INFINITY;
+
+    for (let index = 0; index < routePoints.length - 1; index += 1) {
+        const distance = distanceToSegment(point, routePoints[index], routePoints[index + 1]);
+
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            bestIndex = index;
+        }
+    }
+
+    return bestIndex;
+}
+
+function distanceToSegment(point, start, end) {
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const lengthSquared = (dx * dx) + (dy * dy);
+
+    if (lengthSquared <= 0) {
+        return Math.hypot(point.x - start.x, point.y - start.y);
+    }
+
+    const t = clamp(
+        (((point.x - start.x) * dx) + ((point.y - start.y) * dy)) / lengthSquared,
+        0,
+        1,
+    );
+    const projection = {
+        x: start.x + (dx * t),
+        y: start.y + (dy * t),
+    };
+
+    return Math.hypot(point.x - projection.x, point.y - projection.y);
+}
+
+function roundWaypointCoordinate(value) {
+    return Math.round(Number(value) * 100) / 100;
+}
+
+function isTextEditingTarget(target) {
+    if (!(target instanceof Element)) {
+        return false;
+    }
+
+    return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
 }
 
 function cubicBezierPoint(p0, p1, p2, p3, t) {
@@ -5595,7 +6197,7 @@ function contactConditionField(fieldKey) {
     return fields.find(([value]) => value === fieldKey) ?? fields[0] ?? EDGE_CONTACT_CONDITION_FIELD_OPTIONS[0];
 }
 
-function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateConditionPayload, onCopyEdgeId, onRefreshDiagnostics, timezone, timezoneLabel, dialogFieldKeys }) {
+function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateConditionPayload, onResetWaypoints, onCopyEdgeId, onRefreshDiagnostics, timezone, timezoneLabel, dialogFieldKeys }) {
     const source = blocks.find((block) => block.client_key === edge.source?.client_key);
     const target = blocks.find((block) => block.client_key === edge.target?.client_key);
     const isAi = isAiEdge(edge);
@@ -5631,6 +6233,7 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
     const labelMode = edgeLabelMode(edge);
     const canvasLabelPreview = edgeLabel(edge, isButton);
     const transitionActions = transitionActionItems(payload.transition_actions);
+    const waypointCount = edgeWaypoints(edge).length;
 
     function updatePayload(patch) {
         onUpdateConditionPayload((current) => ({
@@ -6386,6 +6989,15 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                         </div>
                     )}
                 </div>
+                <div className="ac-v3-builder__edge-shape">
+                    <div>
+                        <strong>Форма стрелки</strong>
+                        <span>{waypointCount > 0 ? `Точек маршрута: ${waypointCount}` : 'Двойной клик по линии добавляет точку маршрута.'}</span>
+                    </div>
+                    <button type="button" disabled={waypointCount === 0} onClick={onResetWaypoints}>
+                        Сбросить форму стрелки
+                    </button>
+                </div>
                 <button type="button" className="ac-v3-builder__danger" onClick={onRemove}>Удалить связь</button>
             </section>
         </div>
@@ -6721,13 +7333,21 @@ function portsTopOffset(block) {
         + NODE_BODY_PADDING;
 }
 
-function graphBounds(blocks) {
-    if (blocks.length === 0) {
+function graphBounds(blocks, edges = []) {
+    const waypointPositions = edges.flatMap((edge) => edgeWaypoints(edge).map((waypoint) => ({ x: waypoint.x, y: waypoint.y })));
+
+    if (blocks.length === 0 && waypointPositions.length === 0) {
         return { minX: 0, minY: 0, width: CANVAS_MIN_WIDTH, height: CANVAS_MIN_HEIGHT };
     }
 
-    const xs = blocks.map((block) => blockPosition(block).x);
-    const ys = blocks.map((block) => blockPosition(block).y);
+    const xs = [
+        ...blocks.map((block) => blockPosition(block).x),
+        ...waypointPositions.map((point) => point.x),
+    ];
+    const ys = [
+        ...blocks.map((block) => blockPosition(block).y),
+        ...waypointPositions.map((point) => point.y),
+    ];
     const minX = Math.min(...xs);
     const minY = Math.min(...ys);
     const worldMinX = Math.min(0, minX - CANVAS_EXPAND_PADDING);

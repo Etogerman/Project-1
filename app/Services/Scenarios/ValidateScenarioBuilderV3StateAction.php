@@ -127,6 +127,8 @@ class ValidateScenarioBuilderV3StateAction
 
     private const MAX_EDGE_DELAY_VALUE = 100000;
 
+    private const MAX_EDGE_WAYPOINTS = 5;
+
     private const MAX_TRANSITION_ACTIONS_PER_EDGE = 5;
 
     private const EDGE_TRANSITION_ACTION_TYPES = ['write_field'];
@@ -1023,7 +1025,7 @@ class ValidateScenarioBuilderV3StateAction
             'transition_actions' => $this->normalizeEdgeTransitionActions($payload['transition_actions'] ?? [], $edgeIndex),
             'delay' => $this->normalizeEdgeDelay($payload['delay'] ?? [], $mode, $edgeIndex),
             'flags' => is_array($payload['flags'] ?? null) ? $payload['flags'] : [],
-            'ui' => is_array($payload['ui'] ?? null) ? $payload['ui'] : [],
+            'ui' => $this->normalizeEdgeUi($payload['ui'] ?? [], $edgeIndex),
         ];
     }
 
@@ -1115,6 +1117,62 @@ class ValidateScenarioBuilderV3StateAction
             'unit' => $unit,
             'scheduled_at' => null,
             'cancel_if_left_source_block' => (bool) ($delay['cancel_if_left_source_block'] ?? true),
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function normalizeEdgeUi(mixed $ui, int $edgeIndex): array
+    {
+        $ui = is_array($ui) ? $ui : [];
+
+        if (! array_key_exists('waypoints', $ui)) {
+            return $ui;
+        }
+
+        $waypoints = $ui['waypoints'];
+        $key = "builder.edges.$edgeIndex.condition_payload.ui.waypoints";
+
+        if (! is_array($waypoints) || ! array_is_list($waypoints)) {
+            $this->fail($key, 'Waypoints must be a list.');
+        }
+
+        if (count($waypoints) > self::MAX_EDGE_WAYPOINTS) {
+            $this->fail($key, 'Too many edge waypoints.');
+        }
+
+        $normalizedWaypoints = [];
+
+        foreach ($waypoints as $waypointIndex => $waypoint) {
+            if (! is_array($waypoint)) {
+                $this->fail("$key.$waypointIndex", 'Waypoint must be an object.');
+            }
+
+            $id = trim((string) ($waypoint['id'] ?? ''));
+
+            if ($id === '' || strlen($id) > 40) {
+                $this->fail("$key.$waypointIndex.id", 'Invalid waypoint id.');
+            }
+
+            if (! $this->isFiniteNumber($waypoint['x'] ?? null)) {
+                $this->fail("$key.$waypointIndex.x", 'Waypoint x must be a number.');
+            }
+
+            if (! $this->isFiniteNumber($waypoint['y'] ?? null)) {
+                $this->fail("$key.$waypointIndex.y", 'Waypoint y must be a number.');
+            }
+
+            $normalizedWaypoints[] = [
+                'id' => $id,
+                'x' => round((float) $waypoint['x'], 2),
+                'y' => round((float) $waypoint['y'], 2),
+            ];
+        }
+
+        return [
+            ...$ui,
+            'waypoints' => $normalizedWaypoints,
         ];
     }
 
@@ -1713,6 +1771,12 @@ class ValidateScenarioBuilderV3StateAction
         }
 
         return $string;
+    }
+
+    private function isFiniteNumber(mixed $value): bool
+    {
+        return (is_int($value) || is_float($value))
+            && is_finite((float) $value);
     }
 
     private function fail(string $key, string $message): never

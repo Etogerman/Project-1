@@ -692,6 +692,25 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
     cursor: grabbing;
 }
 
+.ac-v3-builder__edge-waypoint {
+    fill: var(--surface);
+    pointer-events: all;
+    stroke: var(--accent);
+    stroke-width: 2.2;
+    cursor: grab;
+    filter: drop-shadow(0 4px 8px color-mix(in oklch, var(--accent) 18%, transparent));
+}
+
+.ac-v3-builder__edge-waypoint:hover,
+.ac-v3-builder__edge-waypoint.is-selected {
+    fill: color-mix(in oklch, var(--accent) 16%, var(--surface));
+    stroke-width: 2.8;
+}
+
+.ac-v3-builder__edge-waypoint:active {
+    cursor: grabbing;
+}
+
 .ac-v3-builder__edge-gear {
     cursor: pointer;
     pointer-events: all;
@@ -739,7 +758,8 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
     font-size: 10px;
     font-weight: 650;
     paint-order: stroke;
-    pointer-events: none;
+    cursor: pointer;
+    pointer-events: auto;
     stroke: var(--bg);
     stroke-linejoin: round;
     stroke-width: 5px;
@@ -2553,6 +2573,34 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
 .ac-v3-builder__edge-diagnostics-item p {
     color: var(--danger);
     font-size: 11px;
+}
+
+.ac-v3-builder__edge-shape {
+    display: grid;
+    gap: 8px;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: color-mix(in oklch, var(--accent) 4%, var(--surface));
+    padding: 9px;
+}
+
+.ac-v3-builder__edge-shape > div {
+    display: grid;
+    gap: 2px;
+}
+
+.ac-v3-builder__edge-shape strong {
+    color: var(--text-1);
+    font-size: 12px;
+}
+
+.ac-v3-builder__edge-shape span {
+    color: var(--text-3);
+    font-size: 11px;
+}
+
+.ac-v3-builder__edge-shape button {
+    justify-self: start;
 }
 
 .ac-v3-builder__field-row {
