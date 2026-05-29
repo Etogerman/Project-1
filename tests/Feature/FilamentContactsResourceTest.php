@@ -2337,13 +2337,14 @@ class FilamentContactsResourceTest extends TestCase
             ->assertSee('Удалить клиента')
             ->call('openDeleteContactDialog')
             ->assertSee('Контакт')
-            ->assertSee('будет удалён вместе с диалогами, сообщениями, историческими сборами данных с ответами, телефонами и идентичностями.')
+            ->assertSee('будет удалён вместе с диалогами, сообщениями, телефонами и профилями каналов.')
             ->assertSee('Контактов')
             ->assertSee('Диалогов')
             ->assertSee('Сообщений')
-            ->assertSee('Сборов данных')
             ->assertSee('Телефонов')
-            ->assertSee('Идентификаторов')
+            ->assertSee('Профилей каналов')
+            ->assertDontSee('Сборов данных')
+            ->assertDontSee('Идентификаторов')
             ->call('deleteMountedContact')
             ->assertRedirect(ContactResource::getUrl('index'));
 
@@ -2585,7 +2586,8 @@ class FilamentContactsResourceTest extends TestCase
             ->assertSee('Диалогов')
             ->assertSee('Сообщений')
             ->assertSee('Телефонов')
-            ->assertSee('Идентификаторов');
+            ->assertSee('Профилей каналов')
+            ->assertDontSee('Идентификаторов');
     }
 
     public function test_contact_modal_delete_preview_from_merged_secondary_uses_root_aggregate(): void

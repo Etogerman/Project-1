@@ -629,9 +629,8 @@ trait InteractsWithContactWorkspace
             ['label' => 'Контактов', 'value' => $preview->contactsCount],
             ['label' => 'Диалогов', 'value' => $preview->dialogsCount],
             ['label' => 'Сообщений', 'value' => $preview->messagesCount],
-            ['label' => 'Сборов данных', 'value' => $preview->questionnaireRunsCount],
             ['label' => 'Телефонов', 'value' => $preview->phonesCount],
-            ['label' => 'Идентификаторов', 'value' => $preview->identitiesCount],
+            ['label' => 'Профилей каналов', 'value' => $preview->identitiesCount],
         ];
         $this->showDeleteContactDialog = true;
     }

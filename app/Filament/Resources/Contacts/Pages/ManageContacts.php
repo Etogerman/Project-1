@@ -637,7 +637,7 @@ class ManageContacts extends ManageRecords
             ['label' => 'Диалогов', 'value' => $preview->dialogsCount],
             ['label' => 'Сообщений', 'value' => $preview->messagesCount],
             ['label' => 'Телефонов', 'value' => $preview->phonesCount],
-            ['label' => 'Идентификаторов', 'value' => $preview->identitiesCount],
+            ['label' => 'Профилей каналов', 'value' => $preview->identitiesCount],
         ];
         $this->showDeleteContactDialog = true;
     }
