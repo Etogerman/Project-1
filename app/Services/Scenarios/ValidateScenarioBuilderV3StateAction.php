@@ -127,6 +127,27 @@ class ValidateScenarioBuilderV3StateAction
 
     private const MAX_EDGE_DELAY_VALUE = 100000;
 
+    private const MAX_TRANSITION_ACTIONS_PER_EDGE = 5;
+
+    private const EDGE_TRANSITION_ACTION_TYPES = ['write_field'];
+
+    private const EDGE_TRANSITION_ACTION_SCOPES = ['contact', 'dialog'];
+
+    private const EDGE_TRANSITION_ACTION_VALUE_SOURCES = ['static'];
+
+    private const EDGE_TRANSITION_CONTACT_FIELDS = [
+        'first_name',
+        'last_name',
+        'country',
+        'city',
+        'gender',
+        'gender_source',
+        'age_years',
+        'age_range',
+        'first_name_source',
+        'first_name_resolution_method',
+    ];
+
     /**
      * @param  array<string, mixed>  $input
      * @return array<string, mixed>
@@ -999,6 +1020,7 @@ class ValidateScenarioBuilderV3StateAction
             'field_condition' => $this->normalizeEdgeFieldCondition($payload['field_condition'] ?? [], $edgeIndex),
             'match' => $this->normalizeEdgeMatch($payload['match'] ?? [], $edgeIndex),
             'input_capture' => $this->normalizeEdgeInputCapture($payload['input_capture'] ?? [], $edgeIndex),
+            'transition_actions' => $this->normalizeEdgeTransitionActions($payload['transition_actions'] ?? [], $edgeIndex),
             'delay' => $this->normalizeEdgeDelay($payload['delay'] ?? [], $mode, $edgeIndex),
             'flags' => is_array($payload['flags'] ?? null) ? $payload['flags'] : [],
             'ui' => is_array($payload['ui'] ?? null) ? $payload['ui'] : [],
@@ -1254,6 +1276,74 @@ class ValidateScenarioBuilderV3StateAction
             'field_key' => $fieldKey,
             'data_type' => $dataType,
         ];
+    }
+
+    /**
+     * @return list<array{type: string, target_scope: string, target_field: string, value_source: string, value: string}>
+     */
+    private function normalizeEdgeTransitionActions(mixed $actions, int $edgeIndex): array
+    {
+        if (! is_array($actions)) {
+            return [];
+        }
+
+        if (! array_is_list($actions)) {
+            $this->fail("builder.edges.$edgeIndex.condition_payload.transition_actions", 'Transition actions must be a list.');
+        }
+
+        if (count($actions) > self::MAX_TRANSITION_ACTIONS_PER_EDGE) {
+            $this->fail("builder.edges.$edgeIndex.condition_payload.transition_actions", 'Too many transition actions.');
+        }
+
+        $normalized = [];
+
+        foreach ($actions as $actionIndex => $action) {
+            $action = $this->arrayValue($action, "builder.edges.$edgeIndex.condition_payload.transition_actions.$actionIndex");
+            $type = trim((string) ($action['type'] ?? 'write_field'));
+            $targetScope = trim((string) ($action['target_scope'] ?? 'contact'));
+            $targetField = trim((string) ($action['target_field'] ?? ''));
+            $valueSource = trim((string) ($action['value_source'] ?? 'static'));
+            $value = trim((string) ($action['value'] ?? ''));
+            $baseKey = "builder.edges.$edgeIndex.condition_payload.transition_actions.$actionIndex";
+
+            if (! in_array($type, self::EDGE_TRANSITION_ACTION_TYPES, true)) {
+                $this->fail("$baseKey.type", 'Unknown transition action type.');
+            }
+
+            if (! in_array($targetScope, self::EDGE_TRANSITION_ACTION_SCOPES, true)) {
+                $this->fail("$baseKey.target_scope", 'Unknown transition action scope.');
+            }
+
+            if (! in_array($valueSource, self::EDGE_TRANSITION_ACTION_VALUE_SOURCES, true)) {
+                $this->fail("$baseKey.value_source", 'Unknown transition action value source.');
+            }
+
+            if ($targetScope === 'contact' && ! in_array($targetField, self::EDGE_TRANSITION_CONTACT_FIELDS, true)) {
+                $this->fail("$baseKey.target_field", 'Unknown writable contact field.');
+            }
+
+            if ($targetScope === 'dialog' && ! preg_match('/^[A-Za-z][A-Za-z0-9_]{0,63}$/', $targetField)) {
+                $this->fail("$baseKey.target_field", 'Invalid dialog field key.');
+            }
+
+            if ($value === '') {
+                $this->fail("$baseKey.value", 'Transition action value is required.');
+            }
+
+            if (mb_strlen($value) > self::MAX_MESSAGE_LENGTH) {
+                $this->fail("$baseKey.value", 'Transition action value is too long.');
+            }
+
+            $normalized[] = [
+                'type' => $type,
+                'target_scope' => $targetScope,
+                'target_field' => $targetField,
+                'value_source' => $valueSource,
+                'value' => $value,
+            ];
+        }
+
+        return $normalized;
     }
 
     /**

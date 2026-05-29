@@ -536,11 +536,36 @@ class CompileScenarioBuilderV3RuntimeAction
             'expression' => trim((string) ($conditionPayload['expression'] ?? '')),
             'field_condition' => $this->compileEdgeFieldCondition($conditionPayload),
             'match' => $this->compileEdgeMatch($conditionPayload),
+            'transition_actions' => $this->compileEdgeTransitionActions($conditionPayload),
             'delay' => $delay,
             'input_capture' => $mode === self::EDGE_MODE_WAIT_REPLY
                 ? $this->compileEdgeInputCapture($conditionPayload)
                 : $this->disabledEdgeInputCapture(),
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $conditionPayload
+     * @return list<array{type: string, target_scope: string, target_field: string, value_source: string, value: string}>
+     */
+    private function compileEdgeTransitionActions(array $conditionPayload): array
+    {
+        return collect(is_array($conditionPayload['transition_actions'] ?? null) ? $conditionPayload['transition_actions'] : [])
+            ->filter(fn (mixed $action): bool => is_array($action))
+            ->map(fn (array $action): array => [
+                'type' => (string) ($action['type'] ?? 'write_field'),
+                'target_scope' => (string) ($action['target_scope'] ?? 'contact'),
+                'target_field' => (string) ($action['target_field'] ?? ''),
+                'value_source' => (string) ($action['value_source'] ?? 'static'),
+                'value' => (string) ($action['value'] ?? ''),
+            ])
+            ->filter(fn (array $action): bool => $action['type'] === 'write_field'
+                && in_array($action['target_scope'], ['contact', 'dialog'], true)
+                && $action['target_field'] !== ''
+                && $action['value_source'] === 'static'
+                && trim($action['value']) !== '')
+            ->values()
+            ->all();
     }
 
     /**

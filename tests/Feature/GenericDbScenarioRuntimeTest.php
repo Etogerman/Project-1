@@ -2963,6 +2963,170 @@ class GenericDbScenarioRuntimeTest extends TestCase
             && $request['text'] === 'Это не номер телефона');
     }
 
+    public function test_v3_transition_actions_write_contact_and_dialog_fields(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9404]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9405]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('v3_transition_actions_write_fields', $this->v3WaitReplyRuntimeSchema($channel->id, [
+            $this->v3WaitReplyEdge(
+                id: '20',
+                edgeKey: 'edge_gender_male',
+                targetBlockId: 'accepted',
+                matchType: 'exact_text',
+                variants: ['Мужской'],
+                transitionActions: [
+                    [
+                        'type' => 'write_field',
+                        'target_scope' => 'contact',
+                        'target_field' => 'gender',
+                        'value_source' => 'static',
+                        'value' => 'male',
+                    ],
+                    [
+                        'type' => 'write_field',
+                        'target_scope' => 'contact',
+                        'target_field' => 'gender_source',
+                        'value_source' => 'static',
+                        'value' => 'client',
+                    ],
+                    [
+                        'type' => 'write_field',
+                        'target_scope' => 'dialog',
+                        'target_field' => 'questionnaire_step',
+                        'value_source' => 'static',
+                        'value' => 'gender_done',
+                    ],
+                ],
+            ),
+        ], [
+            'accepted' => 'Пол записан',
+        ]));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Мужской');
+
+        $run->refresh();
+        $contact->refresh();
+        $dialog->refresh();
+        $counterKey = 'published_'.$scenario->publishedVersion->id.':edge_gender_male';
+
+        $this->assertSame('accepted', $run->current_step);
+        $this->assertSame('male', $contact->gender);
+        $this->assertSame(Contact::GENDER_SOURCE_CLIENT, $contact->gender_source);
+        $this->assertSame('gender_done', data_get($dialog->fields_payload, 'questionnaire_step'));
+        $this->assertSame(1, data_get($dialog->fields_payload, '_v3.transition_counts.'.$counterKey));
+    }
+
+    public function test_v3_transition_action_failure_rolls_back_and_uses_next_edge(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9406]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9407]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('v3_transition_actions_fallback', $this->v3WaitReplyRuntimeSchema($channel->id, [
+            $this->v3WaitReplyEdge(
+                id: '30',
+                edgeKey: 'edge_invalid_action',
+                targetBlockId: 'invalid',
+                priority: 20,
+                transitionActions: [
+                    [
+                        'type' => 'write_field',
+                        'target_scope' => 'contact',
+                        'target_field' => 'gender',
+                        'value_source' => 'static',
+                        'value' => 'male',
+                    ],
+                    [
+                        'type' => 'write_field',
+                        'target_scope' => 'contact',
+                        'target_field' => 'gender_source',
+                        'value_source' => 'static',
+                        'value' => 'bad_source',
+                    ],
+                ],
+            ),
+            $this->v3WaitReplyEdge(
+                id: '20',
+                edgeKey: 'edge_fallback_after_action',
+                targetBlockId: 'fallback',
+                priority: 10,
+            ),
+        ], [
+            'invalid' => 'Не должно отправиться',
+            'fallback' => 'Fallback',
+        ]));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Мужской');
+
+        $run->refresh();
+        $contact->refresh();
+        $dialog->refresh();
+        $invalidKey = 'published_'.$scenario->publishedVersion->id.':edge_invalid_action';
+        $fallbackKey = 'published_'.$scenario->publishedVersion->id.':edge_fallback_after_action';
+
+        $this->assertSame('fallback', $run->current_step);
+        $this->assertNull($contact->gender);
+        $this->assertNull($contact->gender_source);
+        $this->assertNull(data_get($dialog->fields_payload, '_v3.transition_counts.'.$invalidKey));
+        $this->assertSame(1, data_get($dialog->fields_payload, '_v3.transition_counts.'.$fallbackKey));
+    }
+
     public function test_v3_wait_reply_number_capture_enforces_format_and_saves_normalized_decimal(): void
     {
         Http::fake([
@@ -9000,10 +9164,13 @@ class GenericDbScenarioRuntimeTest extends TestCase
                         'id' => $edge['id'],
                         'edge_key' => $edge['edge_key'],
                         'mode' => 'wait_reply',
+                        'priority' => $edge['priority'] ?? 10,
+                        'transition_limit' => $edge['transition_limit'] ?? 0,
                         'source_block_id' => 'start',
                         'target_block_id' => $edge['target_block_id'],
                         'from_output_id' => null,
                         'label' => $edge['label'] ?? '',
+                        'transition_actions' => $edge['transition_actions'] ?? [],
                     ])
                     ->values()
                     ->all(),
@@ -9113,6 +9280,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         string $dialogPhoneCondition = '',
         array $fieldCondition = [],
         string $expression = '',
+        array $transitionActions = [],
     ): array {
         return [
             'id' => $id,
@@ -9145,6 +9313,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
                 'field_key' => '',
                 'data_type' => 'any_text',
             ], $inputCapture),
+            'transition_actions' => $transitionActions,
         ];
     }
 

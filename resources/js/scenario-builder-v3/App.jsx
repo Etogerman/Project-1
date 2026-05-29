@@ -121,6 +121,21 @@ const CONTACT_RUNTIME_WRITABLE_FIELD_KEYS = new Set([
     'age_years',
     'age_range',
 ]);
+const MAX_TRANSITION_ACTIONS_PER_EDGE = 5;
+const TRANSITION_ACTION_TYPE_WRITE_FIELD = 'write_field';
+const TRANSITION_ACTION_VALUE_SOURCE_STATIC = 'static';
+const TRANSITION_CONTACT_WRITABLE_FIELD_KEYS = new Set([
+    'first_name',
+    'last_name',
+    'country',
+    'city',
+    'gender',
+    'gender_source',
+    'age_years',
+    'age_range',
+    'first_name_source',
+    'first_name_resolution_method',
+]);
 const CONTACT_RUNTIME_CONDITION_FIELD_KEYS = new Set([
     'phone',
     'first_name',
@@ -4890,6 +4905,34 @@ function ActionStaticValueField({ item, onChange }) {
     );
 }
 
+function TransitionActionValueField({ item, onChange }) {
+    const options = transitionActionValueOptions(item);
+
+    if (options.length > 0) {
+        return (
+            <label>
+                <span>Значение</span>
+                <select value={item.value} onChange={(event) => onChange(event.target.value)}>
+                    {options.map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                    ))}
+                </select>
+            </label>
+        );
+    }
+
+    return (
+        <label>
+            <span>Значение</span>
+            <input
+                value={item.value}
+                placeholder="Текст"
+                onChange={(event) => onChange(event.target.value)}
+            />
+        </label>
+    );
+}
+
 function StartConditionFields({
     start,
     channels,
@@ -5357,6 +5400,31 @@ function contactActionFieldOptions(currentFieldKey = '') {
     return options;
 }
 
+function contactTransitionActionFieldOptions(currentFieldKey = '') {
+    const currentKey = normalizeDictionaryFieldKey(currentFieldKey);
+    const options = currentFieldDictionary().contact.map((field) => ({
+        key: field.key,
+        label: field.label,
+        disabled: ! TRANSITION_CONTACT_WRITABLE_FIELD_KEYS.has(field.key),
+    }));
+
+    if (currentKey && ! options.some((option) => option.key === currentKey)) {
+        options.unshift({
+            key: currentKey,
+            label: `${currentKey} · ${FIELD_DICTIONARY_MISSING_LABEL}`,
+            disabled: true,
+        });
+    }
+
+    return options;
+}
+
+function defaultTransitionContactFieldKey() {
+    return currentFieldDictionary().contact
+        .find((field) => TRANSITION_CONTACT_WRITABLE_FIELD_KEYS.has(field.key))
+        ?.key ?? 'first_name';
+}
+
 function defaultWritableContactFieldKey() {
     return contactCaptureFields()[0]?.[0] ?? 'first_name';
 }
@@ -5562,6 +5630,7 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
     const showsAutoLabelControls = ! edgeUsesOutputLabel(edge, isButton);
     const labelMode = edgeLabelMode(edge);
     const canvasLabelPreview = edgeLabel(edge, isButton);
+    const transitionActions = transitionActionItems(payload.transition_actions);
 
     function updatePayload(patch) {
         onUpdateConditionPayload((current) => ({
@@ -5634,6 +5703,40 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                 ...patch,
             }),
         }));
+    }
+
+    function updateTransitionActions(nextActions) {
+        onUpdateConditionPayload((current) => ({
+            ...current,
+            transition_actions: nextActions.map((item) => normalizeTransitionActionItem(item)),
+        }));
+    }
+
+    function updateTransitionAction(index, patch) {
+        const next = transitionActions.map((item, itemIndex) => {
+            if (itemIndex !== index) {
+                return item;
+            }
+
+            return normalizeTransitionActionItem({
+                ...item,
+                ...patch,
+            });
+        });
+
+        updateTransitionActions(next);
+    }
+
+    function addTransitionAction() {
+        if (transitionActions.length >= MAX_TRANSITION_ACTIONS_PER_EDGE) {
+            return;
+        }
+
+        updateTransitionActions([...transitionActions, defaultTransitionActionItem()]);
+    }
+
+    function removeTransitionAction(index) {
+        updateTransitionActions(transitionActions.filter((_, itemIndex) => itemIndex !== index));
     }
 
     return (
@@ -6192,6 +6295,97 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                         </div>
                     </>
                 ) : null}
+                <div className="ac-v3-builder__ai-outputs">
+                    <div className="ac-v3-builder__ai-outputs-head">
+                        <span>Действия перехода</span>
+                        <button
+                            type="button"
+                            disabled={transitionActions.length >= MAX_TRANSITION_ACTIONS_PER_EDGE}
+                            onClick={addTransitionAction}
+                        >
+                            Добавить
+                        </button>
+                    </div>
+                    {transitionActions.length === 0 ? (
+                        <p className="ac-v3-builder__edge-diagnostics-empty">
+                            Можно записать значения в поля контакта или диалога до перехода в следующий блок.
+                        </p>
+                    ) : (
+                        <div className="ac-v3-builder__action-list">
+                            {transitionActions.map((item, index) => {
+                                const contactOptions = contactTransitionActionFieldOptions(item.target_field);
+
+                                return (
+                                    <div className="ac-v3-builder__action-row" key={`${index}-${item.target_scope}-${item.target_field}`}>
+                                        <label>
+                                            <span>Действие</span>
+                                            <input readOnly value="Изменить данные" />
+                                        </label>
+                                        <label>
+                                            <span>Сущность</span>
+                                            <select
+                                                value={item.target_scope}
+                                                onChange={(event) => {
+                                                    const targetScope = event.target.value;
+
+                                                    updateTransitionAction(index, {
+                                                        target_scope: targetScope,
+                                                        target_field: targetScope === 'contact' ? defaultTransitionContactFieldKey() : 'field',
+                                                        value: '',
+                                                    });
+                                                }}
+                                            >
+                                                {ACTION_TARGET_SCOPE_OPTIONS.map(([value, label]) => (
+                                                    <option key={value} value={value}>{label}</option>
+                                                ))}
+                                            </select>
+                                        </label>
+                                        {item.target_scope === 'contact' ? (
+                                            <label>
+                                                <span>Поле</span>
+                                                <select
+                                                    value={item.target_field}
+                                                    onChange={(event) => updateTransitionAction(index, {
+                                                        target_field: event.target.value,
+                                                        value: '',
+                                                    })}
+                                                >
+                                                    {contactOptions.map((option) => (
+                                                        <option key={option.key} value={option.key} disabled={option.disabled}>
+                                                            {option.disabled ? `${option.label} · только отображение` : option.label}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                            </label>
+                                        ) : (
+                                            <label>
+                                                <span>Поле</span>
+                                                <DialogFieldKeyInput
+                                                    value={item.target_field}
+                                                    placeholder="questionnaire_step"
+                                                    onChange={(fieldKey) => updateTransitionAction(index, { target_field: fieldKey })}
+                                                    suggestions={dialogFieldKeys}
+                                                    purpose="transition_action"
+                                                />
+                                            </label>
+                                        )}
+                                        <TransitionActionValueField
+                                            item={item}
+                                            onChange={(value) => updateTransitionAction(index, { value })}
+                                        />
+                                        <button
+                                            type="button"
+                                            title="Удалить действие"
+                                            onClick={() => removeTransitionAction(index)}
+                                        >
+                                            ×
+                                        </button>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                </div>
                 <button type="button" className="ac-v3-builder__danger" onClick={onRemove}>Удалить связь</button>
             </section>
         </div>
@@ -7010,6 +7204,58 @@ function defaultActionItem() {
         source_field_key: '',
         static_value: '',
     };
+}
+
+function transitionActionItems(actions) {
+    if (! Array.isArray(actions)) {
+        return [];
+    }
+
+    return actions
+        .slice(0, MAX_TRANSITION_ACTIONS_PER_EDGE)
+        .map((item) => normalizeTransitionActionItem(item));
+}
+
+function normalizeTransitionActionItem(item = {}) {
+    const targetScope = ACTION_TARGET_SCOPE_OPTIONS.some(([value]) => value === item.target_scope)
+        ? item.target_scope
+        : 'contact';
+    const targetField = targetScope === 'contact'
+        ? (normalizeDictionaryFieldKey(item.target_field) || defaultTransitionContactFieldKey())
+        : normalizeDialogFieldKey(item.target_field || 'field');
+    const normalized = {
+        type: TRANSITION_ACTION_TYPE_WRITE_FIELD,
+        target_scope: targetScope,
+        target_field: targetField,
+        value_source: TRANSITION_ACTION_VALUE_SOURCE_STATIC,
+        value: String(item.value ?? item.static_value ?? ''),
+    };
+    const options = transitionActionValueOptions(normalized);
+
+    if (options.length > 0 && ! options.some(([value]) => value === normalized.value)) {
+        normalized.value = options[0][0];
+    }
+
+    return normalized;
+}
+
+function defaultTransitionActionItem() {
+    return normalizeTransitionActionItem({
+        type: TRANSITION_ACTION_TYPE_WRITE_FIELD,
+        target_scope: 'contact',
+        target_field: defaultTransitionContactFieldKey(),
+        value_source: TRANSITION_ACTION_VALUE_SOURCE_STATIC,
+        value: '',
+    });
+}
+
+function transitionActionValueOptions(item) {
+    const entity = item.target_scope === 'dialog'
+        ? FIELD_DICTIONARY_ENTITY_DIALOG
+        : FIELD_DICTIONARY_ENTITY_CONTACT;
+
+    return dictionaryFieldValueOptions(entity, item.target_field, item.value)
+        .map((option) => [option.value, option.label]);
 }
 
 function actionStaticValueOptions(item) {

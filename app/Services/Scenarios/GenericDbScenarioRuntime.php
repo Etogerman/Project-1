@@ -133,6 +133,19 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         'age_range' => 'any_text',
     ];
 
+    private const V3_CONTACT_TRANSITION_WRITE_FIELDS = [
+        'first_name',
+        'last_name',
+        'country',
+        'city',
+        'gender',
+        'gender_source',
+        'age_years',
+        'age_range',
+        'first_name_source',
+        'first_name_resolution_method',
+    ];
+
     private const V3_CONTACT_FIELD_CONDITION_FIELDS = [
         'phone',
         'first_name',
@@ -1454,9 +1467,9 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 }
 
                 $block = $this->v3RuntimeBlock($runtime, $currentBlockId) ?? [];
-                $transition = $this->v3TransitionForMessage($message, is_array($block) ? $block : [], $dialog);
+                $transitions = $this->v3TransitionCandidatesForMessage($message, is_array($block) ? $block : [], $dialog);
 
-                if ($transition === null) {
+                if ($transitions === []) {
                     return new ScenarioInboundResult(
                         consumed: true,
                         status: ScenarioRun::STATUS_ACTIVE,
@@ -1466,10 +1479,17 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                     );
                 }
 
-                $transitionEdge = $transition['edge'];
-                $capturedValue = $transition['captured_value'];
+                $transition = null;
 
-                if (! $this->applyV3TransitionSideEffectsToDialog($dialog, $message, $transitionEdge, $capturedValue)) {
+                foreach ($transitions as $candidate) {
+                    if ($this->applyV3TransitionSideEffectsToDialog($dialog, $message, $candidate['edge'], $candidate['captured_value'])) {
+                        $transition = $candidate;
+
+                        break;
+                    }
+                }
+
+                if ($transition === null) {
                     return new ScenarioInboundResult(
                         consumed: true,
                         status: ScenarioRun::STATUS_ACTIVE,
@@ -1479,6 +1499,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                     );
                 }
 
+                $transitionEdge = $transition['edge'];
                 $targetBlockId = filled($transitionEdge['target_block_id'] ?? null) ? (string) $transitionEdge['target_block_id'] : null;
 
                 if ($targetBlockId === null) {
@@ -1523,9 +1544,19 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
      */
     private function v3TransitionForMessage(Message $message, array $block, ?Dialog $dialog): ?array
     {
+        return $this->v3TransitionCandidatesForMessage($message, $block, $dialog)[0] ?? null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     * @return list<array{edge: array<string, mixed>, captured_value: array{valid: bool, value: string|null, phone_raw?: string|null, phone_normalized?: string|null}}>
+     */
+    private function v3TransitionCandidatesForMessage(Message $message, array $block, ?Dialog $dialog): array
+    {
         $edges = collect($this->v3TransitionEdgesForMessage($message, $block))
             ->sort(fn (array $left, array $right): int => $this->compareV3TransitionEdges($left, $right))
             ->values();
+        $candidates = [];
 
         foreach ($edges as $edge) {
             if ($this->v3TransitionLimitReached($dialog, $edge)) {
@@ -1538,13 +1569,13 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 continue;
             }
 
-            return [
+            $candidates[] = [
                 'edge' => $edge,
                 'captured_value' => $capturedValue,
             ];
         }
 
-        return null;
+        return $candidates;
     }
 
     /**
@@ -1940,6 +1971,33 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
      */
     private function applyV3TransitionSideEffectsToDialog(Dialog $dialog, Message $message, array $edge, ?array $capturedValue): bool
     {
+        try {
+            return DB::transaction(fn (): bool => $this->applyV3TransitionSideEffectsToDialogInTransaction(
+                $dialog,
+                $message,
+                $edge,
+                $capturedValue,
+            ));
+        } catch (Throwable $throwable) {
+            Log::warning('scenario.v3_transition_side_effects_failed', [
+                'scenario_code' => $this->code(),
+                'dialog_id' => $message->dialog_id,
+                'message_id' => $message->id,
+                'edge_key' => $edge['edge_key'] ?? null,
+                'exception_class' => $throwable::class,
+                'error' => $throwable->getMessage(),
+            ]);
+
+            return false;
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $edge
+     * @param  array{valid?: bool, value?: string|null, phone_raw?: string|null, phone_normalized?: string|null}|null  $capturedValue
+     */
+    private function applyV3TransitionSideEffectsToDialogInTransaction(Dialog $dialog, Message $message, array $edge, ?array $capturedValue): bool
+    {
         $fieldsPayload = is_array($dialog->fields_payload) ? $dialog->fields_payload : [];
         $limit = max(0, (int) ($edge['transition_limit'] ?? 0));
         $counterKey = $this->v3TransitionCountKey($edge);
@@ -1979,6 +2037,8 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             }
         }
 
+        $this->applyV3TransitionActions($message, $edge, $fieldsPayload);
+
         data_set($fieldsPayload, '_v3.transition_counts.'.$counterKey, $currentCount + 1);
 
         $encoded = json_encode($fieldsPayload);
@@ -1990,12 +2050,143 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 'edge_key' => $edge['edge_key'] ?? null,
             ]);
 
-            return false;
+            throw new RuntimeException('v3_dialog_fields_payload_limit_exceeded');
         }
 
         $dialog->forceFill(['fields_payload' => $fieldsPayload])->save();
 
         return true;
+    }
+
+    /**
+     * @param  array<string, mixed>  $edge
+     * @param  array<string, mixed>  $fieldsPayload
+     */
+    private function applyV3TransitionActions(Message $message, array $edge, array &$fieldsPayload): void
+    {
+        $actions = is_array($edge['transition_actions'] ?? null) ? $edge['transition_actions'] : [];
+
+        foreach ($actions as $index => $action) {
+            if (! is_array($action) || ! $this->applyV3TransitionAction($message, $action, $fieldsPayload)) {
+                Log::info('scenario.v3_transition_action_failed', [
+                    'scenario_code' => $this->code(),
+                    'dialog_id' => $message->dialog_id,
+                    'message_id' => $message->id,
+                    'edge_key' => $edge['edge_key'] ?? null,
+                    'action_index' => $index,
+                    'action_type' => is_array($action) ? ($action['type'] ?? null) : null,
+                    'target_scope' => is_array($action) ? ($action['target_scope'] ?? null) : null,
+                    'target_field' => is_array($action) ? ($action['target_field'] ?? null) : null,
+                    'status' => 'validation_failed',
+                ]);
+
+                throw new RuntimeException('v3_transition_action_failed');
+            }
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $action
+     * @param  array<string, mixed>  $fieldsPayload
+     */
+    private function applyV3TransitionAction(Message $message, array $action, array &$fieldsPayload): bool
+    {
+        if (($action['type'] ?? null) !== 'write_field' || ($action['value_source'] ?? 'static') !== 'static') {
+            return false;
+        }
+
+        $targetScope = (string) ($action['target_scope'] ?? 'contact');
+        $targetField = trim((string) ($action['target_field'] ?? ''));
+        $value = trim((string) ($action['value'] ?? ''));
+
+        if ($targetField === '' || $value === '') {
+            return false;
+        }
+
+        if ($targetScope === 'dialog') {
+            return $this->applyV3TransitionDialogFieldToPayload($fieldsPayload, $targetField, $value);
+        }
+
+        if ($targetScope === 'contact') {
+            return $this->applyV3TransitionContactField($message, $targetField, $value);
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  array<string, mixed>  $fieldsPayload
+     */
+    private function applyV3TransitionDialogFieldToPayload(array &$fieldsPayload, string $fieldKey, string $value): bool
+    {
+        if (! preg_match('/^[A-Za-z][A-Za-z0-9_]{0,63}$/', $fieldKey) || mb_strlen($value) > self::V3_DIALOG_FIELD_VALUE_MAX_LENGTH) {
+            return false;
+        }
+
+        $userFieldCount = collect($fieldsPayload)
+            ->keys()
+            ->filter(fn (mixed $key): bool => is_string($key) && ! str_starts_with($key, '_'))
+            ->unique()
+            ->count();
+
+        if (! array_key_exists($fieldKey, $fieldsPayload) && $userFieldCount >= self::V3_DIALOG_USER_FIELDS_MAX) {
+            return false;
+        }
+
+        $fieldsPayload[$fieldKey] = $value;
+
+        return true;
+    }
+
+    private function applyV3TransitionContactField(Message $message, string $fieldKey, string $value): bool
+    {
+        if (! $message->contact instanceof Contact || ! in_array($fieldKey, self::V3_CONTACT_TRANSITION_WRITE_FIELDS, true)) {
+            return false;
+        }
+
+        $contact = $this->resolveRootContactAction->handle($message->contact);
+        $lockedContact = Contact::query()
+            ->whereKey($contact->id)
+            ->lockForUpdate()
+            ->first();
+
+        if (! $lockedContact instanceof Contact) {
+            return false;
+        }
+
+        return match ($fieldKey) {
+            'first_name' => $this->applyV3ContactFirstNameCapture(
+                $lockedContact,
+                $value,
+                Contact::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT,
+                new FirstNameResolutionWriteContext(
+                    dialogId: $message->dialog_id,
+                    channelId: $message->channel_id,
+                    scenarioId: $this->scenario->id,
+                    messageId: $message->id,
+                ),
+            ),
+            'last_name', 'country', 'city' => $this->applyV3ContactStringCapture($lockedContact, $fieldKey, $value),
+            'gender' => $this->applyV3ContactEnumCapture($lockedContact, $fieldKey, $value, Contact::genderOptions()),
+            'gender_source' => $this->applyV3ContactEnumCapture($lockedContact, $fieldKey, $value, Contact::genderSourceOptions()),
+            'age_range' => $this->applyV3ContactEnumCapture($lockedContact, $fieldKey, $value, Contact::ageRangeOptions()),
+            'age_years' => $this->applyV3ContactAgeYearsCapture($lockedContact, $value),
+            'first_name_source' => $this->applyV3ContactEnumCapture($lockedContact, $fieldKey, $value, $this->firstNameSourceOptionsForV3()),
+            'first_name_resolution_method' => $this->applyV3ContactEnumCapture($lockedContact, $fieldKey, $value, Contact::firstNameResolutionMethodOptions()),
+            default => false,
+        };
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function firstNameSourceOptionsForV3(): array
+    {
+        return collect(Contact::allowedFirstNameSources())
+            ->mapWithKeys(fn (string $source): array => [
+                $source => Contact::formatFirstNameSourceBadgeLabel($source) ?? $source,
+            ])
+            ->all();
     }
 
     /**
@@ -2484,66 +2675,88 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 : null,
         ]);
 
-        $edge = $this->v3AiAnalysisEdge($analysis, $outputId);
+        $edges = $this->v3AiAnalysisEdges($analysis, $outputId);
 
-        if ($edge === null) {
+        if ($edges === []) {
             return null;
         }
 
-        $targetBlockId = filled($edge['target_block_id'] ?? null) ? (string) $edge['target_block_id'] : null;
+        foreach ($edges as $edge) {
+            $targetBlockId = filled($edge['target_block_id'] ?? null) ? (string) $edge['target_block_id'] : null;
 
-        if ($targetBlockId === null) {
-            return null;
-        }
-
-        if (
-            ! $this->v3EdgeAllowsContactPhone($message, $edge)
-            || ! $this->v3EdgeAllowsDialogPhone($message, $edge)
-            || ! $this->v3EdgeAllowsFieldCondition($message, $edge)
-            || ! $this->v3EdgeAllowsExpression($message, $edge)
-        ) {
-            return null;
-        }
-
-        if ($allowDelayedOutputs && $delaySeconds > 0) {
-            $delayedStatePayload = $this->scheduleV3DelayedAiAnalysis(
-                $message,
-                $run,
-                $blockId,
-                $outputId,
-                $delaySeconds,
-                $statePayload,
-            );
-
-            if ($delayedStatePayload !== null) {
-                return $this->activeProgress(
-                    $blockId,
-                    $this->markV3Waiting($delayedStatePayload, $blockId, $block, $message->channel),
-                );
+            if ($targetBlockId === null) {
+                continue;
             }
+
+            if (
+                ! $this->v3EdgeAllowsContactPhone($message, $edge)
+                || ! $this->v3EdgeAllowsDialogPhone($message, $edge)
+                || ! $this->v3EdgeAllowsFieldCondition($message, $edge)
+                || ! $this->v3EdgeAllowsExpression($message, $edge)
+            ) {
+                continue;
+            }
+
+            if ($allowDelayedOutputs && $delaySeconds > 0) {
+                $delayedStatePayload = $this->scheduleV3DelayedAiAnalysis(
+                    $message,
+                    $run,
+                    $blockId,
+                    $outputId,
+                    $delaySeconds,
+                    $statePayload,
+                );
+
+                if ($delayedStatePayload !== null) {
+                    return $this->activeProgress(
+                        $blockId,
+                        $this->markV3Waiting($delayedStatePayload, $blockId, $block, $message->channel),
+                    );
+                }
+            }
+
+            $dialog = $message->dialog_id !== null
+                ? Dialog::query()->find($message->dialog_id)
+                : null;
+
+            if (
+                $dialog instanceof Dialog
+                && ! $this->applyV3TransitionSideEffectsToDialog($dialog, $message, $edge, null)
+            ) {
+                continue;
+            }
+
+            $statePayload = $this->clearV3AiAnalysisPending($statePayload, $blockId);
+
+            return $this->advanceV3FromBlock(
+                $message,
+                $runtime,
+                $targetBlockId,
+                $statePayload,
+                $remainingTransitions - 1,
+                $run,
+            );
         }
 
-        $dialog = $message->dialog_id !== null
-            ? Dialog::query()->find($message->dialog_id)
-            : null;
+        return null;
+    }
 
-        if (
-            $dialog instanceof Dialog
-            && ! $this->applyV3TransitionSideEffectsToDialog($dialog, $message, $edge, null)
-        ) {
-            return null;
-        }
+    /**
+     * @param  array<string, mixed>  $analysis
+     * @return list<array<string, mixed>>
+     */
+    private function v3AiAnalysisEdges(array $analysis, string $outputId): array
+    {
+        $outputs = is_array($analysis['outputs'] ?? null) ? $analysis['outputs'] : [];
 
-        $statePayload = $this->clearV3AiAnalysisPending($statePayload, $blockId);
-
-        return $this->advanceV3FromBlock(
-            $message,
-            $runtime,
-            $targetBlockId,
-            $statePayload,
-            $remainingTransitions - 1,
-            $run,
-        );
+        return collect($outputs)
+            ->filter(fn (mixed $output): bool => is_array($output)
+                && ($output['id'] ?? null) === $outputId
+                && is_array($output['edge'] ?? null))
+            ->map(fn (array $output): array => $output['edge'])
+            ->sort(fn (array $left, array $right): int => $this->compareV3TransitionEdges($left, $right))
+            ->values()
+            ->all();
     }
 
     /**
@@ -2936,34 +3149,45 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             ->values()
             ->all();
 
-        $edge = collect([...$blockEdges, ...$runtimeEdges])
-            ->first(fn (mixed $edge): bool => is_array($edge)
+        $edges = collect([...$blockEdges, ...$runtimeEdges])
+            ->filter(fn (mixed $edge): bool => is_array($edge)
                 && ($edge['from_output_id'] ?? null) === $outputId
-                && filled($edge['target_block_id'] ?? null));
+                && filled($edge['target_block_id'] ?? null))
+            ->sort(fn (array $left, array $right): int => $this->compareV3TransitionEdges($left, $right))
+            ->values();
 
-        if (! is_array($edge)) {
-            return null;
+        foreach ($edges as $edge) {
+            if (
+                ! $this->v3EdgeAllowsContactPhone($message, $edge)
+                || ! $this->v3EdgeAllowsDialogPhone($message, $edge)
+                || ! $this->v3EdgeAllowsFieldCondition($message, $edge)
+                || ! $this->v3EdgeAllowsExpression($message, $edge)
+            ) {
+                continue;
+            }
+
+            $dialog = $message->dialog_id !== null
+                ? Dialog::query()->find($message->dialog_id)
+                : null;
+
+            if (
+                $dialog instanceof Dialog
+                && ! $this->applyV3TransitionSideEffectsToDialog($dialog, $message, $edge, null)
+            ) {
+                continue;
+            }
+
+            return $this->advanceV3FromBlock(
+                $message,
+                $runtime,
+                (string) $edge['target_block_id'],
+                $statePayload,
+                $remainingTransitions - 1,
+                $run,
+            );
         }
 
-        if (
-            ! $this->v3EdgeAllowsContactPhone($message, $edge)
-            || ! $this->v3EdgeAllowsDialogPhone($message, $edge)
-            || ! $this->v3EdgeAllowsFieldCondition($message, $edge)
-            || ! $this->v3EdgeAllowsExpression($message, $edge)
-        ) {
-            return null;
-        }
-
-        $targetBlockId = (string) $edge['target_block_id'];
-
-        return $this->advanceV3FromBlock(
-            $message,
-            $runtime,
-            $targetBlockId,
-            $statePayload,
-            $remainingTransitions - 1,
-            $run,
-        );
+        return null;
     }
 
     /**
@@ -3978,27 +4202,6 @@ TEXT;
         return $lines !== []
             ? implode("\n", $lines)
             : trim((string) $message->text);
-    }
-
-    /**
-     * @param  array<string, mixed>  $analysis
-     * @return array<string, mixed>|null
-     */
-    private function v3AiAnalysisEdge(array $analysis, string $outputId): ?array
-    {
-        $outputs = is_array($analysis['outputs'] ?? null) ? $analysis['outputs'] : [];
-
-        foreach ($outputs as $output) {
-            if (! is_array($output) || ($output['id'] ?? null) !== $outputId) {
-                continue;
-            }
-
-            $edge = is_array($output['edge'] ?? null) ? $output['edge'] : null;
-
-            return $edge;
-        }
-
-        return null;
     }
 
     /**

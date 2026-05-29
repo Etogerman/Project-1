@@ -1384,6 +1384,138 @@ class ScenarioBuilderV3StateTest extends TestCase
             ]);
     }
 
+    public function test_put_state_accepts_edge_transition_actions(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_transition_actions',
+            'name' => 'V3 Transition Actions',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_source',
+                'type' => 'state',
+                'title' => 'Источник',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Выберите пол'),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_target',
+                'type' => 'state',
+                'title' => 'Цель',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Принято'),
+            ],
+        ];
+        $conditionPayload = $this->edgePayload(null, 'Мужской');
+        $conditionPayload['transition_actions'] = [
+            [
+                'type' => 'write_field',
+                'target_scope' => 'contact',
+                'target_field' => 'gender',
+                'value_source' => 'static',
+                'value' => 'male',
+            ],
+            [
+                'type' => 'write_field',
+                'target_scope' => 'contact',
+                'target_field' => 'gender_source',
+                'value_source' => 'static',
+                'value' => 'client',
+            ],
+            [
+                'type' => 'write_field',
+                'target_scope' => 'dialog',
+                'target_field' => 'questionnaire_step',
+                'value_source' => 'static',
+                'value' => 'gender_done',
+            ],
+        ];
+
+        $response = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, [[
+                'id' => null,
+                'client_key' => 'tmp_edge',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_source', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_target'],
+                'condition_payload' => $conditionPayload,
+            ]]))
+            ->assertOk();
+
+        $this->assertSame('gender', $response->json('builder.edges.0.condition_payload.transition_actions.0.target_field'));
+        $this->assertSame('client', $response->json('builder.edges.0.condition_payload.transition_actions.1.value'));
+        $this->assertSame('questionnaire_step', $response->json('builder.edges.0.condition_payload.transition_actions.2.target_field'));
+    }
+
+    public function test_put_state_rejects_invalid_edge_transition_actions(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_transition_actions_invalid',
+            'name' => 'V3 Transition Actions Invalid',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_source',
+                'type' => 'state',
+                'title' => 'Источник',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Выберите пол'),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_target',
+                'type' => 'state',
+                'title' => 'Цель',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Принято'),
+            ],
+        ];
+        $conditionPayload = $this->edgePayload(null, 'Мужской');
+        $conditionPayload['transition_actions'] = array_fill(0, 6, [
+            'type' => 'write_field',
+            'target_scope' => 'contact',
+            'target_field' => 'gender',
+            'value_source' => 'static',
+            'value' => 'male',
+        ]);
+
+        $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, [[
+                'id' => null,
+                'client_key' => 'tmp_edge',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_source', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_target'],
+                'condition_payload' => $conditionPayload,
+            ]]))
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['builder.edges.0.condition_payload.transition_actions']);
+
+        $conditionPayload['transition_actions'] = [[
+            'type' => 'write_field',
+            'target_scope' => 'contact',
+            'target_field' => 'phone',
+            'value_source' => 'static',
+            'value' => '+79990000000',
+        ]];
+
+        $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, [[
+                'id' => null,
+                'client_key' => 'tmp_edge',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_source', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_target'],
+                'condition_payload' => $conditionPayload,
+            ]]))
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['builder.edges.0.condition_payload.transition_actions.0.target_field']);
+    }
+
     public function test_put_state_normalizes_automatic_edge_delay_settings(): void
     {
         $admin = $this->adminUser();

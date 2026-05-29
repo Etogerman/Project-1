@@ -59,6 +59,8 @@ class Contact extends Model
 
     public const GENDER_SOURCE_OPERATOR = 'operator';
 
+    public const GENDER_SOURCE_SCENARIO = 'scenario';
+
     public const GENDER_SOURCE_DICTIONARY = 'dictionary';
 
     public const GENDER_SOURCE_AI = 'ai';
@@ -230,6 +232,7 @@ class Contact extends Model
         return [
             self::GENDER_SOURCE_CLIENT => 'Клиент указал',
             self::GENDER_SOURCE_OPERATOR => 'Оператор',
+            self::GENDER_SOURCE_SCENARIO => 'Сценарий',
             self::GENDER_SOURCE_DICTIONARY => 'Справочник',
             self::GENDER_SOURCE_AI => 'ИИ',
         ];
