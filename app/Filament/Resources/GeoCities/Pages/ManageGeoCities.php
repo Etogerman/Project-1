@@ -30,10 +30,12 @@ class ManageGeoCities extends ManageRecords
     {
         return [
             ...$this->geoAddressNavigationActions('cities'),
+            $this->exportGeoLocationsAction(),
             $this->importGeoLocationsAction(),
             CreateAction::make()
                 ->label('Добавить город')
                 ->modalWidth(Width::ThreeExtraLarge)
+                ->extraModalWindowAttributes(['class' => 'ac-geo-form-modal'])
                 ->modalFooterActionsAlignment(Alignment::End)
                 ->using(fn (array $data): GeoCity => GeoCityResource::createCity($data))
                 ->createAnother(false),

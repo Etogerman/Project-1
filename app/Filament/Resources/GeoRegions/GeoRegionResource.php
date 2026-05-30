@@ -137,12 +137,14 @@ class GeoRegionResource extends Resource
                     ->iconButton()
                     ->tooltip('Изменить регион')
                     ->modalWidth(Width::ThreeExtraLarge)
+                    ->extraModalWindowAttributes(['class' => 'ac-geo-form-modal'])
                     ->modalFooterActionsAlignment(Alignment::End)
                     ->using(fn (array $data, GeoRegion $record): GeoRegion => static::updateRegion($record, $data)),
                 DeleteAction::make()
                     ->icon(Heroicon::OutlinedTrash)
                     ->iconButton()
                     ->color('danger')
+                    ->extraModalWindowAttributes(['class' => 'ac-geo-form-modal'])
                     ->tooltip('Удалить регион')
                     ->visible(fn (GeoRegion $record): bool => ! $record->cities()->exists())
                     ->before(function (GeoRegion $record): void {

@@ -159,12 +159,14 @@ class GeoAliasResource extends Resource
                     ->iconButton()
                     ->tooltip('Изменить вариант')
                     ->modalWidth(Width::ThreeExtraLarge)
+                    ->extraModalWindowAttributes(['class' => 'ac-geo-form-modal'])
                     ->modalFooterActionsAlignment(Alignment::End)
                     ->using(fn (array $data, GeoAlias $record): GeoAlias => static::updateAlias($record, $data)),
                 DeleteAction::make()
                     ->icon(Heroicon::OutlinedTrash)
                     ->iconButton()
                     ->color('danger')
+                    ->extraModalWindowAttributes(['class' => 'ac-geo-form-modal'])
                     ->tooltip('Удалить вариант'),
             ])
             ->toolbarActions([]);

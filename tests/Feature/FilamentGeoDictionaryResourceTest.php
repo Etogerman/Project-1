@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Filament\Resources\DataDictionaryEntries\DataDictionaryEntryResource;
+use App\Filament\Resources\GeoAliases\GeoAliasResource;
 use App\Filament\Resources\GeoCountries\GeoCountryResource;
 use App\Filament\Resources\GeoCountries\Pages\ManageGeoCountries;
 use App\Filament\Resources\GeoRegions\GeoRegionResource;
@@ -52,7 +53,15 @@ class FilamentGeoDictionaryResourceTest extends TestCase
             ->assertSee('Страны')
             ->assertSee('Регионы')
             ->assertSee('Города')
-            ->assertSee('Варианты');
+            ->assertSee('Варианты')
+            ->assertSee('Экспорт CSV')
+            ->assertSee('Импорт CSV');
+
+        $this->actingAs($admin)
+            ->get(GeoAliasResource::getUrl())
+            ->assertOk()
+            ->assertSee('Экспорт CSV')
+            ->assertSee('Импорт CSV');
 
         Livewire::actingAs($admin)
             ->test(ManageGeoCountries::class)

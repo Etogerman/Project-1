@@ -30,10 +30,12 @@ class ManageGeoRegions extends ManageRecords
     {
         return [
             ...$this->geoAddressNavigationActions('regions'),
+            $this->exportGeoLocationsAction(),
             $this->importGeoLocationsAction(),
             CreateAction::make()
                 ->label('Добавить регион')
                 ->modalWidth(Width::ThreeExtraLarge)
+                ->extraModalWindowAttributes(['class' => 'ac-geo-form-modal'])
                 ->modalFooterActionsAlignment(Alignment::End)
                 ->using(fn (array $data): GeoRegion => GeoRegionResource::createRegion($data))
                 ->createAnother(false),

@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\Geo\Concerns;
 
+use App\Services\Geo\GeoCsvExportService;
 use App\Services\Geo\GeoCsvImportService;
 use App\Services\Geo\GeoImportReport;
 use Filament\Actions\Action;
@@ -14,12 +15,31 @@ use Illuminate\Support\Facades\Storage;
 
 trait HasGeoCsvImportActions
 {
+    protected function exportGeoLocationsAction(): Action
+    {
+        return Action::make('exportGeoLocations')
+            ->label('Экспорт CSV')
+            ->icon(Heroicon::OutlinedArrowDownTray)
+            ->action(function () {
+                $csv = app(GeoCsvExportService::class)->exportLocations();
+
+                return response()->streamDownload(
+                    function () use ($csv): void {
+                        echo $csv;
+                    },
+                    'geo_locations-'.now()->format('Ymd-His').'.csv',
+                    ['Content-Type' => 'text/csv; charset=UTF-8'],
+                );
+            });
+    }
+
     protected function importGeoLocationsAction(): Action
     {
         return Action::make('importGeoLocations')
-            ->label('Импорт locations CSV')
+            ->label('Импорт CSV')
             ->icon(Heroicon::OutlinedArrowUpTray)
             ->modalWidth(Width::Large)
+            ->extraModalWindowAttributes(['class' => 'ac-geo-form-modal'])
             ->form([
                 FileUpload::make('file')
                     ->label('geo_locations.csv')
@@ -36,12 +56,31 @@ trait HasGeoCsvImportActions
             });
     }
 
+    protected function exportGeoAliasesAction(): Action
+    {
+        return Action::make('exportGeoAliases')
+            ->label('Экспорт CSV')
+            ->icon(Heroicon::OutlinedArrowDownTray)
+            ->action(function () {
+                $csv = app(GeoCsvExportService::class)->exportAliases();
+
+                return response()->streamDownload(
+                    function () use ($csv): void {
+                        echo $csv;
+                    },
+                    'geo_aliases-'.now()->format('Ymd-His').'.csv',
+                    ['Content-Type' => 'text/csv; charset=UTF-8'],
+                );
+            });
+    }
+
     protected function importGeoAliasesAction(): Action
     {
         return Action::make('importGeoAliases')
-            ->label('Импорт aliases CSV')
+            ->label('Импорт CSV')
             ->icon(Heroicon::OutlinedArrowUpTray)
             ->modalWidth(Width::Large)
+            ->extraModalWindowAttributes(['class' => 'ac-geo-form-modal'])
             ->form([
                 FileUpload::make('file')
                     ->label('geo_aliases.csv')

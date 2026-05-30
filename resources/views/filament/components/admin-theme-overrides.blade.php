@@ -550,6 +550,68 @@
         flex-wrap: nowrap;
     }
 
+    :is(
+        .fi-resource-geo-countries,
+        .fi-resource-geo-regions,
+        .fi-resource-geo-cities,
+        .fi-resource-geo-aliases
+    ) .fi-page-header-main-ctn {
+        gap: 0.75rem;
+    }
+
+    :is(
+        .fi-resource-geo-countries,
+        .fi-resource-geo-regions,
+        .fi-resource-geo-cities,
+        .fi-resource-geo-aliases
+    ) .fi-header {
+        align-items: center;
+        gap: 0.75rem;
+        padding: 0;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        box-shadow: none;
+    }
+
+    :is(
+        .fi-resource-geo-countries,
+        .fi-resource-geo-regions,
+        .fi-resource-geo-cities,
+        .fi-resource-geo-aliases
+    ) .fi-header-heading {
+        font-size: 1.5rem;
+        line-height: 1.1;
+        letter-spacing: 0;
+    }
+
+    :is(
+        .fi-resource-geo-countries,
+        .fi-resource-geo-regions,
+        .fi-resource-geo-cities,
+        .fi-resource-geo-aliases
+    ) .fi-header-actions-ctn {
+        align-items: center;
+        gap: 0.45rem;
+        margin-left: auto;
+    }
+
+    :is(
+        .fi-resource-geo-countries,
+        .fi-resource-geo-regions,
+        .fi-resource-geo-cities,
+        .fi-resource-geo-aliases
+    ) .fi-header-actions-ctn .fi-btn {
+        min-height: 2rem;
+        height: 2rem;
+        padding-block: 0;
+        padding-inline: 0.7rem;
+        border-radius: var(--ac-radius-2);
+        font-size: var(--ac-fs-13);
+        font-weight: var(--ac-fw-semi);
+        box-shadow: none !important;
+    }
+
     .ac-sr-only {
         position: absolute;
         width: 1px;
@@ -912,7 +974,6 @@
     }
 
     .fi-global-search-field .fi-input-wrp,
-    .fi-ta-search-field .fi-input-wrp,
     .fi-pagination-records-per-page-select .fi-input-wrp {
         min-height: 2.9rem;
         border-color: color-mix(in srgb, var(--ac-warning) 16%, var(--ac-border-strong));
@@ -927,14 +988,12 @@
     }
 
     .fi-global-search-field .fi-input,
-    .fi-ta-search-field .fi-input,
     .fi-pagination-records-per-page-select .fi-select-input,
     .fi-pagination-records-per-page-select .fi-select-input-btn {
         min-height: 2.9rem;
     }
 
     .fi-global-search-field .fi-input-wrp-prefix,
-    .fi-ta-search-field .fi-input-wrp-prefix,
     .fi-pagination-records-per-page-select .fi-input-wrp-prefix,
     .fi-global-search-field .fi-input-wrp-suffix,
     .fi-pagination-records-per-page-select .fi-input-wrp-suffix {
@@ -944,34 +1003,60 @@
     }
 
     .fi-global-search-field .fi-input::placeholder,
-    .fi-ta-search-field .fi-input::placeholder,
     .fi-pagination-records-per-page-select .fi-input-wrp-label {
         color: var(--ac-text-soft);
     }
 
     .fi-ta-search-field .fi-input-wrp {
         display: flex;
-        align-items: stretch;
+        align-items: center;
+        min-height: 1.9rem;
+        height: 1.9rem;
+        border-color: var(--ac-border-input);
+        border-radius: var(--ac-radius-2);
+        background: var(--ac-surface);
+        box-shadow: none;
     }
 
     .fi-ta-search-field .fi-input-wrp-content-ctn {
-        order: 1;
+        order: 2;
         min-width: 0;
     }
 
     .fi-ta-search-field .fi-input-wrp-prefix {
-        order: 2;
-        border-inline-start: 1px solid color-mix(in srgb, var(--ac-warning) 18%, var(--ac-border));
+        order: 1;
+        min-width: 1.9rem;
+        color: var(--ac-text-3);
+        border-inline-start: none;
         border-inline-end: none;
+        background: transparent;
+    }
+
+    .fi-ta-search-field .fi-input-wrp-suffix {
+        order: 3;
+        min-width: 1.9rem;
+        border-inline-start: none;
+        background: transparent;
+    }
+
+    .fi-ta-search-field .fi-input {
+        min-height: 1.9rem;
+        height: 1.9rem;
+        font-size: var(--ac-fs-13);
+        font-weight: var(--ac-fw-medium);
+    }
+
+    .fi-ta-search-field .fi-input::placeholder {
+        color: var(--ac-text-3);
     }
 
     .fi-ta-header-toolbar .fi-ta-search-field {
-        min-width: min(100%, 17rem);
+        min-width: min(100%, 20rem);
     }
 
     .fi-ta-header-toolbar .fi-btn,
     .fi-ta-header-toolbar .fi-icon-btn {
-        min-height: 2.9rem;
+        min-height: 1.9rem;
     }
 
     .fi-input-wrp:hover {
@@ -1080,6 +1165,71 @@
 
     .ac-table-toolbar-trigger {
         min-height: 2.9rem;
+    }
+
+    :is(
+        .fi-resource-geo-countries,
+        .fi-resource-geo-regions,
+        .fi-resource-geo-cities,
+        .fi-resource-geo-aliases
+    ) .fi-ta-ctn {
+        border-radius: var(--ac-radius-3);
+    }
+
+    :is(
+        .fi-resource-geo-countries,
+        .fi-resource-geo-regions,
+        .fi-resource-geo-cities,
+        .fi-resource-geo-aliases
+    ) .fi-ta-header-ctn {
+        padding: 0.75rem 0.9rem 0;
+    }
+
+    :is(
+        .fi-resource-geo-countries,
+        .fi-resource-geo-regions,
+        .fi-resource-geo-cities,
+        .fi-resource-geo-aliases
+    ) .fi-ta-header-toolbar {
+        margin-top: 0;
+        padding: 0.6rem 0;
+    }
+
+    :is(
+        .fi-resource-geo-countries,
+        .fi-resource-geo-regions,
+        .fi-resource-geo-cities,
+        .fi-resource-geo-aliases
+    ) .fi-ta-header-toolbar > :last-child > .fi-ta-search-field {
+        flex: 0 0 20rem;
+        min-width: 20rem;
+    }
+
+    :is(
+        .fi-resource-geo-countries,
+        .fi-resource-geo-regions,
+        .fi-resource-geo-cities,
+        .fi-resource-geo-aliases
+    ) .fi-ta-header-toolbar .fi-btn,
+    :is(
+        .fi-resource-geo-countries,
+        .fi-resource-geo-regions,
+        .fi-resource-geo-cities,
+        .fi-resource-geo-aliases
+    ) .fi-ta-header-toolbar .fi-icon-btn {
+        min-height: 1.9rem;
+        border-radius: var(--ac-radius-2);
+        box-shadow: none;
+    }
+
+    :is(
+        .fi-resource-geo-countries,
+        .fi-resource-geo-regions,
+        .fi-resource-geo-cities,
+        .fi-resource-geo-aliases
+    ) .ac-table-toolbar-trigger {
+        min-height: 1.9rem;
+        border-radius: var(--ac-radius-2);
     }
 
     .fi-ta-filter-indicators {
@@ -1241,6 +1391,149 @@
             inset 0 1px 0 rgba(255, 255, 255, 0.88),
             0 0 0 1px color-mix(in srgb, var(--ac-primary) 38%, transparent),
             0 0 0 4px color-mix(in srgb, var(--ac-primary-soft) 76%, transparent);
+    }
+
+    .ac-geo-form-modal {
+        border: 1px solid var(--ac-border);
+        border-radius: var(--ac-radius-4);
+        background: var(--ac-surface);
+        box-shadow: var(--ac-shadow-lg);
+    }
+
+    .ac-geo-form-modal .fi-modal-header {
+        padding: 1rem 1.1rem 0.75rem;
+        border-bottom: 1px solid var(--ac-border);
+    }
+
+    .ac-geo-form-modal .fi-modal-heading {
+        font-size: var(--ac-fs-15);
+        font-weight: var(--ac-fw-semi);
+        line-height: 1.25;
+        letter-spacing: 0;
+    }
+
+    .ac-geo-form-modal .fi-modal-content {
+        display: grid;
+        gap: 0.8rem;
+        padding: 0.9rem 1.1rem;
+    }
+
+    .ac-geo-form-modal .fi-modal-footer {
+        padding: 0.75rem 1.1rem 1rem;
+        border-top: 1px solid var(--ac-border);
+        background: var(--ac-surface);
+    }
+
+    .ac-geo-form-modal .fi-modal-footer-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.5rem;
+        width: 100%;
+    }
+
+    .ac-geo-form-modal .fi-modal-footer .fi-btn {
+        min-height: 1.9rem;
+        border-radius: var(--ac-radius-2);
+        padding-inline: 0.8rem;
+        font-size: var(--ac-fs-13);
+        font-weight: var(--ac-fw-semi);
+        box-shadow: none;
+    }
+
+    .ac-geo-form-modal .fi-section {
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        box-shadow: none;
+    }
+
+    .ac-geo-form-modal .fi-section-header {
+        padding: 0 0 0.6rem;
+        border-bottom: 1px solid var(--ac-border);
+    }
+
+    .ac-geo-form-modal .fi-section-heading,
+    .ac-geo-form-modal .fi-section-header-heading {
+        font-size: var(--ac-fs-14);
+        font-weight: var(--ac-fw-semi);
+        letter-spacing: 0;
+    }
+
+    .ac-geo-form-modal .fi-section-content-ctn,
+    .ac-geo-form-modal .fi-section-content {
+        border: 0;
+        background: transparent;
+        box-shadow: none;
+    }
+
+    .ac-geo-form-modal .fi-section-content {
+        display: grid;
+        gap: 0.8rem;
+        padding-top: 0.8rem;
+    }
+
+    .ac-geo-form-modal .fi-fo-field {
+        gap: 0.35rem;
+    }
+
+    .ac-geo-form-modal .fi-fo-field-label {
+        color: var(--ac-text);
+        font-size: var(--ac-fs-13);
+        font-weight: var(--ac-fw-semi);
+    }
+
+    .ac-geo-form-modal .fi-fo-field-wrp-helper-text,
+    .ac-geo-form-modal .fi-fo-field-wrp-hint {
+        color: var(--ac-text-3);
+        font-size: var(--ac-fs-12);
+        line-height: 1.35;
+    }
+
+    .ac-geo-form-modal .fi-input-wrp {
+        min-height: 2rem;
+        border-color: var(--ac-border-input);
+        border-radius: var(--ac-radius-2);
+        background: var(--ac-surface);
+        box-shadow: none;
+        transition: border-color 140ms ease, box-shadow 140ms ease;
+    }
+
+    .ac-geo-form-modal .fi-input,
+    .ac-geo-form-modal .fi-select-input,
+    .ac-geo-form-modal .fi-select-input-btn {
+        min-height: 2rem;
+        font-size: var(--ac-fs-13);
+        font-weight: var(--ac-fw-medium);
+    }
+
+    .ac-geo-form-modal .fi-input-wrp:hover {
+        border-color: color-mix(in srgb, var(--ac-border-strong) 72%, var(--ac-primary));
+        box-shadow: none;
+    }
+
+    .ac-geo-form-modal .fi-input-wrp:focus-within {
+        border-color: var(--ac-primary);
+        background: var(--ac-surface);
+        box-shadow: 0 0 0 3px var(--ac-accent-ring);
+    }
+
+    .ac-geo-form-modal .fi-input-wrp:has(textarea.fi-input) {
+        background: var(--ac-surface);
+        box-shadow: none;
+    }
+
+    .ac-geo-form-modal textarea.fi-input {
+        min-height: 4.5rem;
+        line-height: 1.45;
+    }
+
+    .ac-geo-form-modal .fi-fo-toggle {
+        align-items: center;
+        gap: 0.55rem;
+    }
+
+    .ac-geo-form-modal .fi-toggle {
+        box-shadow: none;
     }
 
     textarea.fi-input {

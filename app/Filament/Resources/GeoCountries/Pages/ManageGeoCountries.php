@@ -30,10 +30,12 @@ class ManageGeoCountries extends ManageRecords
     {
         return [
             ...$this->geoAddressNavigationActions('countries'),
+            $this->exportGeoLocationsAction(),
             $this->importGeoLocationsAction(),
             CreateAction::make()
                 ->label('Добавить страну')
                 ->modalWidth(Width::ThreeExtraLarge)
+                ->extraModalWindowAttributes(['class' => 'ac-geo-form-modal'])
                 ->modalFooterActionsAlignment(Alignment::End)
                 ->using(fn (array $data): GeoCountry => GeoCountryResource::createCountry($data))
                 ->createAnother(false),

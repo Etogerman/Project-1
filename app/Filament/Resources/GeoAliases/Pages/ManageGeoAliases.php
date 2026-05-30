@@ -30,10 +30,12 @@ class ManageGeoAliases extends ManageRecords
     {
         return [
             ...$this->geoAddressNavigationActions('aliases'),
+            $this->exportGeoAliasesAction(),
             $this->importGeoAliasesAction(),
             CreateAction::make()
                 ->label('Добавить вариант')
                 ->modalWidth(Width::ThreeExtraLarge)
+                ->extraModalWindowAttributes(['class' => 'ac-geo-form-modal'])
                 ->modalFooterActionsAlignment(Alignment::End)
                 ->using(fn (array $data): GeoAlias => GeoAliasResource::createAlias($data))
                 ->createAnother(false),

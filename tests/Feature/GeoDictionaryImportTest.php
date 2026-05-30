@@ -2,9 +2,11 @@
 
 namespace Tests\Feature;
 
+use App\Models\GeoAlias;
 use App\Models\GeoCity;
 use App\Models\GeoCountry;
 use App\Models\GeoRegion;
+use App\Services\Geo\GeoCsvExportService;
 use App\Services\Geo\GeoCsvImportService;
 use App\Services\Geo\ResolveGeoCityAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -71,6 +73,18 @@ class GeoDictionaryImportTest extends TestCase
         $this->assertDatabaseCount('geo_countries', 0);
     }
 
+    public function test_locations_export_uses_importable_csv_shape(): void
+    {
+        $this->createMoscow();
+
+        $csv = app(GeoCsvExportService::class)->exportLocations();
+
+        $this->assertStringStartsWith("\xEF\xBB\xBFtype;country_iso2;country_iso3;country_name_ru;country_name_en;region_code;region_name_ru;region_type;city_name_ru;city_name_en;population;lat;lon;timezone;active", $csv);
+        $this->assertStringContainsString('country;RU;RUS;Россия;', $csv);
+        $this->assertStringContainsString('region;RU;;;;RU-MOW;Москва;', $csv);
+        $this->assertStringContainsString('city;RU;;;;RU-MOW;Москва;', $csv);
+    }
+
     public function test_alias_import_creates_alias_and_resolver_uses_it(): void
     {
         $city = $this->createMoscow();
@@ -111,6 +125,28 @@ class GeoDictionaryImportTest extends TestCase
         $this->assertSame(1, $report->exitCode());
         $this->assertSame(['alias_conflict', 'alias_conflict'], array_column($report->errors, 'code'));
         $this->assertDatabaseCount('geo_aliases', 0);
+    }
+
+    public function test_aliases_export_uses_importable_csv_shape(): void
+    {
+        $city = $this->createMoscow();
+
+        GeoAlias::query()->create([
+            'alias' => 'мск',
+            'normalized_alias' => 'мск',
+            'city_id' => $city->id,
+            'language' => 'ru',
+            'alias_type' => GeoAlias::TYPE_SHORT,
+            'confidence' => 95,
+            'auto_apply' => true,
+            'active' => true,
+            'comment' => 'сокращение',
+        ]);
+
+        $csv = app(GeoCsvExportService::class)->exportAliases();
+
+        $this->assertStringStartsWith("\xEF\xBB\xBFalias;city_name_ru;region_name_ru;country_iso2;language;alias_type;confidence;auto_apply;active;comment", $csv);
+        $this->assertStringContainsString('мск;Москва;Москва;RU;ru;short;95;да;да;сокращение', $csv);
     }
 
     public function test_geo_import_commands_use_shared_service(): void

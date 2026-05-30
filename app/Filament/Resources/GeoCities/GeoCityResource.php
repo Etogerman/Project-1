@@ -160,12 +160,14 @@ class GeoCityResource extends Resource
                     ->iconButton()
                     ->tooltip('Изменить город')
                     ->modalWidth(Width::ThreeExtraLarge)
+                    ->extraModalWindowAttributes(['class' => 'ac-geo-form-modal'])
                     ->modalFooterActionsAlignment(Alignment::End)
                     ->using(fn (array $data, GeoCity $record): GeoCity => static::updateCity($record, $data)),
                 DeleteAction::make()
                     ->icon(Heroicon::OutlinedTrash)
                     ->iconButton()
                     ->color('danger')
+                    ->extraModalWindowAttributes(['class' => 'ac-geo-form-modal'])
                     ->tooltip('Удалить город')
                     ->visible(fn (GeoCity $record): bool => ! $record->aliases()->exists())
                     ->before(function (GeoCity $record): void {
