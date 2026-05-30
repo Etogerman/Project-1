@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Filament\Resources\DataDictionaryEntries\DataDictionaryEntryResource;
 use App\Filament\Resources\GeoCountries\GeoCountryResource;
 use App\Filament\Resources\GeoCountries\Pages\ManageGeoCountries;
 use App\Filament\Resources\GeoRegions\GeoRegionResource;
@@ -64,6 +65,19 @@ class FilamentGeoDictionaryResourceTest extends TestCase
             ->get(GeoCountryResource::getUrl());
 
         $this->assertContains($employeeResponse->getStatusCode(), [302, 403]);
+    }
+
+    public function test_admin_can_open_names_dictionary_after_geo_navigation_changes(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $this->actingAs($admin)
+            ->get(DataDictionaryEntryResource::getUrl())
+            ->assertOk()
+            ->assertSee('Имена');
     }
 
     public function test_country_identity_fields_are_not_changed_by_update_flow(): void
