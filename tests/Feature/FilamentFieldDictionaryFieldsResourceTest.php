@@ -62,6 +62,11 @@ class FilamentFieldDictionaryFieldsResourceTest extends TestCase
             ->where('field_key', 'stage')
             ->firstOrFail();
 
+        $dialogCurrentBlock = FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_DIALOG)
+            ->where('field_key', 'current_block_id')
+            ->firstOrFail();
+
         $this->assertTrue($gender->is_system);
         $this->assertSame(FieldDictionaryField::TYPE_SELECT, $gender->type);
         $this->assertSame('gender_source', $gender->source_field_key);
@@ -74,6 +79,9 @@ class FilamentFieldDictionaryFieldsResourceTest extends TestCase
         $this->assertContains('30_39', collect($ageRange->options)->pluck('value')->all());
         $this->assertContains('scenario', collect($genderSource->options)->pluck('value')->all());
         $this->assertContains(Dialog::STAGE_TRANSFERRED_TO_MPP, collect($dialogStage->options)->pluck('value')->all());
+        $this->assertTrue($dialogCurrentBlock->is_system);
+        $this->assertSame(FieldDictionaryField::TYPE_TEXT, $dialogCurrentBlock->type);
+        $this->assertFalse($dialogCurrentBlock->is_multiple);
     }
 
     public function test_field_dictionary_label_helpers_return_dictionary_value_or_caller_fallback(): void

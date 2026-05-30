@@ -514,6 +514,10 @@
         margin-bottom: 0.5rem;
     }
 
+    .fi-header .fi-breadcrumbs {
+        display: none;
+    }
+
     .fi-breadcrumbs-item-label {
         font-size: 0.78rem;
         font-weight: 600;
@@ -649,6 +653,10 @@
     .ac-dialog-top-crumbs__link.is-current {
         color: #18181a;
         font-weight: 600;
+    }
+
+    body [data-role="dialog-top-breadcrumbs"].ac-dialog-top-crumbs {
+        display: none;
     }
 
     .ac-env-indicator--topbar {
@@ -3137,11 +3145,80 @@
         overflow-wrap: anywhere;
     }
 
+    .ac-dialog-side-list .ac-meta__link {
+        color: var(--ac-accent);
+        font-weight: 650;
+        text-decoration: none;
+    }
+
+    .ac-dialog-side-list .ac-meta__link:hover {
+        text-decoration: underline;
+    }
+
+    .ac-dialog-side-list .ac-meta[data-field-key="current_block_id"] .ac-meta__value,
+    .ac-dialog-side-list .ac-meta[data-field-key="last_message_at"] .ac-meta__value,
+    .ac-dialog-side-list .ac-meta[data-field-key="last_inbound_message_at"] .ac-meta__value,
+    .ac-dialog-side-list .ac-meta[data-field-key="last_outbound_message_at"] .ac-meta__value {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .ac-dialog-side-list .ac-meta[data-field-key="current_block_id"] .ac-meta__value--muted,
+    .ac-dialog-side-list .ac-meta[data-field-key="last_message_at"] .ac-meta__value--muted,
+    .ac-dialog-side-list .ac-meta[data-field-key="last_inbound_message_at"] .ac-meta__value--muted,
+    .ac-dialog-side-list .ac-meta[data-field-key="last_outbound_message_at"] .ac-meta__value--muted {
+        grid-column: 2;
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
     .ac-dialog-side-list .ac-select {
         justify-self: end;
         max-width: 100%;
         min-height: 2.5rem;
         padding: 0.55rem 0.75rem;
+    }
+
+    .ac-dialog-status-toggle {
+        justify-self: end;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        max-width: 100%;
+        min-width: 0;
+        overflow: hidden;
+        border: 1px solid var(--ac-border);
+        border-radius: 999px;
+        background: var(--ac-accent-soft);
+        padding: 0.42rem 0.72rem;
+        color: var(--ac-accent-active);
+        font-size: 0.78rem;
+        font-weight: 700;
+        line-height: 1.15;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        cursor: pointer;
+        transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease;
+        box-shadow: var(--ac-shadow-sm);
+    }
+
+    .ac-dialog-status-toggle:hover:not(:disabled) {
+        background: var(--ac-surface-strong);
+        color: var(--ac-text);
+    }
+
+    .ac-dialog-status-toggle:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+    }
+
+    .ac-dialog-status-toggle span {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
 
     .ac-surface {
@@ -8156,8 +8233,11 @@
     .fi-resource-dialogs .fi-ta-table td {
         height: var(--ac-dialogs-row-h);
         border-color: var(--ac-border);
-        padding: 0.45rem 0.7rem;
         vertical-align: middle;
+    }
+
+    .fi-resource-dialogs .fi-ta-table th {
+        padding: 0.45rem 0.7rem;
     }
 
     .fi-resource-dialogs .fi-ta-header-cell-contact-label,
@@ -8253,6 +8333,7 @@
         color: var(--ac-text);
         font-size: 0.82rem;
         line-height: 1.3;
+        padding: 0 !important;
     }
 
     .fi-resource-dialogs .fi-ta-table .fi-ta-text,
@@ -8263,7 +8344,11 @@
     }
 
     .fi-resource-dialogs .fi-ta-table .fi-ta-col {
-        min-height: 0;
+        box-sizing: border-box;
+        min-height: 3.875rem;
+        width: 100%;
+        padding: 0.45rem 0.7rem;
+        align-items: center;
     }
 
     .fi-resource-dialogs .fi-ta-table .fi-ta-text {
@@ -8327,6 +8412,312 @@
         font-size: 0.8rem;
     }
 
+    .fi-resource-dialogs .fi-ta-col-manager-dropdown {
+        display: none !important;
+    }
+
+    .fi-resource-dialogs .fi-ta-header-toolbar {
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .fi-resource-dialogs .ac-dialogs-table-tools {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        flex: 0 0 auto;
+    }
+
+    .fi-resource-dialogs .ac-dialogs-table-scroll {
+        position: relative;
+        scrollbar-gutter: stable;
+        overscroll-behavior-x: contain;
+        box-shadow: inset -2px 0 0 var(--ac-border-strong);
+    }
+
+    .fi-resource-dialogs .ac-dialogs-table-scroll.has-more-right {
+        box-shadow:
+            inset -2px 0 0 var(--ac-border-strong),
+            inset -22px 0 20px -24px rgba(15, 23, 42, 0.45);
+    }
+
+    .fi-resource-dialogs .ac-dialogs-table-scroll.has-more-left {
+        box-shadow:
+            inset 22px 0 20px -24px rgba(15, 23, 42, 0.36),
+            inset -2px 0 0 var(--ac-border-strong);
+    }
+
+    .fi-resource-dialogs .ac-dialogs-table-scroll.has-more-left.has-more-right {
+        box-shadow:
+            inset 22px 0 20px -24px rgba(15, 23, 42, 0.36),
+            inset -2px 0 0 var(--ac-border-strong),
+            inset -22px 0 20px -24px rgba(15, 23, 42, 0.45);
+    }
+
+    .fi-resource-dialogs .ac-dialogs-table-scroll .fi-ta-table {
+        max-width: none;
+        width: auto;
+    }
+
+    .fi-resource-dialogs .fi-ta-table th[data-ac-dialogs-last-visible="1"],
+    .fi-resource-dialogs .fi-ta-table td[data-ac-dialogs-last-visible="1"] {
+        border-inline-end: 2px solid var(--ac-border-strong) !important;
+    }
+
+    .fi-resource-dialogs .fi-ta-header-cell {
+        position: relative;
+        overflow: visible;
+    }
+
+    .fi-resource-dialogs .fi-ta-header-cell-sort-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        min-width: 0;
+        position: relative;
+        z-index: 3;
+        color: inherit;
+        text-decoration: none;
+        cursor: pointer;
+    }
+
+    .fi-resource-dialogs .ac-dialogs-sort-link:hover {
+        color: var(--ac-primary);
+    }
+
+    .fi-resource-dialogs .ac-dialogs-resize-handle {
+        position: absolute;
+        z-index: 4;
+        top: 0;
+        right: -0.18rem;
+        bottom: 0;
+        width: 0.45rem;
+        border: 0;
+        border-radius: 999px;
+        background: transparent;
+        cursor: col-resize;
+    }
+
+    .fi-resource-dialogs .ac-dialogs-resize-handle::after {
+        content: "";
+        position: absolute;
+        top: 0.34rem;
+        right: 0.18rem;
+        bottom: 0.34rem;
+        width: 2px;
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--ac-border-strong) 74%, transparent);
+        transition: background 120ms ease, width 120ms ease;
+    }
+
+    .fi-resource-dialogs .fi-ta-header-cell:hover .ac-dialogs-resize-handle::after,
+    .fi-resource-dialogs .ac-dialogs-resize-handle:hover::after,
+    .ac-dialogs-table-is-resizing .ac-dialogs-resize-handle::after {
+        width: 3px;
+        background: var(--ac-primary);
+    }
+
+    .ac-dialogs-table-is-resizing,
+    .ac-dialogs-table-is-resizing * {
+        cursor: col-resize !important;
+        user-select: none !important;
+    }
+
+    .fi-resource-dialogs .ac-dialogs-scroll-buttons {
+        display: inline-flex;
+        align-items: center;
+        overflow: hidden;
+        border: 1px solid var(--ac-border);
+        border-radius: 8px;
+        background: var(--ac-surface);
+    }
+
+    .fi-resource-dialogs .ac-dialogs-scroll-buttons button,
+    .fi-resource-dialogs .ac-dialogs-columns-button {
+        min-height: 2.15rem;
+        border: 0;
+        background: transparent;
+        color: var(--ac-text);
+        font-size: 0.82rem;
+        font-weight: 700;
+        line-height: 1;
+        cursor: pointer;
+    }
+
+    .fi-resource-dialogs .ac-dialogs-scroll-buttons button {
+        width: 2rem;
+        border-inline-end: 1px solid var(--ac-border);
+    }
+
+    .fi-resource-dialogs .ac-dialogs-scroll-buttons button:last-child {
+        border-inline-end: 0;
+    }
+
+    .fi-resource-dialogs .ac-dialogs-scroll-buttons button:hover:not(:disabled),
+    .fi-resource-dialogs .ac-dialogs-columns-button:hover {
+        background: var(--ac-primary-soft);
+        color: var(--ac-primary);
+    }
+
+    .fi-resource-dialogs .ac-dialogs-scroll-buttons button:disabled {
+        cursor: default;
+        opacity: 0.38;
+    }
+
+    .fi-resource-dialogs .ac-dialogs-columns {
+        position: relative;
+    }
+
+    .fi-resource-dialogs .ac-dialogs-columns[open] {
+        z-index: 50;
+    }
+
+    .fi-resource-dialogs .ac-dialogs-columns > summary {
+        list-style: none;
+    }
+
+    .fi-resource-dialogs .ac-dialogs-columns > summary::-webkit-details-marker {
+        display: none;
+    }
+
+    .fi-resource-dialogs .ac-dialogs-columns-button {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.42rem;
+        border: 1px solid var(--ac-border);
+        border-radius: 8px;
+        padding: 0.3rem 0.62rem;
+        background: var(--ac-surface);
+    }
+
+    .fi-resource-dialogs .ac-dialogs-columns-button-count {
+        color: var(--ac-text-muted);
+        font-weight: 600;
+    }
+
+    .fi-resource-dialogs .ac-dialogs-columns-popover {
+        position: absolute;
+        top: calc(100% + 0.45rem);
+        right: 0;
+        width: 17.5rem;
+        max-width: calc(100vw - 2rem);
+        border: 1px solid var(--ac-border);
+        border-radius: 12px;
+        background: var(--ac-surface);
+        box-shadow: 0 22px 46px -32px rgba(15, 23, 42, 0.55);
+        padding: 0.55rem;
+    }
+
+    .fi-resource-dialogs .ac-dialogs-columns-popover-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        padding: 0.12rem 0.22rem 0.45rem;
+    }
+
+    .fi-resource-dialogs .ac-dialogs-columns-title {
+        color: var(--ac-text);
+        font-size: 0.8rem;
+        font-weight: 750;
+    }
+
+    .fi-resource-dialogs .ac-dialogs-columns-message {
+        min-height: 1rem;
+        margin: 0 0 0.3rem;
+        padding-inline: 0.22rem;
+        color: var(--ac-danger);
+        font-size: 0.72rem;
+        font-weight: 650;
+    }
+
+    .fi-resource-dialogs .ac-dialogs-columns-list {
+        display: grid;
+        gap: 0.14rem;
+        max-height: 21rem;
+        overflow-y: auto;
+        padding-right: 0.12rem;
+    }
+
+    .fi-resource-dialogs .ac-dialogs-columns-row {
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+        border-radius: 8px;
+        padding: 0.32rem 0.36rem;
+        color: var(--ac-text);
+        font-size: 0.8rem;
+        line-height: 1.2;
+        cursor: grab;
+    }
+
+    .fi-resource-dialogs .ac-dialogs-columns-row:hover,
+    .fi-resource-dialogs .ac-dialogs-columns-row.is-dragging {
+        background: var(--ac-primary-soft);
+    }
+
+    .fi-resource-dialogs .ac-dialogs-columns-row.is-dragging {
+        opacity: 0.6;
+        outline: 1px dashed var(--ac-primary);
+    }
+
+    .fi-resource-dialogs .ac-dialogs-columns-drag {
+        width: 1rem;
+        color: var(--ac-text-soft);
+        font-size: 0.82rem;
+        letter-spacing: -0.2em;
+        cursor: grab;
+        user-select: none;
+    }
+
+    .fi-resource-dialogs .ac-dialogs-columns-check {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        min-width: 0;
+        flex: 1 1 auto;
+        cursor: pointer;
+    }
+
+    .fi-resource-dialogs .ac-dialogs-columns-check input {
+        width: 0.92rem;
+        height: 0.92rem;
+        accent-color: var(--ac-primary);
+    }
+
+    .fi-resource-dialogs .ac-dialogs-columns-actions {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.38rem;
+        margin-top: 0.5rem;
+        border-top: 1px solid var(--ac-border);
+        padding-top: 0.5rem;
+    }
+
+    .fi-resource-dialogs .ac-dialogs-columns-action {
+        min-height: 1.95rem;
+        border: 0;
+        border-radius: 8px;
+        background: transparent;
+        color: var(--ac-primary);
+        font-size: 0.76rem;
+        font-weight: 750;
+        cursor: pointer;
+    }
+
+    .fi-resource-dialogs .ac-dialogs-columns-action:hover {
+        background: var(--ac-primary-soft);
+    }
+
+    .fi-resource-dialogs .ac-dialogs-columns-apply {
+        background: var(--ac-primary);
+        color: var(--ac-text-inverse);
+    }
+
+    .fi-resource-dialogs .ac-dialogs-columns-apply:hover {
+        background: var(--ac-primary-hover);
+    }
+
     @media (max-width: 1140px) {
         .ac-contact-page__layout,
         .ac-contact-stats,
@@ -8363,6 +8754,10 @@
         }
 
         .ac-dialog-side-list .ac-select {
+            justify-self: stretch;
+        }
+
+        .ac-dialog-status-toggle {
             justify-self: stretch;
         }
 
@@ -8440,3 +8835,855 @@
         box-shadow: 16px 0 36px -30px rgba(2, 6, 23, 0.8);
     }
 </style>
+
+@php
+    $acDialogsTableColumnLayout = \App\Filament\Resources\Dialogs\DialogResource::getDialogsTableColumnLayoutConfig();
+    $acDialogsTableUserId = auth()->id();
+@endphp
+
+<script>
+    (() => {
+        const columnConfig = @json($acDialogsTableColumnLayout);
+        const userId = @json($acDialogsTableUserId);
+        const storageKey = `ab.dialogs.table.columns.v1.user.${userId || 'guest'}`;
+        const tableSelector = '.fi-resource-dialogs .fi-ta-table';
+        const toolbarSelector = '.fi-resource-dialogs .fi-ta-header-toolbar';
+        const scrollSelector = '.fi-resource-dialogs .fi-ta-content-ctn';
+        const configByFilament = new Map(columnConfig.map((column) => [column.filament, column]));
+        let sortFallbackListenerReady = false;
+        let rowNavigationFallbackReady = false;
+
+        const isDialogsIndex = () => {
+            const path = window.location.pathname.replace(/\/+$/, '');
+
+            return !!document.querySelector('.fi-resource-dialogs') && path === '/admin/dialogs';
+        };
+
+        const readSettings = () => {
+            try {
+                const parsed = JSON.parse(window.localStorage.getItem(storageKey) || '{}');
+
+                return parsed && typeof parsed === 'object' ? parsed : {};
+            } catch (error) {
+                return {};
+            }
+        };
+
+        const writeSettings = (settings) => {
+            window.localStorage.setItem(storageKey, JSON.stringify(settings));
+        };
+
+        const resetSettings = () => {
+            window.localStorage.removeItem(storageKey);
+        };
+
+        const resolveSortColumn = (button) => {
+            const action = button.dataset.acDialogsWireClick || button.getAttribute('wire:click') || '';
+            const match = action.match(/sortTable\('([^']+)'\)/);
+
+            return button.dataset.acDialogsSortColumn || match?.[1] || null;
+        };
+
+        const resolveNextSortDirection = (column) => {
+            const currentSort = new URL(window.location.href).searchParams.get('sort') || '';
+            const [currentColumn, currentDirection] = currentSort.split(':');
+
+            if (currentColumn !== column) {
+                return 'asc';
+            }
+
+            return currentDirection === 'asc' ? 'desc' : 'asc';
+        };
+
+        const resolveSortUrl = (column) => {
+            const url = new URL(window.location.href);
+            url.searchParams.set('sort', `${column}:${resolveNextSortDirection(column)}`);
+            url.searchParams.delete('page');
+
+            return url.toString();
+        };
+
+        const navigateToSort = (column) => {
+            window.location.href = resolveSortUrl(column);
+        };
+
+        const getColumnSuffixFromHeader = (header) => {
+            const className = Array.from(header.classList)
+                .find((name) => name.startsWith('fi-ta-header-cell-') && name !== 'fi-ta-header-cell');
+
+            return className ? className.replace('fi-ta-header-cell-', '') : null;
+        };
+
+        const textLabel = (node, fallback) => {
+            const text = (node?.textContent || '').replace(/\s+/g, ' ').trim();
+
+            return text || fallback;
+        };
+
+        const normalizeColumns = (table) => {
+            const headers = Array.from(table.querySelectorAll('thead tr:first-child > th'));
+
+            return headers
+                .map((header, index) => {
+                    const suffix = getColumnSuffixFromHeader(header);
+
+                    if (!suffix) {
+                        return null;
+                    }
+
+                    const configured = configByFilament.get(suffix);
+                    const fallbackId = suffix.replaceAll('-', '_');
+                    const defaultWidth = configured?.defaultWidth || 140;
+                    const minWidth = configured?.minWidth || 90;
+
+                    return {
+                        id: configured?.id || fallbackId,
+                        suffix,
+                        label: configured?.label || textLabel(header, fallbackId),
+                        defaultWidth,
+                        minWidth,
+                        defaultVisible: configured?.defaultVisible ?? false,
+                        defaultOrder: configured?.defaultOrder ?? (1000 + index),
+                        header,
+                    };
+                })
+                .filter(Boolean);
+        };
+
+        const getCells = (table, column) => {
+            return Array.from(table.querySelectorAll(`.fi-ta-cell-${column.suffix}`));
+        };
+
+        const getColumnElements = (table, column) => {
+            return [column.header, ...getCells(table, column)].filter(Boolean);
+        };
+
+        const defaultStateFor = (columns) => {
+            return {
+                order: columns
+                    .slice()
+                    .sort((a, b) => a.defaultOrder - b.defaultOrder)
+                    .map((column) => column.id),
+                visible: Object.fromEntries(columns.map((column) => [column.id, column.defaultVisible])),
+                widths: Object.fromEntries(columns.map((column) => [column.id, column.defaultWidth])),
+            };
+        };
+
+        const normalizeState = (columns, settings = {}) => {
+            const defaults = defaultStateFor(columns);
+            const known = new Set(columns.map((column) => column.id));
+            const order = Array.isArray(settings.order)
+                ? settings.order.filter((id) => known.has(id))
+                : [];
+
+            defaults.order.forEach((id) => {
+                if (!order.includes(id)) {
+                    order.push(id);
+                }
+            });
+
+            const visible = { ...defaults.visible };
+            Object.entries(settings.visible || {}).forEach(([id, value]) => {
+                if (known.has(id)) {
+                    visible[id] = Boolean(value);
+                }
+            });
+
+            if (!Object.values(visible).some(Boolean) && order.length > 0) {
+                visible[order[0]] = true;
+            }
+
+            const widths = { ...defaults.widths };
+            Object.entries(settings.widths || {}).forEach(([id, value]) => {
+                const column = columns.find((item) => item.id === id);
+                const width = Number(value);
+
+                if (column && Number.isFinite(width)) {
+                    widths[id] = Math.max(column.minWidth, Math.round(width));
+                }
+            });
+
+            return { order, visible, widths };
+        };
+
+        const settingsFromState = (state) => ({
+            order: state.order,
+            visible: state.visible,
+            widths: state.widths,
+        });
+
+        const ensureColgroup = (table) => {
+            let colgroup = table.querySelector(':scope > colgroup');
+
+            if (!colgroup) {
+                colgroup = document.createElement('colgroup');
+                table.insertBefore(colgroup, table.firstChild);
+            }
+
+            return colgroup;
+        };
+
+        const buildColgroup = (table, columns, state) => {
+            const colgroup = ensureColgroup(table);
+            colgroup.innerHTML = '';
+
+            state.order.forEach((id) => {
+                const column = columns.find((item) => item.id === id);
+
+                if (!column) {
+                    return;
+                }
+
+                const col = document.createElement('col');
+                col.dataset.acDialogsCol = column.id;
+                col.style.width = `${state.visible[column.id] ? state.widths[column.id] : 0}px`;
+                colgroup.appendChild(col);
+            });
+        };
+
+        const reorderDom = (table, columns, state) => {
+            const headRow = table.querySelector('thead tr:first-child');
+            const rows = Array.from(table.querySelectorAll('tbody tr'));
+
+            state.order.forEach((id) => {
+                const column = columns.find((item) => item.id === id);
+
+                if (!column) {
+                    return;
+                }
+
+                if (headRow && column.header) {
+                    headRow.appendChild(column.header);
+                }
+
+                rows.forEach((row) => {
+                    const cell = row.querySelector(`.fi-ta-cell-${column.suffix}`);
+
+                    if (cell) {
+                        row.appendChild(cell);
+                    }
+                });
+            });
+        };
+
+        const setLastVisibleBoundary = (table, columns, state) => {
+            columns.forEach((column) => {
+                getColumnElements(table, column).forEach((node) => {
+                    node.dataset.acDialogsLastVisible = '0';
+                });
+            });
+
+            const lastVisibleId = state.order.filter((id) => state.visible[id]).at(-1);
+            const lastVisible = columns.find((column) => column.id === lastVisibleId);
+
+            if (!lastVisible) {
+                return;
+            }
+
+            getColumnElements(table, lastVisible).forEach((node) => {
+                node.dataset.acDialogsLastVisible = '1';
+            });
+        };
+
+        const applyColumnLayout = (table, columns, state) => {
+            reorderDom(table, columns, state);
+            buildColgroup(table, columns, state);
+
+            let visibleWidth = 0;
+
+            columns.forEach((column) => {
+                const visible = Boolean(state.visible[column.id]);
+
+                if (visible) {
+                    visibleWidth += Number(state.widths[column.id] || column.defaultWidth);
+                }
+
+                getColumnElements(table, column).forEach((node) => {
+                    node.hidden = !visible;
+                    node.style.display = visible ? '' : 'none';
+                    node.dataset.acDialogsColumnId = column.id;
+                });
+            });
+
+            const scroll = table.closest(scrollSelector);
+            const minWidth = scroll?.clientWidth || 0;
+            table.style.width = `${Math.max(visibleWidth, minWidth)}px`;
+            table.style.minWidth = `${Math.max(visibleWidth, minWidth)}px`;
+            setLastVisibleBoundary(table, columns, state);
+            updateScrollState(scroll);
+        };
+
+        const updateScrollState = (scroll) => {
+            if (!scroll) {
+                return;
+            }
+
+            const maxScroll = Math.max(0, scroll.scrollWidth - scroll.clientWidth - 1);
+            const hasLeft = scroll.scrollLeft > 0;
+            const hasRight = scroll.scrollLeft < maxScroll;
+
+            scroll.classList.toggle('has-more-left', hasLeft);
+            scroll.classList.toggle('has-more-right', hasRight);
+
+            const tools = scroll.closest('.fi-ta-ctn')?.querySelector('[data-ac-dialogs-tools]');
+            const left = tools?.querySelector('[data-ac-dialogs-scroll-left]');
+            const right = tools?.querySelector('[data-ac-dialogs-scroll-right]');
+
+            if (left) {
+                left.disabled = !hasLeft;
+            }
+
+            if (right) {
+                right.disabled = !hasRight;
+            }
+        };
+
+        const ensureResizeHandles = (table, columns, state) => {
+            columns.forEach((column) => {
+                if (!column.header || column.header.querySelector('[data-ac-dialogs-resize]')) {
+                    return;
+                }
+
+                const handle = document.createElement('button');
+                handle.type = 'button';
+                handle.className = 'ac-dialogs-resize-handle';
+                handle.dataset.acDialogsResize = column.id;
+                handle.setAttribute('aria-label', `Изменить ширину: ${column.label}`);
+                column.header.appendChild(handle);
+
+                handle.addEventListener('dblclick', (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    state.widths[column.id] = column.defaultWidth;
+                    writeSettings(settingsFromState(state));
+                    applyColumnLayout(table, columns, state);
+                });
+
+                handle.addEventListener('pointerdown', (event) => {
+                    if (event.button !== 0) {
+                        return;
+                    }
+
+                    event.preventDefault();
+                    event.stopPropagation();
+
+                    const startX = event.clientX;
+                    const startWidth = Number(state.widths[column.id] || column.defaultWidth);
+                    let nextWidth = startWidth;
+
+                    document.body.classList.add('ac-dialogs-table-is-resizing');
+                    handle.setPointerCapture?.(event.pointerId);
+
+                    const onMove = (moveEvent) => {
+                        nextWidth = Math.max(column.minWidth, Math.round(startWidth + moveEvent.clientX - startX));
+                        state.widths[column.id] = nextWidth;
+                        applyColumnLayout(table, columns, state);
+                    };
+
+                    const onUp = () => {
+                        document.removeEventListener('pointermove', onMove);
+                        document.removeEventListener('pointerup', onUp);
+                        document.body.classList.remove('ac-dialogs-table-is-resizing');
+                        state.widths[column.id] = nextWidth;
+                        writeSettings(settingsFromState(state));
+                        applyColumnLayout(table, columns, state);
+                    };
+
+                    document.addEventListener('pointermove', onMove);
+            document.addEventListener('pointerup', onUp, { once: true });
+                });
+            });
+        };
+
+        const ensureSortFallbacks = (table) => {
+            table.querySelectorAll('.fi-ta-header-cell-sort-btn').forEach((button) => {
+                const column = resolveSortColumn(button);
+
+                if (!column) {
+                    return;
+                }
+
+                button.dataset.acDialogsWireClick = button.dataset.acDialogsWireClick || button.getAttribute('wire:click') || '';
+                button.dataset.acDialogsSortColumn = column;
+            });
+
+            installSortFallbackListener();
+        };
+
+        const installSortFallbackListener = () => {
+            if (sortFallbackListenerReady) {
+                return;
+            }
+
+            sortFallbackListenerReady = true;
+
+            const sort = (event) => {
+                const button = event.target?.closest?.('.fi-ta-header-cell-sort-btn');
+
+                if (!isDialogsIndex() || !button || !button.closest(tableSelector)) {
+                    return;
+                }
+
+                const column = resolveSortColumn(button);
+
+                if (!column) {
+                    return;
+                }
+
+                event.preventDefault();
+                event.stopPropagation();
+                event.stopImmediatePropagation?.();
+                navigateToSort(column);
+            };
+
+            document.addEventListener('pointerup', sort, true);
+            document.addEventListener('click', sort, true);
+            document.addEventListener('keydown', (event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') {
+                    return;
+                }
+
+                sort(event);
+            }, true);
+        };
+
+        const installRowNavigationFallbackListener = () => {
+            if (rowNavigationFallbackReady) {
+                return;
+            }
+
+            rowNavigationFallbackReady = true;
+
+            const resolveRowNavigationUrl = (target) => {
+                const directLink = target?.closest?.(`${tableSelector} tbody a.fi-ta-col[href]`);
+
+                if (directLink) {
+                    return directLink.href;
+                }
+
+                const row = target?.closest?.(`${tableSelector} tbody tr[data-ac-dialogs-row-url]`);
+
+                if (!row) {
+                    return null;
+                }
+
+                if (target.closest('button, input, select, textarea, summary, [data-ac-dialogs-resize], .ac-dialogs-columns')) {
+                    return null;
+                }
+
+                return row.dataset.acDialogsRowUrl || null;
+            };
+
+            const openRowLink = (event) => {
+                const isPrimaryPointer = event.button === undefined
+                    || event.button === 0
+                    || (event.type === 'pointerup' && event.button === -1);
+
+                if (!isDialogsIndex() || !isPrimaryPointer || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+                    return;
+                }
+
+                const url = resolveRowNavigationUrl(event.target);
+
+                if (!url) {
+                    return;
+                }
+
+                event.preventDefault();
+                event.stopPropagation();
+                event.stopImmediatePropagation?.();
+                window.location.href = url;
+            };
+
+            document.addEventListener('pointerup', openRowLink, true);
+            document.addEventListener('click', openRowLink, true);
+        };
+
+        const bindRowNavigation = (table) => {
+            table.querySelectorAll('tbody tr').forEach((row) => {
+                const link = row.querySelector('a.fi-ta-col[href]');
+
+                if (!link) {
+                    row.removeAttribute('data-ac-dialogs-row-url');
+                    row.removeAttribute('role');
+                    row.removeAttribute('tabindex');
+                    return;
+                }
+
+                row.dataset.acDialogsRowUrl = link.href;
+                row.setAttribute('role', 'link');
+                row.setAttribute('tabindex', '0');
+            });
+        };
+
+        const buildColumnsList = (details, columns, draft) => {
+            const list = details.querySelector('[data-ac-dialogs-columns-list]');
+            const message = details.querySelector('[data-ac-dialogs-columns-message]');
+
+            if (!list) {
+                return;
+            }
+
+            list.innerHTML = '';
+
+            draft.order.forEach((id) => {
+                const column = columns.find((item) => item.id === id);
+
+                if (!column) {
+                    return;
+                }
+
+                const row = document.createElement('div');
+                row.className = 'ac-dialogs-columns-row';
+                row.draggable = true;
+                row.dataset.acDialogsColumnsRow = column.id;
+                row.innerHTML = `
+                    <span class="ac-dialogs-columns-drag" aria-hidden="true">⋮⋮</span>
+                    <label class="ac-dialogs-columns-check">
+                        <input type="checkbox" value="${column.id}">
+                        <span></span>
+                    </label>
+                `;
+
+                const input = row.querySelector('input');
+                const label = row.querySelector('.ac-dialogs-columns-check span');
+                input.checked = Boolean(draft.visible[column.id]);
+                label.textContent = column.label;
+
+                input.addEventListener('change', () => {
+                    const nextVisible = { ...draft.visible, [column.id]: input.checked };
+
+                    if (!Object.values(nextVisible).some(Boolean)) {
+                        input.checked = true;
+                        message.textContent = 'Оставьте хотя бы одну колонку.';
+
+                        return;
+                    }
+
+                    draft.visible = nextVisible;
+                    message.textContent = '';
+                });
+
+                    list.appendChild(row);
+
+                    const dragHandle = row.querySelector('.ac-dialogs-columns-drag');
+                    dragHandle?.addEventListener('pointerdown', (event) => {
+                        if (event.button !== 0) {
+                            return;
+                        }
+
+                        event.preventDefault();
+                        event.stopPropagation();
+                        row.classList.add('is-dragging');
+                        dragHandle.setPointerCapture?.(event.pointerId);
+
+                        const moveRow = (moveEvent) => {
+                            const rows = Array.from(list.querySelectorAll('[data-ac-dialogs-columns-row]'))
+                                .filter((candidate) => candidate !== row);
+                            const target = rows.find((candidate) => {
+                                const rect = candidate.getBoundingClientRect();
+
+                                return moveEvent.clientY >= rect.top && moveEvent.clientY <= rect.bottom;
+                            });
+
+                            if (!target) {
+                                return;
+                            }
+
+                            const rect = target.getBoundingClientRect();
+
+                            if (moveEvent.clientY > rect.top + rect.height / 2) {
+                                target.after(row);
+                            } else {
+                                target.before(row);
+                            }
+                        };
+
+                        const stopMove = () => {
+                            document.removeEventListener('pointermove', moveRow);
+                            document.removeEventListener('pointerup', stopMove);
+                            row.classList.remove('is-dragging');
+                        };
+
+                        document.addEventListener('pointermove', moveRow);
+                        document.addEventListener('pointerup', stopMove, { once: true });
+                    });
+                });
+        };
+
+        const syncToolsCount = (tools, columns, state) => {
+            const count = tools?.querySelector('[data-ac-dialogs-columns-count]');
+
+            if (!count) {
+                return;
+            }
+
+            const visible = columns.filter((column) => state.visible[column.id]).length;
+            count.textContent = `${visible}/${columns.length}`;
+        };
+
+        const ensureTools = (table, columns, state) => {
+            const tableContainer = table.closest('.fi-ta-ctn');
+            const toolbar = document.querySelector(toolbarSelector);
+
+            if (!tableContainer || !toolbar) {
+                return null;
+            }
+
+            let tools = toolbar.querySelector('[data-ac-dialogs-tools]');
+
+            if (tools && tools.__acDialogsTable !== table) {
+                tools.remove();
+                tools = null;
+            }
+
+            if (!tools) {
+                tools = document.createElement('div');
+                tools.className = 'ac-dialogs-table-tools';
+                tools.dataset.acDialogsTools = '1';
+                tools.innerHTML = `
+                    <div class="ac-dialogs-scroll-buttons" aria-label="Прокрутка таблицы">
+                        <button type="button" data-ac-dialogs-scroll-left aria-label="Прокрутить влево">‹</button>
+                        <button type="button" data-ac-dialogs-scroll-right aria-label="Прокрутить вправо">›</button>
+                    </div>
+                    <details class="ac-dialogs-columns">
+                        <summary>
+                            <span class="ac-dialogs-columns-button">
+                                <span>Колонки</span>
+                                <span class="ac-dialogs-columns-button-count" data-ac-dialogs-columns-count></span>
+                            </span>
+                        </summary>
+                        <div class="ac-dialogs-columns-popover">
+                            <div class="ac-dialogs-columns-popover-head">
+                                <div class="ac-dialogs-columns-title">Видимость и порядок</div>
+                                <button type="button" class="ac-dialogs-columns-action" data-ac-dialogs-reset>Сбросить</button>
+                            </div>
+                            <div class="ac-dialogs-columns-message" data-ac-dialogs-columns-message></div>
+                            <div class="ac-dialogs-columns-list" data-ac-dialogs-columns-list></div>
+                            <div class="ac-dialogs-columns-actions">
+                                <button type="button" class="ac-dialogs-columns-action" data-ac-dialogs-cancel>Отмена</button>
+                                <button type="button" class="ac-dialogs-columns-action" data-ac-dialogs-show-all>Показать все</button>
+                                <button type="button" class="ac-dialogs-columns-action ac-dialogs-columns-apply" data-ac-dialogs-apply>Применить</button>
+                            </div>
+                        </div>
+                    </details>
+                `;
+                toolbar.appendChild(tools);
+
+                tools.querySelector('[data-ac-dialogs-scroll-left]')?.addEventListener('click', () => {
+                    table.closest(scrollSelector)?.scrollBy({ left: -420, behavior: 'smooth' });
+                });
+                tools.querySelector('[data-ac-dialogs-scroll-right]')?.addEventListener('click', () => {
+                    table.closest(scrollSelector)?.scrollBy({ left: 420, behavior: 'smooth' });
+                });
+            }
+
+            tools.__acDialogsTable = table;
+            const details = tools.querySelector('.ac-dialogs-columns');
+
+            if (details && details.dataset.acDialogsBound !== '1') {
+                details.dataset.acDialogsBound = '1';
+
+                details.addEventListener('toggle', () => {
+                    if (!details.open) {
+                        return;
+                    }
+
+                    const draft = structuredClone(settingsFromState(state));
+                    details.__acDraft = draft;
+                    buildColumnsList(details, columns, draft);
+                });
+
+                details.querySelector('[data-ac-dialogs-show-all]')?.addEventListener('click', () => {
+                    const draft = details.__acDraft || structuredClone(settingsFromState(state));
+                    draft.visible = Object.fromEntries(columns.map((column) => [column.id, true]));
+                    details.__acDraft = draft;
+                    details.querySelector('[data-ac-dialogs-columns-message]').textContent = '';
+                    buildColumnsList(details, columns, draft);
+                });
+
+                details.querySelector('[data-ac-dialogs-reset]')?.addEventListener('click', () => {
+                    resetSettings();
+                    const defaults = defaultStateFor(columns);
+                    state.order = defaults.order;
+                    state.visible = defaults.visible;
+                    state.widths = defaults.widths;
+                    details.open = false;
+                    applyColumnLayout(table, columns, state);
+                    syncToolsCount(tools, columns, state);
+                });
+
+                details.querySelector('[data-ac-dialogs-cancel]')?.addEventListener('click', () => {
+                    details.open = false;
+                });
+
+                details.querySelector('[data-ac-dialogs-apply]')?.addEventListener('click', () => {
+                    const draft = details.__acDraft || structuredClone(settingsFromState(state));
+                    const order = Array.from(details.querySelectorAll('[data-ac-dialogs-columns-row]'))
+                        .map((row) => row.dataset.acDialogsColumnsRow)
+                        .filter(Boolean);
+
+                    draft.order = order.length ? order : draft.order;
+
+                    if (!Object.values(draft.visible).some(Boolean)) {
+                        details.querySelector('[data-ac-dialogs-columns-message]').textContent = 'Оставьте хотя бы одну колонку.';
+
+                        return;
+                    }
+
+                    state.order = draft.order;
+                    state.visible = draft.visible;
+                    state.widths = { ...state.widths, ...(draft.widths || {}) };
+                    writeSettings(settingsFromState(state));
+                    details.open = false;
+                    applyColumnLayout(table, columns, state);
+                    syncToolsCount(tools, columns, state);
+                });
+
+                const list = details.querySelector('[data-ac-dialogs-columns-list]');
+
+                list?.addEventListener('dragstart', (event) => {
+                    const row = event.target.closest('[data-ac-dialogs-columns-row]');
+
+                    if (!row) {
+                        return;
+                    }
+
+                    row.classList.add('is-dragging');
+                    event.dataTransfer.effectAllowed = 'move';
+                    event.dataTransfer.setData('text/plain', row.dataset.acDialogsColumnsRow || '');
+                });
+
+                list?.addEventListener('dragover', (event) => {
+                    const dragging = list.querySelector('.is-dragging');
+                    const target = event.target.closest('[data-ac-dialogs-columns-row]');
+
+                    if (!dragging || !target || dragging === target) {
+                        return;
+                    }
+
+                    event.preventDefault();
+                    const rect = target.getBoundingClientRect();
+
+                    if (event.clientY > rect.top + rect.height / 2) {
+                        target.after(dragging);
+                    } else {
+                        target.before(dragging);
+                    }
+                });
+
+                list?.addEventListener('drop', (event) => {
+                    event.preventDefault();
+                });
+
+                list?.addEventListener('dragend', () => {
+                    list.querySelectorAll('.is-dragging').forEach((row) => row.classList.remove('is-dragging'));
+                });
+            }
+
+            syncToolsCount(tools, columns, state);
+
+            return tools;
+        };
+
+        const initDialogsTable = () => {
+            if (!isDialogsIndex()) {
+                return;
+            }
+
+            const table = document.querySelector(tableSelector);
+
+            if (!table) {
+                return;
+            }
+
+            bindRowNavigation(table);
+
+            const scroll = table.closest(scrollSelector);
+            scroll?.classList.add('ac-dialogs-table-scroll');
+
+            const columns = normalizeColumns(table);
+
+            if (columns.length === 0) {
+                return;
+            }
+
+            const state = normalizeState(columns, readSettings());
+            const tools = ensureTools(table, columns, state);
+
+            ensureResizeHandles(table, columns, state);
+            ensureSortFallbacks(table);
+            applyColumnLayout(table, columns, state);
+            syncToolsCount(tools, columns, state);
+
+            if (scroll && scroll.dataset.acDialogsScrollBound !== '1') {
+                scroll.dataset.acDialogsScrollBound = '1';
+                scroll.addEventListener('scroll', () => updateScrollState(scroll), { passive: true });
+                scroll.addEventListener('wheel', (event) => {
+                    const horizontalDelta = Math.abs(event.deltaX) >= Math.abs(event.deltaY)
+                        ? event.deltaX
+                        : (event.shiftKey ? event.deltaY : 0);
+
+                    if (horizontalDelta === 0 || scroll.scrollWidth <= scroll.clientWidth) {
+                        return;
+                    }
+
+                    event.preventDefault();
+                    scroll.scrollLeft += horizontalDelta;
+                    updateScrollState(scroll);
+                }, { passive: false });
+            }
+
+            updateScrollState(scroll);
+        };
+
+        installSortFallbackListener();
+        installRowNavigationFallbackListener();
+
+        let initQueued = false;
+
+        const scheduleInit = () => {
+            if (initQueued) {
+                return;
+            }
+
+            initQueued = true;
+            const runOnNextFrame = window.requestAnimationFrame?.bind(window)
+                || ((callback) => window.setTimeout(callback, 0));
+
+            runOnNextFrame(() => {
+                initQueued = false;
+                initDialogsTable();
+            });
+        };
+
+        const installObserver = () => {
+            if (!document.body || document.body.dataset.acDialogsObserverReady === '1') {
+                return;
+            }
+
+            document.body.dataset.acDialogsObserverReady = '1';
+            new MutationObserver(() => scheduleInit()).observe(document.body, {
+                childList: true,
+                subtree: true,
+            });
+        };
+
+        scheduleInit();
+        document.addEventListener('DOMContentLoaded', scheduleInit);
+        document.addEventListener('DOMContentLoaded', installObserver);
+        document.addEventListener('livewire:navigated', scheduleInit);
+        document.addEventListener('livewire:init', () => {
+            if (window.Livewire?.hook) {
+                window.Livewire.hook('morphed', scheduleInit);
+            }
+        });
+
+        if (window.Livewire?.hook) {
+            window.Livewire.hook('morphed', scheduleInit);
+        }
+
+        installObserver();
+        window.addEventListener('resize', scheduleInit);
+    })();
+</script>

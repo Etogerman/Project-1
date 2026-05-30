@@ -355,6 +355,34 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                     return;
                 }
 
+                $pendingOutputId = (string) data_get($statePayload, "v3.ai_analysis_pending.$blockId.output_id", '');
+                $pendingDelaySeconds = max(0, (int) data_get($statePayload, "v3.ai_analysis_pending.$blockId.delay_seconds", 0));
+
+                if (
+                    $pendingOutputId !== ''
+                    && ! $this->v3DelayedAiAnalysisWasAlreadyScheduled($statePayload, $blockId, (int) $message->id, $pendingOutputId)
+                ) {
+                    $pendingScheduledFor = CarbonImmutable::now();
+
+                    try {
+                        $pendingScheduledForRaw = data_get($statePayload, "v3.ai_analysis_pending.$blockId.scheduled_for");
+                        $pendingScheduledFor = is_string($pendingScheduledForRaw) && $pendingScheduledForRaw !== ''
+                            ? CarbonImmutable::parse($pendingScheduledForRaw)
+                            : $pendingScheduledFor;
+                    } catch (Throwable) {
+                        $pendingScheduledFor = CarbonImmutable::now();
+                    }
+
+                    $statePayload = $this->rememberV3DelayedAiAnalysisSchedule(
+                        $statePayload,
+                        $blockId,
+                        (int) $message->id,
+                        $pendingOutputId,
+                        $pendingDelaySeconds,
+                        $pendingScheduledFor,
+                    );
+                }
+
                 $progress = $this->advanceV3FromBlock(
                     $message,
                     $runtime,
@@ -649,6 +677,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             return is_array($block) && (
                 $this->v3TargetForContactShare($block, $channel) !== null
                 || $this->v3BlockAcceptsContactShareWaitReply($block)
+                || $this->v3AutomaticEdges($block) !== []
             );
         }
 
@@ -1288,7 +1317,10 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
         $transition = $this->v3TransitionForMessage($message, is_array($block) ? $block : [], $message->dialog);
 
-        if ($transition !== null) {
+        if (
+            $transition !== null
+            || $this->v3AutomaticEdges(is_array($block) ? $block : []) !== []
+        ) {
             return $this->handleV3TransitionInbound($run, $message, $runtime);
         }
 
@@ -1470,6 +1502,40 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 $transitions = $this->v3TransitionCandidatesForMessage($message, is_array($block) ? $block : [], $dialog);
 
                 if ($transitions === []) {
+                    if ($this->v3AutomaticEdges(is_array($block) ? $block : []) !== []) {
+                        if ($this->v3ShouldRemoveTelegramReplyKeyboardAfterInbound($message, is_array($block) ? $block : [])) {
+                            $statePayload = $this->markV3PendingTelegramKeyboardRemoval($statePayload);
+                        }
+
+                        $automaticProgress = $this->advanceV3AutomaticEdges(
+                            $message,
+                            $runtime,
+                            is_array($block) ? $block : [],
+                            $statePayload,
+                            count(is_array($runtime['blocks'] ?? null) ? $runtime['blocks'] : []) + 1,
+                            $lockedRun,
+                        );
+
+                        if ($automaticProgress !== null) {
+                            $lockedRun->forceFill([
+                                'status' => $automaticProgress['status'],
+                                'current_step' => $automaticProgress['current_step'],
+                                'state_payload' => $automaticProgress['state_payload'],
+                                'exit_outcome' => $automaticProgress['exit_outcome'],
+                                'finished_at' => $automaticProgress['status'] === ScenarioRun::STATUS_ACTIVE ? null : now(),
+                            ])->save();
+
+                            return new ScenarioInboundResult(
+                                consumed: true,
+                                status: $automaticProgress['status'],
+                                currentStep: $automaticProgress['current_step'],
+                                statePayload: $automaticProgress['state_payload'],
+                                exitOutcome: $automaticProgress['exit_outcome'],
+                                persisted: true,
+                            );
+                        }
+                    }
+
                     return new ScenarioInboundResult(
                         consumed: true,
                         status: ScenarioRun::STATUS_ACTIVE,
@@ -3526,8 +3592,30 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             return null;
         }
 
+        if ($this->v3DelayedAiAnalysisWasAlreadyScheduled($statePayload, $blockId, (int) $message->id, $outputId)) {
+            Log::info('scenario.v3_ai_analysis_delayed_duplicate_skipped', [
+                'scenario_code' => $this->code(),
+                'scenario_run_id' => $run->id,
+                'dialog_id' => $message->dialog_id,
+                'message_id' => $message->id,
+                'block_id' => $blockId,
+                'output_id' => $outputId,
+            ]);
+
+            return $statePayload;
+        }
+
         $token = (string) Str::uuid();
         $scheduledFor = CarbonImmutable::now()->addSeconds($delaySeconds);
+
+        $statePayload = $this->rememberV3DelayedAiAnalysisSchedule(
+            $statePayload,
+            $blockId,
+            (int) $message->id,
+            $outputId,
+            $delaySeconds,
+            $scheduledFor,
+        );
 
         data_set($statePayload, "v3.ai_analysis_pending.$blockId", [
             'token' => $token,
@@ -3548,6 +3636,61 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         )
             ->delay($scheduledFor)
             ->afterCommit();
+
+        return $statePayload;
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     */
+    private function v3DelayedAiAnalysisWasAlreadyScheduled(
+        array $statePayload,
+        string $blockId,
+        int $messageId,
+        string $outputId,
+    ): bool {
+        $history = data_get($statePayload, "v3.ai_analysis_delayed_history.$blockId", []);
+
+        if (! is_array($history)) {
+            return false;
+        }
+
+        foreach ($history as $entry) {
+            if (
+                is_array($entry)
+                && (int) ($entry['message_id'] ?? 0) === $messageId
+                && (string) ($entry['output_id'] ?? '') === $outputId
+            ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @return array<string, mixed>
+     */
+    private function rememberV3DelayedAiAnalysisSchedule(
+        array $statePayload,
+        string $blockId,
+        int $messageId,
+        string $outputId,
+        int $delaySeconds,
+        CarbonImmutable $scheduledFor,
+    ): array {
+        $history = data_get($statePayload, "v3.ai_analysis_delayed_history.$blockId", []);
+        $history = is_array($history) ? array_values($history) : [];
+
+        $history[] = [
+            'message_id' => $messageId,
+            'output_id' => $outputId,
+            'delay_seconds' => $delaySeconds,
+            'scheduled_for' => $scheduledFor->toJSON(),
+        ];
+
+        data_set($statePayload, "v3.ai_analysis_delayed_history.$blockId", array_slice($history, -20));
 
         return $statePayload;
     }

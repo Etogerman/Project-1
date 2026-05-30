@@ -13,6 +13,8 @@ use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
 use App\Models\FieldDictionaryField;
 use App\Models\Message;
+use App\Models\ScenarioRun;
+use App\Models\ScenarioVersion;
 use App\Models\User;
 use App\Services\Bots\ContactIdentityAvatarStorage;
 use App\Services\Bots\SendManualDialogReplyAction;
@@ -224,6 +226,16 @@ class ViewDialog extends ViewRecord
         }
     }
 
+    public function setDialogInboxStatus(string $status): void
+    {
+        if ($this->dialogInboxStatusSelection === $status) {
+            return;
+        }
+
+        $this->dialogInboxStatusSelection = $status;
+        $this->updateDialogInboxStatus();
+    }
+
     public function updateDialogStage(): void
     {
         try {
@@ -335,6 +347,7 @@ class ViewDialog extends ViewRecord
             'peerSyncState' => $this->getPeerSyncStateViewData(),
             'contactSummary' => $this->getContactSummaryViewData(),
             'dialogFields' => $this->getDialogFieldsViewData(),
+            'dialogSystemFields' => $this->getDialogSystemFieldsViewData(),
             'dialogFieldLabels' => $this->getDialogFieldLabels(),
             'dialogBreadcrumbs' => $this->getDialogBreadcrumbsViewData(),
             'kanbanBackUrl' => $this->resolveDialogsBackUrl(),
@@ -643,6 +656,227 @@ class ViewDialog extends ViewRecord
     }
 
     /**
+     * @return array{
+     *     rows: list<array{
+     *         key: string,
+     *         label: string,
+     *         value: string,
+     *         detail: ?string,
+     *         url: ?string,
+     *         value_role: ?string,
+     *         tone: ?string
+     *     }>
+     * }
+     */
+    protected function getDialogSystemFieldsViewData(): array
+    {
+        $dialog = $this->getRecord();
+        $dialogHeader = $this->getDialogHeaderViewData();
+        $contactSummary = $this->getContactSummaryViewData();
+        $inboxStatus = $this->getDialogInboxStatusViewData();
+        $dialogStage = $this->getDialogStageViewData();
+        $currentBlock = $this->getCurrentDialogBlockViewData($dialog);
+
+        return [
+            'rows' => [
+                $this->dialogSystemFieldRow('id', 'ID', (string) $dialog->id),
+                $this->dialogSystemFieldRow(
+                    'contact_id',
+                    'Контакт',
+                    $contactSummary['contact_label'],
+                    null,
+                    'dialog-contact-label',
+                    null,
+                    $this->getContactViewUrl(),
+                ),
+                $this->dialogSystemFieldRow('channel_id', 'Канал', $dialogHeader['channel_label'], null, 'dialog-channel-label'),
+                $this->dialogSystemFieldRow('status', 'Статус', $inboxStatus['current_label']),
+                $this->dialogSystemFieldRow('stage', 'Этап', $dialogStage['current_label']),
+                $this->dialogSystemFieldRow(
+                    'current_block_id',
+                    'Текущий блок',
+                    $currentBlock['value'],
+                    $currentBlock['detail'],
+                    'dialog-current-block',
+                    $currentBlock['tone'],
+                ),
+                $this->dialogSystemFieldRow('created_at', 'Создан', $this->formatDialogTimestamp($dialog->created_at)),
+                $this->dialogSystemFieldRow('updated_at', 'Обновлён', $this->formatDialogTimestamp($dialog->updated_at)),
+                $this->dialogSystemFieldRow(
+                    'last_message_at',
+                    'Последнее сообщение',
+                    $this->formatDialogSnapshotLine(
+                        $this->formatDialogTimestamp($dialog->last_message_at),
+                        $this->formatDialogMessagePreview($dialog, 'last_message_id', $dialog->last_message_preview),
+                    ),
+                ),
+                $this->dialogSystemFieldRow(
+                    'last_inbound_message_at',
+                    'Последнее входящее',
+                    $this->formatDialogSnapshotLine(
+                        $this->formatDialogTimestamp($dialog->last_inbound_at),
+                        $this->formatDialogMessagePreview($dialog, 'last_inbound_message_id', $dialog->last_inbound_message_preview),
+                    ),
+                    null,
+                    null,
+                    null,
+                    null,
+                    'Последнее входящее',
+                ),
+                $this->dialogSystemFieldRow(
+                    'last_outbound_message_at',
+                    'Последнее исходящее',
+                    $this->formatDialogSnapshotLine(
+                        $this->formatDialogTimestamp($dialog->last_outbound_at),
+                        $this->formatDialogMessagePreview($dialog, 'last_outbound_message_id', $dialog->last_outbound_message_preview),
+                    ),
+                    null,
+                    null,
+                    null,
+                    null,
+                    'Последнее исходящее',
+                ),
+                $this->dialogSystemFieldRow('phone', 'Телефон', $dialogHeader['phone_label']),
+            ],
+        ];
+    }
+
+    /**
+     * @return array{
+     *     key: string,
+     *     label: string,
+     *     value: string,
+     *     detail: ?string,
+     *     url: ?string,
+     *     value_role: ?string,
+     *     tone: ?string
+     * }
+     */
+    protected function dialogSystemFieldRow(
+        string $fieldKey,
+        string $fallbackLabel,
+        string $value,
+        ?string $detail = null,
+        ?string $valueRole = null,
+        ?string $tone = null,
+        ?string $url = null,
+        ?string $displayLabel = null,
+    ): array {
+        return [
+            'key' => $fieldKey,
+            'label' => filled($displayLabel) ? $displayLabel : $this->dialogFieldLabel($fieldKey, $fallbackLabel),
+            'value' => trim($value) !== '' ? $value : '—',
+            'detail' => filled($detail) ? $detail : null,
+            'url' => filled($url) ? $url : null,
+            'value_role' => $valueRole,
+            'tone' => $tone,
+        ];
+    }
+
+    /**
+     * @return array{value: string, detail: ?string, tone: ?string}
+     */
+    protected function getCurrentDialogBlockViewData(Dialog $dialog): array
+    {
+        $activeRuns = ScenarioRun::query()
+            ->where('dialog_id', $dialog->id)
+            ->where('status', ScenarioRun::STATUS_ACTIVE)
+            ->orderByDesc('id')
+            ->get(['id', 'scenario_code', 'current_step', 'state_payload', 'status']);
+
+        /** @var ScenarioRun|null $run */
+        $run = $activeRuns->first();
+
+        if (! $run instanceof ScenarioRun) {
+            return [
+                'value' => '—',
+                'detail' => null,
+                'tone' => 'muted',
+            ];
+        }
+
+        $statePayload = is_array($run->state_payload) ? $run->state_payload : [];
+        $currentBlockId = trim((string) data_get($statePayload, 'v3.current_block_id', ''));
+
+        if ($currentBlockId === '') {
+            $currentBlockId = filled($run->current_step) ? trim((string) $run->current_step) : '';
+        }
+
+        $detailParts = [
+            'run #'.$run->id,
+            $run->status,
+        ];
+
+        if ($activeRuns->count() > 1) {
+            $detailParts[] = 'найдено несколько активных запусков';
+        }
+
+        if ($currentBlockId === '') {
+            return [
+                'value' => '—',
+                'detail' => null,
+                'tone' => 'muted',
+            ];
+        }
+
+        $publishedVersionId = (int) data_get($statePayload, 'v3.published_version_id', 0);
+
+        if ($publishedVersionId < 1) {
+            return [
+                'value' => $currentBlockId.' · сценарий без V3-схемы · '.implode(' · ', $detailParts),
+                'detail' => null,
+                'tone' => 'muted',
+            ];
+        }
+
+        $detailParts[] = 'v'.$publishedVersionId;
+        $blockTitle = $this->resolvePublishedV3BlockTitle($publishedVersionId, $currentBlockId);
+
+        return [
+            'value' => '#'.$currentBlockId.' · '.($blockTitle ?? 'блок не найден').' · '.implode(' · ', $detailParts),
+            'detail' => null,
+            'tone' => $blockTitle !== null ? null : 'warning',
+        ];
+    }
+
+    protected function resolvePublishedV3BlockTitle(int $publishedVersionId, string $currentBlockId): ?string
+    {
+        $version = ScenarioVersion::query()->find($publishedVersionId, ['id', 'schema_payload']);
+
+        if (! $version instanceof ScenarioVersion) {
+            return null;
+        }
+
+        $schemaPayload = is_array($version->schema_payload) ? $version->schema_payload : [];
+        $blocks = data_get($schemaPayload, 'builder_v3_runtime.blocks', []);
+
+        if (! is_array($blocks)) {
+            return null;
+        }
+
+        $block = $blocks[$currentBlockId] ?? null;
+
+        if (! is_array($block)) {
+            $block = collect($blocks)->first(function (mixed $candidate) use ($currentBlockId): bool {
+                if (! is_array($candidate)) {
+                    return false;
+                }
+
+                return trim((string) ($candidate['id'] ?? '')) === $currentBlockId
+                    || trim((string) ($candidate['card_id'] ?? '')) === $currentBlockId;
+            });
+        }
+
+        if (! is_array($block)) {
+            return null;
+        }
+
+        $title = trim((string) ($block['title'] ?? ''));
+
+        return $title !== '' ? $title : null;
+    }
+
+    /**
      * @return array<string, string>
      */
     protected function getDialogFieldLabels(): array
@@ -723,6 +957,53 @@ class ViewDialog extends ViewRecord
             'type' => $type,
             'is_truncated' => $isTruncated,
         ];
+    }
+
+    protected function formatDialogTimestamp(mixed $value): string
+    {
+        return $value instanceof Carbon
+            ? $value->format('d.m.Y H:i')
+            : '—';
+    }
+
+    protected function formatDialogPreview(mixed $value): ?string
+    {
+        $preview = trim((string) $value);
+
+        if ($preview === '') {
+            return null;
+        }
+
+        return mb_strlen($preview) > 140
+            ? mb_substr($preview, 0, 140).'…'
+            : $preview;
+    }
+
+    protected function formatDialogMessagePreview(Dialog $dialog, string $messageIdColumn, mixed $fallbackPreview): ?string
+    {
+        $messageId = $dialog->getAttribute($messageIdColumn);
+
+        if (filled($messageId)) {
+            $message = Message::query()->find((int) $messageId);
+
+            if ($message instanceof Message) {
+                $feed = app(BuildConversationFeedViewDataAction::class)->handle(new Collection([$message]));
+                $displayText = trim((string) data_get($feed, '0.display_text', ''));
+
+                if ($displayText !== '') {
+                    return $this->formatDialogPreview($displayText);
+                }
+            }
+        }
+
+        return $this->formatDialogPreview($fallbackPreview);
+    }
+
+    protected function formatDialogSnapshotLine(string $timestamp, ?string $preview): string
+    {
+        return filled($preview)
+            ? $timestamp.' · '.$preview
+            : $timestamp;
     }
 
     protected function appendOutboundMessageToConversation(Message $message): void

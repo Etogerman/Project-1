@@ -314,60 +314,67 @@
                     <p class="ac-dialog-summary__section-title">Параметры</p>
                     <div class="ac-dialog-side-list">
                         <div class="ac-meta">
-                            <label for="dialog-inbox-status" class="ac-meta__label">
+                            <p class="ac-meta__label">
                                 {{ $dialogFieldLabel('status', 'Статус') }}
-                            </label>
-                            <select
-                                id="dialog-inbox-status"
-                                data-role="dialog-inbox-status-select"
-                                wire:model="dialogInboxStatusSelection"
-                                wire:change="updateDialogInboxStatus"
-                                @disabled(! $dialogInboxStatus['is_editable'])
-                                class="ac-select"
+                            </p>
+                            @php
+                                $statusOptions = $dialogInboxStatus['options'];
+                                $currentStatusLabel = $statusOptions[$dialogInboxStatusSelection] ?? (array_values($statusOptions)[0] ?? '—');
+                                $nextStatusValue = collect($statusOptions)
+                                    ->keys()
+                                    ->first(fn ($statusValue) => $statusValue !== $dialogInboxStatusSelection);
+                                $nextStatusLabel = $nextStatusValue !== null ? ($statusOptions[$nextStatusValue] ?? null) : null;
+                            @endphp
+                            <button
+                                type="button"
+                                class="ac-dialog-status-toggle"
+                                data-role="dialog-inbox-status-toggle"
+                                wire:click="setDialogInboxStatus(@js($nextStatusValue))"
+                                wire:loading.attr="disabled"
+                                wire:target="setDialogInboxStatus"
+                                aria-label="{{ $dialogFieldLabel('status', 'Статус') }}"
+                                title="{{ $nextStatusLabel ? 'Сменить на: '.$nextStatusLabel : $currentStatusLabel }}"
+                                @disabled(! $dialogInboxStatus['is_editable'] || $nextStatusValue === null)
                             >
-                                @foreach ($dialogInboxStatus['options'] as $statusValue => $statusLabel)
-                                    <option value="{{ $statusValue }}">
-                                        {{ $statusLabel }}
-                                    </option>
-                                @endforeach
-                            </select>
+                                <span data-role="dialog-inbox-status-current">{{ $currentStatusLabel }}</span>
+                            </button>
                         </div>
                     </div>
                 </section>
 
-                <section class="ac-surface ac-dialog-side-card" data-role="dialog-contact-card">
-                    <p class="ac-dialog-summary__section-title">Контакт</p>
+                <section class="ac-surface ac-dialog-side-card" data-role="dialog-system-fields-section">
+                    <p class="ac-dialog-summary__section-title">Системные поля</p>
                     <div class="ac-dialog-side-list">
-                        <div class="ac-meta">
-                            <p class="ac-meta__label">
-                                {{ $dialogFieldLabel('contact_id', 'Контакт') }}
-                            </p>
-                            <p data-role="dialog-contact-label" class="ac-meta__value">
-                                {{ $contactSummary['contact_label'] }}
-                            </p>
-                        </div>
-                        <div class="ac-meta">
-                            <p class="ac-meta__label">
-                                {{ $dialogFieldLabel('phone', 'Телефон') }}
-                            </p>
-                            <p class="ac-meta__value">
-                                {{ $dialogHeader['phone_label'] }}
-                            </p>
-                        </div>
-                    </div>
-                </section>
-
-                <section class="ac-surface ac-dialog-side-card" data-role="dialog-channel-card">
-                    <p class="ac-dialog-summary__section-title">Канал</p>
-                    <div class="ac-dialog-side-list">
-                        <div class="ac-meta">
-                            <p class="ac-meta__label">
-                                {{ $dialogFieldLabel('channel_id', 'Канал') }}
-                            </p>
-                            <p data-role="dialog-channel-label" class="ac-meta__value">
-                                {{ $dialogHeader['channel_label'] }}
-                            </p>
-                        </div>
+                        @foreach ($dialogSystemFields['rows'] as $systemField)
+                            <div
+                                class="ac-meta"
+                                data-role="dialog-system-field-row"
+                                data-field-key="{{ $systemField['key'] }}"
+                                @if (filled($systemField['tone'])) data-tone="{{ $systemField['tone'] }}" @endif
+                            >
+                                <p class="ac-meta__label">
+                                    {{ $systemField['label'] }}
+                                </p>
+                                <p
+                                    @if (filled($systemField['value_role'])) data-role="{{ $systemField['value_role'] }}" @endif
+                                    class="ac-meta__value"
+                                    title="{{ $systemField['value'] }}"
+                                >
+                                    @if (filled($systemField['url']))
+                                        <a class="ac-meta__link" href="{{ $systemField['url'] }}" title="{{ $systemField['value'] }}">
+                                            {{ $systemField['value'] }}
+                                        </a>
+                                    @else
+                                        {{ $systemField['value'] }}
+                                    @endif
+                                </p>
+                                @if (filled($systemField['detail']))
+                                    <p class="ac-meta__value ac-meta__value--muted" title="{{ $systemField['detail'] }}">
+                                        {{ $systemField['detail'] }}
+                                    </p>
+                                @endif
+                            </div>
+                        @endforeach
                     </div>
                 </section>
 

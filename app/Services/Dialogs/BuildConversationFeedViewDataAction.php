@@ -213,6 +213,12 @@ class BuildConversationFeedViewDataAction
             return $systemEventDisplayText;
         }
 
+        $contactShareDisplayText = $this->resolveContactShareDisplayText($message);
+
+        if ($contactShareDisplayText !== null) {
+            return $contactShareDisplayText;
+        }
+
         $mediaOnlyDisplayText = $this->resolveMediaOnlyConversationDisplayText($message, $mediaItems);
 
         if ($mediaOnlyDisplayText !== null) {
@@ -228,6 +234,120 @@ class BuildConversationFeedViewDataAction
             Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION => 'Спасибо, данные сохранили.',
             default => 'Системное сообщение',
         };
+    }
+
+    protected function resolveContactShareDisplayText(Message $message): ?string
+    {
+        if ($message->message_kind !== Message::KIND_INBOUND_CONTACT_SHARE) {
+            return null;
+        }
+
+        $phoneNumber = $this->resolveSharedContactPhoneNumber($message);
+
+        if (! filled($phoneNumber)) {
+            return null;
+        }
+
+        return 'Поделился номером: '.$phoneNumber;
+    }
+
+    protected function resolveSharedContactPhoneNumber(Message $message): ?string
+    {
+        $payload = is_array($message->raw_payload) ? $message->raw_payload : [];
+        $candidateContainers = [];
+
+        foreach ([
+            data_get($payload, 'message.contact'),
+            data_get($payload, 'contact'),
+            data_get($payload, 'body.contact'),
+            data_get($payload, 'body'),
+        ] as $container) {
+            if (is_array($container)) {
+                $candidateContainers[] = $container;
+            }
+        }
+
+        foreach ([
+            data_get($payload, 'attachments'),
+            data_get($payload, 'body.attachments'),
+        ] as $attachments) {
+            if (! is_array($attachments)) {
+                continue;
+            }
+
+            foreach ($attachments as $attachment) {
+                if (! is_array($attachment)) {
+                    continue;
+                }
+
+                foreach ([
+                    $attachment,
+                    data_get($attachment, 'contact'),
+                    data_get($attachment, 'payload'),
+                    data_get($attachment, 'payload.contact'),
+                ] as $container) {
+                    if (is_array($container)) {
+                        $candidateContainers[] = $container;
+                    }
+                }
+            }
+        }
+
+        foreach ($candidateContainers as $container) {
+            $phoneNumber = $this->normalizeSharedContactPhoneNumber(
+                data_get($container, 'phone_number')
+                ?? data_get($container, 'phone')
+                ?? data_get($container, 'number')
+                ?? data_get($container, 'contact.phone_number')
+                ?? data_get($container, 'contact.phone')
+                ?? data_get($container, 'payload.contact.phone_number')
+                ?? data_get($container, 'payload.contact.phone')
+            );
+
+            if (filled($phoneNumber)) {
+                return $phoneNumber;
+            }
+
+            $vcfPhoneNumber = $this->resolveSharedContactPhoneNumberFromVcf($container);
+
+            if (filled($vcfPhoneNumber)) {
+                return $vcfPhoneNumber;
+            }
+        }
+
+        return null;
+    }
+
+    protected function normalizeSharedContactPhoneNumber(mixed $value): ?string
+    {
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $phoneNumber = trim((string) $value);
+
+        return $phoneNumber !== '' ? $phoneNumber : null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $container
+     */
+    protected function resolveSharedContactPhoneNumberFromVcf(array $container): ?string
+    {
+        $vcfInfo = $this->normalizeSharedContactPhoneNumber(
+            data_get($container, 'vcf_info')
+            ?? data_get($container, 'payload.vcf_info')
+        );
+
+        if (! filled($vcfInfo)) {
+            return null;
+        }
+
+        if (! preg_match('/^TEL(?:;[^:\r\n]+)*:([^\r\n]+)/mi', $vcfInfo, $matches)) {
+            return null;
+        }
+
+        return $this->normalizeSharedContactPhoneNumber($matches[1] ?? null);
     }
 
     /**

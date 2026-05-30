@@ -15,6 +15,9 @@ use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
 use App\Models\FieldDictionaryField;
 use App\Models\Message;
+use App\Models\Scenario;
+use App\Models\ScenarioRun;
+use App\Models\ScenarioVersion;
 use App\Models\User;
 use App\Services\Bots\ContactIdentityAvatarStorage;
 use App\Services\Dialogs\BuildDialogMessageSnapshotPayloadAction;
@@ -143,6 +146,152 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertDontSee('transition_counts');
     }
 
+    public function test_dialog_view_renders_system_fields_and_current_v3_block(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages();
+        $dialog->forceFill([
+            'last_message_at' => now()->subMinutes(5),
+            'last_message_preview' => 'Последний текст диалога',
+            'last_inbound_at' => now()->subMinutes(7),
+            'last_inbound_message_preview' => 'Входящий текст клиента',
+            'last_outbound_at' => now()->subMinutes(6),
+            'last_outbound_message_preview' => 'Ответ оператора',
+        ])->save();
+
+        FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_DIALOG)
+            ->where('field_key', 'phone')
+            ->firstOrFail()
+            ->update(['name' => 'Телефон канала']);
+
+        $publishedVersion = $this->createPublishedScenarioVersion([
+            'builder_v3_runtime' => [
+                'blocks' => [
+                    '798' => [
+                        'id' => '798',
+                        'card_id' => '798',
+                        'title' => 'Старт: анкета',
+                    ],
+                ],
+            ],
+        ]);
+
+        ScenarioRun::query()->create([
+            'scenario_code' => $publishedVersion->scenario->code,
+            'dialog_id' => $dialog->id,
+            'status' => ScenarioRun::STATUS_ACTIVE,
+            'current_step' => '798',
+            'state_payload' => [
+                'v3' => [
+                    'schema_version' => 3,
+                    'current_block_id' => '798',
+                    'published_version_id' => $publishedVersion->id,
+                ],
+            ],
+            'started_at' => now(),
+        ]);
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]))
+            ->assertOk()
+            ->assertSee('data-role="dialog-system-fields-section"', false)
+            ->assertSee('data-field-key="current_block_id"', false)
+            ->assertSee('Текущий блок')
+            ->assertDontSee('Текущий блок клиента')
+            ->assertSee('#798 · Старт: анкета')
+            ->assertSee('v'.$publishedVersion->id)
+            ->assertSee('Телефон канала')
+            ->assertSee('Последнее входящее')
+            ->assertSee('Последнее исходящее')
+            ->assertSee('Последний текст диалога')
+            ->assertSee('Входящий текст клиента')
+            ->assertSee('Ответ оператора')
+            ->assertSee('data-role="dialog-contact-label"', false)
+            ->assertSee('data-role="dialog-channel-label"', false)
+            ->assertDontSee('Аватарка');
+    }
+
+    public function test_dialog_view_renders_empty_current_block_without_active_run(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages();
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]))
+            ->assertOk()
+            ->assertSee('data-field-key="current_block_id"', false)
+            ->assertSee('Текущий блок')
+            ->assertDontSee('Текущий блок клиента');
+    }
+
+    public function test_dialog_view_renders_non_v3_current_step_without_block_lookup(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages();
+        $publishedVersion = $this->createPublishedScenarioVersion([
+            'version' => 1,
+            'blocks' => [],
+        ]);
+
+        ScenarioRun::query()->create([
+            'scenario_code' => $publishedVersion->scenario->code,
+            'dialog_id' => $dialog->id,
+            'status' => ScenarioRun::STATUS_ACTIVE,
+            'current_step' => 'awaiting_reaction',
+            'state_payload' => [],
+            'started_at' => now(),
+        ]);
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]))
+            ->assertOk()
+            ->assertSee('awaiting_reaction · сценарий без V3-схемы');
+    }
+
+    public function test_dialog_view_marks_missing_current_v3_block_without_crashing(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages();
+        $publishedVersion = $this->createPublishedScenarioVersion([
+            'builder_v3_runtime' => [
+                'blocks' => [],
+            ],
+        ]);
+
+        ScenarioRun::query()->create([
+            'scenario_code' => $publishedVersion->scenario->code,
+            'dialog_id' => $dialog->id,
+            'status' => ScenarioRun::STATUS_ACTIVE,
+            'current_step' => '999',
+            'state_payload' => [
+                'v3' => [
+                    'schema_version' => 3,
+                    'current_block_id' => '999',
+                    'published_version_id' => $publishedVersion->id,
+                ],
+            ],
+            'started_at' => now(),
+        ]);
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]))
+            ->assertOk()
+            ->assertSee('#999 · блок не найден');
+    }
+
     public function test_dialog_view_escapes_legacy_dialog_field_keys_and_values(): void
     {
         $admin = User::factory()->create([
@@ -177,6 +326,57 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertOk()
             ->assertSee('Диалоги')
             ->assertSee($dialog->contact->display_name);
+    }
+
+    public function test_dialogs_inbox_column_layout_config_matches_custom_manager_contract(): void
+    {
+        $config = collect(DialogResource::getDialogsTableColumnLayoutConfig())->keyBy('id');
+
+        $this->assertSame([
+            'contact',
+            'status',
+            'last_message',
+            'stage',
+            'assignee',
+            'channel',
+            'route',
+            'actor',
+            'activity',
+            'id',
+            'external_user_id',
+            'external_username',
+            'phone',
+            'route_source',
+            'external_chat_id',
+        ], $config->keys()->all());
+
+        $this->assertSame('preview-text', $config['last_message']['filament']);
+        $this->assertSame(260, $config['last_message']['defaultWidth']);
+        $this->assertSame(180, $config['last_message']['minWidth']);
+        $this->assertTrue($config['last_message']['defaultVisible']);
+        $this->assertSame(72, $config['id']['defaultWidth']);
+        $this->assertSame(56, $config['id']['minWidth']);
+        $this->assertFalse($config['external_user_id']['defaultVisible']);
+    }
+
+    public function test_dialogs_inbox_page_exposes_custom_column_manager_bootstrap(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $this->createInboxDialog();
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('index'))
+            ->assertOk()
+            ->assertSee('ab.dialogs.table.columns.v1.user.', false)
+            ->assertSee('"id":"last_message"', false)
+            ->assertSee('"defaultWidth":260', false)
+            ->assertSee("sortTable('contact_label')", false)
+            ->assertSee('rowNavigationFallbackReady', false)
+            ->assertSee('data-ac-dialogs-row-url', false)
+            ->assertSee('data-ac-dialogs-tools', false);
     }
 
     public function test_dialogs_inbox_table_uses_field_dictionary_labels(): void
@@ -366,7 +566,7 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertTableColumnStateSet('external_username', '@dialog_hidden_user', $dialog)
             ->assertTableColumnExists(
                 'phone_label',
-                fn ($column): bool => $column->getLabel() === 'Номер телефона'
+                fn ($column): bool => $column->getLabel() === FieldDictionaryField::labelFor(FieldDictionaryField::ENTITY_DIALOG, 'phone', 'Номер телефона')
                     && $column->isToggleable()
                     && $column->isToggledHiddenByDefault(),
                 $dialog,
@@ -420,6 +620,29 @@ class FilamentDialogsResourceTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ListDialogs::class)
             ->assertTableColumnStateSet('stage', 'Телефон получен', $dialog);
+    }
+
+    public function test_dialogs_inbox_table_can_sort_by_contact_label(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $zetaDialog = $this->createInboxDialog([
+            'contactName' => null,
+            'contactFirstName' => 'Яков',
+        ]);
+        $alphaDialog = $this->createInboxDialog([
+            'contactName' => null,
+            'contactFirstName' => 'Анна',
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->call('sortTable', 'contact_label', 'asc')
+            ->assertCanSeeTableRecords([$alphaDialog, $zetaDialog], inOrder: true)
+            ->call('sortTable', 'contact_label', 'desc')
+            ->assertCanSeeTableRecords([$zetaDialog, $alphaDialog], inOrder: true);
     }
 
     public function test_dialogs_inbox_uses_current_dialog_identity_label_for_each_row(): void
@@ -698,7 +921,7 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertDontSee('[data-role=\\"conversation-thread\\"]', escape: false);
     }
 
-    public function test_dialog_view_renders_editable_status_select_for_pending_inbox_message(): void
+    public function test_dialog_view_renders_one_click_status_toggle_for_pending_inbox_message(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -709,10 +932,15 @@ class FilamentDialogsResourceTest extends TestCase
         $this->actingAs($admin)
             ->get(DialogResource::getUrl('view', ['record' => $dialog]))
             ->assertOk()
-            ->assertSee('Статус диалога')
+            ->assertSee('Статус')
             ->assertSee('Требует ответа')
             ->assertSee('Не требует ответа')
-            ->assertSee('data-role="dialog-inbox-status-select"', escape: false)
+            ->assertSee('data-role="dialog-inbox-status-toggle"', escape: false)
+            ->assertSee('data-role="dialog-inbox-status-current"', escape: false)
+            ->assertSee('wire:click="setDialogInboxStatus', escape: false)
+            ->assertSee('Сменить на: Не требует ответа')
+            ->assertDontSee('data-role="dialog-inbox-status-option"', escape: false)
+            ->assertDontSee('data-role="dialog-inbox-status-select"', escape: false)
             ->assertDontSee('data-role="dialog-inbox-status-help"', escape: false)
             ->assertDontSee('data-role="dialog-inbox-status-help-panel"', escape: false)
             ->assertDontSee('Новое входящее сообщение автоматически вернёт диалог в статус «Требует ответа».')
@@ -2236,6 +2464,50 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertDontSee('data-role="conversation-channel"', false);
     }
 
+    public function test_dialog_view_shows_shared_contact_phone_number_when_available(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(0);
+        $contact = $dialog->contact;
+        $identity = $dialog->currentContactIdentity;
+        $channel = $dialog->channel;
+
+        $message = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity?->id,
+            'channel_id' => $channel?->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_CONTACT_SHARE,
+            'text' => null,
+            'raw_payload' => [
+                'message' => [
+                    'contact' => [
+                        'phone_number' => '+7 999 123 45 67',
+                    ],
+                ],
+            ],
+            'received_at' => now(),
+        ]);
+
+        $dialog->forceFill([
+            'last_message_id' => $message->id,
+            'last_message_at' => $message->received_at,
+            'last_message_preview' => 'Поделился номером телефона',
+            'last_inbound_message_id' => $message->id,
+            'last_inbound_at' => $message->received_at,
+            'last_inbound_message_preview' => 'Поделился номером телефона',
+        ])->save();
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee('Поделился номером: +7 999 123 45 67')
+            ->assertDontSee('Поделился номером телефона');
+    }
+
     public function test_dialog_view_shows_bitrix24_sender_label_for_bitrix24_openlines_message(): void
     {
         $admin = User::factory()->create([
@@ -2559,8 +2831,7 @@ class FilamentDialogsResourceTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
             ->assertSet('dialogInboxStatusSelection', DialogInboxStatusData::CODE_REQUIRES_REPLY)
-            ->set('dialogInboxStatusSelection', DialogInboxStatusData::CODE_NOT_REQUIRED)
-            ->call('updateDialogInboxStatus')
+            ->call('setDialogInboxStatus', DialogInboxStatusData::CODE_NOT_REQUIRED)
             ->assertNotified()
             ->assertSet('dialogInboxStatusSelection', DialogInboxStatusData::CODE_NOT_REQUIRED)
             ->assertSee('Не требует ответа')
@@ -2825,6 +3096,23 @@ class FilamentDialogsResourceTest extends TestCase
         }
 
         return $dialog->fresh(['contact.assignedUser', 'contact.phoneNumbers', 'contact.primaryIdentity', 'channel', 'currentContactIdentity']);
+    }
+
+    protected function createPublishedScenarioVersion(array $schemaPayload): ScenarioVersion
+    {
+        $scenario = Scenario::query()->create([
+            'code' => 'dialog_card_test_'.Str::random(8),
+            'name' => 'Dialog card test',
+            'is_active' => true,
+            'is_archived' => false,
+        ]);
+
+        return ScenarioVersion::query()->create([
+            'scenario_id' => $scenario->id,
+            'version_number' => 1,
+            'status' => ScenarioVersion::STATUS_PUBLISHED,
+            'schema_payload' => $schemaPayload,
+        ])->fresh(['scenario']);
     }
 
     /**

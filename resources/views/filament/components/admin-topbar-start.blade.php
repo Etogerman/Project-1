@@ -1,5 +1,7 @@
 @php
     use App\Models\Contact;
+    use App\Models\Dialog;
+    use App\Services\Contacts\ResolveContactDisplayNameAction;
 
     $sectionLabels = [
         'contacts' => 'Контакты',
@@ -33,6 +35,35 @@
                 $currentLabel = $nameParts !== []
                     ? implode(' ', $nameParts)
                     : (filled($contact->display_name) ? (string) $contact->display_name : 'Контакт #'.$contact->id);
+            }
+        }
+    } elseif ($firstSegment === 'dialogs') {
+        $thirdSegment = request()->segment(3);
+
+        if ($thirdSegment === 'kanban') {
+            $currentLabel = 'Канбан';
+        } elseif (blank($thirdSegment)) {
+            $currentLabel = 'Список';
+        } else {
+            $routeRecord = request()->route('record');
+            $recordId = is_object($routeRecord) && method_exists($routeRecord, 'getKey')
+                ? $routeRecord->getKey()
+                : $routeRecord;
+
+            if (filled($recordId) && is_numeric($recordId)) {
+                $dialog = Dialog::query()
+                    ->with('contact')
+                    ->find($recordId);
+
+                if ($dialog instanceof Dialog) {
+                    $contactLabel = $dialog->contact instanceof Contact
+                        ? app(ResolveContactDisplayNameAction::class)->handle($dialog->contact, $dialog)
+                        : null;
+
+                    $currentLabel = filled($contactLabel)
+                        ? $contactLabel
+                        : 'Диалог #'.$dialog->id;
+                }
             }
         }
     }

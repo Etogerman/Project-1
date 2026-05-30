@@ -3340,6 +3340,26 @@ function EdgePath({
             />
             {selected ? <path d={d} className="ac-v3-builder__edge-selection" /> : null}
             <path d={d} className="ac-v3-builder__edge" markerEnd={`url(#${markerId})`} />
+            {label ? (
+                <text
+                    x={labelPoint.x}
+                    y={labelPoint.y}
+                    className="ac-v3-builder__edge-label"
+                    textAnchor="middle"
+                    dominantBaseline="central"
+                    data-edge-action
+                    onClick={(event) => {
+                        event.stopPropagation();
+                        onSelect();
+                    }}
+                    onDoubleClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                    }}
+                >
+                    {label}
+                </text>
+            ) : null}
             {selected ? (
                 <>
                     <circle
@@ -3404,26 +3424,6 @@ function EdgePath({
                     r="4"
                     className="ac-v3-builder__edge-source-dot"
                 />
-            ) : null}
-            {label ? (
-                <text
-                    x={labelPoint.x}
-                    y={labelPoint.y}
-                    className="ac-v3-builder__edge-label"
-                    textAnchor="middle"
-                    dominantBaseline="central"
-                    data-edge-action
-                    onClick={(event) => {
-                        event.stopPropagation();
-                        onSelect();
-                    }}
-                    onDoubleClick={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                    }}
-                >
-                    {label}
-                </text>
             ) : null}
         </g>
     );

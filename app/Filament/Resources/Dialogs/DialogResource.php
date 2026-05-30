@@ -136,6 +136,7 @@ class DialogResource extends Resource
                     ->label($dialogFieldLabel('contact_id', 'Контакт'))
                     ->state(fn (Dialog $record): string => static::resolveContactLabel($record))
                     ->searchable(query: fn (Builder $query, string $search): Builder => static::applyTableSearch($query, $search))
+                    ->sortable(query: fn (Builder $query, string $direction): Builder => static::applyContactLabelSort($query, $direction))
                     ->toggleable(),
                 TextColumn::make('inbox_status')
                     ->label($dialogFieldLabel('status', 'Статус'))
@@ -269,10 +270,7 @@ class DialogResource extends Resource
                 'back_to' => static::getUrl('index'),
             ]))
             ->emptyStateHeading('Диалогов ещё нет')
-            ->emptyStateDescription('Диалоги появятся после первых входящих сообщений от внешней аудитории.')
-            ->columnManager()
-            ->deferColumnManager(false)
-            ->reorderableColumns();
+            ->emptyStateDescription('Диалоги появятся после первых входящих сообщений от внешней аудитории.');
     }
 
     public static function getRecordTitle(?Model $record): ?string
@@ -292,6 +290,38 @@ class DialogResource extends Resource
             'index' => ListDialogs::route('/'),
             'kanban' => DialogKanban::route('/kanban'),
             'view' => ViewDialog::route('/{record}'),
+        ];
+    }
+
+    /**
+     * @return array<int, array{
+     *     id:string,
+     *     filament:string,
+     *     label:string,
+     *     defaultWidth:int,
+     *     minWidth:int,
+     *     defaultVisible:bool,
+     *     defaultOrder:int
+     * }>
+     */
+    public static function getDialogsTableColumnLayoutConfig(): array
+    {
+        return [
+            ['id' => 'contact', 'filament' => 'contact-label', 'label' => 'Контакт', 'defaultWidth' => 160, 'minWidth' => 120, 'defaultVisible' => true, 'defaultOrder' => 10],
+            ['id' => 'status', 'filament' => 'inbox-status', 'label' => 'Статус', 'defaultWidth' => 130, 'minWidth' => 110, 'defaultVisible' => true, 'defaultOrder' => 20],
+            ['id' => 'last_message', 'filament' => 'preview-text', 'label' => 'Последнее сообщение', 'defaultWidth' => 260, 'minWidth' => 180, 'defaultVisible' => true, 'defaultOrder' => 30],
+            ['id' => 'stage', 'filament' => 'stage', 'label' => 'Этап', 'defaultWidth' => 140, 'minWidth' => 110, 'defaultVisible' => true, 'defaultOrder' => 40],
+            ['id' => 'assignee', 'filament' => 'assigned-user', 'label' => 'Ответственный', 'defaultWidth' => 130, 'minWidth' => 100, 'defaultVisible' => true, 'defaultOrder' => 50],
+            ['id' => 'channel', 'filament' => 'channel-label', 'label' => 'Канал', 'defaultWidth' => 180, 'minWidth' => 140, 'defaultVisible' => true, 'defaultOrder' => 60],
+            ['id' => 'route', 'filament' => 'route-status', 'label' => 'Маршрут', 'defaultWidth' => 150, 'minWidth' => 120, 'defaultVisible' => true, 'defaultOrder' => 70],
+            ['id' => 'actor', 'filament' => 'preview-sender-label', 'label' => 'Кто', 'defaultWidth' => 110, 'minWidth' => 90, 'defaultVisible' => true, 'defaultOrder' => 80],
+            ['id' => 'activity', 'filament' => 'last-message-at', 'label' => 'Активность', 'defaultWidth' => 110, 'minWidth' => 90, 'defaultVisible' => true, 'defaultOrder' => 90],
+            ['id' => 'id', 'filament' => 'id', 'label' => 'ID', 'defaultWidth' => 72, 'minWidth' => 56, 'defaultVisible' => true, 'defaultOrder' => 100],
+            ['id' => 'external_user_id', 'filament' => 'external-user-id', 'label' => 'Внешний ID', 'defaultWidth' => 140, 'minWidth' => 90, 'defaultVisible' => false, 'defaultOrder' => 110],
+            ['id' => 'external_username', 'filament' => 'external-username', 'label' => 'Username', 'defaultWidth' => 140, 'minWidth' => 90, 'defaultVisible' => false, 'defaultOrder' => 120],
+            ['id' => 'phone', 'filament' => 'phone-label', 'label' => 'Номер телефона', 'defaultWidth' => 140, 'minWidth' => 90, 'defaultVisible' => false, 'defaultOrder' => 130],
+            ['id' => 'route_source', 'filament' => 'route-source', 'label' => 'Источник маршрута', 'defaultWidth' => 160, 'minWidth' => 100, 'defaultVisible' => false, 'defaultOrder' => 140],
+            ['id' => 'external_chat_id', 'filament' => 'external-chat-id', 'label' => 'ID чата', 'defaultWidth' => 120, 'minWidth' => 90, 'defaultVisible' => false, 'defaultOrder' => 150],
         ];
     }
 
@@ -756,6 +786,20 @@ class DialogResource extends Resource
                 });
             }
         });
+    }
+
+    protected static function applyContactLabelSort(Builder $query, string $direction): Builder
+    {
+        $direction = strtolower($direction) === 'desc' ? 'desc' : 'asc';
+
+        return $query
+            ->leftJoin('contacts as contact_sort', 'contact_sort.id', '=', 'dialogs.contact_id')
+            ->leftJoin('contact_identities as dialog_identity_sort', 'dialog_identity_sort.id', '=', 'dialogs.current_contact_identity_id')
+            ->select('dialogs.*')
+            ->orderByRaw(
+                "lower(coalesce(nullif(trim(coalesce(contact_sort.first_name, '') || ' ' || coalesce(contact_sort.last_name, '')), ''), nullif(contact_sort.name, ''), nullif(dialog_identity_sort.display_name, ''), nullif(dialog_identity_sort.external_username, ''), nullif(dialog_identity_sort.external_user_id, ''), '')) {$direction}"
+            )
+            ->orderBy('dialogs.id', $direction);
     }
 
     protected static function resolveUsernameSearch(string $search): ?string
