@@ -11,6 +11,10 @@ use App\Models\ChannelConnectionType;
 use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\FieldDictionaryField;
+use App\Models\GeoAlias;
+use App\Models\GeoCity;
+use App\Models\GeoCountry;
+use App\Models\GeoRegion;
 use App\Models\Scenario;
 use App\Models\User;
 use App\Policies\AutoReplyCategoryPolicy;
@@ -21,6 +25,10 @@ use App\Policies\ChannelPolicy;
 use App\Policies\ContactPolicy;
 use App\Policies\DialogPolicy;
 use App\Policies\FieldDictionaryFieldPolicy;
+use App\Policies\GeoAliasPolicy;
+use App\Policies\GeoCityPolicy;
+use App\Policies\GeoCountryPolicy;
+use App\Policies\GeoRegionPolicy;
 use App\Policies\ScenarioPolicy;
 use App\Policies\UserPolicy;
 use Illuminate\Auth\Events\Login;
@@ -56,6 +64,10 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(AutoReplyRule::class, AutoReplyRulePolicy::class);
         Gate::policy(AutoReplyCategory::class, AutoReplyCategoryPolicy::class);
         Gate::policy(Bitrix24Connection::class, Bitrix24ConnectionPolicy::class);
+        Gate::policy(GeoCountry::class, GeoCountryPolicy::class);
+        Gate::policy(GeoRegion::class, GeoRegionPolicy::class);
+        Gate::policy(GeoCity::class, GeoCityPolicy::class);
+        Gate::policy(GeoAlias::class, GeoAliasPolicy::class);
 
         Event::listen(Login::class, RecordAdminUserLogin::class);
 
