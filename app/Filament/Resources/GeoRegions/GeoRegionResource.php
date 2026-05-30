@@ -23,7 +23,6 @@ use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Facades\Schema as SchemaFacade;
 use Illuminate\Validation\ValidationException;
 use UnitEnum;
 
@@ -35,9 +34,9 @@ class GeoRegionResource extends Resource
 
     protected static ?string $modelLabel = 'Регион';
 
-    protected static ?string $pluralModelLabel = 'География: регионы';
+    protected static ?string $pluralModelLabel = 'Регионы';
 
-    protected static ?string $navigationLabel = 'География: регионы';
+    protected static ?string $navigationLabel = 'Регионы';
 
     protected static string|UnitEnum|null $navigationGroup = 'Настройки';
 
@@ -47,7 +46,7 @@ class GeoRegionResource extends Resource
 
     public static function shouldRegisterNavigation(): bool
     {
-        return SchemaFacade::hasTable('geo_regions');
+        return false;
     }
 
     public static function getEloquentQuery(): Builder

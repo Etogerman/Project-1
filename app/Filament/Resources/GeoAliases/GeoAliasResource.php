@@ -24,7 +24,6 @@ use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Facades\Schema as SchemaFacade;
 use UnitEnum;
 
 class GeoAliasResource extends Resource
@@ -35,9 +34,9 @@ class GeoAliasResource extends Resource
 
     protected static ?string $modelLabel = 'Вариант написания';
 
-    protected static ?string $pluralModelLabel = 'География: варианты';
+    protected static ?string $pluralModelLabel = 'Варианты написания';
 
-    protected static ?string $navigationLabel = 'География: варианты';
+    protected static ?string $navigationLabel = 'Варианты написания';
 
     protected static string|UnitEnum|null $navigationGroup = 'Настройки';
 
@@ -47,7 +46,7 @@ class GeoAliasResource extends Resource
 
     public static function shouldRegisterNavigation(): bool
     {
-        return SchemaFacade::hasTable('geo_aliases');
+        return false;
     }
 
     public static function getEloquentQuery(): Builder

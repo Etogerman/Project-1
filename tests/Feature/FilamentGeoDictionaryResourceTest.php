@@ -48,7 +48,10 @@ class FilamentGeoDictionaryResourceTest extends TestCase
         $this->actingAs($admin)
             ->get(GeoCountryResource::getUrl())
             ->assertOk()
-            ->assertSee('География: страны');
+            ->assertSee('Страны')
+            ->assertSee('Регионы')
+            ->assertSee('Города')
+            ->assertSee('Варианты');
 
         Livewire::actingAs($admin)
             ->test(ManageGeoCountries::class)

@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\GeoRegions\Pages;
 
+use App\Filament\Resources\Geo\Concerns\HasGeoAddressNavigationActions;
 use App\Filament\Resources\Geo\Concerns\HasGeoCsvImportActions;
 use App\Filament\Resources\GeoRegions\GeoRegionResource;
 use App\Filament\Resources\Pages\ManageRecords;
@@ -13,6 +14,7 @@ use Illuminate\Support\Facades\Gate;
 
 class ManageGeoRegions extends ManageRecords
 {
+    use HasGeoAddressNavigationActions;
     use HasGeoCsvImportActions;
 
     protected static string $resource = GeoRegionResource::class;
@@ -27,6 +29,7 @@ class ManageGeoRegions extends ManageRecords
     protected function getHeaderActions(): array
     {
         return [
+            ...$this->geoAddressNavigationActions('regions'),
             $this->importGeoLocationsAction(),
             CreateAction::make()
                 ->label('Добавить регион')

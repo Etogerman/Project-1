@@ -40,6 +40,8 @@ class FieldDictionaryFieldResource extends Resource
 
     protected static string|UnitEnum|null $navigationGroup = 'Настройки';
 
+    protected static ?string $navigationParentItem = 'Справочники';
+
     protected static ?int $navigationSort = 19;
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedSquares2x2;

@@ -21,7 +21,6 @@ use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Facades\Schema as SchemaFacade;
 use Illuminate\Validation\ValidationException;
 use UnitEnum;
 
@@ -33,9 +32,9 @@ class GeoCountryResource extends Resource
 
     protected static ?string $modelLabel = 'Страна';
 
-    protected static ?string $pluralModelLabel = 'География: страны';
+    protected static ?string $pluralModelLabel = 'Страны';
 
-    protected static ?string $navigationLabel = 'География: страны';
+    protected static ?string $navigationLabel = 'Страны';
 
     protected static string|UnitEnum|null $navigationGroup = 'Настройки';
 
@@ -45,7 +44,7 @@ class GeoCountryResource extends Resource
 
     public static function shouldRegisterNavigation(): bool
     {
-        return SchemaFacade::hasTable('geo_countries');
+        return false;
     }
 
     public static function getEloquentQuery(): Builder

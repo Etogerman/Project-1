@@ -24,7 +24,6 @@ use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Facades\Schema as SchemaFacade;
 use Illuminate\Validation\ValidationException;
 use UnitEnum;
 
@@ -36,9 +35,9 @@ class GeoCityResource extends Resource
 
     protected static ?string $modelLabel = 'Город';
 
-    protected static ?string $pluralModelLabel = 'География: города';
+    protected static ?string $pluralModelLabel = 'Города';
 
-    protected static ?string $navigationLabel = 'География: города';
+    protected static ?string $navigationLabel = 'Города';
 
     protected static string|UnitEnum|null $navigationGroup = 'Настройки';
 
@@ -48,7 +47,7 @@ class GeoCityResource extends Resource
 
     public static function shouldRegisterNavigation(): bool
     {
-        return SchemaFacade::hasTable('geo_cities');
+        return false;
     }
 
     public static function getEloquentQuery(): Builder

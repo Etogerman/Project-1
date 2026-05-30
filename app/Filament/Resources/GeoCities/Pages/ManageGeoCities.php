@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\GeoCities\Pages;
 
+use App\Filament\Resources\Geo\Concerns\HasGeoAddressNavigationActions;
 use App\Filament\Resources\Geo\Concerns\HasGeoCsvImportActions;
 use App\Filament\Resources\GeoCities\GeoCityResource;
 use App\Filament\Resources\Pages\ManageRecords;
@@ -13,6 +14,7 @@ use Illuminate\Support\Facades\Gate;
 
 class ManageGeoCities extends ManageRecords
 {
+    use HasGeoAddressNavigationActions;
     use HasGeoCsvImportActions;
 
     protected static string $resource = GeoCityResource::class;
@@ -27,6 +29,7 @@ class ManageGeoCities extends ManageRecords
     protected function getHeaderActions(): array
     {
         return [
+            ...$this->geoAddressNavigationActions('cities'),
             $this->importGeoLocationsAction(),
             CreateAction::make()
                 ->label('Добавить город')

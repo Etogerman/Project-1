@@ -3,6 +3,7 @@
 namespace App\Providers\Filament;
 
 use App\Filament\Resources\DataDictionaryEntries\DataDictionaryEntryResource;
+use App\Filament\Resources\GeoCountries\GeoCountryResource;
 use App\Http\Middleware\TrackAdminUserActivity;
 use App\Models\User;
 use Filament\Actions\Action;
@@ -78,6 +79,13 @@ class AdminPanelProvider extends PanelProvider
                     ->url(fn (): string => DataDictionaryEntryResource::getUrl())
                     ->isActiveWhen(fn (): bool => request()->routeIs('filament.admin.resources.data-dictionary-entries.*'))
                     ->sort(18),
+                NavigationItem::make('Адреса')
+                    ->group('Настройки')
+                    ->parentItem('Справочники')
+                    ->icon(Heroicon::OutlinedGlobeEuropeAfrica)
+                    ->url(fn (): string => GeoCountryResource::getUrl())
+                    ->isActiveWhen(fn (): bool => request()->routeIs('filament.admin.resources.geo-*'))
+                    ->sort(2),
             ])
             ->userMenuItems([
                 'profile' => fn (Action $action): Action => $action->sort(-2),
