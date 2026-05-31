@@ -53,7 +53,7 @@ class CompileScenarioBuilderV3RuntimeAction
             ->all();
         $runtimeBlockIdsByClientKey = $blocks
             ->mapWithKeys(fn (ScenarioBuilderBlock $block): array => [
-                (string) $block->client_key => $this->runtimeBlockId($block),
+                'block_'.$block->id => $this->runtimeBlockId($block),
             ])
             ->all();
 
@@ -282,6 +282,29 @@ class CompileScenarioBuilderV3RuntimeAction
                     ];
                 }
 
+                if ($type === 'resolve_geo_city') {
+                    $source = (string) ($item['source'] ?? 'current_inbound_message');
+
+                    if ($source === 'ai_data') {
+                        return [
+                            'type' => $type,
+                            'source' => 'ai_data',
+                            'source_block_client_key' => $sourceBlockClientKey,
+                            'source_block_id' => $sourceBlockClientKey !== ''
+                                ? ($runtimeBlockIdsByClientKey[$sourceBlockClientKey] ?? '')
+                                : '',
+                            'city_field_key' => (string) ($item['city_field_key'] ?? 'geo_city'),
+                            'region_field_key' => (string) ($item['region_field_key'] ?? 'geo_region'),
+                            'country_field_key' => (string) ($item['country_field_key'] ?? 'geo_country'),
+                        ];
+                    }
+
+                    return [
+                        'type' => $type,
+                        'source' => 'current_inbound_message',
+                    ];
+                }
+
                 return [
                     'type' => $type,
                     'source_type' => (string) ($item['source_type'] ?? 'ai_data'),
@@ -303,6 +326,12 @@ class CompileScenarioBuilderV3RuntimeAction
                         && ($item['target'] ?? '') === 'last_current_run_outbound')
                 ),
                 'calculate_distance_to_moscow' => true,
+                'resolve_geo_city' => ($item['source'] ?? '') === 'current_inbound_message'
+                    || (
+                        ($item['source'] ?? '') === 'ai_data'
+                        && ($item['source_block_id'] ?? '') !== ''
+                        && ($item['city_field_key'] ?? '') !== ''
+                    ),
                 default => (($item['target_field'] ?? '') !== ''
                     && (($item['source_type'] ?? '') === 'static_value'
                         ? trim((string) ($item['static_value'] ?? '')) !== ''

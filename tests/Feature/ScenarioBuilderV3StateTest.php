@@ -3255,6 +3255,352 @@ class ScenarioBuilderV3StateTest extends TestCase
         ]);
     }
 
+    public function test_publish_keeps_geo_city_action_outputs_in_runtime_snapshot(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['name' => 'Telegram Geo']);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_geo_city_action',
+            'name' => 'V3 Geo City Action',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_start',
+                'type' => 'state',
+                'title' => 'Старт',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->startSettings('/start', [$channel->id]),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_geo',
+                'type' => 'state',
+                'title' => 'Распознать город',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->geoCityActionSettings(),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_done',
+                'type' => 'state',
+                'title' => 'Готово',
+                'position' => ['x' => 840, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Город записан'),
+            ],
+        ];
+        $edges = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_start_edge',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_start', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_geo'],
+                'condition_payload' => $this->edgePayload(null, 'Дальше'),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_found_edge',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_geo', 'output_id' => 'geo_found'],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_done'],
+                'condition_payload' => $this->edgePayload('geo_found', 'Город найден'),
+            ],
+        ];
+
+        $saved = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
+            ->assertOk()
+            ->assertJsonPath('builder.blocks.1.settings_payload.modules.0.payload.actions.0.type', 'resolve_geo_city')
+            ->assertJsonPath('builder.blocks.1.settings_payload.modules.0.payload.actions.0.source', 'current_inbound_message')
+            ->assertJsonPath('builder.blocks.1.settings_payload.outputs.0.id', 'geo_found')
+            ->assertJsonPath('builder.blocks.1.settings_payload.outputs.1.id', 'geo_not_found')
+            ->assertJsonPath('builder.blocks.1.settings_payload.outputs.2.id', 'geo_limit_reached')
+            ->json();
+
+        $this->assertCount(3, data_get($saved, 'builder.blocks.1.settings_payload.outputs'));
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $saved['scenario']['draft_version_id'],
+                'base_revision' => $saved['builder']['revision'],
+            ])
+            ->assertOk();
+
+        $scenario->refresh()->load('publishedVersion');
+        $geoBlockId = (string) $saved['id_map']['blocks']['tmp_geo'];
+
+        $this->assertSame(
+            'resolve_geo_city',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$geoBlockId.actions.0.type"),
+        );
+        $this->assertSame(
+            'current_inbound_message',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$geoBlockId.actions.0.source"),
+        );
+        $this->assertSame(
+            'action_result',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$geoBlockId.action_result_edges.0.mode"),
+        );
+        $this->assertSame(
+            'geo_found',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$geoBlockId.action_result_edges.0.from_output_id"),
+        );
+    }
+
+    public function test_publish_keeps_geo_city_ai_data_source_in_runtime_snapshot(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['name' => 'Telegram Geo AI Data']);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_geo_city_ai_data_action',
+            'name' => 'V3 Geo City AI Data Action',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_start',
+                'type' => 'state',
+                'title' => 'Старт',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->startSettings('/start', [$channel->id]),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_ai',
+                'type' => 'state',
+                'title' => 'ИИ ищет город',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->geoAiAnalysisSettings(),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_geo',
+                'type' => 'state',
+                'title' => 'Проверить город',
+                'position' => ['x' => 840, 'y' => 160],
+                'settings_payload' => $this->geoCityActionSettings(action: [
+                    'source' => 'ai_data',
+                    'source_block_client_key' => 'tmp_ai',
+                    'city_field_key' => 'geo_city',
+                    'region_field_key' => 'geo_region',
+                    'country_field_key' => 'geo_country',
+                ]),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_done',
+                'type' => 'state',
+                'title' => 'Готово',
+                'position' => ['x' => 1200, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Город записан'),
+            ],
+        ];
+        $aiPayload = $this->edgePayload('city_found', 'Город найден');
+        $aiPayload['mode'] = 'ai_analysis';
+        $aiPayload['match'] = ['type' => 'any_inbound', 'text' => ''];
+        $edges = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_start_edge',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_start', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_ai'],
+                'condition_payload' => $this->edgePayload(null, 'Дальше'),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_ai_found_edge',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_ai', 'output_id' => 'city_found'],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_geo'],
+                'condition_payload' => $aiPayload,
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_found_edge',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_geo', 'output_id' => 'geo_found'],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_done'],
+                'condition_payload' => $this->edgePayload('geo_found', 'Город найден'),
+            ],
+        ];
+
+        $saved = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
+            ->assertOk()
+            ->assertJsonPath('builder.blocks.2.settings_payload.modules.0.payload.actions.0.type', 'resolve_geo_city')
+            ->assertJsonPath('builder.blocks.2.settings_payload.modules.0.payload.actions.0.source', 'ai_data')
+            ->assertJsonPath('builder.blocks.2.settings_payload.outputs.0.id', 'geo_found')
+            ->assertJsonPath('builder.blocks.2.settings_payload.outputs.1.id', 'geo_not_found')
+            ->assertJsonPath('builder.blocks.2.settings_payload.outputs.2.id', 'geo_limit_reached')
+            ->json();
+
+        $this->assertCount(3, data_get($saved, 'builder.blocks.2.settings_payload.outputs'));
+        $this->assertSame(
+            'block_'.$saved['id_map']['blocks']['tmp_ai'],
+            data_get($saved, 'builder.blocks.2.settings_payload.modules.0.payload.actions.0.source_block_client_key'),
+        );
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $saved['scenario']['draft_version_id'],
+                'base_revision' => $saved['builder']['revision'],
+            ])
+            ->assertOk();
+
+        $scenario->refresh()->load('publishedVersion');
+        $aiBlockId = (string) $saved['id_map']['blocks']['tmp_ai'];
+        $geoBlockId = (string) $saved['id_map']['blocks']['tmp_geo'];
+
+        $this->assertSame(
+            'resolve_geo_city',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$geoBlockId.actions.0.type"),
+        );
+        $this->assertSame(
+            'ai_data',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$geoBlockId.actions.0.source"),
+        );
+        $this->assertSame(
+            $aiBlockId,
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$geoBlockId.actions.0.source_block_id"),
+        );
+        $this->assertSame(
+            'geo_city',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$geoBlockId.actions.0.city_field_key"),
+        );
+        $this->assertSame(
+            'geo_found',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$geoBlockId.action_result_edges.0.from_output_id"),
+        );
+    }
+
+    public function test_state_rejects_geo_city_ai_data_source_without_ai_block(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['name' => 'Telegram Bad Geo AI']);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_geo_city_bad_ai_source',
+            'name' => 'V3 Geo City Bad AI Source',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_start',
+                'type' => 'state',
+                'title' => 'Старт',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->startSettings('/start', [$channel->id]),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_not_ai',
+                'type' => 'state',
+                'title' => 'Обычный блок',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Не ИИ'),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_geo',
+                'type' => 'state',
+                'title' => 'Проверить город',
+                'position' => ['x' => 840, 'y' => 160],
+                'settings_payload' => $this->geoCityActionSettings(action: [
+                    'source' => 'ai_data',
+                    'source_block_client_key' => 'tmp_not_ai',
+                    'city_field_key' => 'geo_city',
+                ]),
+            ],
+        ];
+
+        $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, []))
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors([
+                'builder.blocks.2.settings_payload.modules.0.payload.actions.0.source_block_client_key',
+            ]);
+    }
+
+    public function test_state_collapses_legacy_geo_city_outputs_on_save(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_geo_city_legacy_outputs',
+            'name' => 'V3 Geo City Legacy Outputs',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $geoSettings = $this->geoCityActionSettings(includeLegacyOutputs: true);
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_geo',
+                'type' => 'state',
+                'title' => 'Распознать город',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $geoSettings,
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_not_found',
+                'type' => 'state',
+                'title' => 'Не нашли',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Город не найден'),
+            ],
+        ];
+        $edges = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_legacy_edge',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_geo', 'output_id' => 'geo_ambiguous'],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_not_found'],
+                'condition_payload' => $this->edgePayload('geo_ambiguous', 'Несколько вариантов'),
+            ],
+        ];
+
+        $saved = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
+            ->assertOk()
+            ->json();
+
+        $this->assertSame('geo_found', data_get($saved, 'builder.blocks.0.settings_payload.outputs.0.id'));
+        $this->assertSame('geo_not_found', data_get($saved, 'builder.blocks.0.settings_payload.outputs.1.id'));
+        $this->assertSame('geo_limit_reached', data_get($saved, 'builder.blocks.0.settings_payload.outputs.2.id'));
+        $this->assertCount(3, data_get($saved, 'builder.blocks.0.settings_payload.outputs'));
+        $this->assertSame('geo_not_found', data_get($saved, 'builder.edges.0.source.output_id'));
+        $this->assertSame('geo_not_found', data_get($saved, 'builder.edges.0.condition_payload.from_output_id'));
+    }
+
+    public function test_state_rejects_multiple_result_actions_in_action_block(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_geo_multiple_result_actions',
+            'name' => 'V3 Geo Multiple Result Actions',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $geoSettings = $this->geoCityActionSettings();
+        $geoSettings['modules'][0]['payload']['actions'][] = [
+            'type' => 'calculate_distance_to_moscow',
+        ];
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_action',
+                'type' => 'state',
+                'title' => 'Два результата',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $geoSettings,
+            ],
+        ];
+
+        $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, []))
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors([
+                'builder.blocks.0.settings_payload.modules.0.payload.actions.0.type',
+            ]);
+    }
+
     private function saveSingleStartBlockState(User $admin, Scenario $scenario, Channel $channel): array
     {
         $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
@@ -3695,6 +4041,137 @@ class ScenarioBuilderV3StateTest extends TestCase
                 ],
             ],
         ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function geoCityActionSettings(bool $includeLegacyOutputs = false, array $action = []): array
+    {
+        $outputs = [
+            [
+                'id' => 'geo_found',
+                'label' => 'Город найден',
+                'source' => 'action',
+                'module_id' => 'mod_action',
+                'action_result_id' => 'geo_found',
+            ],
+            [
+                'id' => 'geo_not_found',
+                'label' => 'Город не найден',
+                'source' => 'action',
+                'module_id' => 'mod_action',
+                'action_result_id' => 'geo_not_found',
+            ],
+            [
+                'id' => 'geo_limit_reached',
+                'label' => 'Превышено попыток',
+                'source' => 'action',
+                'module_id' => 'mod_action',
+                'action_result_id' => 'geo_limit_reached',
+            ],
+        ];
+
+        if ($includeLegacyOutputs) {
+            $outputs = [
+                $outputs[0],
+                [
+                    'id' => 'geo_manual_required',
+                    'label' => 'Нужно уточнить',
+                    'source' => 'action',
+                    'module_id' => 'mod_action',
+                    'action_result_id' => 'geo_manual_required',
+                ],
+                [
+                    'id' => 'geo_ambiguous',
+                    'label' => 'Несколько вариантов',
+                    'source' => 'action',
+                    'module_id' => 'mod_action',
+                    'action_result_id' => 'geo_ambiguous',
+                ],
+                $outputs[1],
+                [
+                    'id' => 'geo_below_threshold',
+                    'label' => 'Низкая уверенность',
+                    'source' => 'action',
+                    'module_id' => 'mod_action',
+                    'action_result_id' => 'geo_below_threshold',
+                ],
+                [
+                    'id' => 'geo_inactive',
+                    'label' => 'Отключено в справочнике',
+                    'source' => 'action',
+                    'module_id' => 'mod_action',
+                    'action_result_id' => 'geo_inactive',
+                ],
+                [
+                    'id' => 'geo_failed',
+                    'label' => 'Ошибка',
+                    'source' => 'action',
+                    'module_id' => 'mod_action',
+                    'action_result_id' => 'geo_failed',
+                ],
+                $outputs[2],
+            ];
+        }
+
+        return [
+            'schema_version' => 3,
+            'kind' => 'state',
+            'ui' => ['sheet_id' => 'main', 'width' => 320, 'collapsed' => false],
+            'modules' => [
+                [
+                    'id' => 'mod_action',
+                    'type' => 'action',
+                    'enabled' => true,
+                    'payload' => [
+                        'actions' => [
+                            array_replace([
+                                'type' => 'resolve_geo_city',
+                                'source' => 'current_inbound_message',
+                            ], $action),
+                        ],
+                    ],
+                ],
+            ],
+            'outputs' => $outputs,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function geoAiAnalysisSettings(): array
+    {
+        $settings = $this->aiAnalysisSettings();
+        $settings['modules'][0]['payload']['prompt'] = 'Определи, указал ли клиент город проживания.';
+        $settings['modules'][0]['payload']['variants'] = [
+            ['id' => 'city_found', 'label' => 'Город найден', 'delay_seconds' => 0],
+            ['id' => 'city_not_found', 'label' => 'Город не найден', 'delay_seconds' => 10],
+        ];
+        $settings['modules'][0]['payload']['extract_fields'] = [
+            ['key' => 'geo_city', 'label' => 'Город', 'type' => 'text'],
+            ['key' => 'geo_region', 'label' => 'Регион', 'type' => 'text'],
+            ['key' => 'geo_country', 'label' => 'Страна', 'type' => 'text'],
+        ];
+        $settings['outputs'] = [
+            [
+                'id' => 'city_found',
+                'label' => 'Город найден',
+                'source' => 'ai',
+                'module_id' => 'mod_ai',
+                'ai_variant_id' => 'city_found',
+            ],
+            [
+                'id' => 'city_not_found',
+                'label' => 'Город не найден',
+                'source' => 'ai',
+                'module_id' => 'mod_ai',
+                'ai_variant_id' => 'city_not_found',
+            ],
+        ];
+
+        return $settings;
     }
 
     /**

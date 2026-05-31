@@ -6,6 +6,7 @@ use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\GeoResolutionEvent;
 use App\Models\Message;
+use Illuminate\Support\Facades\DB;
 
 class ApplyGeoResolutionToContactAction
 {
@@ -18,15 +19,17 @@ class ApplyGeoResolutionToContactAction
         ?Dialog $dialog = null,
         ?Message $message = null,
     ): GeoResolutionEvent {
-        if (($result['status'] ?? null) === ResolveGeoCityAction::STATUS_MATCHED_CITY) {
-            $contact->forceFill([
-                'country' => $this->nullableString($result['country'] ?? null),
-                'region' => $this->nullableString($result['region'] ?? null),
-                'city' => $this->nullableString($result['city'] ?? null),
-            ])->save();
-        }
+        return DB::transaction(function () use ($contact, $result, $dialog, $message): GeoResolutionEvent {
+            if (($result['status'] ?? null) === ResolveGeoCityAction::STATUS_MATCHED_CITY) {
+                $contact->forceFill([
+                    'country' => $this->nullableString($result['country'] ?? null),
+                    'region' => $this->nullableString($result['region'] ?? null),
+                    'city' => $this->nullableString($result['city'] ?? null),
+                ])->save();
+            }
 
-        return $this->createEvent($contact, $result, $dialog, $message);
+            return $this->createEvent($contact, $result, $dialog, $message);
+        });
     }
 
     /**

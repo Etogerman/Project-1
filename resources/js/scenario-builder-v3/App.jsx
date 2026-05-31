@@ -80,6 +80,7 @@ const ACTION_TYPE_WRITE_CONTACT_FIELD = 'write_contact_field';
 const ACTION_TYPE_CHECK_DATA = 'check_data';
 const ACTION_TYPE_EDIT_MESSAGE = 'edit_message';
 const ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW = 'calculate_distance_to_moscow';
+const ACTION_TYPE_RESOLVE_GEO_CITY = 'resolve_geo_city';
 const ACTION_EDIT_MESSAGE_OPERATION_REMOVE_BUTTONS = 'remove_buttons';
 const ACTION_EDIT_MESSAGE_OPERATION_DELETE_MESSAGE = 'delete_message';
 const ACTION_EDIT_MESSAGE_TARGET_LAST_CURRENT_RUN_OUTBOUND_WITH_INLINE_BUTTONS = 'last_current_run_outbound_with_inline_buttons';
@@ -91,6 +92,10 @@ const ACTION_TARGET_SCOPE_OPTIONS = [
 const ACTION_VALUE_SOURCE_OPTIONS = [
     ['static_value', 'Заданное значение'],
     ['ai_data', 'Переменная или результат ИИ'],
+];
+const GEO_CITY_SOURCE_OPTIONS = [
+    ['current_inbound_message', 'Последний ответ клиента'],
+    ['ai_data', 'Данные из ИИ-анализа'],
 ];
 const ACTION_FIELD_VALUE_OPTIONS = {
     contact: {
@@ -179,9 +184,15 @@ const ACTION_DISTANCE_TO_MOSCOW_OUTPUTS = [
     { id: 'distance_unknown', label: 'Не удалось определить', source: 'action', action_result_id: 'distance_unknown' },
     { id: 'distance_failed', label: 'Ошибка расчёта', source: 'action', action_result_id: 'distance_failed' },
 ];
+const ACTION_GEO_CITY_OUTPUTS = [
+    { id: 'geo_found', label: 'Город найден', source: 'action', action_result_id: 'geo_found' },
+    { id: 'geo_not_found', label: 'Город не найден', source: 'action', action_result_id: 'geo_not_found' },
+    { id: 'geo_limit_reached', label: 'Превышено попыток', source: 'action', action_result_id: 'geo_limit_reached' },
+];
 const ACTION_RESULT_OUTPUTS = [
     ...ACTION_CHECK_DATA_OUTPUTS,
     ...ACTION_DISTANCE_TO_MOSCOW_OUTPUTS,
+    ...ACTION_GEO_CITY_OUTPUTS,
 ];
 const FIRST_NAME_SOURCE_CONDITION_OPTIONS = [
     ['auto', 'Авто'],
@@ -1754,10 +1765,12 @@ export default function App({
         if (type === 'action' && Array.isArray(patch.actions)) {
             const hasCheckData = patch.actions.some((item) => item?.type === ACTION_TYPE_CHECK_DATA);
             const hasDistanceToMoscow = patch.actions.some((item) => item?.type === ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW);
+            const hasGeoCity = patch.actions.some((item) => isGeoCityResultActionType(item?.type));
             const allActionOutputIds = new Set(ACTION_RESULT_OUTPUTS.map((output) => output.id));
             const nextActionOutputIds = new Set([
                 ...(hasCheckData ? ACTION_CHECK_DATA_OUTPUTS : []),
                 ...(hasDistanceToMoscow ? ACTION_DISTANCE_TO_MOSCOW_OUTPUTS : []),
+                ...(hasGeoCity ? ACTION_GEO_CITY_OUTPUTS : []),
             ].map((output) => output.id));
 
             updateEdges(edges.filter((edge) => (
@@ -4551,6 +4564,7 @@ function BlockPanel({
                                 {type === 'action' ? (
                                     <ActionFields
                                         action={action}
+                                        blocks={blocks}
                                         blockKey={block.client_key}
                                         onUpdateModulePayload={onUpdateModulePayload}
                                         dialogFieldKeys={dialogFieldKeys}
@@ -5245,8 +5259,9 @@ function MessageFields({ message, blockKey, onUpdateModulePayload }) {
     );
 }
 
-function ActionFields({ action, blockKey, onUpdateModulePayload, dialogFieldKeys = [] }) {
+function ActionFields({ action, blocks = [], blockKey, onUpdateModulePayload, dialogFieldKeys = [] }) {
     const items = actionItems(action);
+    const aiSourceBlocks = aiBlocksForGeoSource(blocks, blockKey);
 
     function updateItem(index, patch) {
         onUpdateModulePayload(blockKey, 'action', {
@@ -5297,6 +5312,7 @@ function ActionFields({ action, blockKey, onUpdateModulePayload, dialogFieldKeys
                             <option value="check_data">Проверить данные</option>
                             <option value="edit_message">Изменить сообщение</option>
                             <option value="calculate_distance_to_moscow">Рассчитать расстояние до Москвы</option>
+                            <option value="resolve_geo_city">Распознать географию</option>
                         </select>
                     </label>
                     {item.type === ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW ? (
@@ -5304,6 +5320,15 @@ function ActionFields({ action, blockKey, onUpdateModulePayload, dialogFieldKeys
                             <span>Что рассчитать</span>
                             <input value="Расстояние от города контакта до Москвы" readOnly />
                         </label>
+                    ) : isGeoCityResultActionType(item.type) ? (
+                        <GeoCityActionFields
+                            item={item}
+                            aiSourceBlocks={aiSourceBlocks}
+                            onChange={(patch) => updateItem(index, normalizeActionItemForType({
+                                ...item,
+                                ...patch,
+                            }))}
+                        />
                     ) : item.type === ACTION_TYPE_EDIT_MESSAGE ? (
                         <>
                             <label>
@@ -5476,6 +5501,99 @@ function ActionFields({ action, blockKey, onUpdateModulePayload, dialogFieldKeys
                 </div>
             ))}
         </div>
+    );
+}
+
+function GeoCityActionFields({ item, aiSourceBlocks, onChange }) {
+    const selectedBlock = aiSourceBlocks.find((block) => block.client_key === item.source_block_client_key) ?? null;
+    const selectedAiModule = selectedBlock ? findModule(selectedBlock.settings_payload, 'ai') : null;
+    const fieldOptions = selectedAiModule ? aiExtractFieldDefinitions(selectedAiModule) : [];
+
+    function updateSource(source) {
+        if (source === 'ai_data') {
+            onChange({
+                source: 'ai_data',
+                source_block_client_key: item.source_block_client_key || '',
+                city_field_key: item.city_field_key || 'geo_city',
+                region_field_key: item.region_field_key || 'geo_region',
+                country_field_key: item.country_field_key || 'geo_country',
+            });
+
+            return;
+        }
+
+        onChange({ source: 'current_inbound_message' });
+    }
+
+    return (
+        <>
+            <label>
+                <span>Откуда взять город</span>
+                <select value={item.source} onChange={(event) => updateSource(event.target.value)}>
+                    {GEO_CITY_SOURCE_OPTIONS.map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                    ))}
+                </select>
+            </label>
+            {item.source === 'ai_data' ? (
+                <>
+                    <label>
+                        <span>ИИ-блок</span>
+                        <select
+                            value={item.source_block_client_key}
+                            onChange={(event) => onChange({ source_block_client_key: event.target.value })}
+                        >
+                            <option value="">Выберите блок</option>
+                            {aiSourceBlocks.map((block) => (
+                                <option key={block.client_key} value={block.client_key}>
+                                    {block.title || 'ИИ-анализ'}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+                    <GeoCityAiFieldSelect
+                        label="Поле города"
+                        value={item.city_field_key}
+                        fieldOptions={fieldOptions}
+                        onChange={(value) => onChange({ city_field_key: value })}
+                    />
+                    <GeoCityAiFieldSelect
+                        label="Поле региона"
+                        value={item.region_field_key}
+                        fieldOptions={fieldOptions}
+                        onChange={(value) => onChange({ region_field_key: value })}
+                    />
+                    <GeoCityAiFieldSelect
+                        label="Поле страны"
+                        value={item.country_field_key}
+                        fieldOptions={fieldOptions}
+                        onChange={(value) => onChange({ country_field_key: value })}
+                    />
+                </>
+            ) : (
+                <label>
+                    <span>Что распознать</span>
+                    <input value="Город из сообщения клиента" readOnly />
+                </label>
+            )}
+        </>
+    );
+}
+
+function GeoCityAiFieldSelect({ label, value, fieldOptions, onChange }) {
+    return (
+        <label>
+            <span>{label}</span>
+            <select value={value} onChange={(event) => onChange(event.target.value)} disabled={fieldOptions.length === 0}>
+                {fieldOptions.length === 0 ? (
+                    <option value={value}>Нет полей ИИ</option>
+                ) : fieldOptions.map((field) => (
+                    <option key={field.key} value={field.key}>
+                        {field.label || field.key}
+                    </option>
+                ))}
+            </select>
+        </label>
     );
 }
 
@@ -7584,6 +7702,12 @@ function actionItemSummary(item) {
         return `${dictionary} → ${item.target_variable_key || 'переменная'}`;
     }
 
+    if (item.type === ACTION_TYPE_RESOLVE_GEO_CITY) {
+        return item.source === 'ai_data'
+            ? 'География → данные ИИ'
+            : 'География → ответ клиента';
+    }
+
     if (item.type === ACTION_TYPE_WRITE_CONTACT_FIELD) {
         const scope = ACTION_TARGET_SCOPE_OPTIONS.find(([value]) => value === item.target_scope)?.[1] ?? 'Данные';
         const field = item.target_scope === 'contact'
@@ -7717,6 +7841,22 @@ function aiExtractFieldDefinitions(aiModule) {
     return normalizedFields.length > 0 ? normalizedFields : DEFAULT_AI_EXTRACT_FIELDS;
 }
 
+function aiBlocksForGeoSource(blocks, currentBlockKey) {
+    return (Array.isArray(blocks) ? blocks : [])
+        .filter((block) => block && typeof block === 'object')
+        .filter((block) => block.client_key !== currentBlockKey)
+        .filter((block) => findModule(block.settings_payload, 'ai'))
+        .map((block) => ({
+            client_key: block.client_key,
+            title: block.title,
+            settings_payload: block.settings_payload,
+        }));
+}
+
+function isGeoCityResultActionType(type) {
+    return type === ACTION_TYPE_RESOLVE_GEO_CITY;
+}
+
 function actionItems(actionModule) {
     const rawItems = Array.isArray(actionModule?.payload?.actions) ? actionModule.payload.actions : [];
     const normalizedItems = rawItems
@@ -7726,6 +7866,7 @@ function actionItems(actionModule) {
             item.type === ACTION_TYPE_CHECK_DATA
             || item.type === ACTION_TYPE_EDIT_MESSAGE
             || item.type === ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW
+            || isGeoCityResultActionType(item.type)
             || item.target_field !== ''
         ));
 
@@ -7739,7 +7880,9 @@ function normalizeActionItemForType(item) {
             ? ACTION_TYPE_EDIT_MESSAGE
             : (item.type === ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW
                 ? ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW
-                : ACTION_TYPE_WRITE_CONTACT_FIELD));
+                : (isGeoCityResultActionType(item.type)
+                    ? item.type
+                    : ACTION_TYPE_WRITE_CONTACT_FIELD)));
 
     if (type === ACTION_TYPE_EDIT_MESSAGE) {
         const operation = item.operation === ACTION_EDIT_MESSAGE_OPERATION_DELETE_MESSAGE
@@ -7780,6 +7923,24 @@ function normalizeActionItemForType(item) {
 
     if (type === ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW) {
         return { type };
+    }
+
+    if (isGeoCityResultActionType(type)) {
+        const source = item.source === 'ai_data' ? 'ai_data' : 'current_inbound_message';
+
+        if (source === 'ai_data') {
+            return {
+                type,
+                source,
+                source_block_client_key: String(item.source_block_client_key ?? ''),
+                source_block_id: String(item.source_block_id ?? ''),
+                city_field_key: normalizeAiExtractFieldKey(item.city_field_key || item.source_field_key || 'geo_city') || 'geo_city',
+                region_field_key: normalizeAiExtractFieldKey(item.region_field_key || 'geo_region') || 'geo_region',
+                country_field_key: normalizeAiExtractFieldKey(item.country_field_key || 'geo_country') || 'geo_country',
+            };
+        }
+
+        return { type, source };
     }
 
     const targetScope = ACTION_TARGET_SCOPE_OPTIONS.some(([value]) => value === item.target_scope)
@@ -7964,6 +8125,7 @@ function syncOutputs(settingsPayload) {
     const actionOutputs = [
         ...(actionDefinitions.some((item) => item.type === ACTION_TYPE_CHECK_DATA) ? ACTION_CHECK_DATA_OUTPUTS : []),
         ...(actionDefinitions.some((item) => item.type === ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW) ? ACTION_DISTANCE_TO_MOSCOW_OUTPUTS : []),
+        ...(actionDefinitions.some((item) => isGeoCityResultActionType(item.type)) ? ACTION_GEO_CITY_OUTPUTS : []),
     ].map((output) => ({
         ...output,
         module_id: action?.id ?? 'mod_action',

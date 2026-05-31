@@ -21,6 +21,7 @@ use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
 use App\Models\DataDictionaryEntry;
 use App\Models\Dialog;
+use App\Models\GeoResolutionEvent;
 use App\Models\Message;
 use App\Models\Scenario;
 use App\Models\ScenarioBuilderBlock;
@@ -40,9 +41,11 @@ use App\Services\Bots\StoreOutboundScenarioMessageAction;
 use App\Services\Contacts\AddContactPhoneAction;
 use App\Services\DataCollection\ExtractFirstNameAction;
 use App\Services\Dialogs\DeleteLastOutboundDialogMessageAction;
+use App\Services\Geo\ResolveGeoCityAction;
 use App\Services\Scenarios\DispatchStoredInboundScenarioAction;
 use App\Services\Scenarios\GenericDbScenarioRuntime;
 use App\Services\Scenarios\ScenarioRegistry;
+use Database\Seeders\GeoDictionarySeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -1394,6 +1397,662 @@ class GenericDbScenarioRuntimeTest extends TestCase
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && $request['chat_id'] === $dialog->external_chat_id
             && $request['text'] === 'Расстояние рассчитано');
+    }
+
+    public function test_v3_geo_city_action_writes_contact_and_follows_found_edge(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9761]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9762]]),
+        ]);
+        $this->seed(GeoDictionarySeeder::class);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel, [
+            'country' => null,
+            'region' => null,
+            'city' => null,
+        ]);
+        $scenario = $this->createPublishedScenario(
+            'v3_geo_city_found',
+            $this->v3GeoCityRuntimeSchema($channel->id),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $run->forceFill([
+            'state_payload' => array_replace_recursive($run->state_payload ?? [], [
+                'v3' => [
+                    'geo_resolution_attempts' => [
+                        'resolve_geo' => 2,
+                    ],
+                ],
+            ]),
+        ])->save();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'я из мск');
+
+        $run->refresh();
+        $contact->refresh();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('geo_found_done', $run->current_step);
+        $this->assertSame('Россия', $contact->country);
+        $this->assertSame('Москва', $contact->region);
+        $this->assertSame('Москва', $contact->city);
+        $this->assertNull(data_get($run->state_payload, 'v3.geo_resolution_attempts.resolve_geo'));
+
+        $this->assertDatabaseHas('geo_resolution_events', [
+            'contact_id' => $contact->id,
+            'dialog_id' => $dialog->id,
+            'status' => ResolveGeoCityAction::STATUS_MATCHED_CITY,
+            'matched_alias' => 'мск',
+            'country' => 'Россия',
+            'region' => 'Москва',
+            'city' => 'Москва',
+        ]);
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && $request['text'] === 'Город найден');
+    }
+
+    public function test_v3_geo_city_action_routes_ambiguous_to_not_found_without_mutating_contact(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9771]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9772]]),
+        ]);
+        $this->seed(GeoDictionarySeeder::class);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel, [
+            'country' => 'Россия',
+            'region' => 'Старый регион',
+            'city' => 'Старый город',
+        ]);
+        $scenario = $this->createPublishedScenario(
+            'v3_geo_city_ambiguous',
+            $this->v3GeoCityRuntimeSchema($channel->id),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'я из химок, сейчас в москве');
+
+        $run->refresh();
+        $contact->refresh();
+
+        $this->assertSame('geo_not_found_done', $run->current_step);
+        $this->assertSame('Россия', $contact->country);
+        $this->assertSame('Старый регион', $contact->region);
+        $this->assertSame('Старый город', $contact->city);
+        $this->assertSame(1, data_get($run->state_payload, 'v3.geo_resolution_attempts.resolve_geo'));
+
+        $this->assertDatabaseHas('geo_resolution_events', [
+            'contact_id' => $contact->id,
+            'dialog_id' => $dialog->id,
+            'status' => ResolveGeoCityAction::STATUS_AMBIGUOUS,
+        ]);
+    }
+
+    public function test_v3_geo_city_action_preserves_legacy_ambiguous_output_for_old_snapshot(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9773]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9774]]),
+        ]);
+        $this->seed(GeoDictionarySeeder::class);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel, [
+            'country' => 'Россия',
+            'region' => 'Старый регион',
+            'city' => 'Старый город',
+        ]);
+        $scenario = $this->createPublishedScenario(
+            'v3_geo_city_legacy_ambiguous',
+            $this->v3GeoCityRuntimeSchema($channel->id, legacyGeoOutputs: true),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'я из химок, сейчас в москве');
+
+        $run->refresh();
+
+        $this->assertSame('geo_ambiguous_done', $run->current_step);
+        $this->assertSame(1, data_get($run->state_payload, 'v3.geo_resolution_attempts.resolve_geo'));
+    }
+
+    public function test_v3_geo_city_action_handles_missing_current_inbound_message(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9781]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9782]]),
+        ]);
+        $this->seed(GeoDictionarySeeder::class);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario(
+            'v3_geo_city_missing_inbound',
+            $this->v3GeoCityRuntimeSchema($channel->id),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, '', [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_SCENARIO_MESSAGE,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+        ]);
+
+        $run->refresh();
+        $event = GeoResolutionEvent::query()->where('contact_id', $contact->id)->firstOrFail();
+
+        $this->assertSame('geo_not_found_done', $run->current_step);
+        $this->assertSame(1, data_get($run->state_payload, 'v3.geo_resolution_attempts.resolve_geo'));
+        $this->assertSame(ResolveGeoCityAction::STATUS_NOT_FOUND, $event->status);
+        $this->assertSame('missing_current_inbound_message', data_get($event->payload, 'reason'));
+    }
+
+    public function test_v3_geo_city_action_uses_limit_without_resolver_event(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9791]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9792]]),
+        ]);
+        $this->seed(GeoDictionarySeeder::class);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel, [
+            'country' => null,
+            'region' => null,
+            'city' => null,
+        ]);
+        $scenario = $this->createPublishedScenario(
+            'v3_geo_city_limit',
+            $this->v3GeoCityRuntimeSchema($channel->id),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $run->forceFill([
+            'state_payload' => array_replace_recursive($run->state_payload ?? [], [
+                'v3' => [
+                    'geo_resolution_attempts' => [
+                        'resolve_geo' => 3,
+                    ],
+                ],
+            ]),
+        ])->save();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'я из мск');
+
+        $run->refresh();
+        $contact->refresh();
+
+        $this->assertSame('geo_limit_reached_done', $run->current_step);
+        $this->assertSame(3, data_get($run->state_payload, 'v3.geo_resolution_attempts.resolve_geo'));
+        $this->assertNull($contact->country);
+        $this->assertSame(0, GeoResolutionEvent::query()->count());
+    }
+
+    public function test_v3_geo_city_action_writes_contact_from_ai_analysis_data(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9793]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9794]]),
+        ]);
+        $this->seed(GeoDictionarySeeder::class);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel, [
+            'country' => null,
+            'region' => null,
+            'city' => null,
+        ]);
+        $scenario = $this->createPublishedScenario(
+            'v3_geo_city_ai_data_found',
+            $this->v3GeoCityRuntimeSchema($channel->id, geoAction: $this->v3GeoCityAiDataAction()),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $run->forceFill([
+            'state_payload' => array_replace_recursive($run->state_payload ?? [], [
+                'v3' => [
+                    'geo_resolution_attempts' => [
+                        'resolve_geo' => 2,
+                    ],
+                    'ai_analysis' => [
+                        'ai_city' => [
+                            'output_id' => 'city_found',
+                            'label' => 'Город найден',
+                            'ai_request_id' => 123,
+                            'data' => [
+                                'geo_city' => 'Химки',
+                                'geo_region' => 'Московская область',
+                                'geo_country' => 'Россия',
+                            ],
+                        ],
+                    ],
+                ],
+            ]),
+        ])->save();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'дальше');
+
+        $run->refresh();
+        $contact->refresh();
+        $event = GeoResolutionEvent::query()->where('contact_id', $contact->id)->firstOrFail();
+
+        $this->assertSame('geo_found_done', $run->current_step);
+        $this->assertSame('Россия', $contact->country);
+        $this->assertSame('Московская область', $contact->region);
+        $this->assertSame('Химки', $contact->city);
+        $this->assertNull(data_get($run->state_payload, 'v3.geo_resolution_attempts.resolve_geo'));
+        $this->assertSame(ResolveGeoCityAction::STATUS_MATCHED_CITY, $event->status);
+        $this->assertSame('ai_data', data_get($event->payload, 'source'));
+        $this->assertSame('city_found', data_get($event->payload, 'ai_output_id'));
+        $this->assertSame('Химки', data_get($event->payload, 'ai_city'));
+        $this->assertSame('Химки Московская область Россия', data_get($event->payload, 'resolver_input'));
+        $this->assertTrue(data_get($event->payload, 'resolver_ran'));
+        $this->assertSame('geo_found', data_get($event->payload, 'final_output'));
+    }
+
+    public function test_v3_geo_city_action_routes_ai_city_not_confirmed_to_not_found(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9795]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9796]]),
+        ]);
+        $this->seed(GeoDictionarySeeder::class);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel, [
+            'country' => 'Россия',
+            'region' => 'Старый регион',
+            'city' => 'Старый город',
+        ]);
+        $scenario = $this->createPublishedScenario(
+            'v3_geo_city_ai_data_not_found',
+            $this->v3GeoCityRuntimeSchema($channel->id, geoAction: $this->v3GeoCityAiDataAction()),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $run->forceFill([
+            'state_payload' => array_replace_recursive($run->state_payload ?? [], [
+                'v3' => [
+                    'ai_analysis' => [
+                        'ai_city' => [
+                            'output_id' => 'city_found',
+                            'label' => 'Город найден',
+                            'data' => [
+                                'geo_city' => 'Омск',
+                                'geo_region' => 'Омская область',
+                                'geo_country' => 'Россия',
+                            ],
+                        ],
+                    ],
+                ],
+            ]),
+        ])->save();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'дальше');
+
+        $run->refresh();
+        $contact->refresh();
+        $event = GeoResolutionEvent::query()->where('contact_id', $contact->id)->firstOrFail();
+
+        $this->assertSame('geo_not_found_done', $run->current_step);
+        $this->assertSame('Россия', $contact->country);
+        $this->assertSame('Старый регион', $contact->region);
+        $this->assertSame('Старый город', $contact->city);
+        $this->assertSame(1, data_get($run->state_payload, 'v3.geo_resolution_attempts.resolve_geo'));
+        $this->assertSame(ResolveGeoCityAction::STATUS_NOT_FOUND, $event->status);
+        $this->assertSame('geo_not_found', data_get($event->payload, 'final_output'));
+        $this->assertSame('Омск Омская область Россия', data_get($event->payload, 'resolver_input'));
+        $this->assertTrue(data_get($event->payload, 'resolver_ran'));
+    }
+
+    public function test_v3_geo_city_action_counts_missing_ai_data_and_writes_diagnostic_event(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9797]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9798]]),
+        ]);
+        $this->seed(GeoDictionarySeeder::class);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario(
+            'v3_geo_city_missing_ai_data',
+            $this->v3GeoCityRuntimeSchema($channel->id, geoAction: $this->v3GeoCityAiDataAction()),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'дальше');
+
+        $run->refresh();
+        $event = GeoResolutionEvent::query()->where('contact_id', $contact->id)->firstOrFail();
+
+        $this->assertSame('geo_not_found_done', $run->current_step);
+        $this->assertSame(1, data_get($run->state_payload, 'v3.geo_resolution_attempts.resolve_geo'));
+        $this->assertSame(ResolveGeoCityAction::STATUS_NOT_FOUND, $event->status);
+        $this->assertSame('missing_ai_data', data_get($event->payload, 'reason'));
+        $this->assertFalse(data_get($event->payload, 'resolver_ran'));
+        $this->assertNull($event->source_text);
+    }
+
+    public function test_v3_geo_city_action_counts_missing_ai_city_and_writes_diagnostic_event(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9799]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9800]]),
+        ]);
+        $this->seed(GeoDictionarySeeder::class);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario(
+            'v3_geo_city_missing_ai_city',
+            $this->v3GeoCityRuntimeSchema($channel->id, geoAction: $this->v3GeoCityAiDataAction()),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $run->forceFill([
+            'state_payload' => array_replace_recursive($run->state_payload ?? [], [
+                'v3' => [
+                    'ai_analysis' => [
+                        'ai_city' => [
+                            'output_id' => 'city_not_found',
+                            'label' => 'Город не найден',
+                            'data' => [
+                                'geo_region' => 'Московская область',
+                                'geo_country' => 'Россия',
+                            ],
+                        ],
+                    ],
+                ],
+            ]),
+        ])->save();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'дальше');
+
+        $run->refresh();
+        $event = GeoResolutionEvent::query()->where('contact_id', $contact->id)->firstOrFail();
+
+        $this->assertSame('geo_not_found_done', $run->current_step);
+        $this->assertSame(1, data_get($run->state_payload, 'v3.geo_resolution_attempts.resolve_geo'));
+        $this->assertSame('missing_ai_city', data_get($event->payload, 'reason'));
+        $this->assertSame('Московская область', data_get($event->payload, 'ai_region'));
+        $this->assertFalse(data_get($event->payload, 'resolver_ran'));
+    }
+
+    public function test_v3_geo_city_action_checks_limit_before_reading_ai_data(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9801]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9802]]),
+        ]);
+        $this->seed(GeoDictionarySeeder::class);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario(
+            'v3_geo_city_ai_data_limit',
+            $this->v3GeoCityRuntimeSchema($channel->id, geoAction: $this->v3GeoCityAiDataAction()),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $run->forceFill([
+            'state_payload' => array_replace_recursive($run->state_payload ?? [], [
+                'v3' => [
+                    'geo_resolution_attempts' => [
+                        'resolve_geo' => 3,
+                    ],
+                    'ai_analysis' => [
+                        'ai_city' => [
+                            'output_id' => 'city_found',
+                            'label' => 'Город найден',
+                            'data' => [
+                                'geo_city' => 'Химки',
+                                'geo_region' => 'Московская область',
+                                'geo_country' => 'Россия',
+                            ],
+                        ],
+                    ],
+                ],
+            ]),
+        ])->save();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'дальше');
+
+        $run->refresh();
+
+        $this->assertSame('geo_limit_reached_done', $run->current_step);
+        $this->assertSame(3, data_get($run->state_payload, 'v3.geo_resolution_attempts.resolve_geo'));
+        $this->assertSame(0, GeoResolutionEvent::query()->count());
     }
 
     public function test_v3_unsupported_legacy_action_uses_failed_output(): void
@@ -8810,6 +9469,161 @@ class GenericDbScenarioRuntimeTest extends TestCase
                 ],
                 'edges' => [],
             ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function v3GeoCityRuntimeSchema(
+        int $channelId,
+        bool $legacyGeoOutputs = false,
+        array $geoAction = [],
+    ): array {
+        $waitEdge = $this->v3WaitReplyEdge('10', 'edge_to_geo', 'resolve_geo');
+        $foundEdge = $this->v3GeoCityActionResultEdge('20', 'edge_geo_found', 'geo_found', 'geo_found_done', 'Город найден');
+        $manualRequiredEdge = $this->v3GeoCityActionResultEdge('30', 'edge_geo_manual_required', 'geo_manual_required', 'geo_manual_required_done', 'Нужно уточнить');
+        $ambiguousEdge = $this->v3GeoCityActionResultEdge('40', 'edge_geo_ambiguous', 'geo_ambiguous', 'geo_ambiguous_done', 'Несколько вариантов');
+        $notFoundEdge = $this->v3GeoCityActionResultEdge('50', 'edge_geo_not_found', 'geo_not_found', 'geo_not_found_done', 'Не найдено');
+        $belowThresholdEdge = $this->v3GeoCityActionResultEdge('60', 'edge_geo_below_threshold', 'geo_below_threshold', 'geo_below_threshold_done', 'Низкая уверенность');
+        $inactiveEdge = $this->v3GeoCityActionResultEdge('70', 'edge_geo_inactive', 'geo_inactive', 'geo_inactive_done', 'Отключено');
+        $failedEdge = $this->v3GeoCityActionResultEdge('80', 'edge_geo_failed', 'geo_failed', 'geo_failed_done', 'Ошибка');
+        $limitEdge = $this->v3GeoCityActionResultEdge('90', 'edge_geo_limit_reached', 'geo_limit_reached', 'geo_limit_reached_done', 'Лимит');
+        $resultEdges = $legacyGeoOutputs
+            ? [
+                $foundEdge,
+                $manualRequiredEdge,
+                $ambiguousEdge,
+                $notFoundEdge,
+                $belowThresholdEdge,
+                $inactiveEdge,
+                $failedEdge,
+                $limitEdge,
+            ]
+            : [
+                $foundEdge,
+                $notFoundEdge,
+                $limitEdge,
+            ];
+        $doneBlockLabels = [
+            'geo_found_done' => 'Город найден',
+            'geo_not_found_done' => 'Город не найден',
+            'geo_limit_reached_done' => 'Лимит попыток',
+        ];
+
+        if ($legacyGeoOutputs) {
+            $doneBlockLabels += [
+                'geo_manual_required_done' => 'Нужно уточнить город',
+                'geo_ambiguous_done' => 'Нашли несколько вариантов',
+                'geo_below_threshold_done' => 'Нужна проверка города',
+                'geo_inactive_done' => 'Вариант отключён',
+                'geo_failed_done' => 'Ошибка распознавания',
+            ];
+        }
+
+        $doneBlocks = collect($doneBlockLabels)->mapWithKeys(fn (string $text, string $id): array => [
+            $id => [
+                'id' => $id,
+                'db_id' => crc32($id),
+                'kind' => 'state',
+                'title' => $text,
+                'message' => [
+                    'text' => $text,
+                    'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                ],
+                'buttons' => null,
+                'wait_reply_edges' => [],
+                'automatic_edges' => [],
+                'default_target_block_id' => null,
+            ],
+        ])->all();
+
+        return [
+            'version' => 3,
+            'builder_v3_runtime' => [
+                'schema_version' => 3,
+                'source_revision' => 'v3:test',
+                'compiled_at' => now()->toISOString(),
+                'entrypoints' => [[
+                    'block_id' => 'start',
+                    'channel_ids' => [$channelId],
+                    'match' => 'strict',
+                    'values' => ['старт'],
+                    'priority' => 10,
+                ]],
+                'blocks' => array_merge([
+                    'start' => [
+                        'id' => 'start',
+                        'db_id' => 1,
+                        'kind' => 'state',
+                        'title' => 'Спросить город',
+                        'message' => [
+                            'text' => 'В каком городе живёте?',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => null,
+                        'wait_reply_edges' => [$waitEdge],
+                        'automatic_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                    'resolve_geo' => [
+                        'id' => 'resolve_geo',
+                        'db_id' => 2,
+                        'kind' => 'state',
+                        'title' => 'Распознать город',
+                        'actions' => [array_replace([
+                            'type' => 'resolve_geo_city',
+                            'source' => 'current_inbound_message',
+                        ], $geoAction)],
+                        'message' => null,
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'action_result_edges' => $resultEdges,
+                        'default_target_block_id' => null,
+                    ],
+                ], $doneBlocks),
+                'edges' => array_merge([$waitEdge], $resultEdges),
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function v3GeoCityAiDataAction(): array
+    {
+        return [
+            'type' => 'resolve_geo_city',
+            'source' => 'ai_data',
+            'source_block_client_key' => 'block_ai_city',
+            'source_block_id' => 'ai_city',
+            'city_field_key' => 'geo_city',
+            'region_field_key' => 'geo_region',
+            'country_field_key' => 'geo_country',
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function v3GeoCityActionResultEdge(
+        string $id,
+        string $edgeKey,
+        string $outputId,
+        string $targetBlockId,
+        string $label,
+    ): array {
+        return [
+            'id' => $id,
+            'edge_key' => $edgeKey,
+            'mode' => 'action_result',
+            'priority' => 10,
+            'transition_limit' => 0,
+            'source_block_id' => 'resolve_geo',
+            'target_block_id' => $targetBlockId,
+            'from_output_id' => $outputId,
+            'label' => $label,
         ];
     }
 

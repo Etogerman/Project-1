@@ -152,6 +152,7 @@ class SaveScenarioBuilderV3StateAction
             ->keyBy('id');
         $incomingExistingIds = [];
         $blockIdsByClientKey = [];
+        $savedBlocksByClientKey = [];
 
         foreach ($blocks as $block) {
             $blockId = $block['id'];
@@ -199,16 +200,89 @@ class SaveScenarioBuilderV3StateAction
             $this->syncStartConditionTables($model, $settingsPayload);
 
             $blockIdsByClientKey[$block['client_key']] = (int) $model->id;
+            $savedBlocksByClientKey[$block['client_key']] = $model;
 
             if ($blockId === null) {
                 $idMap['blocks'][$block['client_key']] = (int) $model->id;
             }
         }
 
+        $this->stabilizeGeoAiSourceBlockKeys($savedBlocksByClientKey);
+
         return [
             'block_ids_by_client_key' => $blockIdsByClientKey,
             'deleted_block_ids' => array_values(array_diff($serverVisibleScope['block_ids'], $incomingExistingIds)),
         ];
+    }
+
+    /**
+     * @param  array<string, ScenarioBuilderBlock>  $blocksByClientKey
+     */
+    private function stabilizeGeoAiSourceBlockKeys(array $blocksByClientKey): void
+    {
+        $stableKeysByClientKey = [];
+
+        foreach ($blocksByClientKey as $clientKey => $block) {
+            $stableKey = 'block_'.$block->id;
+            $stableKeysByClientKey[(string) $clientKey] = $stableKey;
+            $stableKeysByClientKey[$stableKey] = $stableKey;
+        }
+
+        foreach ($blocksByClientKey as $block) {
+            $settingsPayload = is_array($block->settings_payload) ? $block->settings_payload : [];
+            $stableSettingsPayload = $this->settingsPayloadWithStableGeoAiSourceBlockKeys($settingsPayload, $stableKeysByClientKey);
+
+            if ($stableSettingsPayload === $settingsPayload) {
+                continue;
+            }
+
+            $block->forceFill([
+                'settings_payload' => $stableSettingsPayload,
+            ])->save();
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $settingsPayload
+     * @param  array<string, string>  $stableKeysByClientKey
+     * @return array<string, mixed>
+     */
+    private function settingsPayloadWithStableGeoAiSourceBlockKeys(array $settingsPayload, array $stableKeysByClientKey): array
+    {
+        $modules = is_array($settingsPayload['modules'] ?? null) ? $settingsPayload['modules'] : [];
+
+        foreach ($modules as $moduleIndex => $module) {
+            if (! is_array($module) || ($module['type'] ?? null) !== 'action') {
+                continue;
+            }
+
+            $actions = is_array(data_get($module, 'payload.actions')) ? data_get($module, 'payload.actions') : [];
+
+            foreach ($actions as $actionIndex => $action) {
+                if (
+                    ! is_array($action)
+                    || ($action['type'] ?? null) !== 'resolve_geo_city'
+                    || ($action['source'] ?? null) !== 'ai_data'
+                ) {
+                    continue;
+                }
+
+                $sourceBlockClientKey = trim((string) ($action['source_block_client_key'] ?? ''));
+
+                if ($sourceBlockClientKey === '' || ! isset($stableKeysByClientKey[$sourceBlockClientKey])) {
+                    continue;
+                }
+
+                $actions[$actionIndex]['source_block_client_key'] = $stableKeysByClientKey[$sourceBlockClientKey];
+            }
+
+            data_set($module, 'payload.actions', $actions);
+            $modules[$moduleIndex] = $module;
+        }
+
+        $settingsPayload['modules'] = $modules;
+
+        return $settingsPayload;
     }
 
     /**

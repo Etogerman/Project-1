@@ -40,7 +40,27 @@ class ValidateScenarioBuilderV3StateAction
 
     private const MAX_ACTIONS_PER_BLOCK = 20;
 
-    private const ACTION_TYPES = ['write_contact_field', 'check_data', 'edit_message', 'calculate_distance_to_moscow'];
+    private const ACTION_TYPES = [
+        'write_contact_field',
+        'check_data',
+        'edit_message',
+        'calculate_distance_to_moscow',
+        'resolve_geo_city',
+    ];
+
+    private const ACTION_RESULT_TYPES = ['check_data', 'calculate_distance_to_moscow', 'resolve_geo_city'];
+
+    private const GEO_CITY_SOURCES = ['current_inbound_message', 'ai_data'];
+
+    private const GEO_CITY_OUTPUT_NOT_FOUND = 'geo_not_found';
+
+    private const GEO_CITY_LEGACY_NOT_FOUND_OUTPUTS = [
+        'geo_manual_required',
+        'geo_ambiguous',
+        'geo_below_threshold',
+        'geo_inactive',
+        'geo_failed',
+    ];
 
     private const ACTION_SOURCE_TYPES = ['ai_data', 'inbound_message', 'static_value'];
 
@@ -165,6 +185,8 @@ class ValidateScenarioBuilderV3StateAction
         }
 
         $blocks = $this->normalizeBlocks($builder['blocks'] ?? []);
+        $this->validateGeoAiDataSources($blocks);
+
         $edges = $this->normalizeEdges($builder['edges'] ?? [], $blocks);
 
         return [
@@ -237,6 +259,7 @@ class ValidateScenarioBuilderV3StateAction
 
         $modules = $this->normalizeModules($settingsPayload['modules'] ?? [], $blockIndex);
         $outputs = $this->normalizeOutputs($settingsPayload['outputs'] ?? [], $blockIndex);
+        $outputs = $this->hasResolveGeoCityAction($modules) ? $this->geoCityCanonicalOutputs($modules) : $outputs;
         $kind = $this->optionalStringValue(
             $settingsPayload['kind'] ?? 'state',
             "builder.blocks.$blockIndex.settings_payload.kind",
@@ -707,8 +730,29 @@ class ValidateScenarioBuilderV3StateAction
             $targetVariableKey = trim((string) ($action['target_variable_key'] ?? ''));
             $operation = trim((string) ($action['operation'] ?? 'remove_buttons'));
             $target = trim((string) ($action['target'] ?? 'last_current_run_outbound_with_inline_buttons'));
+            $geoSource = trim((string) ($action['source'] ?? 'current_inbound_message'));
+            $geoCityFieldKey = trim((string) ($action['city_field_key'] ?? $action['source_field_key'] ?? 'geo_city'));
+            $geoRegionFieldKey = trim((string) ($action['region_field_key'] ?? 'geo_region'));
+            $geoCountryFieldKey = trim((string) ($action['country_field_key'] ?? 'geo_country'));
+
             if (! in_array($type, self::ACTION_TYPES, true)) {
                 $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.type", 'Unknown action type.');
+            }
+
+            if (in_array($type, self::ACTION_RESULT_TYPES, true)) {
+                $resultActionIndexes = collect($actions)
+                    ->map(fn (mixed $item): string => is_array($item) ? trim((string) ($item['type'] ?? 'write_contact_field')) : '')
+                    ->filter(fn (string $itemType): bool => in_array($itemType, self::ACTION_RESULT_TYPES, true))
+                    ->keys()
+                    ->values();
+
+                if ($resultActionIndexes->count() > 1) {
+                    $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.type", 'Only one result action is allowed in action block.');
+                }
+
+                if ($actionIndex !== count($actions) - 1) {
+                    $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.type", 'Result action must be the last action in block.');
+                }
             }
 
             if ($type === 'edit_message') {
@@ -765,6 +809,46 @@ class ValidateScenarioBuilderV3StateAction
             if ($type === 'calculate_distance_to_moscow') {
                 $normalized[] = [
                     'type' => $type,
+                ];
+
+                continue;
+            }
+
+            if ($type === 'resolve_geo_city') {
+                if (! in_array($geoSource, self::GEO_CITY_SOURCES, true)) {
+                    $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.source", 'Unknown geo source.');
+                }
+
+                if ($geoSource === 'current_inbound_message') {
+                    $normalized[] = [
+                        'type' => $type,
+                        'source' => 'current_inbound_message',
+                    ];
+
+                    continue;
+                }
+
+                if ($sourceBlockClientKey === '') {
+                    $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.source_block_client_key", 'Geo AI source block is required.');
+                }
+
+                if ($geoCityFieldKey === '' || ! preg_match('/^[A-Za-z][A-Za-z0-9_]*$/', $geoCityFieldKey)) {
+                    $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.city_field_key", 'Invalid geo city field.');
+                }
+
+                foreach (['region_field_key' => $geoRegionFieldKey, 'country_field_key' => $geoCountryFieldKey] as $field => $fieldKey) {
+                    if ($fieldKey !== '' && ! preg_match('/^[A-Za-z][A-Za-z0-9_]*$/', $fieldKey)) {
+                        $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.$field", 'Invalid geo optional field.');
+                    }
+                }
+
+                $normalized[] = [
+                    'type' => $type,
+                    'source' => 'ai_data',
+                    'source_block_client_key' => $sourceBlockClientKey,
+                    'city_field_key' => $geoCityFieldKey,
+                    'region_field_key' => $geoRegionFieldKey,
+                    'country_field_key' => $geoCountryFieldKey,
                 ];
 
                 continue;
@@ -944,6 +1028,7 @@ class ValidateScenarioBuilderV3StateAction
             $source = $this->normalizeEndpoint($edge['source'] ?? null, "builder.edges.$index.source", $blockKeys, $blockIds);
             $target = $this->normalizeEndpoint($edge['target'] ?? null, "builder.edges.$index.target", $blockKeys, $blockIds);
             $sourceOutputId = $this->nullableStringValue(data_get($edge, 'source.output_id'), "builder.edges.$index.source.output_id");
+            $sourceOutputId = $this->normalizeGeoCitySourceOutputId($source['client_key'], $sourceOutputId, $blockKeys);
 
             if ($sourceOutputId !== null) {
                 $sourceKey = $source['client_key'].'|'.$sourceOutputId;
@@ -1446,6 +1531,170 @@ class ValidateScenarioBuilderV3StateAction
 
         return collect(is_array($outputs) ? $outputs : [])
             ->contains(fn (array $output): bool => ($output['id'] ?? null) === $outputId);
+    }
+
+    private function normalizeGeoCitySourceOutputId(string $clientKey, ?string $outputId, $blockKeys): ?string
+    {
+        if ($outputId === null || ! in_array($outputId, self::GEO_CITY_LEGACY_NOT_FOUND_OUTPUTS, true)) {
+            return $outputId;
+        }
+
+        $block = $blockKeys->get($clientKey);
+
+        return is_array($block) && $this->hasResolveGeoCityAction(data_get($block, 'settings_payload.modules', []))
+            ? self::GEO_CITY_OUTPUT_NOT_FOUND
+            : $outputId;
+    }
+
+    private function hasResolveGeoCityAction(mixed $modules): bool
+    {
+        if (! is_array($modules)) {
+            return false;
+        }
+
+        foreach ($modules as $module) {
+            if (! is_array($module) || ($module['type'] ?? null) !== 'action') {
+                continue;
+            }
+
+            $actions = data_get($module, 'payload.actions', []);
+
+            if (! is_array($actions)) {
+                continue;
+            }
+
+            foreach ($actions as $action) {
+                if (is_array($action) && ($action['type'] ?? null) === 'resolve_geo_city') {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $modules
+     * @return list<array<string, mixed>>
+     */
+    private function geoCityCanonicalOutputs(array $modules): array
+    {
+        $moduleId = 'mod_action';
+
+        foreach ($modules as $module) {
+            if (($module['type'] ?? null) === 'action' && $this->hasResolveGeoCityAction([$module])) {
+                $moduleId = (string) ($module['id'] ?? $moduleId);
+                break;
+            }
+        }
+
+        return [
+            [
+                'id' => 'geo_found',
+                'label' => 'Город найден',
+                'source' => 'action',
+                'module_id' => $moduleId,
+                'action_result_id' => 'geo_found',
+            ],
+            [
+                'id' => 'geo_not_found',
+                'label' => 'Город не найден',
+                'source' => 'action',
+                'module_id' => $moduleId,
+                'action_result_id' => 'geo_not_found',
+            ],
+            [
+                'id' => 'geo_limit_reached',
+                'label' => 'Превышено попыток',
+                'source' => 'action',
+                'module_id' => $moduleId,
+                'action_result_id' => 'geo_limit_reached',
+            ],
+        ];
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $blocks
+     */
+    private function validateGeoAiDataSources(array $blocks): void
+    {
+        $blocksByClientKey = collect($blocks)->keyBy('client_key');
+
+        foreach ($blocks as $blockIndex => $block) {
+            $modules = data_get($block, 'settings_payload.modules', []);
+
+            if (! is_array($modules)) {
+                continue;
+            }
+
+            foreach ($modules as $moduleIndex => $module) {
+                if (! is_array($module) || ($module['type'] ?? null) !== 'action') {
+                    continue;
+                }
+
+                $actions = data_get($module, 'payload.actions', []);
+
+                if (! is_array($actions)) {
+                    continue;
+                }
+
+                foreach ($actions as $actionIndex => $action) {
+                    if (
+                        ! is_array($action)
+                        || ($action['type'] ?? null) !== 'resolve_geo_city'
+                        || ($action['source'] ?? null) !== 'ai_data'
+                    ) {
+                        continue;
+                    }
+
+                    $sourceBlockClientKey = (string) ($action['source_block_client_key'] ?? '');
+                    $sourceBlock = $blocksByClientKey->get($sourceBlockClientKey);
+                    $path = "builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex";
+
+                    if (! is_array($sourceBlock) || ! $this->hasAiModule($sourceBlock)) {
+                        $this->fail("$path.source_block_client_key", 'Geo source block must be an AI analysis block.');
+                    }
+
+                    $extractFieldKeys = $this->aiExtractFieldKeys($sourceBlock);
+
+                    foreach ([
+                        'city_field_key' => (string) ($action['city_field_key'] ?? ''),
+                        'region_field_key' => (string) ($action['region_field_key'] ?? ''),
+                        'country_field_key' => (string) ($action['country_field_key'] ?? ''),
+                    ] as $field => $fieldKey) {
+                        if ($fieldKey !== '' && ! in_array($fieldKey, $extractFieldKeys, true)) {
+                            $this->fail("$path.$field", 'Geo source field must exist in selected AI analysis block.');
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     */
+    private function hasAiModule(array $block): bool
+    {
+        return collect(data_get($block, 'settings_payload.modules', []))
+            ->contains(fn (mixed $module): bool => is_array($module) && ($module['type'] ?? null) === 'ai');
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     * @return list<string>
+     */
+    private function aiExtractFieldKeys(array $block): array
+    {
+        $aiModule = collect(data_get($block, 'settings_payload.modules', []))
+            ->first(fn (mixed $module): bool => is_array($module) && ($module['type'] ?? null) === 'ai');
+
+        return collect(data_get($aiModule, 'payload.extract_fields', []))
+            ->filter(fn (mixed $field): bool => is_array($field))
+            ->map(fn (array $field): string => trim((string) ($field['key'] ?? '')))
+            ->filter(fn (string $key): bool => $key !== '')
+            ->values()
+            ->all();
     }
 
     /**

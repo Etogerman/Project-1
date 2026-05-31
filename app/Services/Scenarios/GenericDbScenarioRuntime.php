@@ -41,6 +41,9 @@ use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\Contacts\SyncContactDistanceToMoscowAction;
 use App\Services\DataCollection\ExtractFirstNameAction;
 use App\Services\Dialogs\DeleteLastOutboundDialogMessageAction;
+use App\Services\Geo\ApplyGeoResolutionToContactAction;
+use App\Services\Geo\ResolveAndApplyGeoCityAction;
+use App\Services\Geo\ResolveGeoCityAction;
 use App\Services\Messages\PrepareMessageContentAction;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Collection;
@@ -110,6 +113,32 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
     private const V3_DISTANCE_TO_MOSCOW_OUTPUT_OUT_OF_SCOPE = 'distance_out_of_scope';
 
     private const V3_DISTANCE_TO_MOSCOW_OUTPUT_FAILED = 'distance_failed';
+
+    private const V3_GEO_CITY_OUTPUT_FOUND = 'geo_found';
+
+    private const V3_GEO_CITY_OUTPUT_MANUAL_REQUIRED = 'geo_manual_required';
+
+    private const V3_GEO_CITY_OUTPUT_AMBIGUOUS = 'geo_ambiguous';
+
+    private const V3_GEO_CITY_OUTPUT_NOT_FOUND = 'geo_not_found';
+
+    private const V3_GEO_CITY_OUTPUT_BELOW_THRESHOLD = 'geo_below_threshold';
+
+    private const V3_GEO_CITY_OUTPUT_INACTIVE = 'geo_inactive';
+
+    private const V3_GEO_CITY_OUTPUT_FAILED = 'geo_failed';
+
+    private const V3_GEO_CITY_OUTPUT_LIMIT_REACHED = 'geo_limit_reached';
+
+    private const V3_GEO_CITY_ATTEMPT_LIMIT = 3;
+
+    private const V3_GEO_CITY_LEGACY_OUTPUTS_BY_STATUS = [
+        ResolveGeoCityAction::STATUS_MANUAL_REQUIRED => self::V3_GEO_CITY_OUTPUT_MANUAL_REQUIRED,
+        ResolveGeoCityAction::STATUS_AMBIGUOUS => self::V3_GEO_CITY_OUTPUT_AMBIGUOUS,
+        ResolveGeoCityAction::STATUS_BELOW_THRESHOLD => self::V3_GEO_CITY_OUTPUT_BELOW_THRESHOLD,
+        ResolveGeoCityAction::STATUS_INACTIVE => self::V3_GEO_CITY_OUTPUT_INACTIVE,
+        ResolveGeoCityAction::STATUS_FAILED => self::V3_GEO_CITY_OUTPUT_FAILED,
+    ];
 
     private const V3_CONTACT_CAPTURE_FIELDS = [
         'phone',
@@ -194,6 +223,9 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         private readonly ResolveRootContactAction $resolveRootContactAction,
         private readonly QueueBitrix24ContactSyncAction $queueBitrix24ContactSyncAction,
         private readonly SyncContactDistanceToMoscowAction $syncContactDistanceToMoscowAction,
+        private readonly ResolveAndApplyGeoCityAction $resolveAndApplyGeoCityAction,
+        private readonly ResolveGeoCityAction $resolveGeoCityAction,
+        private readonly ApplyGeoResolutionToContactAction $applyGeoResolutionToContactAction,
     ) {}
 
     public function code(): string
@@ -2866,6 +2898,16 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 );
             }
 
+            if (($action['type'] ?? null) === 'resolve_geo_city') {
+                return $this->applyV3ResolveGeoCityAction(
+                    $message,
+                    $action,
+                    $block,
+                    $statePayload,
+                    filled($block['id'] ?? null) ? (string) $block['id'] : null,
+                );
+            }
+
             if (($action['type'] ?? null) !== 'write_contact_field') {
                 Log::warning('scenario.v3_unsupported_action_skipped', [
                     'scenario_code' => $this->code(),
@@ -3398,6 +3440,366 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             Contact::DISTANCE_TO_MOSCOW_STATUS_UNKNOWN => self::V3_DISTANCE_TO_MOSCOW_OUTPUT_UNKNOWN,
             default => self::V3_DISTANCE_TO_MOSCOW_OUTPUT_FAILED,
         };
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @return array{state_payload: array<string, mixed>, output_id: string}
+     */
+    private function applyV3ResolveGeoCityAction(Message $message, array $action, array $block, array $statePayload, ?string $blockId): array
+    {
+        $attemptKey = $blockId ?: 'unknown';
+        $attemptPath = "v3.geo_resolution_attempts.$attemptKey";
+        $attempts = max(0, (int) data_get($statePayload, $attemptPath, 0));
+
+        if ($attempts >= self::V3_GEO_CITY_ATTEMPT_LIMIT) {
+            Log::info('scenario.v3_geo_city_attempt_limit_reached', [
+                'scenario_code' => $this->code(),
+                'dialog_id' => $message->dialog_id,
+                'message_id' => $message->id,
+                'block_id' => $blockId,
+                'attempts' => $attempts,
+            ]);
+
+            return [
+                'state_payload' => $statePayload,
+                'output_id' => self::V3_GEO_CITY_OUTPUT_LIMIT_REACHED,
+            ];
+        }
+
+        $rootContact = $message->contact instanceof Contact
+            ? $this->resolveRootContactAction->handle($message->contact)
+            : null;
+
+        if (! $rootContact instanceof Contact) {
+            Log::warning('scenario.v3_geo_city_missing_contact', [
+                'scenario_code' => $this->code(),
+                'dialog_id' => $message->dialog_id,
+                'message_id' => $message->id,
+                'block_id' => $blockId,
+            ]);
+
+            data_set($statePayload, $attemptPath, $attempts + 1);
+
+            return [
+                'state_payload' => $statePayload,
+                'output_id' => $this->v3GeoCityOutputId(ResolveGeoCityAction::STATUS_FAILED, $block),
+            ];
+        }
+
+        $dialog = $message->dialog instanceof Dialog
+            ? $message->dialog
+            : ($message->dialog_id !== null ? Dialog::query()->find($message->dialog_id) : null);
+
+        if (($action['source'] ?? 'current_inbound_message') === 'ai_data') {
+            return $this->applyV3ResolveGeoCityFromAiDataAction(
+                message: $message,
+                action: $action,
+                block: $block,
+                statePayload: $statePayload,
+                blockId: $blockId,
+                rootContact: $rootContact,
+                dialog: $dialog,
+                attemptPath: $attemptPath,
+                attempts: $attempts,
+            );
+        }
+
+        $isCurrentInboundMessage = $message->direction === Message::DIRECTION_INBOUND
+            && $message->sent_by_type === Message::SENT_BY_TYPE_CONTACT;
+        $text = trim((string) ($message->text ?? ''));
+
+        if (! $isCurrentInboundMessage || $text === '') {
+            $reason = ! $isCurrentInboundMessage ? 'missing_current_inbound_message' : 'empty_text';
+            $result = [
+                'status' => ResolveGeoCityAction::STATUS_NOT_FOUND,
+                'source_text' => $text !== '' ? $text : null,
+                'payload' => ['reason' => $reason],
+            ];
+
+            $this->applyGeoResolutionToContactAction->createEvent($rootContact, $result, $dialog, $message);
+
+            data_set($statePayload, $attemptPath, $attempts + 1);
+
+            return [
+                'state_payload' => $statePayload,
+                'output_id' => self::V3_GEO_CITY_OUTPUT_NOT_FOUND,
+            ];
+        }
+
+        $result = $this->resolveAndApplyGeoCityAction->handle($rootContact, $text, $dialog, $message);
+        $status = (string) ($result['status'] ?? ResolveGeoCityAction::STATUS_FAILED);
+        $outputId = $this->v3GeoCityOutputId($status, $block);
+
+        if ($outputId !== self::V3_GEO_CITY_OUTPUT_FOUND) {
+            data_set($statePayload, $attemptPath, $attempts + 1);
+        } else {
+            data_forget($statePayload, $attemptPath);
+        }
+
+        return [
+            'state_payload' => $statePayload,
+            'output_id' => $outputId,
+        ];
+    }
+
+    private function v3GeoCityOutputId(string $status, array $block): string
+    {
+        if ($status === ResolveGeoCityAction::STATUS_MATCHED_CITY) {
+            return self::V3_GEO_CITY_OUTPUT_FOUND;
+        }
+
+        $legacyOutputId = self::V3_GEO_CITY_LEGACY_OUTPUTS_BY_STATUS[$status] ?? null;
+
+        if ($legacyOutputId !== null && $this->v3BlockHasActionResultEdge($block, $legacyOutputId)) {
+            return $legacyOutputId;
+        }
+
+        return self::V3_GEO_CITY_OUTPUT_NOT_FOUND;
+    }
+
+    /**
+     * @param  array<string, mixed>  $action
+     * @param  array<string, mixed>  $block
+     * @param  array<string, mixed>  $statePayload
+     * @return array{state_payload: array<string, mixed>, output_id: string}
+     */
+    private function applyV3ResolveGeoCityFromAiDataAction(
+        Message $message,
+        array $action,
+        array $block,
+        array $statePayload,
+        ?string $blockId,
+        Contact $rootContact,
+        ?Dialog $dialog,
+        string $attemptPath,
+        int $attempts,
+    ): array {
+        $sourceBlockId = trim((string) ($action['source_block_id'] ?? ''));
+        $analysis = $this->v3GeoCityAiAnalysis($statePayload, $sourceBlockId);
+        $sourceBlockClientKey = trim((string) ($action['source_block_client_key'] ?? ''));
+        $cityFieldKey = trim((string) ($action['city_field_key'] ?? 'geo_city'));
+        $regionFieldKey = trim((string) ($action['region_field_key'] ?? 'geo_region'));
+        $countryFieldKey = trim((string) ($action['country_field_key'] ?? 'geo_country'));
+
+        if ($analysis === null) {
+            $this->applyGeoResolutionToContactAction->createEvent(
+                $rootContact,
+                $this->v3GeoCityAiDataEarlyResult(
+                    reason: 'missing_ai_data',
+                    action: $action,
+                    analysis: null,
+                    city: null,
+                    region: null,
+                    country: null,
+                ),
+                $dialog,
+                $message,
+            );
+            data_set($statePayload, $attemptPath, $attempts + 1);
+
+            return [
+                'state_payload' => $statePayload,
+                'output_id' => self::V3_GEO_CITY_OUTPUT_NOT_FOUND,
+            ];
+        }
+
+        $city = $this->v3GeoCityAiDataValue($analysis, $cityFieldKey);
+        $region = $regionFieldKey !== '' ? $this->v3GeoCityAiDataValue($analysis, $regionFieldKey) : null;
+        $country = $countryFieldKey !== '' ? $this->v3GeoCityAiDataValue($analysis, $countryFieldKey) : null;
+
+        if ($city === null) {
+            $this->applyGeoResolutionToContactAction->createEvent(
+                $rootContact,
+                $this->v3GeoCityAiDataEarlyResult(
+                    reason: 'missing_ai_city',
+                    action: $action,
+                    analysis: $analysis,
+                    city: $city,
+                    region: $region,
+                    country: $country,
+                ),
+                $dialog,
+                $message,
+            );
+            data_set($statePayload, $attemptPath, $attempts + 1);
+
+            return [
+                'state_payload' => $statePayload,
+                'output_id' => self::V3_GEO_CITY_OUTPUT_NOT_FOUND,
+            ];
+        }
+
+        $resolverInput = $this->v3GeoCityResolverInputFromAiData($city, $region, $country);
+        $geoResult = $this->resolveGeoCityAction->handle($resolverInput);
+        $status = (string) ($geoResult['status'] ?? ResolveGeoCityAction::STATUS_FAILED);
+        $outputId = $status === ResolveGeoCityAction::STATUS_MATCHED_CITY
+            ? self::V3_GEO_CITY_OUTPUT_FOUND
+            : self::V3_GEO_CITY_OUTPUT_NOT_FOUND;
+        $geoResult = $this->withV3GeoCityAiDataPayload(
+            result: $geoResult,
+            action: $action,
+            analysis: $analysis,
+            city: $city,
+            region: $region,
+            country: $country,
+            resolverInput: $resolverInput,
+            outputId: $outputId,
+        );
+
+        if ($outputId === self::V3_GEO_CITY_OUTPUT_FOUND) {
+            $this->applyGeoResolutionToContactAction->handle($rootContact, $geoResult, $dialog, $message);
+            data_forget($statePayload, $attemptPath);
+        } else {
+            $this->applyGeoResolutionToContactAction->createEvent($rootContact, $geoResult, $dialog, $message);
+            data_set($statePayload, $attemptPath, $attempts + 1);
+        }
+
+        Log::info('scenario.v3_geo_city_ai_data_resolved', [
+            'scenario_code' => $this->code(),
+            'dialog_id' => $message->dialog_id,
+            'message_id' => $message->id,
+            'block_id' => $blockId,
+            'source_block_id' => $sourceBlockId,
+            'source_block_client_key' => $sourceBlockClientKey,
+            'resolver_status' => $status,
+            'output_id' => $outputId,
+        ]);
+
+        return [
+            'state_payload' => $statePayload,
+            'output_id' => $outputId,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @return array<string, mixed>|null
+     */
+    private function v3GeoCityAiAnalysis(array $statePayload, string $sourceBlockId): ?array
+    {
+        if ($sourceBlockId === '') {
+            return null;
+        }
+
+        $analysis = data_get($statePayload, "v3.ai_analysis.$sourceBlockId");
+
+        return is_array($analysis) ? $analysis : null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $analysis
+     */
+    private function v3GeoCityAiDataValue(array $analysis, string $fieldKey): ?string
+    {
+        if ($fieldKey === '') {
+            return null;
+        }
+
+        $value = data_get($analysis, "data.$fieldKey");
+
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $trimmed = trim((string) $value);
+
+        return $trimmed === '' ? null : mb_substr($trimmed, 0, 255);
+    }
+
+    private function v3GeoCityResolverInputFromAiData(string $city, ?string $region, ?string $country): string
+    {
+        return collect([$city, $region, $country])
+            ->filter(fn (?string $value): bool => is_string($value) && trim($value) !== '')
+            ->implode(' ');
+    }
+
+    /**
+     * @param  array<string, mixed>  $action
+     * @param  array<string, mixed>|null  $analysis
+     * @return array<string, mixed>
+     */
+    private function v3GeoCityAiDataEarlyResult(
+        string $reason,
+        array $action,
+        ?array $analysis,
+        ?string $city,
+        ?string $region,
+        ?string $country,
+    ): array {
+        return [
+            'status' => ResolveGeoCityAction::STATUS_NOT_FOUND,
+            'source_text' => null,
+            'payload' => [
+                'source' => 'ai_data',
+                'reason' => $reason,
+                'source_block_id' => (string) ($action['source_block_id'] ?? ''),
+                'source_block_client_key' => (string) ($action['source_block_client_key'] ?? ''),
+                'city_field_key' => (string) ($action['city_field_key'] ?? ''),
+                'region_field_key' => (string) ($action['region_field_key'] ?? ''),
+                'country_field_key' => (string) ($action['country_field_key'] ?? ''),
+                'ai_output_id' => is_array($analysis) ? data_get($analysis, 'output_id') : null,
+                'ai_output_label' => is_array($analysis) ? data_get($analysis, 'label') : null,
+                'ai_request_id' => is_array($analysis) ? data_get($analysis, 'ai_request_id') : null,
+                'ai_city' => $city,
+                'ai_region' => $region,
+                'ai_country' => $country,
+                'resolver_input' => null,
+                'resolver_status' => ResolveGeoCityAction::STATUS_NOT_FOUND,
+                'resolver_ran' => false,
+                'final_output' => self::V3_GEO_CITY_OUTPUT_NOT_FOUND,
+            ],
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $result
+     * @param  array<string, mixed>  $action
+     * @param  array<string, mixed>  $analysis
+     * @return array<string, mixed>
+     */
+    private function withV3GeoCityAiDataPayload(
+        array $result,
+        array $action,
+        array $analysis,
+        string $city,
+        ?string $region,
+        ?string $country,
+        string $resolverInput,
+        string $outputId,
+    ): array {
+        $payload = is_array($result['payload'] ?? null) ? $result['payload'] : [];
+        $status = (string) ($result['status'] ?? ResolveGeoCityAction::STATUS_FAILED);
+
+        $result['source_text'] = $resolverInput;
+        $result['payload'] = array_merge($payload, [
+            'source' => 'ai_data',
+            'source_block_id' => (string) ($action['source_block_id'] ?? ''),
+            'source_block_client_key' => (string) ($action['source_block_client_key'] ?? ''),
+            'city_field_key' => (string) ($action['city_field_key'] ?? ''),
+            'region_field_key' => (string) ($action['region_field_key'] ?? ''),
+            'country_field_key' => (string) ($action['country_field_key'] ?? ''),
+            'ai_output_id' => data_get($analysis, 'output_id'),
+            'ai_output_label' => data_get($analysis, 'label'),
+            'ai_request_id' => data_get($analysis, 'ai_request_id'),
+            'ai_city' => $city,
+            'ai_region' => $region,
+            'ai_country' => $country,
+            'resolver_input' => $resolverInput,
+            'resolver_status' => $status,
+            'resolver_ran' => true,
+            'final_output' => $outputId,
+        ]);
+
+        return $result;
+    }
+
+    private function v3BlockHasActionResultEdge(array $block, string $outputId): bool
+    {
+        $edges = is_array($block['action_result_edges'] ?? null) ? $block['action_result_edges'] : [];
+
+        return collect($edges)->contains(fn (mixed $edge): bool => is_array($edge)
+            && ($edge['from_output_id'] ?? null) === $outputId);
     }
 
     private function applyV3WriteDialogFieldAction(Message $message, string $fieldKey, string $value): bool

@@ -19,6 +19,16 @@ class BuildScenarioBuilderV3StateAction
 {
     public const SCHEMA_VERSION = 3;
 
+    private const GEO_CITY_OUTPUT_NOT_FOUND = 'geo_not_found';
+
+    private const GEO_CITY_LEGACY_NOT_FOUND_OUTPUTS = [
+        'geo_manual_required',
+        'geo_ambiguous',
+        'geo_below_threshold',
+        'geo_inactive',
+        'geo_failed',
+    ];
+
     private const DEFAULT_SHEET_ID = 'main';
 
     private const DEFAULT_SHEET_NAME = 'Главный';
@@ -296,6 +306,10 @@ class BuildScenarioBuilderV3StateAction
         $settingsPayload['modules'] = $this->modulesWithCanonicalStartCondition($block, $settingsPayload['modules'] ?? []);
         $settingsPayload['outputs'] = is_array($settingsPayload['outputs'] ?? null) ? array_values($settingsPayload['outputs']) : [];
 
+        if ($this->hasResolveGeoCityAction($settingsPayload['modules'])) {
+            $settingsPayload['outputs'] = $this->geoCityCanonicalOutputs($settingsPayload['modules']);
+        }
+
         return $settingsPayload;
     }
 
@@ -425,6 +439,12 @@ class BuildScenarioBuilderV3StateAction
     {
         $conditionPayload = is_array($edge->condition_payload) ? $edge->condition_payload : [];
         $fromOutputId = $conditionPayload['from_output_id'] ?? null;
+        $displayOutputId = $this->displayOutputIdForEdge($edge, is_string($fromOutputId) ? $fromOutputId : null);
+
+        if ($displayOutputId !== $fromOutputId) {
+            $conditionPayload['from_output_id'] = $displayOutputId;
+            $conditionPayload['label'] = 'Город не найден';
+        }
 
         return [
             'id' => (int) $edge->id,
@@ -432,13 +452,96 @@ class BuildScenarioBuilderV3StateAction
             'source' => [
                 'block_id' => (int) $edge->from_scenario_builder_block_id,
                 'client_key' => 'block_'.$edge->from_scenario_builder_block_id,
-                'output_id' => is_string($fromOutputId) && $fromOutputId !== '' ? $fromOutputId : null,
+                'output_id' => is_string($displayOutputId) && $displayOutputId !== '' ? $displayOutputId : null,
             ],
             'target' => [
                 'block_id' => $edge->to_scenario_builder_block_id !== null ? (int) $edge->to_scenario_builder_block_id : null,
                 'client_key' => $edge->to_scenario_builder_block_id !== null ? 'block_'.$edge->to_scenario_builder_block_id : null,
             ],
             'condition_payload' => $conditionPayload,
+        ];
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $modules
+     */
+    private function hasResolveGeoCityAction(array $modules): bool
+    {
+        foreach ($modules as $module) {
+            if (($module['type'] ?? null) !== 'action') {
+                continue;
+            }
+
+            $actions = data_get($module, 'payload.actions', []);
+
+            if (! is_array($actions)) {
+                continue;
+            }
+
+            foreach ($actions as $action) {
+                if (is_array($action) && ($action['type'] ?? null) === 'resolve_geo_city') {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private function displayOutputIdForEdge(ScenarioBuilderEdge $edge, ?string $outputId): ?string
+    {
+        if ($outputId === null || ! in_array($outputId, self::GEO_CITY_LEGACY_NOT_FOUND_OUTPUTS, true)) {
+            return $outputId;
+        }
+
+        $sourceBlock = $edge->fromBuilderBlock;
+        $settingsPayload = $sourceBlock instanceof ScenarioBuilderBlock && is_array($sourceBlock->settings_payload)
+            ? $sourceBlock->settings_payload
+            : [];
+        $modules = is_array($settingsPayload['modules'] ?? null) ? $settingsPayload['modules'] : [];
+
+        return $this->hasResolveGeoCityAction($modules)
+            ? self::GEO_CITY_OUTPUT_NOT_FOUND
+            : $outputId;
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $modules
+     * @return list<array<string, mixed>>
+     */
+    private function geoCityCanonicalOutputs(array $modules): array
+    {
+        $moduleId = 'mod_action';
+
+        foreach ($modules as $module) {
+            if (($module['type'] ?? null) === 'action' && $this->hasResolveGeoCityAction([$module])) {
+                $moduleId = (string) ($module['id'] ?? $moduleId);
+                break;
+            }
+        }
+
+        return [
+            [
+                'id' => 'geo_found',
+                'label' => 'Город найден',
+                'source' => 'action',
+                'module_id' => $moduleId,
+                'action_result_id' => 'geo_found',
+            ],
+            [
+                'id' => 'geo_not_found',
+                'label' => 'Город не найден',
+                'source' => 'action',
+                'module_id' => $moduleId,
+                'action_result_id' => 'geo_not_found',
+            ],
+            [
+                'id' => 'geo_limit_reached',
+                'label' => 'Превышено попыток',
+                'source' => 'action',
+                'module_id' => $moduleId,
+                'action_result_id' => 'geo_limit_reached',
+            ],
         ];
     }
 
