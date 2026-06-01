@@ -179,7 +179,7 @@ class DialogResource extends Resource
                     ->badge()
                     ->color(fn (Dialog $record): string => static::resolvePreviewSenderTone($record))
                     ->placeholder('—')
-                    ->toggleable(isToggledHiddenByDefault: true),
+                    ->toggleable(),
                 TextColumn::make('last_message_at')
                     ->label('Активность')
                     ->dateTime('d.m.Y H:i')

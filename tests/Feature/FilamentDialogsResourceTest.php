@@ -2860,7 +2860,7 @@ class FilamentDialogsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
-            ->assertSee('Ответ')
+            ->assertSee('Написать клиенту')
             ->assertSee('Отправить')
             ->assertSee('rows="1"', false)
             ->assertSee('conversation-reply-textarea-height', false)

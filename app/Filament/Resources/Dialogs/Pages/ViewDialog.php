@@ -744,7 +744,6 @@ class ViewDialog extends ViewRecord
     protected function getDialogSystemFieldsViewData(): array
     {
         $dialog = $this->getRecord();
-        $dialogHeader = $this->getDialogHeaderViewData();
         $contactSummary = $this->getContactSummaryViewData();
         $inboxStatus = $this->getDialogInboxStatusViewData();
         $dialogStage = $this->getDialogStageViewData();
@@ -762,9 +761,10 @@ class ViewDialog extends ViewRecord
                     null,
                     $this->getContactViewUrl(),
                 ),
-                $this->dialogSystemFieldRow('channel_id', 'Канал', $dialogHeader['channel_label'], null, 'dialog-channel-label'),
+                $this->dialogSystemFieldRow('channel_id', 'Канал', $this->formatChannelLabel($dialog->channel, 'Неизвестный канал'), null, 'dialog-channel-label'),
                 $this->dialogSystemFieldRow('status', 'Статус', $inboxStatus['current_label']),
                 $this->dialogSystemFieldRow('stage', 'Этап', $dialogStage['current_label']),
+                $this->dialogSystemFieldRow('assigned_user_id', 'Ответственный', $contactSummary['assigned_user_label']),
                 $this->dialogSystemFieldRow(
                     'current_block_id',
                     'Текущий блок',
@@ -809,7 +809,7 @@ class ViewDialog extends ViewRecord
                     null,
                     'Последнее исходящее',
                 ),
-                $this->dialogSystemFieldRow('phone', 'Телефон', $dialogHeader['phone_label']),
+                $this->dialogSystemFieldRow('phone', 'Телефон', $this->formatDialogPhoneLabel($dialog)),
             ],
         ];
     }
