@@ -23,6 +23,10 @@ class ValidateScenarioBuilderV3StateAction
 
     private const MAX_PAYLOAD_BYTES = 1048576;
 
+    private const MAX_VARIABLE_ACTION_OPERATIONS = 10;
+
+    private const MAX_MESSAGE_VARIABLE_VARIANTS = 20;
+
     private const MODULE_TYPES = ['start_condition', 'message', 'buttons', 'ai', 'action'];
 
     private const AI_SOURCES = [
@@ -46,20 +50,35 @@ class ValidateScenarioBuilderV3StateAction
         'edit_message',
         'calculate_distance_to_moscow',
         'resolve_geo_city',
+        'variables',
     ];
 
-    private const ACTION_RESULT_TYPES = ['check_data', 'calculate_distance_to_moscow', 'resolve_geo_city'];
+    private const ACTION_RESULT_TYPES = ['check_data', 'calculate_distance_to_moscow', 'resolve_geo_city', 'variables'];
+
+    private const VARIABLE_OPERATIONS = ['set', 'increment', 'clear'];
 
     private const GEO_CITY_SOURCES = ['current_inbound_message', 'ai_data'];
 
     private const GEO_CITY_OUTPUT_NOT_FOUND = 'geo_not_found';
 
-    private const GEO_CITY_LEGACY_NOT_FOUND_OUTPUTS = [
+    private const GEO_CITY_OUTPUT_MANUAL_REQUIRED = 'geo_manual_required';
+
+    private const GEO_CITY_OUTPUT_LIMIT_REACHED = 'geo_limit_reached';
+
+    private const GEO_CITY_LEGACY_MANUAL_REQUIRED_OUTPUTS = [
         'geo_manual_required',
         'geo_ambiguous',
         'geo_below_threshold',
         'geo_inactive',
+    ];
+
+    private const GEO_CITY_LEGACY_NOT_FOUND_OUTPUTS = [
         'geo_failed',
+    ];
+
+    private const VARIABLES_LEGACY_OUTPUTS = [
+        'variables_done',
+        'variables_failed',
     ];
 
     private const ACTION_SOURCE_TYPES = ['ai_data', 'inbound_message', 'static_value'];
@@ -259,7 +278,9 @@ class ValidateScenarioBuilderV3StateAction
 
         $modules = $this->normalizeModules($settingsPayload['modules'] ?? [], $blockIndex);
         $outputs = $this->normalizeOutputs($settingsPayload['outputs'] ?? [], $blockIndex);
-        $outputs = $this->hasResolveGeoCityAction($modules) ? $this->geoCityCanonicalOutputs($modules) : $outputs;
+        $outputs = $this->hasResolveGeoCityAction($modules)
+            ? $this->geoCityCanonicalOutputs($modules)
+            : ($this->hasVariablesAction($modules) ? $this->withoutLegacyVariableOutputs($outputs) : $outputs);
         $kind = $this->optionalStringValue(
             $settingsPayload['kind'] ?? 'state',
             "builder.blocks.$blockIndex.settings_payload.kind",
@@ -462,14 +483,77 @@ class ValidateScenarioBuilderV3StateAction
     private function normalizeMessagePayload(array $payload, int $blockIndex, int $moduleIndex): array
     {
         $text = (string) ($payload['text'] ?? '');
+        $textMode = (string) ($payload['text_mode'] ?? 'static');
 
         if (mb_strlen($text) > self::MAX_MESSAGE_LENGTH) {
             $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.text", 'Message text is too long.');
         }
 
+        if ($textMode !== 'by_dialog_variable') {
+            return [
+                'text' => $text,
+                'text_format' => (string) ($payload['text_format'] ?? 'plain_text'),
+                'text_mode' => 'static',
+                'variable_key' => '',
+                'variable_text_variants' => [],
+                'fallback_text' => '',
+            ];
+        }
+
+        $variableKey = trim((string) ($payload['variable_key'] ?? ''));
+
+        if (! $this->validDialogVariableKey($variableKey)) {
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.variable_key", 'Invalid dialog variable key.');
+        }
+
+        $fallbackText = (string) ($payload['fallback_text'] ?? '');
+
+        if (mb_strlen($fallbackText) > self::MAX_MESSAGE_LENGTH) {
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.fallback_text", 'Fallback text is too long.');
+        }
+
+        $variants = $payload['variable_text_variants'] ?? [];
+
+        if (! is_array($variants) || ! array_is_list($variants)) {
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.variable_text_variants", 'Variable text variants must be a list.');
+        }
+
+        if (count($variants) > self::MAX_MESSAGE_VARIABLE_VARIANTS) {
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.variable_text_variants", 'Too many variable text variants.');
+        }
+
+        $normalizedVariants = [];
+
+        foreach ($variants as $variantIndex => $variant) {
+            $variant = $this->arrayValue($variant, "builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.variable_text_variants.$variantIndex");
+            $value = trim((string) ($variant['value'] ?? ''));
+            $variantText = (string) ($variant['text'] ?? '');
+
+            if ($value === '') {
+                $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.variable_text_variants.$variantIndex.value", 'Variant value is required.');
+            }
+
+            if (mb_strlen($value) > 100) {
+                $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.variable_text_variants.$variantIndex.value", 'Variant value is too long.');
+            }
+
+            if (mb_strlen($variantText) > self::MAX_MESSAGE_LENGTH) {
+                $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.variable_text_variants.$variantIndex.text", 'Variant text is too long.');
+            }
+
+            $normalizedVariants[] = [
+                'value' => $value,
+                'text' => $variantText,
+            ];
+        }
+
         return [
             'text' => $text,
             'text_format' => (string) ($payload['text_format'] ?? 'plain_text'),
+            'text_mode' => 'by_dialog_variable',
+            'variable_key' => $variableKey,
+            'variable_text_variants' => $normalizedVariants,
+            'fallback_text' => $fallbackText,
         ];
     }
 
@@ -854,6 +938,18 @@ class ValidateScenarioBuilderV3StateAction
                 continue;
             }
 
+            if ($type === 'variables') {
+                $normalized[] = [
+                    'type' => $type,
+                    'operations' => $this->normalizeVariableOperations(
+                        $action['operations'] ?? [],
+                        "builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.operations",
+                    ),
+                ];
+
+                continue;
+            }
+
             if (! in_array($sourceType, self::ACTION_SOURCE_TYPES, true)) {
                 $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.source_type", 'Unknown action source.');
             }
@@ -878,7 +974,7 @@ class ValidateScenarioBuilderV3StateAction
                 $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.target_field", 'Unknown contact field.');
             }
 
-            if ($targetScope === 'dialog' && ! preg_match('/^[A-Za-z][A-Za-z0-9_]{0,63}$/', $targetField)) {
+            if ($targetScope === 'dialog' && ! $this->validDialogVariableKey($targetField)) {
                 $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.target_field", 'Invalid dialog field.');
             }
 
@@ -895,6 +991,92 @@ class ValidateScenarioBuilderV3StateAction
         }
 
         return ['actions' => $normalized];
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function normalizeVariableOperations(mixed $operations, string $path): array
+    {
+        if (! is_array($operations) || ! array_is_list($operations)) {
+            $this->fail($path, 'Variable operations must be a list.');
+        }
+
+        if ($operations === []) {
+            $this->fail($path, 'Variable action requires at least one operation.');
+        }
+
+        if (count($operations) > self::MAX_VARIABLE_ACTION_OPERATIONS) {
+            $this->fail($path, 'Too many variable operations.');
+        }
+
+        $normalized = [];
+
+        foreach ($operations as $index => $operation) {
+            $operation = $this->arrayValue($operation, "$path.$index");
+            $type = trim((string) ($operation['operation'] ?? 'set'));
+            $fieldKey = trim((string) ($operation['field_key'] ?? ''));
+
+            if (! in_array($type, self::VARIABLE_OPERATIONS, true)) {
+                $this->fail("$path.$index.operation", 'Unknown variable operation.');
+            }
+
+            if (! $this->validDialogVariableKey($fieldKey)) {
+                $this->fail("$path.$index.field_key", 'Invalid dialog variable key.');
+            }
+
+            if ($type === 'increment') {
+                $amountValue = $operation['amount'] ?? 1;
+
+                if (
+                    ! is_int($amountValue)
+                    && ! (is_string($amountValue) && preg_match('/^\d+$/', trim($amountValue)))
+                ) {
+                    $this->fail("$path.$index.amount", 'Increment amount must be an integer.');
+                }
+
+                $amount = (int) $amountValue;
+
+                if ($amount < 1 || $amount > 100) {
+                    $this->fail("$path.$index.amount", 'Increment amount must be from 1 to 100.');
+                }
+
+                $normalized[] = [
+                    'operation' => 'increment',
+                    'field_key' => $fieldKey,
+                    'amount' => $amount,
+                ];
+
+                continue;
+            }
+
+            if ($type === 'clear') {
+                $normalized[] = [
+                    'operation' => 'clear',
+                    'field_key' => $fieldKey,
+                ];
+
+                continue;
+            }
+
+            $value = $operation['value'] ?? '';
+
+            if (! is_scalar($value) && $value !== null) {
+                $this->fail("$path.$index.value", 'Variable value must be scalar.');
+            }
+
+            if (is_string($value) && mb_strlen($value) > self::MAX_MESSAGE_LENGTH) {
+                $this->fail("$path.$index.value", 'Variable value is too long.');
+            }
+
+            $normalized[] = [
+                'operation' => 'set',
+                'field_key' => $fieldKey,
+                'value' => $value,
+            ];
+        }
+
+        return $normalized;
     }
 
     private function normalizeButtonPlacement(mixed $placement, int $blockIndex, int $moduleIndex): string
@@ -1028,7 +1210,13 @@ class ValidateScenarioBuilderV3StateAction
             $source = $this->normalizeEndpoint($edge['source'] ?? null, "builder.edges.$index.source", $blockKeys, $blockIds);
             $target = $this->normalizeEndpoint($edge['target'] ?? null, "builder.edges.$index.target", $blockKeys, $blockIds);
             $sourceOutputId = $this->nullableStringValue(data_get($edge, 'source.output_id'), "builder.edges.$index.source.output_id");
+            $originalSourceOutputId = $sourceOutputId;
             $sourceOutputId = $this->normalizeGeoCitySourceOutputId($source['client_key'], $sourceOutputId, $blockKeys);
+            $sourceOutputId = $this->normalizeVariablesSourceOutputId($source['client_key'], $sourceOutputId, $blockKeys);
+            $sourceWasLegacyVariablesOutput = $originalSourceOutputId !== null
+                && $sourceOutputId === null
+                && $this->sourceBlockHasVariablesAction($source['client_key'], $blockKeys)
+                && in_array($originalSourceOutputId, self::VARIABLES_LEGACY_OUTPUTS, true);
 
             if ($sourceOutputId !== null) {
                 $sourceKey = $source['client_key'].'|'.$sourceOutputId;
@@ -1053,6 +1241,14 @@ class ValidateScenarioBuilderV3StateAction
                 $sourceOutputId,
                 $index,
             );
+
+            if ($sourceWasLegacyVariablesOutput) {
+                $conditionPayload['label'] = in_array((string) ($conditionPayload['label'] ?? ''), ['Готово', 'Ошибка'], true)
+                    ? 'Дальше'
+                    : (filled($conditionPayload['label'] ?? null) ? (string) $conditionPayload['label'] : 'Дальше');
+                $conditionPayload['mode'] = 'automatic';
+                $conditionPayload['from_output_id'] = null;
+            }
 
             $edgeKey = $conditionPayload['edge_key'];
 
@@ -1097,7 +1293,7 @@ class ValidateScenarioBuilderV3StateAction
             'edge_schema_version' => BuildScenarioBuilderV3StateAction::SCHEMA_VERSION,
             'edge_key' => $edgeKey,
             'from_output_id' => $sourceOutputId,
-            'label' => (string) ($payload['label'] ?? ''),
+            'label' => $this->normalizeActionResultEdgeLabel($sourceOutputId, (string) ($payload['label'] ?? '')),
             'mode' => $mode,
             'priority' => $priority,
             'transition_limit' => $transitionLimit,
@@ -1135,6 +1331,10 @@ class ValidateScenarioBuilderV3StateAction
 
         if ($mode === '') {
             return $sourceOutputId !== null ? 'button' : 'automatic';
+        }
+
+        if ($sourceOutputId === null && $mode === 'action_result') {
+            return 'automatic';
         }
 
         return in_array($mode, self::EDGE_MODES, true) ? $mode : 'wait_reply';
@@ -1336,7 +1536,7 @@ class ValidateScenarioBuilderV3StateAction
             $this->fail("builder.edges.$edgeIndex.condition_payload.field_condition.operator", 'Unknown field condition operator.');
         }
 
-        if ($fieldScope === 'dialog' && ! preg_match('/^[A-Za-z][A-Za-z0-9_]{0,63}$/', $fieldKey)) {
+        if ($fieldScope === 'dialog' && ! $this->validDialogVariableKey($fieldKey)) {
             $this->fail("builder.edges.$edgeIndex.condition_payload.field_condition.field_key", 'Invalid dialog field key.');
         }
 
@@ -1391,7 +1591,7 @@ class ValidateScenarioBuilderV3StateAction
         }
 
         if ($fieldScope === 'dialog') {
-            if (! preg_match('/^[A-Za-z][A-Za-z0-9_]{0,63}$/', $fieldKey)) {
+            if (! $this->validDialogVariableKey($fieldKey)) {
                 $this->fail("builder.edges.$edgeIndex.condition_payload.input_capture.field_key", 'Invalid dialog field key.');
             }
 
@@ -1465,7 +1665,7 @@ class ValidateScenarioBuilderV3StateAction
                 $this->fail("$baseKey.target_field", 'Unknown writable contact field.');
             }
 
-            if ($targetScope === 'dialog' && ! preg_match('/^[A-Za-z][A-Za-z0-9_]{0,63}$/', $targetField)) {
+            if ($targetScope === 'dialog' && ! $this->validDialogVariableKey($targetField)) {
                 $this->fail("$baseKey.target_field", 'Invalid dialog field key.');
             }
 
@@ -1527,23 +1727,71 @@ class ValidateScenarioBuilderV3StateAction
     private function blockHasOutput(string $clientKey, string $outputId, $blockKeys): bool
     {
         $block = $blockKeys->get($clientKey);
+
+        if (
+            $outputId === self::GEO_CITY_OUTPUT_LIMIT_REACHED
+            && is_array($block)
+            && $this->hasResolveGeoCityAction(data_get($block, 'settings_payload.modules', []))
+        ) {
+            return true;
+        }
+
         $outputs = data_get($block, 'settings_payload.outputs', []);
 
         return collect(is_array($outputs) ? $outputs : [])
             ->contains(fn (array $output): bool => ($output['id'] ?? null) === $outputId);
     }
 
+    private function normalizeActionResultEdgeLabel(?string $sourceOutputId, string $label): string
+    {
+        return match ($sourceOutputId) {
+            'geo_found' => 'Город найден',
+            'geo_manual_required' => 'Нужно уточнить',
+            'geo_not_found' => 'Город не найден',
+            'geo_limit_reached' => 'Превышено попыток',
+            default => $label,
+        };
+    }
+
     private function normalizeGeoCitySourceOutputId(string $clientKey, ?string $outputId, $blockKeys): ?string
     {
-        if ($outputId === null || ! in_array($outputId, self::GEO_CITY_LEGACY_NOT_FOUND_OUTPUTS, true)) {
+        if ($outputId === null) {
             return $outputId;
         }
 
         $block = $blockKeys->get($clientKey);
 
-        return is_array($block) && $this->hasResolveGeoCityAction(data_get($block, 'settings_payload.modules', []))
+        if (! is_array($block) || ! $this->hasResolveGeoCityAction(data_get($block, 'settings_payload.modules', []))) {
+            return $outputId;
+        }
+
+        if (in_array($outputId, self::GEO_CITY_LEGACY_MANUAL_REQUIRED_OUTPUTS, true)) {
+            return self::GEO_CITY_OUTPUT_MANUAL_REQUIRED;
+        }
+
+        return in_array($outputId, self::GEO_CITY_LEGACY_NOT_FOUND_OUTPUTS, true)
             ? self::GEO_CITY_OUTPUT_NOT_FOUND
             : $outputId;
+    }
+
+    private function normalizeVariablesSourceOutputId(string $clientKey, ?string $outputId, $blockKeys): ?string
+    {
+        if ($outputId === null) {
+            return null;
+        }
+
+        if (! $this->sourceBlockHasVariablesAction($clientKey, $blockKeys)) {
+            return $outputId;
+        }
+
+        return in_array($outputId, self::VARIABLES_LEGACY_OUTPUTS, true) ? null : $outputId;
+    }
+
+    private function sourceBlockHasVariablesAction(string $clientKey, $blockKeys): bool
+    {
+        $block = $blockKeys->get($clientKey);
+
+        return is_array($block) && $this->hasVariablesAction(data_get($block, 'settings_payload.modules', []));
     }
 
     private function hasResolveGeoCityAction(mixed $modules): bool
@@ -1565,6 +1813,33 @@ class ValidateScenarioBuilderV3StateAction
 
             foreach ($actions as $action) {
                 if (is_array($action) && ($action['type'] ?? null) === 'resolve_geo_city') {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private function hasVariablesAction(mixed $modules): bool
+    {
+        if (! is_array($modules)) {
+            return false;
+        }
+
+        foreach ($modules as $module) {
+            if (! is_array($module) || ($module['type'] ?? null) !== 'action') {
+                continue;
+            }
+
+            $actions = data_get($module, 'payload.actions', []);
+
+            if (! is_array($actions)) {
+                continue;
+            }
+
+            foreach ($actions as $action) {
+                if (is_array($action) && ($action['type'] ?? null) === 'variables') {
                     return true;
                 }
             }
@@ -1597,20 +1872,32 @@ class ValidateScenarioBuilderV3StateAction
                 'action_result_id' => 'geo_found',
             ],
             [
+                'id' => 'geo_manual_required',
+                'label' => 'Нужно уточнить',
+                'source' => 'action',
+                'module_id' => $moduleId,
+                'action_result_id' => 'geo_manual_required',
+            ],
+            [
                 'id' => 'geo_not_found',
                 'label' => 'Город не найден',
                 'source' => 'action',
                 'module_id' => $moduleId,
                 'action_result_id' => 'geo_not_found',
             ],
-            [
-                'id' => 'geo_limit_reached',
-                'label' => 'Превышено попыток',
-                'source' => 'action',
-                'module_id' => $moduleId,
-                'action_result_id' => 'geo_limit_reached',
-            ],
         ];
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function withoutLegacyVariableOutputs(array $outputs): array
+    {
+        return collect($outputs)
+            ->filter(fn (mixed $output): bool => is_array($output)
+                && ! in_array((string) ($output['id'] ?? ''), self::VARIABLES_LEGACY_OUTPUTS, true))
+            ->values()
+            ->all();
     }
 
     /**
@@ -1813,6 +2100,7 @@ class ValidateScenarioBuilderV3StateAction
             'width' => (int) ($ui['width'] ?? 320),
             'collapsed' => (bool) ($ui['collapsed'] ?? false),
             'card_id' => $this->optionalStringValue($ui['card_id'] ?? '', "builder.blocks.$blockIndex.settings_payload.ui.card_id", ''),
+            'display_number' => $this->optionalStringValue($ui['display_number'] ?? '', "builder.blocks.$blockIndex.settings_payload.ui.display_number", ''),
         ];
     }
 
@@ -2026,6 +2314,19 @@ class ValidateScenarioBuilderV3StateAction
     {
         return (is_int($value) || is_float($value))
             && is_finite((float) $value);
+    }
+
+    private function validDialogVariableKey(string $key): bool
+    {
+        if ($key === '' || mb_strlen($key) > 64) {
+            return false;
+        }
+
+        if (in_array($key, ['__proto__', 'constructor', 'prototype'], true)) {
+            return false;
+        }
+
+        return preg_match('/^(?!_)[\p{L}][\p{L}\p{N}_]{0,63}$/u', $key) === 1;
     }
 
     private function fail(string $key, string $message): never

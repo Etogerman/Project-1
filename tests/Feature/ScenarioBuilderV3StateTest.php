@@ -146,7 +146,8 @@ class ScenarioBuilderV3StateTest extends TestCase
         $blockId = $response->json('id_map.blocks.tmp_block_1');
 
         $this->assertIsInt($blockId);
-        $this->assertSame((string) $blockId, $response->json('builder.blocks.0.display_id'));
+        $this->assertSame('1', $response->json('builder.blocks.0.display_id'));
+        $this->assertSame('1', $response->json('builder.blocks.0.settings_payload.ui.display_number'));
         $this->assertSame((string) $blockId, $response->json('builder.blocks.0.settings_payload.ui.card_id'));
         $this->assertDatabaseHas('scenario_builder_blocks', [
             'id' => $blockId,
@@ -156,6 +157,69 @@ class ScenarioBuilderV3StateTest extends TestCase
             'position_x' => 120,
             'position_y' => 160,
         ]);
+    }
+
+    public function test_put_state_assigns_stable_display_numbers_and_repairs_duplicates(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_display_numbers',
+            'name' => 'V3 Display Numbers',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $firstPayload = $this->payloadFromState($state, [
+            [
+                'id' => null,
+                'client_key' => 'tmp_block_1',
+                'type' => 'state',
+                'title' => 'Первый',
+                'position' => ['x' => 120, 'y' => 100],
+                'settings_payload' => $this->messageSettings('Первый'),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_block_2',
+                'type' => 'state',
+                'title' => 'Второй',
+                'position' => ['x' => 120, 'y' => 240],
+                'settings_payload' => $this->messageSettings('Второй'),
+            ],
+        ]);
+
+        $firstState = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $firstPayload)
+            ->assertOk()
+            ->assertJsonPath('builder.blocks.0.display_id', '1')
+            ->assertJsonPath('builder.blocks.1.display_id', '2')
+            ->json();
+
+        $newSettings = $this->messageSettings('Третий');
+        $newSettings['ui']['display_number'] = '1';
+        $secondPayload = $this->payloadFromState($firstState, [
+            ...$firstState['builder']['blocks'],
+            [
+                'id' => null,
+                'client_key' => 'tmp_block_3',
+                'type' => 'state',
+                'title' => 'Третий',
+                'position' => ['x' => 120, 'y' => 380],
+                'settings_payload' => $newSettings,
+            ],
+        ]);
+
+        $secondState = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $secondPayload)
+            ->assertOk()
+            ->assertJsonPath('builder.blocks.0.display_id', '1')
+            ->assertJsonPath('builder.blocks.1.display_id', '2')
+            ->assertJsonPath('builder.blocks.2.display_id', '3')
+            ->json();
+
+        $draft = $scenario->fresh()->draftVersion()->firstOrFail();
+
+        $this->assertSame(4, data_get($draft->schema_payload, 'builder_v3.meta.next_display_number'));
+        $this->assertTrue((bool) data_get($draft->schema_payload, 'builder_v3.meta.display_numbers_initialized'));
+        $this->assertSame('3', $secondState['builder']['blocks'][2]['settings_payload']['ui']['display_number'] ?? null);
     }
 
     public function test_sheet_export_treats_blocks_without_sheet_id_as_main(): void
@@ -2810,7 +2874,8 @@ class ScenarioBuilderV3StateTest extends TestCase
 
         $this->assertNotSame($publishedBlockIds, $draftBlockIds);
         $this->assertSame($publishedCardIds, $draftCardIds);
-        $this->assertSame($draftCardIds[0], $publishedResponse['builder']['blocks'][0]['display_id'] ?? null);
+        $this->assertSame('1', $publishedResponse['builder']['blocks'][0]['display_id'] ?? null);
+        $this->assertSame('1', data_get($runtime, "blocks.$startBlockId.display_number"));
     }
 
     public function test_publish_v3_graph_rolls_back_when_selected_channel_becomes_unavailable(): void
@@ -3313,8 +3378,8 @@ class ScenarioBuilderV3StateTest extends TestCase
             ->assertJsonPath('builder.blocks.1.settings_payload.modules.0.payload.actions.0.type', 'resolve_geo_city')
             ->assertJsonPath('builder.blocks.1.settings_payload.modules.0.payload.actions.0.source', 'current_inbound_message')
             ->assertJsonPath('builder.blocks.1.settings_payload.outputs.0.id', 'geo_found')
-            ->assertJsonPath('builder.blocks.1.settings_payload.outputs.1.id', 'geo_not_found')
-            ->assertJsonPath('builder.blocks.1.settings_payload.outputs.2.id', 'geo_limit_reached')
+            ->assertJsonPath('builder.blocks.1.settings_payload.outputs.1.id', 'geo_manual_required')
+            ->assertJsonPath('builder.blocks.1.settings_payload.outputs.2.id', 'geo_not_found')
             ->json();
 
         $this->assertCount(3, data_get($saved, 'builder.blocks.1.settings_payload.outputs'));
@@ -3344,6 +3409,118 @@ class ScenarioBuilderV3StateTest extends TestCase
         $this->assertSame(
             'geo_found',
             data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$geoBlockId.action_result_edges.0.from_output_id"),
+        );
+    }
+
+    public function test_publish_keeps_dialog_variables_action_and_message_variants_in_runtime_snapshot(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['name' => 'Telegram Variables']);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_dialog_variables_action',
+            'name' => 'V3 Dialog Variables Action',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_start',
+                'type' => 'state',
+                'title' => 'Старт',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->startSettings('/start', [$channel->id]),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_variables',
+                'type' => 'state',
+                'title' => 'Счётчик имени',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->variablesActionSettings(),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_message',
+                'type' => 'state',
+                'title' => 'Вопрос по попытке',
+                'position' => ['x' => 840, 'y' => 160],
+                'settings_payload' => $this->variableMessageSettings(),
+            ],
+        ];
+        $variablesEdgePayload = $this->edgePayload(null, 'Дальше');
+        $variablesEdgePayload['mode'] = 'automatic';
+        $variablesEdgePayload['match'] = [
+            'type' => 'any_inbound',
+            'text' => '',
+            'values' => [],
+        ];
+        $edges = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_start_edge',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_start', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_variables'],
+                'condition_payload' => $this->edgePayload(null, 'Дальше'),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_variables_done',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_variables', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_message'],
+                'condition_payload' => $variablesEdgePayload,
+            ],
+        ];
+
+        $saved = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
+            ->assertOk()
+            ->assertJsonPath('builder.blocks.1.settings_payload.modules.0.payload.actions.0.type', 'variables')
+            ->assertJsonPath('builder.blocks.1.settings_payload.modules.0.payload.actions.0.operations.0.operation', 'increment')
+            ->assertJsonPath('builder.blocks.1.settings_payload.modules.0.payload.actions.0.operations.0.field_key', 'спросили_имя')
+            ->assertJsonPath('builder.blocks.1.settings_payload.outputs', [])
+            ->assertJsonPath('builder.edges.1.source.output_id', null)
+            ->assertJsonPath('builder.edges.1.condition_payload.mode', 'automatic')
+            ->assertJsonPath('builder.blocks.2.settings_payload.modules.0.payload.text_mode', 'by_dialog_variable')
+            ->assertJsonPath('builder.blocks.2.settings_payload.modules.0.payload.variable_key', 'спросили_имя')
+            ->json();
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $saved['scenario']['draft_version_id'],
+                'base_revision' => $saved['builder']['revision'],
+            ])
+            ->assertOk();
+
+        $scenario->refresh()->load('publishedVersion');
+        $variablesBlockId = (string) $saved['id_map']['blocks']['tmp_variables'];
+        $messageBlockId = (string) $saved['id_map']['blocks']['tmp_message'];
+
+        $this->assertSame(
+            'variables',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$variablesBlockId.actions.0.type"),
+        );
+        $this->assertSame(
+            'спросили_имя',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$variablesBlockId.actions.0.operations.0.field_key"),
+        );
+        $this->assertSame(
+            [],
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$variablesBlockId.action_result_edges"),
+        );
+        $this->assertSame(
+            $messageBlockId,
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$variablesBlockId.automatic_edges.0.target_block_id"),
+        );
+        $this->assertNull(
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$variablesBlockId.automatic_edges.0.from_output_id"),
+        );
+        $this->assertSame(
+            'by_dialog_variable',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$messageBlockId.message.text_mode"),
+        );
+        $this->assertSame(
+            'спросили_имя',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$messageBlockId.message.variable_key"),
         );
     }
 
@@ -3429,8 +3606,8 @@ class ScenarioBuilderV3StateTest extends TestCase
             ->assertJsonPath('builder.blocks.2.settings_payload.modules.0.payload.actions.0.type', 'resolve_geo_city')
             ->assertJsonPath('builder.blocks.2.settings_payload.modules.0.payload.actions.0.source', 'ai_data')
             ->assertJsonPath('builder.blocks.2.settings_payload.outputs.0.id', 'geo_found')
-            ->assertJsonPath('builder.blocks.2.settings_payload.outputs.1.id', 'geo_not_found')
-            ->assertJsonPath('builder.blocks.2.settings_payload.outputs.2.id', 'geo_limit_reached')
+            ->assertJsonPath('builder.blocks.2.settings_payload.outputs.1.id', 'geo_manual_required')
+            ->assertJsonPath('builder.blocks.2.settings_payload.outputs.2.id', 'geo_not_found')
             ->json();
 
         $this->assertCount(3, data_get($saved, 'builder.blocks.2.settings_payload.outputs'));
@@ -3563,11 +3740,69 @@ class ScenarioBuilderV3StateTest extends TestCase
             ->json();
 
         $this->assertSame('geo_found', data_get($saved, 'builder.blocks.0.settings_payload.outputs.0.id'));
-        $this->assertSame('geo_not_found', data_get($saved, 'builder.blocks.0.settings_payload.outputs.1.id'));
-        $this->assertSame('geo_limit_reached', data_get($saved, 'builder.blocks.0.settings_payload.outputs.2.id'));
+        $this->assertSame('geo_manual_required', data_get($saved, 'builder.blocks.0.settings_payload.outputs.1.id'));
+        $this->assertSame('geo_not_found', data_get($saved, 'builder.blocks.0.settings_payload.outputs.2.id'));
         $this->assertCount(3, data_get($saved, 'builder.blocks.0.settings_payload.outputs'));
-        $this->assertSame('geo_not_found', data_get($saved, 'builder.edges.0.source.output_id'));
-        $this->assertSame('geo_not_found', data_get($saved, 'builder.edges.0.condition_payload.from_output_id'));
+        $this->assertSame('geo_manual_required', data_get($saved, 'builder.edges.0.source.output_id'));
+        $this->assertSame('geo_manual_required', data_get($saved, 'builder.edges.0.condition_payload.from_output_id'));
+        $this->assertSame('Нужно уточнить', data_get($saved, 'builder.edges.0.condition_payload.label'));
+    }
+
+    public function test_state_keeps_geo_limit_output_only_for_existing_legacy_edge(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_geo_legacy_limit_output',
+            'name' => 'V3 Geo Legacy Limit Output',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_geo',
+                'type' => 'state',
+                'title' => 'Распознать город',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->geoCityActionSettings(),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_limit',
+                'type' => 'state',
+                'title' => 'Лимит',
+                'position' => ['x' => 840, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Превышено попыток'),
+            ],
+        ];
+        $edges = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_limit_edge',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_geo', 'output_id' => 'geo_limit_reached'],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_limit'],
+                'condition_payload' => $this->edgePayload('geo_limit_reached', 'Превышено попыток'),
+            ],
+        ];
+
+        $saved = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
+            ->assertOk()
+            ->json();
+
+        $this->assertSame('geo_found', data_get($saved, 'builder.blocks.0.settings_payload.outputs.0.id'));
+        $this->assertSame('geo_manual_required', data_get($saved, 'builder.blocks.0.settings_payload.outputs.1.id'));
+        $this->assertSame('geo_not_found', data_get($saved, 'builder.blocks.0.settings_payload.outputs.2.id'));
+        $this->assertSame('geo_limit_reached', data_get($saved, 'builder.blocks.0.settings_payload.outputs.3.id'));
+        $this->assertTrue((bool) data_get($saved, 'builder.blocks.0.settings_payload.outputs.3.legacy'));
+        $this->assertSame('geo_limit_reached', data_get($saved, 'builder.edges.0.source.output_id'));
+
+        $savedWithoutLimitEdge = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($saved, $saved['builder']['blocks'], []))
+            ->assertOk()
+            ->json();
+
+        $this->assertCount(3, data_get($savedWithoutLimitEdge, 'builder.blocks.0.settings_payload.outputs'));
     }
 
     public function test_state_rejects_multiple_result_actions_in_action_block(): void
@@ -3870,6 +4105,57 @@ class ScenarioBuilderV3StateTest extends TestCase
     /**
      * @return array<string, mixed>
      */
+    private function variablesActionSettings(): array
+    {
+        return [
+            'schema_version' => 3,
+            'kind' => 'state',
+            'ui' => ['sheet_id' => 'main', 'width' => 320, 'collapsed' => false],
+            'modules' => [
+                [
+                    'id' => 'mod_action',
+                    'type' => 'action',
+                    'enabled' => true,
+                    'payload' => [
+                        'actions' => [
+                            [
+                                'type' => 'variables',
+                                'operations' => [
+                                    [
+                                        'operation' => 'increment',
+                                        'field_key' => 'спросили_имя',
+                                        'amount' => 1,
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+            'outputs' => [],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function variableMessageSettings(): array
+    {
+        $settings = $this->messageSettings('Как тебя зовут?');
+        data_set($settings, 'modules.0.payload.text_mode', 'by_dialog_variable');
+        data_set($settings, 'modules.0.payload.variable_key', 'спросили_имя');
+        data_set($settings, 'modules.0.payload.variable_text_variants', [
+            ['value' => '1', 'text' => 'Как тебя зовут?'],
+            ['value' => '2', 'text' => 'Напиши полное нормальное имя'],
+        ]);
+        data_set($settings, 'modules.0.payload.fallback_text', 'Подскажи имя');
+
+        return $settings;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
     private function checkDataActionSettings(string $targetVariableKey): array
     {
         return [
@@ -4048,6 +4334,14 @@ class ScenarioBuilderV3StateTest extends TestCase
      */
     private function geoCityActionSettings(bool $includeLegacyOutputs = false, array $action = []): array
     {
+        $limitOutput = [
+            'id' => 'geo_limit_reached',
+            'label' => 'Превышено попыток',
+            'source' => 'action',
+            'module_id' => 'mod_action',
+            'action_result_id' => 'geo_limit_reached',
+            'legacy' => true,
+        ];
         $outputs = [
             [
                 'id' => 'geo_found',
@@ -4057,31 +4351,25 @@ class ScenarioBuilderV3StateTest extends TestCase
                 'action_result_id' => 'geo_found',
             ],
             [
+                'id' => 'geo_manual_required',
+                'label' => 'Нужно уточнить',
+                'source' => 'action',
+                'module_id' => 'mod_action',
+                'action_result_id' => 'geo_manual_required',
+            ],
+            [
                 'id' => 'geo_not_found',
                 'label' => 'Город не найден',
                 'source' => 'action',
                 'module_id' => 'mod_action',
                 'action_result_id' => 'geo_not_found',
             ],
-            [
-                'id' => 'geo_limit_reached',
-                'label' => 'Превышено попыток',
-                'source' => 'action',
-                'module_id' => 'mod_action',
-                'action_result_id' => 'geo_limit_reached',
-            ],
         ];
 
         if ($includeLegacyOutputs) {
             $outputs = [
                 $outputs[0],
-                [
-                    'id' => 'geo_manual_required',
-                    'label' => 'Нужно уточнить',
-                    'source' => 'action',
-                    'module_id' => 'mod_action',
-                    'action_result_id' => 'geo_manual_required',
-                ],
+                $outputs[1],
                 [
                     'id' => 'geo_ambiguous',
                     'label' => 'Несколько вариантов',
@@ -4089,7 +4377,6 @@ class ScenarioBuilderV3StateTest extends TestCase
                     'module_id' => 'mod_action',
                     'action_result_id' => 'geo_ambiguous',
                 ],
-                $outputs[1],
                 [
                     'id' => 'geo_below_threshold',
                     'label' => 'Низкая уверенность',
@@ -4112,6 +4399,7 @@ class ScenarioBuilderV3StateTest extends TestCase
                     'action_result_id' => 'geo_failed',
                 ],
                 $outputs[2],
+                $limitOutput,
             ];
         }
 

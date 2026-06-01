@@ -108,7 +108,12 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('data-role="dialog-field-row"', false)
             ->assertSee('data-field-key="client_city"', false)
             ->assertSee('data-field-value-type="scalar"', false)
-            ->assertSee('data-role="dialog-field-copy-key"', false)
+            ->assertSee('data-role="dialog-field-value"', false)
+            ->assertSee('data-role="dialog-field-edit"', false)
+            ->assertSee('data-role="dialog-field-edit-input"', false)
+            ->assertSee('data-role="dialog-field-save"', false)
+            ->assertDontSee('data-role="dialog-field-copy-key"', false)
+            ->assertDontSee('Копировать ключ')
             ->assertSee('Город клиента')
             ->assertSee('client_city')
             ->assertSee('Москва')
@@ -117,6 +122,37 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertDontSee('data-field-key="_v3"', false)
             ->assertDontSee('_v3')
             ->assertDontSee('transition_counts');
+    }
+
+    public function test_dialog_view_allows_editing_user_dialog_field_values(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages();
+        $dialog->forceFill([
+            'fields_payload' => [
+                'сколько_раз_спросили_имя' => 3,
+                'client_city' => 'Москва',
+                '_v3' => [
+                    'transition_counts' => [
+                        'published_1:edge_test' => 1,
+                    ],
+                ],
+            ],
+        ])->save();
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->call('saveDialogFieldValue', 'сколько_раз_спросили_имя', '7')
+            ->call('saveDialogFieldValue', 'client_city', 'Химки');
+
+        $dialog->refresh();
+
+        $this->assertSame(7, data_get($dialog->fields_payload, 'сколько_раз_спросили_имя'));
+        $this->assertSame('Химки', data_get($dialog->fields_payload, 'client_city'));
+        $this->assertSame(1, data_get($dialog->fields_payload, '_v3.transition_counts.published_1:edge_test'));
     }
 
     public function test_dialog_view_renders_empty_dialog_fields_state(): void
@@ -174,6 +210,7 @@ class FilamentDialogsResourceTest extends TestCase
                     '798' => [
                         'id' => '798',
                         'card_id' => '798',
+                        'display_number' => '12',
                         'title' => 'Старт: анкета',
                     ],
                 ],
@@ -202,7 +239,7 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('data-field-key="current_block_id"', false)
             ->assertSee('Текущий блок')
             ->assertDontSee('Текущий блок клиента')
-            ->assertSee('#798 · Старт: анкета')
+            ->assertSee('#12 · Старт: анкета')
             ->assertSee('v'.$publishedVersion->id)
             ->assertSee('Телефон канала')
             ->assertSee('Последнее входящее')
@@ -228,7 +265,113 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertOk()
             ->assertSee('data-field-key="current_block_id"', false)
             ->assertSee('Текущий блок')
+            ->assertSee('Сценарий не запускался')
             ->assertDontSee('Текущий блок клиента');
+    }
+
+    public function test_dialog_view_renders_last_known_v3_block_after_completed_run(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages();
+        $publishedVersion = $this->createPublishedScenarioVersion([
+            'builder_v3_runtime' => [
+                'blocks' => [
+                    '1066' => [
+                        'id' => '1066',
+                        'card_id' => '1066',
+                        'title' => 'Возраст заполнен',
+                    ],
+                ],
+            ],
+        ]);
+
+        ScenarioRun::query()->create([
+            'scenario_code' => $publishedVersion->scenario->code,
+            'dialog_id' => $dialog->id,
+            'status' => ScenarioRun::STATUS_COMPLETED,
+            'current_step' => null,
+            'state_payload' => [
+                'v3' => [
+                    'schema_version' => 3,
+                    'status' => 'completed',
+                    'current_block_id' => null,
+                    'last_known_block_id' => '1066',
+                    'published_version_id' => $publishedVersion->id,
+                ],
+            ],
+            'started_at' => now()->subMinute(),
+            'finished_at' => now(),
+        ]);
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]))
+            ->assertOk()
+            ->assertSee('data-field-key="current_block_id"', false)
+            ->assertSee('#1066 · Возраст заполнен')
+            ->assertSee(ScenarioRun::STATUS_COMPLETED);
+    }
+
+    public function test_dialog_view_falls_back_to_last_v3_message_block_after_completed_run(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages();
+        $publishedVersion = $this->createPublishedScenarioVersion([
+            'builder_v3_runtime' => [
+                'blocks' => [
+                    '1063' => [
+                        'id' => '1063',
+                        'card_id' => '1063',
+                        'title' => 'Пол заполнен',
+                    ],
+                ],
+            ],
+        ]);
+
+        $run = ScenarioRun::query()->create([
+            'scenario_code' => $publishedVersion->scenario->code,
+            'dialog_id' => $dialog->id,
+            'status' => ScenarioRun::STATUS_COMPLETED,
+            'current_step' => null,
+            'state_payload' => [
+                'v3' => [
+                    'schema_version' => 3,
+                    'status' => 'completed',
+                    'current_block_id' => null,
+                    'published_version_id' => $publishedVersion->id,
+                ],
+            ],
+            'started_at' => now()->subMinute(),
+            'finished_at' => now(),
+        ]);
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'channel_id' => $dialog->channel_id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_SCENARIO_MESSAGE,
+            'text' => 'Пол заполнен',
+            'raw_payload' => [
+                'v3' => [
+                    'scenario_run_id' => $run->id,
+                    'block_id' => '1063',
+                    'published_version_id' => $publishedVersion->id,
+                ],
+            ],
+            'received_at' => now(),
+        ]);
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]))
+            ->assertOk()
+            ->assertSee('data-field-key="current_block_id"', false)
+            ->assertSee('#1063 · Пол заполнен')
+            ->assertSee(ScenarioRun::STATUS_COMPLETED);
     }
 
     public function test_dialog_view_renders_non_v3_current_step_without_block_lookup(): void

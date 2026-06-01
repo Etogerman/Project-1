@@ -3941,7 +3941,7 @@
         display: grid;
         align-items: start;
         gap: 0.75rem;
-        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-columns: minmax(0, 1fr);
         border: 1px solid var(--ac-border);
         border-radius: 0.65rem;
         background: color-mix(in oklch, var(--ac-surface-muted) 58%, transparent);
@@ -3956,10 +3956,77 @@
         overflow-wrap: anywhere;
     }
 
-    .ac-dialog-field-row__copy {
+    .ac-dialog-field-row__value-line {
+        display: grid;
+        grid-template-columns: minmax(7.5rem, 0.9fr) minmax(0, 1.1fr) auto;
+        align-items: center;
+        gap: 0.45rem;
+    }
+
+    .ac-dialog-field-row__value-line .ac-meta__label,
+    .ac-dialog-field-row__value-line .ac-meta__value {
+        margin: 0;
+        min-width: 0;
+    }
+
+    .ac-dialog-field-row__value-line .ac-meta__value {
+        text-align: right;
+    }
+
+    .ac-dialog-field-row__edit {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 1.75rem;
+        height: 1.75rem;
+        border: 1px solid transparent;
+        border-radius: 999px;
+        background: transparent;
+        color: var(--ac-muted);
+        cursor: pointer;
+    }
+
+    .ac-dialog-field-row__edit:hover {
+        border-color: var(--ac-border);
+        background: color-mix(in oklch, var(--ac-primary) 10%, var(--ac-surface));
+        color: var(--ac-text);
+    }
+
+    .ac-dialog-field-row__editor {
+        margin-top: 0.4rem;
+    }
+
+    .ac-dialog-field-row__input {
+        width: 100%;
+        min-width: 0;
         border: 1px solid var(--ac-border);
         border-radius: 0.55rem;
         background: var(--ac-surface);
+        color: var(--ac-text);
+        font-size: 0.875rem;
+        line-height: 1.25;
+        padding: 0.55rem 0.65rem;
+        text-align: right;
+    }
+
+    .ac-dialog-field-row__input:focus {
+        border-color: var(--ac-primary);
+        outline: 2px solid color-mix(in oklch, var(--ac-primary) 20%, transparent);
+        outline-offset: 1px;
+    }
+
+    .ac-dialog-field-row__actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        min-width: 0;
+        margin-top: -0.25rem;
+    }
+
+    .ac-dialog-field-row__save {
+        border: 1px solid var(--ac-border);
+        border-radius: 0.55rem;
+        background: var(--ac-primary);
         color: var(--ac-text);
         cursor: pointer;
         font-size: 0.75rem;
@@ -3968,9 +4035,15 @@
         padding: 0.45rem 0.65rem;
     }
 
-    .ac-dialog-field-row__copy:hover {
+    .ac-dialog-field-row__save:hover {
         border-color: var(--ac-border-strong);
-        background: color-mix(in oklch, var(--ac-primary) 8%, var(--ac-surface));
+        background: color-mix(in oklch, var(--ac-primary) 84%, white);
+    }
+
+    .ac-dialog-field-row__save:disabled,
+    .ac-dialog-field-row__input:disabled {
+        cursor: wait;
+        opacity: 0.7;
     }
 
     .ac-card-grid {

@@ -115,13 +115,11 @@ class CompileScenarioBuilderV3RuntimeAction
         $compiled = [
             'id' => $runtimeBlockId,
             'card_id' => $runtimeBlockId,
+            'display_number' => $this->displayNumber($settings),
             'db_id' => (int) $block->id,
             'kind' => $this->blockKind($settings),
             'title' => (string) $block->title,
-            'message' => $message !== null ? [
-                'text' => (string) data_get($message, 'payload.text', ''),
-                'text_format' => (string) data_get($message, 'payload.text_format', 'plain_text'),
-            ] : null,
+            'message' => $message !== null ? $this->compileMessage($message) : null,
             'ai_analysis' => $ai !== null
                 ? $this->compileAiAnalysis($ai, $outgoingEdges, $runtimeBlockIdsByDbId)
                 : null,
@@ -158,6 +156,30 @@ class CompileScenarioBuilderV3RuntimeAction
         }
 
         return $compiled;
+    }
+
+    /**
+     * @param  array<string, mixed>  $message
+     * @return array<string, mixed>
+     */
+    private function compileMessage(array $message): array
+    {
+        return [
+            'text' => (string) data_get($message, 'payload.text', ''),
+            'text_format' => (string) data_get($message, 'payload.text_format', 'plain_text'),
+            'text_mode' => (string) data_get($message, 'payload.text_mode', 'static'),
+            'variable_key' => (string) data_get($message, 'payload.variable_key', ''),
+            'variable_text_variants' => collect(data_get($message, 'payload.variable_text_variants', []))
+                ->filter(fn (mixed $variant): bool => is_array($variant))
+                ->map(fn (array $variant): array => [
+                    'value' => (string) ($variant['value'] ?? ''),
+                    'text' => (string) ($variant['text'] ?? ''),
+                ])
+                ->filter(fn (array $variant): bool => trim($variant['value']) !== '')
+                ->values()
+                ->all(),
+            'fallback_text' => (string) data_get($message, 'payload.fallback_text', ''),
+        ];
     }
 
     /**
@@ -305,6 +327,31 @@ class CompileScenarioBuilderV3RuntimeAction
                     ];
                 }
 
+                if ($type === 'variables') {
+                    return [
+                        'type' => 'variables',
+                        'operations' => collect($item['operations'] ?? [])
+                            ->filter(fn (mixed $operation): bool => is_array($operation))
+                            ->map(function (array $operation): array {
+                                $compiled = [
+                                    'operation' => (string) ($operation['operation'] ?? 'set'),
+                                    'field_key' => (string) ($operation['field_key'] ?? ''),
+                                ];
+
+                                if (($compiled['operation'] ?? null) === 'increment') {
+                                    $compiled['amount'] = (int) ($operation['amount'] ?? 1);
+                                } elseif (($compiled['operation'] ?? null) === 'set') {
+                                    $compiled['value'] = $operation['value'] ?? '';
+                                }
+
+                                return $compiled;
+                            })
+                            ->filter(fn (array $operation): bool => ($operation['field_key'] ?? '') !== '')
+                            ->values()
+                            ->all(),
+                    ];
+                }
+
                 return [
                     'type' => $type,
                     'source_type' => (string) ($item['source_type'] ?? 'ai_data'),
@@ -332,6 +379,7 @@ class CompileScenarioBuilderV3RuntimeAction
                         && ($item['source_block_id'] ?? '') !== ''
                         && ($item['city_field_key'] ?? '') !== ''
                     ),
+                'variables' => ($item['operations'] ?? []) !== [],
                 default => (($item['target_field'] ?? '') !== ''
                     && (($item['source_type'] ?? '') === 'static_value'
                         ? trim((string) ($item['static_value'] ?? '')) !== ''
@@ -349,8 +397,7 @@ class CompileScenarioBuilderV3RuntimeAction
     private function compileActionResultEdges(Collection $outgoingEdges, array $runtimeBlockIdsByDbId): array
     {
         return $outgoingEdges
-            ->filter(fn (ScenarioBuilderEdge $edge): bool => $this->edgeMode($edge) === self::EDGE_MODE_ACTION_RESULT
-                || $this->edgeOutputId($edge) !== null)
+            ->filter(fn (ScenarioBuilderEdge $edge): bool => $this->edgeOutputId($edge) !== null)
             ->map(function (ScenarioBuilderEdge $edge) use ($runtimeBlockIdsByDbId): array {
                 $compiled = $this->compileEdge($edge, $runtimeBlockIdsByDbId);
                 $compiled['mode'] = self::EDGE_MODE_ACTION_RESULT;
@@ -761,6 +808,26 @@ class CompileScenarioBuilderV3RuntimeAction
         $cardId = trim((string) data_get($this->settingsPayload($block), 'ui.card_id', ''));
 
         return $cardId !== '' ? $cardId : (string) $block->id;
+    }
+
+    /**
+     * @param  array<string, mixed>  $settings
+     */
+    private function displayNumber(array $settings): ?string
+    {
+        $value = data_get($settings, 'ui.display_number');
+
+        if (is_int($value) && $value > 0) {
+            return (string) $value;
+        }
+
+        $string = trim((string) $value);
+
+        if ($string === '' || ! ctype_digit($string) || (int) $string < 1) {
+            return null;
+        }
+
+        return (string) ((int) $string);
     }
 
     /**

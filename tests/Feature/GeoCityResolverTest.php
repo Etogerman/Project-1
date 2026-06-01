@@ -39,6 +39,7 @@ class GeoCityResolverTest extends TestCase
 
         $moscow = app(ResolveGeoCityAction::class)->handle('moscow');
         $khimki = app(ResolveGeoCityAction::class)->handle('химки');
+        $typo = app(ResolveGeoCityAction::class)->handle('я из масква');
 
         $this->assertSame(ResolveGeoCityAction::STATUS_MATCHED_CITY, $moscow['status']);
         $this->assertSame('Москва', $moscow['city']);
@@ -47,6 +48,10 @@ class GeoCityResolverTest extends TestCase
         $this->assertSame('Химки', $khimki['city']);
         $this->assertSame('Московская область', $khimki['region']);
         $this->assertSame('Россия', $khimki['country']);
+
+        $this->assertSame(ResolveGeoCityAction::STATUS_MATCHED_CITY, $typo['status']);
+        $this->assertSame('Москва', $typo['city']);
+        $this->assertSame('масква', $typo['matched_alias']);
     }
 
     public function test_resolver_does_not_match_alias_inside_another_word(): void
@@ -78,6 +83,38 @@ class GeoCityResolverTest extends TestCase
 
         $this->assertSame(ResolveGeoCityAction::STATUS_AMBIGUOUS, $result['status']);
         $this->assertCount(2, $result['payload']['candidates']);
+    }
+
+    public function test_resolver_requires_city_when_only_country_or_region_found(): void
+    {
+        $this->seed(GeoDictionarySeeder::class);
+
+        $country = app(ResolveGeoCityAction::class)->handle('я из России');
+        $region = app(ResolveGeoCityAction::class)->handle('живу в Московской области');
+
+        $this->assertSame(ResolveGeoCityAction::STATUS_MANUAL_REQUIRED, $country['status']);
+        $this->assertSame('city_required', $country['payload']['reason']);
+        $this->assertSame('Россия', $country['country']);
+
+        $this->assertSame(ResolveGeoCityAction::STATUS_MANUAL_REQUIRED, $region['status']);
+        $this->assertSame('city_required', $region['payload']['reason']);
+        $this->assertSame('Московская область', $region['region']);
+    }
+
+    public function test_resolver_uses_region_context_to_disambiguate_same_city_name(): void
+    {
+        $this->seed(GeoDictionarySeeder::class);
+        $this->createTestogradFixture();
+
+        $ambiguous = app(ResolveGeoCityAction::class)->handle('Тестоград');
+        $resolved = app(ResolveGeoCityAction::class)->handle('Тестоград Регион A');
+
+        $this->assertSame(ResolveGeoCityAction::STATUS_AMBIGUOUS, $ambiguous['status']);
+        $this->assertSame('ambiguous_city', $ambiguous['payload']['reason']);
+
+        $this->assertSame(ResolveGeoCityAction::STATUS_MATCHED_CITY, $resolved['status']);
+        $this->assertSame('Тестоград', $resolved['city']);
+        $this->assertSame('Регион A', $resolved['region']);
     }
 
     public function test_resolver_returns_manual_required_and_below_threshold(): void
@@ -200,5 +237,38 @@ class GeoCityResolverTest extends TestCase
         $this->assertSame($counts['cities'], GeoCity::query()->count());
         $this->assertSame($counts['aliases'], GeoAlias::query()->count());
         $this->assertSame(0, GeoResolutionEvent::query()->count());
+    }
+
+    private function createTestogradFixture(): void
+    {
+        $normalizer = app(GeoTextNormalizer::class);
+        $country = GeoCountry::query()->where('iso2', 'RU')->firstOrFail();
+
+        foreach (['Регион A', 'Регион B'] as $index => $regionName) {
+            $region = GeoRegion::query()->create([
+                'country_id' => $country->id,
+                'code' => 'TEST-'.($index + 1),
+                'name_ru' => $regionName,
+                'name_en' => null,
+                'normalized_name' => $normalizer->handle($regionName),
+                'type' => 'тестовый регион',
+                'active' => true,
+            ]);
+
+            GeoCity::query()->create([
+                'country_id' => $country->id,
+                'region_id' => $region->id,
+                'name_ru' => 'Тестоград',
+                'name_en' => null,
+                'normalized_name' => $normalizer->handle('Тестоград'),
+                'population' => 1000 - $index,
+                'lat' => null,
+                'lon' => null,
+                'timezone' => null,
+                'source' => 'test',
+                'source_id' => 'testograd-'.$index,
+                'active' => true,
+            ]);
+        }
     }
 }

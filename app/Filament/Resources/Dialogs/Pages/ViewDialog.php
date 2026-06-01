@@ -33,6 +33,7 @@ use Filament\Support\Enums\Width;
 use Illuminate\Contracts\Support\Htmlable;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
@@ -52,6 +53,10 @@ class ViewDialog extends ViewRecord
     public const LIVE_REFRESH_MESSAGE_LIMIT = 50;
 
     public const LIVE_REFRESH_INTERVAL_MS = 5000;
+
+    private const DIALOG_FIELD_VALUE_MAX_LENGTH = 2000;
+
+    private const DIALOG_FIELDS_MAX_BYTES = 65536;
 
     protected static string $resource = DialogResource::class;
 
@@ -337,6 +342,72 @@ class ViewDialog extends ViewRecord
         }
     }
 
+    public function saveDialogFieldValue(string $fieldKey, mixed $value): void
+    {
+        $fieldKey = trim($fieldKey);
+        $valueText = is_scalar($value) || $value === null
+            ? (string) $value
+            : '';
+
+        try {
+            if (mb_strlen($valueText) > self::DIALOG_FIELD_VALUE_MAX_LENGTH) {
+                throw ValidationException::withMessages([
+                    'dialog_field_value' => 'Значение поля диалога не должно быть длиннее 2000 символов.',
+                ]);
+            }
+
+            DB::transaction(function () use ($fieldKey, $valueText): void {
+                $dialog = Dialog::query()
+                    ->whereKey($this->getRecord()->getKey())
+                    ->lockForUpdate()
+                    ->firstOrFail();
+
+                $fieldsPayload = is_array($dialog->fields_payload) ? $dialog->fields_payload : [];
+
+                if (! $this->canEditDialogFieldValue($fieldKey, $fieldsPayload)) {
+                    throw ValidationException::withMessages([
+                        'dialog_field_key' => 'Это поле диалога нельзя изменить из карточки.',
+                    ]);
+                }
+
+                $fieldsPayload[$fieldKey] = $this->normalizeEditedDialogFieldValue(
+                    $valueText,
+                    $fieldsPayload[$fieldKey] ?? null,
+                );
+
+                $encoded = json_encode($fieldsPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+                if ($encoded === false || strlen($encoded) > self::DIALOG_FIELDS_MAX_BYTES) {
+                    throw ValidationException::withMessages([
+                        'dialog_field_value' => 'Поля диалога стали слишком большими для сохранения.',
+                    ]);
+                }
+
+                $dialog->forceFill(['fields_payload' => $fieldsPayload])->save();
+            });
+
+            $this->refreshDialogRecord();
+
+            Notification::make()
+                ->success()
+                ->title('Поле обновлено')
+                ->body('Значение поля диалога сохранено.')
+                ->send();
+        } catch (ValidationException $exception) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось сохранить поле')
+                ->body((string) collect($exception->errors())->flatten()->first())
+                ->send();
+        } catch (Throwable $throwable) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось сохранить поле')
+                ->body($throwable->getMessage())
+                ->send();
+        }
+    }
+
     /**
      * @return array<string, mixed>
      */
@@ -617,7 +688,7 @@ class ViewDialog extends ViewRecord
     /**
      * @return array{
      *     is_visible: bool,
-     *     fields: list<array{key: string, label: string, value: string, value_type: string, is_truncated: bool}>
+     *     fields: list<array{key: string, label: string, value: string, editable_value: string, value_type: string, is_truncated: bool, can_edit: bool}>
      * }
      */
     protected function getDialogFieldsViewData(): array
@@ -634,15 +705,17 @@ class ViewDialog extends ViewRecord
         $fields = collect($fieldsPayload)
             ->filter(fn (mixed $value, mixed $key): bool => is_string($key)
                 && ! str_starts_with($key, '_'))
-            ->map(function (mixed $value, string $key): array {
+            ->map(function (mixed $value, string $key) use ($fieldsPayload): array {
                 $formattedValue = $this->formatDialogFieldValue($value);
 
                 return [
                     'key' => $key,
                     'label' => $this->dialogFieldLabel($key, $key),
                     'value' => $formattedValue['value'],
+                    'editable_value' => $this->formatDialogFieldEditableValue($value),
                     'value_type' => $formattedValue['type'],
                     'is_truncated' => $formattedValue['is_truncated'],
+                    'can_edit' => $this->canEditDialogFieldValue($key, $fieldsPayload),
                 ];
             })
             ->sortBy('key', SORT_NATURAL)
@@ -788,19 +861,22 @@ class ViewDialog extends ViewRecord
         $run = $activeRuns->first();
 
         if (! $run instanceof ScenarioRun) {
+            $run = ScenarioRun::query()
+                ->where('dialog_id', $dialog->id)
+                ->orderByDesc('id')
+                ->first(['id', 'scenario_code', 'current_step', 'state_payload', 'status']);
+        }
+
+        if (! $run instanceof ScenarioRun) {
             return [
-                'value' => '—',
+                'value' => 'Сценарий не запускался',
                 'detail' => null,
                 'tone' => 'muted',
             ];
         }
 
         $statePayload = is_array($run->state_payload) ? $run->state_payload : [];
-        $currentBlockId = trim((string) data_get($statePayload, 'v3.current_block_id', ''));
-
-        if ($currentBlockId === '') {
-            $currentBlockId = filled($run->current_step) ? trim((string) $run->current_step) : '';
-        }
+        $currentBlockId = $this->resolveCurrentDialogBlockId($dialog, $run, $activeRuns->contains('id', $run->id));
 
         $detailParts = [
             'run #'.$run->id,
@@ -813,7 +889,7 @@ class ViewDialog extends ViewRecord
 
         if ($currentBlockId === '') {
             return [
-                'value' => '—',
+                'value' => 'Блок не определён · '.implode(' · ', $detailParts),
                 'detail' => null,
                 'tone' => 'muted',
             ];
@@ -830,28 +906,90 @@ class ViewDialog extends ViewRecord
         }
 
         $detailParts[] = 'v'.$publishedVersionId;
-        $blockTitle = $this->resolvePublishedV3BlockTitle($publishedVersionId, $currentBlockId);
+        $blockViewData = $this->resolvePublishedV3BlockViewData($publishedVersionId, $currentBlockId);
+        $blockTitle = $blockViewData['title'];
+        $displayNumber = $blockViewData['display_number'] ?? $currentBlockId;
 
         return [
-            'value' => '#'.$currentBlockId.' · '.($blockTitle ?? 'блок не найден').' · '.implode(' · ', $detailParts),
+            'value' => '#'.$displayNumber.' · '.($blockTitle ?? 'блок не найден').' · '.implode(' · ', $detailParts),
             'detail' => null,
             'tone' => $blockTitle !== null ? null : 'warning',
         ];
     }
 
-    protected function resolvePublishedV3BlockTitle(int $publishedVersionId, string $currentBlockId): ?string
+    protected function resolveCurrentDialogBlockId(Dialog $dialog, ScenarioRun $run, bool $isActiveRun): string
+    {
+        $statePayload = is_array($run->state_payload) ? $run->state_payload : [];
+        $currentBlockId = trim((string) data_get($statePayload, 'v3.current_block_id', ''));
+
+        if ($currentBlockId !== '') {
+            return $currentBlockId;
+        }
+
+        $currentStep = filled($run->current_step) ? trim((string) $run->current_step) : '';
+
+        if ($currentStep !== '') {
+            return $currentStep;
+        }
+
+        if (! $isActiveRun) {
+            $lastKnownBlockId = trim((string) data_get($statePayload, 'v3.last_known_block_id', ''));
+
+            if ($lastKnownBlockId !== '') {
+                return $lastKnownBlockId;
+            }
+
+            return $this->resolveLastKnownScenarioMessageBlockId($dialog, $run) ?? '';
+        }
+
+        return '';
+    }
+
+    protected function resolveLastKnownScenarioMessageBlockId(Dialog $dialog, ScenarioRun $run): ?string
+    {
+        return Message::query()
+            ->where('dialog_id', $dialog->id)
+            ->whereNotNull('raw_payload')
+            ->orderByDesc('id')
+            ->limit(100)
+            ->get(['id', 'raw_payload'])
+            ->map(function (Message $message) use ($run): ?string {
+                $rawPayload = is_array($message->raw_payload) ? $message->raw_payload : [];
+
+                if ((int) data_get($rawPayload, 'v3.scenario_run_id', 0) !== (int) $run->id) {
+                    return null;
+                }
+
+                $blockId = trim((string) data_get($rawPayload, 'v3.block_id', ''));
+
+                return $blockId !== '' ? $blockId : null;
+            })
+            ->filter()
+            ->first();
+    }
+
+    /**
+     * @return array{title: ?string, display_number: ?string}
+     */
+    protected function resolvePublishedV3BlockViewData(int $publishedVersionId, string $currentBlockId): array
     {
         $version = ScenarioVersion::query()->find($publishedVersionId, ['id', 'schema_payload']);
 
         if (! $version instanceof ScenarioVersion) {
-            return null;
+            return [
+                'title' => null,
+                'display_number' => null,
+            ];
         }
 
         $schemaPayload = is_array($version->schema_payload) ? $version->schema_payload : [];
         $blocks = data_get($schemaPayload, 'builder_v3_runtime.blocks', []);
 
         if (! is_array($blocks)) {
-            return null;
+            return [
+                'title' => null,
+                'display_number' => null,
+            ];
         }
 
         $block = $blocks[$currentBlockId] ?? null;
@@ -868,12 +1006,27 @@ class ViewDialog extends ViewRecord
         }
 
         if (! is_array($block)) {
-            return null;
+            return [
+                'title' => null,
+                'display_number' => null,
+            ];
         }
 
         $title = trim((string) ($block['title'] ?? ''));
+        $displayNumber = trim((string) ($block['display_number'] ?? ''));
 
-        return $title !== '' ? $title : null;
+        if ($displayNumber === '') {
+            $displayNumber = trim((string) ($block['card_id'] ?? ''));
+        }
+
+        if ($displayNumber === '') {
+            $displayNumber = trim((string) ($block['id'] ?? ''));
+        }
+
+        return [
+            'title' => $title !== '' ? $title : null,
+            'display_number' => $displayNumber !== '' ? $displayNumber : null,
+        ];
     }
 
     /**
@@ -909,6 +1062,58 @@ class ViewDialog extends ViewRecord
                 $value => FieldDictionaryField::optionLabelFrom($this->dialogOptionLabels[$fieldKey], $value, $label),
             ])
             ->all();
+    }
+
+    /**
+     * @param  array<string, mixed>  $fieldsPayload
+     */
+    protected function canEditDialogFieldValue(string $fieldKey, array $fieldsPayload): bool
+    {
+        return $fieldKey !== ''
+            && ! str_starts_with($fieldKey, '_')
+            && array_key_exists($fieldKey, $fieldsPayload);
+    }
+
+    protected function normalizeEditedDialogFieldValue(string $value, mixed $previousValue): mixed
+    {
+        $trimmed = trim($value);
+
+        if (is_int($previousValue) && preg_match('/^-?\d+$/', $trimmed) === 1) {
+            return (int) $trimmed;
+        }
+
+        if (is_float($previousValue) && is_numeric($trimmed)) {
+            return (float) $trimmed;
+        }
+
+        if (is_bool($previousValue)) {
+            return match (mb_strtolower($trimmed)) {
+                '1', 'true', 'yes', 'да' => true,
+                '0', 'false', 'no', 'нет' => false,
+                default => $value,
+            };
+        }
+
+        return $value;
+    }
+
+    protected function formatDialogFieldEditableValue(mixed $value): string
+    {
+        if ($value === null) {
+            return '';
+        }
+
+        if (is_bool($value)) {
+            return $value ? 'true' : 'false';
+        }
+
+        if (is_scalar($value)) {
+            return (string) $value;
+        }
+
+        $encoded = json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        return $encoded !== false ? $encoded : '';
     }
 
     /**

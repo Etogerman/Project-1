@@ -383,15 +383,6 @@
                         class="ac-surface ac-dialog-side-card"
                         data-role="dialog-fields-section"
                         data-dialog-id="{{ $record->id }}"
-                        x-data="{
-                            copyFieldKey(event) {
-                                const fieldKey = event.currentTarget?.dataset?.fieldKey ?? '';
-
-                                if (fieldKey && navigator.clipboard?.writeText) {
-                                    navigator.clipboard.writeText(fieldKey);
-                                }
-                            },
-                        }"
                     >
                         <p class="ac-dialog-summary__section-title">Поля диалога</p>
                         @if ($dialogFields['fields'] === [])
@@ -403,28 +394,88 @@
                                 @foreach ($dialogFields['fields'] as $field)
                                     <div
                                         class="ac-dialog-field-row"
+                                        wire:key="dialog-field-row-{{ md5($field['key']) }}"
                                         data-role="dialog-field-row"
                                         data-field-key="{{ $field['key'] }}"
                                         data-field-value-type="{{ $field['value_type'] }}"
+                                        x-data="{ value: @js($field['editable_value']), isEditing: false, isSaving: false }"
                                     >
                                         <div class="ac-dialog-field-row__content">
-                                            <p class="ac-meta__label" data-role="dialog-field-key">
-                                                {{ $field['label'] }}
-                                            </p>
-                                            <p class="ac-meta__value" data-role="dialog-field-value">
-                                                {{ $field['value'] }}
-                                            </p>
+                                            @if ($field['can_edit'])
+                                                <div class="ac-dialog-field-row__value-line">
+                                                    <p class="ac-meta__label" data-role="dialog-field-key">
+                                                        {{ $field['label'] }}
+                                                    </p>
+                                                    <p
+                                                        class="ac-meta__value"
+                                                        data-role="dialog-field-value"
+                                                        x-show="! isEditing"
+                                                    >
+                                                        {{ $field['value'] }}
+                                                    </p>
+                                                    <input
+                                                        x-cloak
+                                                        x-ref="input"
+                                                        x-show="isEditing"
+                                                        type="text"
+                                                        class="ac-dialog-field-row__input"
+                                                        data-role="dialog-field-edit-input"
+                                                        aria-label="Значение поля {{ $field['label'] }}"
+                                                        value="{{ $field['editable_value'] }}"
+                                                        x-model="value"
+                                                        x-bind:hidden="! isEditing"
+                                                        x-bind:disabled="isSaving"
+                                                        x-on:keydown.enter.prevent="
+                                                            isSaving = true;
+                                                            $wire.saveDialogFieldValue(@js($field['key']), value).then(() => isEditing = false).finally(() => isSaving = false);
+                                                        "
+                                                    >
+                                                    <button
+                                                        type="button"
+                                                        class="ac-dialog-field-row__edit"
+                                                        data-role="dialog-field-edit"
+                                                        title="Редактировать поле"
+                                                        aria-label="Редактировать поле {{ $field['label'] }}"
+                                                        x-on:click="
+                                                            isEditing = true;
+                                                            $nextTick(() => $refs.input?.focus());
+                                                        "
+                                                    >
+                                                        <x-filament::icon icon="heroicon-m-pencil-square" class="h-4 w-4" />
+                                                    </button>
+                                                </div>
+                                            @else
+                                                <div class="ac-dialog-field-row__value-line">
+                                                    <p class="ac-meta__label" data-role="dialog-field-key">
+                                                        {{ $field['label'] }}
+                                                    </p>
+                                                    <p class="ac-meta__value" data-role="dialog-field-value">
+                                                        {{ $field['value'] }}
+                                                    </p>
+                                                </div>
+                                            @endif
                                         </div>
-                                        <button
-                                            type="button"
-                                            class="ac-dialog-field-row__copy"
-                                            data-role="dialog-field-copy-key"
-                                            data-field-key="{{ $field['key'] }}"
-                                            title="Скопировать ключ поля"
-                                            x-on:click="copyFieldKey($event)"
+                                        <div
+                                            class="ac-dialog-field-row__actions"
+                                            x-cloak
+                                            x-show="isEditing"
                                         >
-                                            Копировать ключ
-                                        </button>
+                                            @if ($field['can_edit'])
+                                                <button
+                                                    type="button"
+                                                    class="ac-dialog-field-row__save"
+                                                    data-role="dialog-field-save"
+                                                    x-bind:disabled="isSaving"
+                                                    x-on:click="
+                                                        isSaving = true;
+                                                        $wire.saveDialogFieldValue(@js($field['key']), value).then(() => isEditing = false).finally(() => isSaving = false);
+                                                    "
+                                                >
+                                                    <span x-show="! isSaving">Сохранить</span>
+                                                    <span x-cloak x-show="isSaving">Сохраняю</span>
+                                                </button>
+                                            @endif
+                                        </div>
                                     </div>
                                 @endforeach
                             </div>

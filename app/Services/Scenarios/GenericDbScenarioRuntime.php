@@ -140,6 +140,13 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         ResolveGeoCityAction::STATUS_FAILED => self::V3_GEO_CITY_OUTPUT_FAILED,
     ];
 
+    private const V3_GEO_CITY_MANUAL_REQUIRED_STATUSES = [
+        ResolveGeoCityAction::STATUS_MANUAL_REQUIRED,
+        ResolveGeoCityAction::STATUS_AMBIGUOUS,
+        ResolveGeoCityAction::STATUS_BELOW_THRESHOLD,
+        ResolveGeoCityAction::STATUS_INACTIVE,
+    ];
+
     private const V3_CONTACT_CAPTURE_FIELDS = [
         'phone',
         'first_name',
@@ -2116,7 +2123,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 if (! $this->applyV3TransitionCaptureToContact($message, $capture, $capturedValue ?? [])) {
                     return false;
                 }
-            } elseif (! preg_match('/^[A-Za-z][A-Za-z0-9_]{0,63}$/', $fieldKey)) {
+            } elseif (! $this->validV3DialogVariableKey($fieldKey)) {
                 return false;
             } elseif ($captureValue === null || mb_strlen($captureValue) > self::V3_DIALOG_FIELD_VALUE_MAX_LENGTH) {
                 return false;
@@ -2217,15 +2224,11 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
      */
     private function applyV3TransitionDialogFieldToPayload(array &$fieldsPayload, string $fieldKey, string $value): bool
     {
-        if (! preg_match('/^[A-Za-z][A-Za-z0-9_]{0,63}$/', $fieldKey) || mb_strlen($value) > self::V3_DIALOG_FIELD_VALUE_MAX_LENGTH) {
+        if (! $this->validV3DialogVariableKey($fieldKey) || mb_strlen($value) > self::V3_DIALOG_FIELD_VALUE_MAX_LENGTH) {
             return false;
         }
 
-        $userFieldCount = collect($fieldsPayload)
-            ->keys()
-            ->filter(fn (mixed $key): bool => is_string($key) && ! str_starts_with($key, '_'))
-            ->unique()
-            ->count();
+        $userFieldCount = $this->v3DialogUserFieldCount($fieldsPayload);
 
         if (! array_key_exists($fieldKey, $fieldsPayload) && $userFieldCount >= self::V3_DIALOG_USER_FIELDS_MAX) {
             return false;
@@ -2569,7 +2572,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 $message,
                 $this->v3TextWithVariables(
                     $message,
-                    (string) ($messagePayload['text'] ?? ''),
+                    $this->v3MessageTextForPayload($message, $messagePayload),
                     $statePayload,
                     $blockId,
                 ),
@@ -2905,6 +2908,16 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                     $block,
                     $statePayload,
                     filled($block['id'] ?? null) ? (string) $block['id'] : null,
+                );
+            }
+
+            if (($action['type'] ?? null) === 'variables') {
+                return $this->applyV3VariablesAction(
+                    $message,
+                    $action,
+                    $statePayload,
+                    filled($block['id'] ?? null) ? (string) $block['id'] : null,
+                    $run,
                 );
             }
 
@@ -3452,21 +3465,6 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         $attemptPath = "v3.geo_resolution_attempts.$attemptKey";
         $attempts = max(0, (int) data_get($statePayload, $attemptPath, 0));
 
-        if ($attempts >= self::V3_GEO_CITY_ATTEMPT_LIMIT) {
-            Log::info('scenario.v3_geo_city_attempt_limit_reached', [
-                'scenario_code' => $this->code(),
-                'dialog_id' => $message->dialog_id,
-                'message_id' => $message->id,
-                'block_id' => $blockId,
-                'attempts' => $attempts,
-            ]);
-
-            return [
-                'state_payload' => $statePayload,
-                'output_id' => self::V3_GEO_CITY_OUTPUT_LIMIT_REACHED,
-            ];
-        }
-
         $rootContact = $message->contact instanceof Contact
             ? $this->resolveRootContactAction->handle($message->contact)
             : null;
@@ -3480,6 +3478,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             ]);
 
             data_set($statePayload, $attemptPath, $attempts + 1);
+            $this->v3ClearGeoCityPending($statePayload, $blockId);
 
             return [
                 'state_payload' => $statePayload,
@@ -3490,6 +3489,29 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         $dialog = $message->dialog instanceof Dialog
             ? $message->dialog
             : ($message->dialog_id !== null ? Dialog::query()->find($message->dialog_id) : null);
+
+        if ($attempts >= self::V3_GEO_CITY_ATTEMPT_LIMIT) {
+            Log::info('scenario.v3_geo_city_attempt_limit_reached', [
+                'scenario_code' => $this->code(),
+                'dialog_id' => $message->dialog_id,
+                'message_id' => $message->id,
+                'block_id' => $blockId,
+                'attempts' => $attempts,
+            ]);
+
+            $this->applyGeoResolutionToContactAction->createEvent(
+                $rootContact,
+                $this->v3GeoCityLimitResult($message, $action, $attempts),
+                $dialog,
+                $message,
+            );
+            $this->v3ClearGeoCityPending($statePayload, $blockId);
+
+            return [
+                'state_payload' => $statePayload,
+                'output_id' => self::V3_GEO_CITY_OUTPUT_LIMIT_REACHED,
+            ];
+        }
 
         if (($action['source'] ?? 'current_inbound_message') === 'ai_data') {
             return $this->applyV3ResolveGeoCityFromAiDataAction(
@@ -3520,6 +3542,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             $this->applyGeoResolutionToContactAction->createEvent($rootContact, $result, $dialog, $message);
 
             data_set($statePayload, $attemptPath, $attempts + 1);
+            $this->v3ClearGeoCityPending($statePayload, $blockId);
 
             return [
                 'state_payload' => $statePayload,
@@ -3527,15 +3550,25 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             ];
         }
 
-        $result = $this->resolveAndApplyGeoCityAction->handle($rootContact, $text, $dialog, $message);
+        $result = $this->resolveGeoCityAction->handle($text);
         $status = (string) ($result['status'] ?? ResolveGeoCityAction::STATUS_FAILED);
         $outputId = $this->v3GeoCityOutputId($status, $block);
+        $result = $this->withV3GeoCityRuntimePayload($result, 'current_inbound_message', $outputId);
 
-        if ($outputId !== self::V3_GEO_CITY_OUTPUT_FOUND) {
-            data_set($statePayload, $attemptPath, $attempts + 1);
+        if ($outputId === self::V3_GEO_CITY_OUTPUT_FOUND) {
+            $this->applyGeoResolutionToContactAction->handle($rootContact, $result, $dialog, $message);
         } else {
-            data_forget($statePayload, $attemptPath);
+            $this->applyGeoResolutionToContactAction->createEvent($rootContact, $result, $dialog, $message);
         }
+
+        $statePayload = $this->v3GeoCityStateAfterOutput(
+            statePayload: $statePayload,
+            attemptPath: $attemptPath,
+            attempts: $attempts,
+            blockId: $blockId,
+            outputId: $outputId,
+            result: $result,
+        );
 
         return [
             'state_payload' => $statePayload,
@@ -3553,6 +3586,10 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
         if ($legacyOutputId !== null && $this->v3BlockHasActionResultEdge($block, $legacyOutputId)) {
             return $legacyOutputId;
+        }
+
+        if (in_array($status, self::V3_GEO_CITY_MANUAL_REQUIRED_STATUSES, true)) {
+            return self::V3_GEO_CITY_OUTPUT_MANUAL_REQUIRED;
         }
 
         return self::V3_GEO_CITY_OUTPUT_NOT_FOUND;
@@ -3597,6 +3634,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 $message,
             );
             data_set($statePayload, $attemptPath, $attempts + 1);
+            $this->v3ClearGeoCityPending($statePayload, $blockId);
 
             return [
                 'state_payload' => $statePayload,
@@ -3604,9 +3642,34 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             ];
         }
 
+        $aiOutputId = trim((string) data_get($analysis, 'output_id', ''));
+
         $city = $this->v3GeoCityAiDataValue($analysis, $cityFieldKey);
         $region = $regionFieldKey !== '' ? $this->v3GeoCityAiDataValue($analysis, $regionFieldKey) : null;
         $country = $countryFieldKey !== '' ? $this->v3GeoCityAiDataValue($analysis, $countryFieldKey) : null;
+
+        if ($aiOutputId === 'city_not_found') {
+            $this->applyGeoResolutionToContactAction->createEvent(
+                $rootContact,
+                $this->v3GeoCityAiDataEarlyResult(
+                    reason: 'ai_city_not_found',
+                    action: $action,
+                    analysis: $analysis,
+                    city: $city,
+                    region: $region,
+                    country: $country,
+                ),
+                $dialog,
+                $message,
+            );
+            data_set($statePayload, $attemptPath, $attempts + 1);
+            $this->v3ClearGeoCityPending($statePayload, $blockId);
+
+            return [
+                'state_payload' => $statePayload,
+                'output_id' => self::V3_GEO_CITY_OUTPUT_NOT_FOUND,
+            ];
+        }
 
         if ($city === null) {
             $this->applyGeoResolutionToContactAction->createEvent(
@@ -3623,6 +3686,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 $message,
             );
             data_set($statePayload, $attemptPath, $attempts + 1);
+            $this->v3ClearGeoCityPending($statePayload, $blockId);
 
             return [
                 'state_payload' => $statePayload,
@@ -3633,9 +3697,16 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         $resolverInput = $this->v3GeoCityResolverInputFromAiData($city, $region, $country);
         $geoResult = $this->resolveGeoCityAction->handle($resolverInput);
         $status = (string) ($geoResult['status'] ?? ResolveGeoCityAction::STATUS_FAILED);
-        $outputId = $status === ResolveGeoCityAction::STATUS_MATCHED_CITY
-            ? self::V3_GEO_CITY_OUTPUT_FOUND
-            : self::V3_GEO_CITY_OUTPUT_NOT_FOUND;
+        $resolverReason = data_get($geoResult, 'payload.reason');
+
+        if ($status === ResolveGeoCityAction::STATUS_MANUAL_REQUIRED && $resolverReason === 'city_required') {
+            $geoResult['status'] = ResolveGeoCityAction::STATUS_NOT_FOUND;
+            data_set($geoResult, 'payload.reason', 'city_not_found');
+            data_set($geoResult, 'payload.resolver_reason', 'city_required');
+            $status = ResolveGeoCityAction::STATUS_NOT_FOUND;
+        }
+
+        $outputId = $this->v3GeoCityOutputId($status, $block);
         $geoResult = $this->withV3GeoCityAiDataPayload(
             result: $geoResult,
             action: $action,
@@ -3649,11 +3720,18 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
         if ($outputId === self::V3_GEO_CITY_OUTPUT_FOUND) {
             $this->applyGeoResolutionToContactAction->handle($rootContact, $geoResult, $dialog, $message);
-            data_forget($statePayload, $attemptPath);
         } else {
             $this->applyGeoResolutionToContactAction->createEvent($rootContact, $geoResult, $dialog, $message);
-            data_set($statePayload, $attemptPath, $attempts + 1);
         }
+
+        $statePayload = $this->v3GeoCityStateAfterOutput(
+            statePayload: $statePayload,
+            attemptPath: $attemptPath,
+            attempts: $attempts,
+            blockId: $blockId,
+            outputId: $outputId,
+            result: $geoResult,
+        );
 
         Log::info('scenario.v3_geo_city_ai_data_resolved', [
             'scenario_code' => $this->code(),
@@ -3670,6 +3748,124 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             'state_payload' => $statePayload,
             'output_id' => $outputId,
         ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function v3GeoCityLimitResult(Message $message, array $action, int $attempts): array
+    {
+        $source = (string) ($action['source'] ?? 'current_inbound_message');
+        $text = $message->direction === Message::DIRECTION_INBOUND
+            && $message->sent_by_type === Message::SENT_BY_TYPE_CONTACT
+            ? trim((string) ($message->text ?? ''))
+            : null;
+
+        return [
+            'status' => ResolveGeoCityAction::STATUS_NOT_FOUND,
+            'source_text' => $text !== '' ? $text : null,
+            'payload' => [
+                'source' => $source,
+                'reason' => 'limit_reached',
+                'attempt_count' => $attempts,
+                'resolver_status' => 'not_started',
+                'resolver_ran' => false,
+                'final_output' => self::V3_GEO_CITY_OUTPUT_LIMIT_REACHED,
+            ],
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $result
+     * @return array<string, mixed>
+     */
+    private function withV3GeoCityRuntimePayload(array $result, string $source, string $outputId): array
+    {
+        $payload = is_array($result['payload'] ?? null) ? $result['payload'] : [];
+        $status = (string) ($result['status'] ?? ResolveGeoCityAction::STATUS_FAILED);
+
+        $result['payload'] = array_merge($payload, [
+            'source' => $source,
+            'resolver_status' => $status,
+            'resolver_ran' => true,
+            'final_output' => $outputId,
+        ]);
+
+        return $result;
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @param  array<string, mixed>  $result
+     * @return array<string, mixed>
+     */
+    private function v3GeoCityStateAfterOutput(
+        array $statePayload,
+        string $attemptPath,
+        int $attempts,
+        ?string $blockId,
+        string $outputId,
+        array $result,
+    ): array {
+        if ($outputId === self::V3_GEO_CITY_OUTPUT_FOUND) {
+            data_forget($statePayload, $attemptPath);
+            $this->v3ClearGeoCityPending($statePayload, $blockId);
+
+            return $statePayload;
+        }
+
+        if ($outputId === self::V3_GEO_CITY_OUTPUT_MANUAL_REQUIRED) {
+            data_set($statePayload, $attemptPath, $attempts + 1);
+            $this->v3SetGeoCityPending($statePayload, $blockId, $result);
+
+            return $statePayload;
+        }
+
+        data_set($statePayload, $attemptPath, $attempts + 1);
+        $this->v3ClearGeoCityPending($statePayload, $blockId);
+
+        return $statePayload;
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     */
+    private function v3ClearGeoCityPending(array &$statePayload, ?string $blockId): void
+    {
+        data_forget($statePayload, 'v3.geo_resolution_pending.'.($blockId ?: 'unknown'));
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @param  array<string, mixed>  $result
+     */
+    private function v3SetGeoCityPending(array &$statePayload, ?string $blockId, array $result): void
+    {
+        $payload = is_array($result['payload'] ?? null) ? $result['payload'] : [];
+        $candidates = is_array($payload['candidates'] ?? null) ? $payload['candidates'] : [];
+
+        if ($candidates === [] && filled($result['city'] ?? null)) {
+            $candidates = [[
+                'city_id' => $result['city_id'] ?? null,
+                'city' => $result['city'] ?? null,
+                'region_id' => $result['region_id'] ?? null,
+                'region' => $result['region'] ?? null,
+                'country_id' => $result['country_id'] ?? null,
+                'country' => $result['country'] ?? null,
+                'matched_alias' => $result['matched_alias'] ?? null,
+                'confidence' => $result['confidence'] ?? null,
+            ]];
+        }
+
+        data_set($statePayload, 'v3.geo_resolution_pending.'.($blockId ?: 'unknown'), [
+            'reason' => $payload['reason'] ?? null,
+            'source' => $payload['source'] ?? 'current_inbound_message',
+            'source_text' => $result['source_text'] ?? null,
+            'country' => $result['country'] ?? null,
+            'region' => $result['region'] ?? null,
+            'city' => $result['city'] ?? null,
+            'candidates' => array_slice(array_values($candidates), 0, 5),
+        ]);
     }
 
     /**
@@ -3770,6 +3966,12 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
     ): array {
         $payload = is_array($result['payload'] ?? null) ? $result['payload'] : [];
         $status = (string) ($result['status'] ?? ResolveGeoCityAction::STATUS_FAILED);
+        $reason = $payload['reason'] ?? null;
+
+        if ($outputId === self::V3_GEO_CITY_OUTPUT_MANUAL_REQUIRED && $status !== ResolveGeoCityAction::STATUS_NOT_FOUND) {
+            $payload['resolver_reason'] = $reason;
+            $payload['reason'] = 'ai_unconfirmed';
+        }
 
         $result['source_text'] = $resolverInput;
         $result['payload'] = array_merge($payload, [
@@ -3804,7 +4006,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
     private function applyV3WriteDialogFieldAction(Message $message, string $fieldKey, string $value): bool
     {
-        if (! preg_match('/^[A-Za-z][A-Za-z0-9_]{0,63}$/', $fieldKey) || mb_strlen($value) > self::V3_DIALOG_FIELD_VALUE_MAX_LENGTH) {
+        if (! $this->validV3DialogVariableKey($fieldKey) || mb_strlen($value) > self::V3_DIALOG_FIELD_VALUE_MAX_LENGTH) {
             return false;
         }
 
@@ -3818,11 +4020,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         }
 
         $fields = is_array($dialog->fields_payload) ? $dialog->fields_payload : [];
-        $userFieldCount = collect($fields)
-            ->keys()
-            ->filter(fn (mixed $key): bool => is_string($key) && ! str_starts_with($key, '_'))
-            ->unique()
-            ->count();
+        $userFieldCount = $this->v3DialogUserFieldCount($fields);
 
         if (! array_key_exists($fieldKey, $fields) && $userFieldCount >= self::V3_DIALOG_USER_FIELDS_MAX) {
             return false;
@@ -3839,6 +4037,229 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         $dialog->forceFill(['fields_payload' => $fields])->save();
 
         return true;
+    }
+
+    /**
+     * @param  array<string, mixed>  $action
+     * @param  array<string, mixed>  $statePayload
+     * @return array{state_payload: array<string, mixed>, output_id: ?string, stop_current_execution?: bool}
+     */
+    private function applyV3VariablesAction(
+        Message $message,
+        array $action,
+        array $statePayload,
+        ?string $blockId,
+        ?ScenarioRun $run,
+    ): array {
+        $operations = is_array($action['operations'] ?? null) ? $action['operations'] : [];
+        $failure = null;
+
+        try {
+            $saved = DB::transaction(function () use ($message, $operations, &$failure): bool {
+                $dialog = Dialog::query()
+                    ->whereKey($message->dialog_id)
+                    ->lockForUpdate()
+                    ->first();
+
+                if (! $dialog instanceof Dialog) {
+                    $failure = ['reason' => 'dialog_not_found'];
+
+                    return false;
+                }
+
+                $fields = is_array($dialog->fields_payload) ? $dialog->fields_payload : [];
+
+                foreach ($operations as $index => $operation) {
+                    if (! is_array($operation)) {
+                        $failure = ['reason' => 'invalid_operation', 'operation_index' => $index];
+
+                        return false;
+                    }
+
+                    $failure = $this->applyV3DialogVariableOperation($fields, $operation, $index);
+
+                    if ($failure !== null) {
+                        return false;
+                    }
+                }
+
+                if ($this->v3DialogUserFieldCount($fields) > self::V3_DIALOG_USER_FIELDS_MAX) {
+                    $failure = ['reason' => 'too_many_fields'];
+
+                    return false;
+                }
+
+                $encoded = json_encode($fields);
+
+                if ($encoded === false || strlen($encoded) > self::V3_DIALOG_FIELDS_MAX_BYTES) {
+                    $failure = ['reason' => 'payload_too_large'];
+
+                    return false;
+                }
+
+                $dialog->forceFill(['fields_payload' => $fields])->save();
+
+                return true;
+            });
+        } catch (Throwable $throwable) {
+            Log::warning('scenario.v3_variables_action_failed', [
+                'scenario_code' => $this->code(),
+                'dialog_id' => $message->dialog_id,
+                'message_id' => $message->id,
+                'scenario_run_id' => $run?->id,
+                'block_id' => $blockId,
+                'reason' => 'exception',
+                'exception_class' => $throwable::class,
+                'error' => $throwable->getMessage(),
+            ]);
+
+            return [
+                'state_payload' => $statePayload,
+                'output_id' => null,
+                'stop_current_execution' => true,
+            ];
+        }
+
+        if (! $saved) {
+            Log::info('scenario.v3_variables_action_failed', [
+                'scenario_code' => $this->code(),
+                'dialog_id' => $message->dialog_id,
+                'message_id' => $message->id,
+                'scenario_run_id' => $run?->id,
+                'block_id' => $blockId,
+                'reason' => is_array($failure) ? ($failure['reason'] ?? 'unknown') : 'unknown',
+                'operation_index' => is_array($failure) ? ($failure['operation_index'] ?? null) : null,
+                'field_key' => is_array($failure) ? ($failure['field_key'] ?? null) : null,
+            ]);
+
+            return [
+                'state_payload' => $statePayload,
+                'output_id' => null,
+                'stop_current_execution' => true,
+            ];
+        }
+
+        Log::info('scenario.v3_variables_action_done', [
+            'scenario_code' => $this->code(),
+            'dialog_id' => $message->dialog_id,
+            'message_id' => $message->id,
+            'scenario_run_id' => $run?->id,
+            'block_id' => $blockId,
+            'operations_count' => count($operations),
+        ]);
+
+        return ['state_payload' => $statePayload, 'output_id' => null];
+    }
+
+    /**
+     * @param  array<string, mixed>  $fields
+     * @param  array<string, mixed>  $operation
+     * @return array<string, mixed>|null
+     */
+    private function applyV3DialogVariableOperation(array &$fields, array $operation, int $index): ?array
+    {
+        $type = (string) ($operation['operation'] ?? '');
+        $fieldKey = trim((string) ($operation['field_key'] ?? ''));
+
+        if (! $this->validV3DialogVariableKey($fieldKey)) {
+            return [
+                'reason' => 'invalid_field_key',
+                'operation_index' => $index,
+                'field_key' => $fieldKey,
+            ];
+        }
+
+        if ($type === 'clear') {
+            unset($fields[$fieldKey]);
+
+            return null;
+        }
+
+        if ($type === 'increment') {
+            $current = $fields[$fieldKey] ?? null;
+
+            if ($current === null || $current === '') {
+                $current = 0;
+            }
+
+            if (! is_int($current) && ! is_float($current) && ! (is_string($current) && is_numeric(trim($current)))) {
+                return [
+                    'reason' => 'not_numeric',
+                    'operation_index' => $index,
+                    'field_key' => $fieldKey,
+                ];
+            }
+
+            $amount = (int) ($operation['amount'] ?? 1);
+
+            if ($amount < 1 || $amount > 100) {
+                return [
+                    'reason' => 'invalid_amount',
+                    'operation_index' => $index,
+                    'field_key' => $fieldKey,
+                ];
+            }
+
+            $next = ((float) $current) + $amount;
+            $fields[$fieldKey] = floor($next) === $next ? (int) $next : $next;
+
+            return null;
+        }
+
+        if ($type === 'set') {
+            $value = $operation['value'] ?? '';
+
+            if (! is_scalar($value) && $value !== null) {
+                return [
+                    'reason' => 'invalid_value',
+                    'operation_index' => $index,
+                    'field_key' => $fieldKey,
+                ];
+            }
+
+            if (is_string($value) && mb_strlen($value) > self::V3_DIALOG_FIELD_VALUE_MAX_LENGTH) {
+                return [
+                    'reason' => 'value_too_long',
+                    'operation_index' => $index,
+                    'field_key' => $fieldKey,
+                ];
+            }
+
+            $fields[$fieldKey] = $value;
+
+            return null;
+        }
+
+        return [
+            'reason' => 'unknown_operation',
+            'operation_index' => $index,
+            'field_key' => $fieldKey,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $fields
+     */
+    private function v3DialogUserFieldCount(array $fields): int
+    {
+        return collect($fields)
+            ->keys()
+            ->filter(fn (mixed $key): bool => is_string($key) && ! str_starts_with($key, '_'))
+            ->unique()
+            ->count();
+    }
+
+    private function validV3DialogVariableKey(string $key): bool
+    {
+        if ($key === '' || mb_strlen($key) > 64) {
+            return false;
+        }
+
+        if (in_array($key, ['__proto__', 'constructor', 'prototype'], true)) {
+            return false;
+        }
+
+        return preg_match('/^(?!_)[\p{L}][\p{L}\p{N}_]{0,63}$/u', $key) === 1;
     }
 
     /**
@@ -4454,7 +4875,7 @@ TEXT;
         }
 
         return (string) preg_replace_callback(
-            '/\{\{\s*([A-Za-z0-9_.]+)\s*(?:\|\s*([^}]*?))?\s*\}\}/u',
+            '/\{\{\s*([\p{L}\p{N}_.]+)\s*(?:\|\s*([^}]*?))?\s*\}\}/u',
             function (array $matches) use ($message, $statePayload, $blockId): string {
                 $path = trim((string) ($matches[1] ?? ''));
                 $fallback = array_key_exists(2, $matches) ? trim((string) $matches[2]) : '';
@@ -4518,6 +4939,44 @@ TEXT;
             },
             $text,
         );
+    }
+
+    /**
+     * @param  array<string, mixed>  $messagePayload
+     */
+    private function v3MessageTextForPayload(Message $message, array $messagePayload): string
+    {
+        if (($messagePayload['text_mode'] ?? 'static') !== 'by_dialog_variable') {
+            return (string) ($messagePayload['text'] ?? '');
+        }
+
+        $fieldKey = trim((string) ($messagePayload['variable_key'] ?? ''));
+
+        if (! $this->validV3DialogVariableKey($fieldKey)) {
+            return (string) ($messagePayload['fallback_text'] ?? '');
+        }
+
+        $dialog = $message->dialog_id !== null
+            ? Dialog::query()->find($message->dialog_id)
+            : ($message->dialog instanceof Dialog ? $message->dialog : null);
+        $fields = is_array($dialog?->fields_payload) ? $dialog->fields_payload : [];
+        $rawValue = $fields[$fieldKey] ?? null;
+        $value = $rawValue === null ? '' : trim((string) $rawValue);
+        $variants = is_array($messagePayload['variable_text_variants'] ?? null)
+            ? $messagePayload['variable_text_variants']
+            : [];
+
+        foreach ($variants as $variant) {
+            if (! is_array($variant)) {
+                continue;
+            }
+
+            if (trim((string) ($variant['value'] ?? '')) === $value) {
+                return (string) ($variant['text'] ?? '');
+            }
+        }
+
+        return (string) ($messagePayload['fallback_text'] ?? '');
     }
 
     /**
@@ -4599,7 +5058,7 @@ TEXT;
 
     private function v3AiAnalysisDialogPromptVariable(Message $message, string $field): ?string
     {
-        if (! preg_match('/^[A-Za-z][A-Za-z0-9_]{0,63}$/', $field)) {
+        if (! $this->validV3DialogVariableKey($field)) {
             return null;
         }
 
@@ -6027,6 +6486,7 @@ TEXT;
     {
         data_set($statePayload, 'v3.status', 'running');
         data_set($statePayload, 'v3.current_block_id', $blockId);
+        data_set($statePayload, 'v3.last_known_block_id', $blockId);
         data_set($statePayload, 'v3.waiting_output_ids', []);
 
         return $statePayload;
@@ -6041,6 +6501,7 @@ TEXT;
     {
         data_set($statePayload, 'v3.status', 'waiting_input');
         data_set($statePayload, 'v3.current_block_id', $blockId);
+        data_set($statePayload, 'v3.last_known_block_id', $blockId);
         data_set($statePayload, 'v3.waiting_output_ids', collect($this->v3WaitingButtonRows($block, $channel))
             ->flatten(1)
             ->pluck('output_id')

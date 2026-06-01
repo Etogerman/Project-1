@@ -21,12 +21,24 @@ class BuildScenarioBuilderV3StateAction
 
     private const GEO_CITY_OUTPUT_NOT_FOUND = 'geo_not_found';
 
-    private const GEO_CITY_LEGACY_NOT_FOUND_OUTPUTS = [
+    private const GEO_CITY_OUTPUT_MANUAL_REQUIRED = 'geo_manual_required';
+
+    private const GEO_CITY_OUTPUT_LIMIT_REACHED = 'geo_limit_reached';
+
+    private const GEO_CITY_LEGACY_MANUAL_REQUIRED_OUTPUTS = [
         'geo_manual_required',
         'geo_ambiguous',
         'geo_below_threshold',
         'geo_inactive',
+    ];
+
+    private const GEO_CITY_LEGACY_NOT_FOUND_OUTPUTS = [
         'geo_failed',
+    ];
+
+    private const VARIABLES_LEGACY_OUTPUTS = [
+        'variables_done',
+        'variables_failed',
     ];
 
     private const DEFAULT_SHEET_ID = 'main';
@@ -266,7 +278,7 @@ class BuildScenarioBuilderV3StateAction
     private function blockToBuilderState(ScenarioBuilderBlock $block): array
     {
         $settingsPayload = $this->settingsPayloadForBlock($block);
-        $displayId = $this->displayIdForBlock($block, $settingsPayload);
+        $displayId = $this->displayNumberForBlock($settingsPayload) ?? $this->displayIdForBlock($block, $settingsPayload);
 
         return [
             'id' => (int) $block->id,
@@ -303,11 +315,25 @@ class BuildScenarioBuilderV3StateAction
             'collapsed' => false,
         ];
         $settingsPayload['ui']['card_id'] = $this->displayIdForBlock($block, $settingsPayload);
+
+        $displayNumber = $this->displayNumberForBlock($settingsPayload);
+
+        if ($displayNumber !== null) {
+            $settingsPayload['ui']['display_number'] = $displayNumber;
+        } else {
+            unset($settingsPayload['ui']['display_number']);
+        }
+
         $settingsPayload['modules'] = $this->modulesWithCanonicalStartCondition($block, $settingsPayload['modules'] ?? []);
         $settingsPayload['outputs'] = is_array($settingsPayload['outputs'] ?? null) ? array_values($settingsPayload['outputs']) : [];
 
         if ($this->hasResolveGeoCityAction($settingsPayload['modules'])) {
-            $settingsPayload['outputs'] = $this->geoCityCanonicalOutputs($settingsPayload['modules']);
+            $settingsPayload['outputs'] = $this->geoCityCanonicalOutputs(
+                $settingsPayload['modules'],
+                $this->hasGeoLimitReachedEdge($block),
+            );
+        } elseif ($this->hasVariablesAction($settingsPayload['modules'])) {
+            $settingsPayload['outputs'] = $this->withoutLegacyVariableOutputs($settingsPayload['outputs']);
         }
 
         return $settingsPayload;
@@ -321,6 +347,26 @@ class BuildScenarioBuilderV3StateAction
         $cardId = trim((string) data_get($settingsPayload, 'ui.card_id', ''));
 
         return $cardId !== '' ? $cardId : (string) $block->id;
+    }
+
+    /**
+     * @param  array<string, mixed>  $settingsPayload
+     */
+    private function displayNumberForBlock(array $settingsPayload): ?string
+    {
+        $value = data_get($settingsPayload, 'ui.display_number');
+
+        if (is_int($value) && $value > 0) {
+            return (string) $value;
+        }
+
+        $string = trim((string) $value);
+
+        if ($string === '' || ! ctype_digit($string) || (int) $string < 1) {
+            return null;
+        }
+
+        return (string) ((int) $string);
     }
 
     /**
@@ -443,7 +489,17 @@ class BuildScenarioBuilderV3StateAction
 
         if ($displayOutputId !== $fromOutputId) {
             $conditionPayload['from_output_id'] = $displayOutputId;
-            $conditionPayload['label'] = 'Город не найден';
+
+            if ($displayOutputId === null && in_array($fromOutputId, self::VARIABLES_LEGACY_OUTPUTS, true)) {
+                $conditionPayload['mode'] = 'automatic';
+                $conditionPayload['label'] = in_array((string) ($conditionPayload['label'] ?? ''), ['Готово', 'Ошибка'], true)
+                    ? 'Дальше'
+                    : (filled($conditionPayload['label'] ?? null) ? (string) $conditionPayload['label'] : 'Дальше');
+            } else {
+                $conditionPayload['label'] = $displayOutputId === self::GEO_CITY_OUTPUT_MANUAL_REQUIRED
+                    ? 'Нужно уточнить'
+                    : 'Город не найден';
+            }
         }
 
         return [
@@ -488,9 +544,35 @@ class BuildScenarioBuilderV3StateAction
         return false;
     }
 
+    /**
+     * @param  list<array<string, mixed>>  $modules
+     */
+    private function hasVariablesAction(array $modules): bool
+    {
+        foreach ($modules as $module) {
+            if (($module['type'] ?? null) !== 'action') {
+                continue;
+            }
+
+            $actions = data_get($module, 'payload.actions', []);
+
+            if (! is_array($actions)) {
+                continue;
+            }
+
+            foreach ($actions as $action) {
+                if (is_array($action) && ($action['type'] ?? null) === 'variables') {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     private function displayOutputIdForEdge(ScenarioBuilderEdge $edge, ?string $outputId): ?string
     {
-        if ($outputId === null || ! in_array($outputId, self::GEO_CITY_LEGACY_NOT_FOUND_OUTPUTS, true)) {
+        if ($outputId === null) {
             return $outputId;
         }
 
@@ -500,7 +582,17 @@ class BuildScenarioBuilderV3StateAction
             : [];
         $modules = is_array($settingsPayload['modules'] ?? null) ? $settingsPayload['modules'] : [];
 
-        return $this->hasResolveGeoCityAction($modules)
+        if (! $this->hasResolveGeoCityAction($modules)) {
+            return $this->hasVariablesAction($modules) && in_array($outputId, self::VARIABLES_LEGACY_OUTPUTS, true)
+                ? null
+                : $outputId;
+        }
+
+        if (in_array($outputId, self::GEO_CITY_LEGACY_MANUAL_REQUIRED_OUTPUTS, true)) {
+            return self::GEO_CITY_OUTPUT_MANUAL_REQUIRED;
+        }
+
+        return in_array($outputId, self::GEO_CITY_LEGACY_NOT_FOUND_OUTPUTS, true)
             ? self::GEO_CITY_OUTPUT_NOT_FOUND
             : $outputId;
     }
@@ -509,7 +601,7 @@ class BuildScenarioBuilderV3StateAction
      * @param  list<array<string, mixed>>  $modules
      * @return list<array<string, mixed>>
      */
-    private function geoCityCanonicalOutputs(array $modules): array
+    private function geoCityCanonicalOutputs(array $modules, bool $includeLegacyLimit = false): array
     {
         $moduleId = 'mod_action';
 
@@ -520,7 +612,7 @@ class BuildScenarioBuilderV3StateAction
             }
         }
 
-        return [
+        $outputs = [
             [
                 'id' => 'geo_found',
                 'label' => 'Город найден',
@@ -529,20 +621,54 @@ class BuildScenarioBuilderV3StateAction
                 'action_result_id' => 'geo_found',
             ],
             [
+                'id' => 'geo_manual_required',
+                'label' => 'Нужно уточнить',
+                'source' => 'action',
+                'module_id' => $moduleId,
+                'action_result_id' => 'geo_manual_required',
+            ],
+            [
                 'id' => 'geo_not_found',
                 'label' => 'Город не найден',
                 'source' => 'action',
                 'module_id' => $moduleId,
                 'action_result_id' => 'geo_not_found',
             ],
-            [
-                'id' => 'geo_limit_reached',
+        ];
+
+        if ($includeLegacyLimit) {
+            $outputs[] = [
+                'id' => self::GEO_CITY_OUTPUT_LIMIT_REACHED,
                 'label' => 'Превышено попыток',
                 'source' => 'action',
                 'module_id' => $moduleId,
-                'action_result_id' => 'geo_limit_reached',
-            ],
-        ];
+                'action_result_id' => self::GEO_CITY_OUTPUT_LIMIT_REACHED,
+                'legacy' => true,
+            ];
+        }
+
+        return $outputs;
+    }
+
+    private function hasGeoLimitReachedEdge(ScenarioBuilderBlock $block): bool
+    {
+        $edges = $block->relationLoaded('outgoingEdges')
+            ? $block->outgoingEdges
+            : $block->outgoingEdges()->get();
+
+        return $edges->contains(fn (ScenarioBuilderEdge $edge): bool => data_get($edge->condition_payload, 'from_output_id') === self::GEO_CITY_OUTPUT_LIMIT_REACHED);
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function withoutLegacyVariableOutputs(array $outputs): array
+    {
+        return collect($outputs)
+            ->filter(fn (mixed $output): bool => is_array($output)
+                && ! in_array((string) ($output['id'] ?? ''), self::VARIABLES_LEGACY_OUTPUTS, true))
+            ->values()
+            ->all();
     }
 
     /**

@@ -29,7 +29,9 @@ const CANVAS_MIN_WIDTH = 1800;
 const CANVAS_MIN_HEIGHT = 1100;
 const CANVAS_EXPAND_PADDING = 720;
 const DEFAULT_OUTPUT = { id: null, label: 'Дальше', kind: 'default', caption: 'Авто' };
+const MODULE_TYPE_CALCULATOR = 'calculator';
 const MODULE_ORDER = ['start_condition', 'message', 'buttons', 'ai', 'action'];
+const MODULE_DISPLAY_ORDER = ['start_condition', 'message', 'buttons', 'ai', 'action', MODULE_TYPE_CALCULATOR];
 const MATCH_OPTIONS = [
     ['exact_keyword', 'Точный текст'],
     ['contains_text', 'Содержит текст'],
@@ -81,6 +83,7 @@ const ACTION_TYPE_CHECK_DATA = 'check_data';
 const ACTION_TYPE_EDIT_MESSAGE = 'edit_message';
 const ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW = 'calculate_distance_to_moscow';
 const ACTION_TYPE_RESOLVE_GEO_CITY = 'resolve_geo_city';
+const ACTION_TYPE_VARIABLES = 'variables';
 const ACTION_EDIT_MESSAGE_OPERATION_REMOVE_BUTTONS = 'remove_buttons';
 const ACTION_EDIT_MESSAGE_OPERATION_DELETE_MESSAGE = 'delete_message';
 const ACTION_EDIT_MESSAGE_TARGET_LAST_CURRENT_RUN_OUTBOUND_WITH_INLINE_BUTTONS = 'last_current_run_outbound_with_inline_buttons';
@@ -186,13 +189,30 @@ const ACTION_DISTANCE_TO_MOSCOW_OUTPUTS = [
 ];
 const ACTION_GEO_CITY_OUTPUTS = [
     { id: 'geo_found', label: 'Город найден', source: 'action', action_result_id: 'geo_found' },
+    { id: 'geo_manual_required', label: 'Нужно уточнить', source: 'action', action_result_id: 'geo_manual_required' },
     { id: 'geo_not_found', label: 'Город не найден', source: 'action', action_result_id: 'geo_not_found' },
-    { id: 'geo_limit_reached', label: 'Превышено попыток', source: 'action', action_result_id: 'geo_limit_reached' },
 ];
+const ACTION_GEO_CITY_LEGACY_LIMIT_OUTPUT = {
+    id: 'geo_limit_reached',
+    label: 'Превышено попыток',
+    source: 'action',
+    action_result_id: 'geo_limit_reached',
+    legacy: true,
+};
+const ACTION_GEO_CITY_OUTPUTS_WITH_LEGACY = [
+    ...ACTION_GEO_CITY_OUTPUTS,
+    ACTION_GEO_CITY_LEGACY_LIMIT_OUTPUT,
+];
+const ACTION_VARIABLE_LEGACY_OUTPUT_IDS = new Set(['variables_done', 'variables_failed']);
 const ACTION_RESULT_OUTPUTS = [
     ...ACTION_CHECK_DATA_OUTPUTS,
     ...ACTION_DISTANCE_TO_MOSCOW_OUTPUTS,
     ...ACTION_GEO_CITY_OUTPUTS,
+];
+const ACTION_RESULT_OUTPUTS_WITH_LEGACY = [
+    ...ACTION_CHECK_DATA_OUTPUTS,
+    ...ACTION_DISTANCE_TO_MOSCOW_OUTPUTS,
+    ...ACTION_GEO_CITY_OUTPUTS_WITH_LEGACY,
 ];
 const FIRST_NAME_SOURCE_CONDITION_OPTIONS = [
     ['auto', 'Авто'],
@@ -218,7 +238,8 @@ const PANEL_WIDTH_STORAGE_KEY = 'scenario-builder-v3-panel-width';
 const PANEL_WIDTH_DEFAULT = 420;
 const PANEL_WIDTH_MIN = 320;
 const PANEL_WIDTH_MAX = 620;
-const DIALOG_FIELD_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+const DIALOG_FIELD_KEY_PATTERN = /^(?!_)\p{L}[\p{L}\p{N}_]{0,63}$/u;
+const RESERVED_DIALOG_FIELD_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const DIALOG_FIELD_KEY_SUGGESTION_LIMIT = 12;
 const DIAGNOSTICS_REFRESH_INTERVAL_MS = 10000;
 const LOG_STATUS_FILTERS = [
@@ -382,11 +403,12 @@ const MODULE_META = {
     buttons: { label: 'Кнопки', short: 'BTN', className: 'is-buttons' },
     ai: { label: 'ИИ-анализ', short: 'AI', className: 'is-ai' },
     action: { label: 'Действие', short: 'ACT', className: 'is-action' },
+    calculator: { label: 'Калькулятор', short: 'CALC', className: 'is-calculator' },
 };
 
 const FUTURE_MODULE_META = [
     { type: 'attachment', label: 'Вложение' },
-    { type: 'code', label: 'Код' },
+    { type: MODULE_TYPE_CALCULATOR, label: 'Калькулятор' },
     { type: 'cloud', label: 'Интеграция' },
     { type: 'analytics', label: 'Аналитика' },
 ];
@@ -564,7 +586,7 @@ export default function App({
     const edges = useMemo(() => filterEdgesForBlocks(allEdges, blocks), [allEdges, blocks]);
     const selectedBlock = blocks.find((block) => block.client_key === selectedBlockKey) ?? null;
     const selectedEdge = edges.find((edge) => edge.client_key === selectedEdgeKey) ?? null;
-    const dialogFieldKeys = useMemo(() => dialogFieldKeysFromEdges(edges, fieldDictionary), [edges, fieldDictionary]);
+    const dialogFieldKeys = useMemo(() => dialogFieldKeysFromBuilder(blocks, edges, fieldDictionary), [blocks, edges, fieldDictionary]);
     const blockSearchMatches = useMemo(() => searchBlocks(blocks, blockSearchQuery), [blocks, blockSearchQuery]);
     const canSave = state?.permissions?.can_update === true
         && status === 'ready'
@@ -763,15 +785,18 @@ export default function App({
             const resolvedSheetEdges = typeof nextEdges === 'function'
                 ? nextEdges(currentSheetEdges)
                 : nextEdges;
+            const resolvedAllEdges = [
+                ...currentAllEdges.filter((edge) => ! currentSheetEdgeKeys.has(edgeIdentityKey(edge))),
+                ...resolvedSheetEdges,
+            ];
+            const resolvedAllBlocks = currentAllBlocks.map((block) => blockWithGeoLegacyLimitOutput(block, resolvedAllEdges));
 
             return {
                 ...current,
                 builder: {
                     ...current.builder,
-                    edges: [
-                        ...currentAllEdges.filter((edge) => ! currentSheetEdgeKeys.has(edgeIdentityKey(edge))),
-                        ...resolvedSheetEdges,
-                    ],
+                    blocks: resolvedAllBlocks,
+                    edges: resolvedAllEdges,
                 },
             };
         });
@@ -1411,6 +1436,12 @@ export default function App({
 
         const { block, output } = drop;
 
+        if (isReadonlyOutput(output)) {
+            setNotice('Этот выход оставлен только для старых связей. Новые стрелки из него создавать нельзя.');
+
+            return;
+        }
+
         if (block.client_key === edge.target?.client_key) {
             setNotice('Начало стрелки нельзя привязать к её конечному блоку.');
 
@@ -1543,7 +1574,7 @@ export default function App({
 
     function focusBlockSearchMatch(offset = 0) {
         if (String(blockSearchQuery ?? '').trim() === '') {
-            setNotice('Введите ID или название блока.');
+            setNotice('Введите номер или название блока.');
 
             return;
         }
@@ -1565,6 +1596,12 @@ export default function App({
     }
 
     function beginConnection(block, output) {
+        if (isReadonlyOutput(output)) {
+            setNotice('Этот выход оставлен только для старых связей. Новые стрелки из него создавать нельзя.');
+
+            return;
+        }
+
         const connection = {
             sourceKey: block.client_key,
             sourceId: block.id,
@@ -1667,8 +1704,48 @@ export default function App({
     }
 
     function toggleModule(clientKey, type, enabled) {
+        if (type === MODULE_TYPE_CALCULATOR) {
+            updateBlockSettings(clientKey, (settings) => {
+                const modules = modulesFrom(settings);
+                const actionModule = findModule(settings, 'action');
+
+                if (enabled && actionModule && ! isCalculatorActionModule(actionModule)) {
+                    return settings;
+                }
+
+                const nextModules = enabled
+                    ? [
+                        ...modules.filter((module) => module.type !== 'action'),
+                        calculatorModuleTemplate(),
+                    ]
+                    : modules.filter((module) => ! (module.type === 'action' && isCalculatorActionModule(module)));
+
+                return syncOutputs({
+                    ...settings,
+                    modules: sortModules(nextModules),
+                });
+            });
+
+            if (! enabled) {
+                updateEdges(edges.filter((edge) => (
+                    edge.source?.client_key !== clientKey
+                    || ! ACTION_VARIABLE_LEGACY_OUTPUT_IDS.has(edge.source?.output_id)
+                )));
+            }
+
+            return;
+        }
+
         updateBlockSettings(clientKey, (settings) => {
             let modules = modulesFrom(settings);
+
+            if (type === 'action') {
+                const actionModule = findModule(settings, 'action');
+
+                if (enabled && actionModule && isCalculatorActionModule(actionModule)) {
+                    return settings;
+                }
+            }
 
             if (enabled && ! modules.some((module) => module.type === type)) {
                 modules = [...modules, moduleTemplate(type, channels, blocks, clientKey)];
@@ -1717,7 +1794,7 @@ export default function App({
         }
 
         if (type === 'action' && ! enabled) {
-            const actionOutputIds = new Set(ACTION_RESULT_OUTPUTS.map((output) => output.id));
+            const actionOutputIds = new Set(ACTION_RESULT_OUTPUTS_WITH_LEGACY.map((output) => output.id));
 
             updateEdges(edges.filter((edge) => (
                 edge.source?.client_key !== clientKey
@@ -1766,11 +1843,14 @@ export default function App({
             const hasCheckData = patch.actions.some((item) => item?.type === ACTION_TYPE_CHECK_DATA);
             const hasDistanceToMoscow = patch.actions.some((item) => item?.type === ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW);
             const hasGeoCity = patch.actions.some((item) => isGeoCityResultActionType(item?.type));
-            const allActionOutputIds = new Set(ACTION_RESULT_OUTPUTS.map((output) => output.id));
+            const allActionOutputIds = new Set([
+                ...ACTION_RESULT_OUTPUTS_WITH_LEGACY.map((output) => output.id),
+                ...ACTION_VARIABLE_LEGACY_OUTPUT_IDS,
+            ]);
             const nextActionOutputIds = new Set([
                 ...(hasCheckData ? ACTION_CHECK_DATA_OUTPUTS : []),
                 ...(hasDistanceToMoscow ? ACTION_DISTANCE_TO_MOSCOW_OUTPUTS : []),
-                ...(hasGeoCity ? ACTION_GEO_CITY_OUTPUTS : []),
+                ...(hasGeoCity ? ACTION_GEO_CITY_OUTPUTS_WITH_LEGACY : []),
             ].map((output) => output.id));
 
             updateEdges(edges.filter((edge) => (
@@ -2325,10 +2405,10 @@ export default function App({
         try {
             await copyTextToClipboard(value);
             setError(null);
-            setNotice(`ID #${value} скопирован`);
+            setNotice(`Номер блока #${value} скопирован`);
         } catch {
             setNotice(null);
-            setError('Не удалось скопировать ID. Скопируйте номер вручную.');
+            setError('Не удалось скопировать номер. Скопируйте его вручную.');
         }
     }
 
@@ -3097,8 +3177,8 @@ function BlockSearchControl({
             <input
                 type="search"
                 value={query}
-                placeholder="ID или название"
-                aria-label="Найти блок по ID или названию"
+                placeholder="Номер или название"
+                aria-label="Найти блок по номеру или названию"
                 onChange={(event) => onQueryChange(event.target.value)}
                 onKeyDown={(event) => {
                     if (event.key === 'Enter') {
@@ -3113,7 +3193,7 @@ function BlockSearchControl({
                 }}
             />
             <span className="ac-v3-builder__block-search-count">
-                {hasQuery ? (hasMatches ? `${matchIndex + 1}/${matchCount}` : '0') : 'ID'}
+                {hasQuery ? (hasMatches ? `${matchIndex + 1}/${matchCount}` : '0') : '№'}
             </span>
             <button type="button" title="Предыдущий найденный блок" disabled={! hasMatches} onClick={onPrevious}>‹</button>
             <button type="button" title="Следующий найденный блок" disabled={! hasMatches} onClick={onNext}>›</button>
@@ -3167,8 +3247,14 @@ function ScenarioNode({
     const buttons = findModule(block.settings_payload, 'buttons');
     const ai = findModule(block.settings_payload, 'ai');
     const action = findModule(block.settings_payload, 'action');
+    const hasCalculator = isCalculatorActionModule(action);
     const position = blockPosition(block);
     const modules = modulesFrom(block.settings_payload);
+    const displayModuleTypes = MODULE_DISPLAY_ORDER.filter((type) => (
+        type === MODULE_TYPE_CALCULATOR
+            ? hasCalculator
+            : modules.some((module) => module.type === type && ! (type === 'action' && hasCalculator))
+    ));
     const blockKind = block.settings_payload?.kind === 'non_state' ? 'non_state' : 'state';
 
     return (
@@ -3238,10 +3324,8 @@ function ScenarioNode({
             </header>
 
             <div className="ac-v3-builder__module-strip">
-                {MODULE_ORDER.map((type) => (
-                    modules.some((module) => module.type === type)
-                        ? <b key={type} className={MODULE_META[type].className}>{MODULE_META[type].short}</b>
-                        : null
+                {displayModuleTypes.map((type) => (
+                    <b key={type} className={MODULE_META[type].className}>{MODULE_META[type].short}</b>
                 ))}
             </div>
 
@@ -3258,8 +3342,11 @@ function ScenarioNode({
                 {ai ? (
                     <ModulePreview type="ai" label="ИИ" value={aiSummary(ai)} />
                 ) : null}
-                {action ? (
+                {action && ! hasCalculator ? (
                     <ModulePreview type="action" label="Действие" value={actionSummary(action)} />
+                ) : null}
+                {hasCalculator ? (
+                    <ModulePreview type={MODULE_TYPE_CALCULATOR} label="Калькулятор" value={actionSummary(action)} />
                 ) : null}
             </div>
 
@@ -3272,10 +3359,13 @@ function ScenarioNode({
                             className={[
                                 connectedOutputIds.has(output.id ?? 'default') ? 'is-connected' : '',
                                 output.kind === 'default' ? 'is-default-output' : 'is-button-output',
+                                output.legacy ? 'is-legacy-output' : '',
                             ].filter(Boolean).join(' ')}
                             title={output.kind === 'default'
                                 ? 'Связать автопереход с блоком'
-                                : (output.kind === 'ai' ? 'Связать результат ИИ с блоком' : 'Связать кнопку с блоком')}
+                                : (output.legacy
+                                    ? 'Старый выход: можно удалить существующую стрелку, новые стрелки не создаются'
+                                    : (output.kind === 'ai' ? 'Связать результат ИИ с блоком' : 'Связать кнопку с блоком'))}
                             onPointerDown={(event) => onStartConnection(event, block, output)}
                             onClick={(event) => event.stopPropagation()}
                         >
@@ -3324,9 +3414,11 @@ function EdgePath({
         return null;
     }
 
-    const source = edgeSourceAnchor(edge, sourceBlock, targetBlock, anchors);
-    const target = edgeTargetAnchor(targetBlock, source, anchors);
     const waypoints = edgeWaypoints(edge, waypointPreview);
+    const sourceReference = waypoints[0] ?? blockCenter(targetBlock, anchors);
+    const source = edgeSourceAnchor(edge, sourceBlock, sourceReference, anchors);
+    const targetReference = waypoints[waypoints.length - 1] ?? source;
+    const target = edgeTargetAnchor(targetBlock, targetReference, anchors);
     const routePoints = edgeRoutePoints(source, target, waypoints);
     const d = edgeRoutePath(routePoints);
     const labelPoint = edgeRouteLabelPoint(routePoints, source, target);
@@ -3442,14 +3534,14 @@ function EdgePath({
     );
 }
 
-function edgeSourceAnchor(edge, sourceBlock, targetBlock, anchors) {
+function edgeSourceAnchor(edge, sourceBlock, referencePoint, anchors) {
     const outputId = edge.source?.output_id ?? null;
 
     if (outputId === null) {
-        return nearestBlockSideAnchor(sourceBlock, blockCenter(targetBlock, anchors), anchors);
+        return nearestBlockSideAnchor(sourceBlock, referencePoint, anchors);
     }
 
-    const side = blockCenter(targetBlock, anchors).x < blockCenter(sourceBlock, anchors).x ? 'left' : 'right';
+    const side = blockHorizontalSideToward(sourceBlock, referencePoint, anchors);
     const portAnchor = anchors.ports[portAnchorKey(sourceBlock.client_key, outputId, side)];
 
     if (portAnchor) {
@@ -3459,8 +3551,8 @@ function edgeSourceAnchor(edge, sourceBlock, targetBlock, anchors) {
     return outputAnchor(sourceBlock, outputId, side);
 }
 
-function edgeTargetAnchor(targetBlock, source, anchors) {
-    return shiftAnchorOutside(nearestBlockSideAnchor(targetBlock, source, anchors), EDGE_TARGET_CLEARANCE);
+function edgeTargetAnchor(targetBlock, referencePoint, anchors) {
+    return shiftAnchorOutside(nearestBlockSideAnchor(targetBlock, referencePoint, anchors), EDGE_TARGET_CLEARANCE);
 }
 
 function edgeRoutePoints(source, target, waypoints) {
@@ -4284,7 +4376,12 @@ function formatDateTime(value, timezoneLabel = '', timezone = '') {
 }
 
 function blockDisplayId(block) {
-    return String(block?.display_id ?? block?.settings_payload?.ui?.card_id ?? '').trim();
+    return String(
+        block?.display_id
+        ?? block?.settings_payload?.ui?.display_number
+        ?? block?.settings_payload?.ui?.card_id
+        ?? '',
+    ).trim();
 }
 
 function cloneBlockSettingsForCopy(settingsPayload) {
@@ -4294,6 +4391,7 @@ function cloneBlockSettingsForCopy(settingsPayload) {
     payload.ui = {
         ...ui,
         card_id: '',
+        display_number: '',
     };
 
     return payload;
@@ -4386,11 +4484,15 @@ function BlockPanel({
     const buttons = findModule(block.settings_payload, 'buttons');
     const ai = findModule(block.settings_payload, 'ai');
     const action = findModule(block.settings_payload, 'action');
+    const hasCalculator = isCalculatorActionModule(action);
+    const hasRegularAction = Boolean(action) && ! hasCalculator;
     const startChannels = start?.payload?.channels?.ids ?? [];
     const buttonsSummary = buttons ? buttonSummary(buttons) : '';
     const activeModules = modulesFrom(block.settings_payload).length;
     const blockKind = block.settings_payload?.kind === 'non_state' ? 'non_state' : 'state';
-    const activeModuleTypes = new Set(modulesFrom(block.settings_payload).map((module) => module.type));
+    const activeModuleTypes = new Set(modulesFrom(block.settings_payload).map((module) => (
+        module.type === 'action' && hasCalculator ? MODULE_TYPE_CALCULATOR : module.type
+    )));
 
     function updateBlockKind(kind) {
         onUpdateBlock(block.client_key, (current) => {
@@ -4459,7 +4561,7 @@ function BlockPanel({
                     <button
                         type="button"
                         className="ac-v3-builder__panel-id"
-                        title="Скопировать ID блока"
+                        title="Скопировать номер блока"
                         onClick={() => onCopyBlockId(block)}
                     >
                         <CopyIcon />
@@ -4499,11 +4601,22 @@ function BlockPanel({
                     />
                     <ModuleSwitch
                         type="action"
-                        checked={Boolean(action)}
+                        checked={hasRegularAction}
+                        disabled={hasCalculator}
                         onChange={(checked) => onToggleModule(block.client_key, 'action', checked)}
                     />
                     {FUTURE_MODULE_META.map((module) => (
-                        <FutureModuleSlot key={module.type} type={module.type} label={module.label} />
+                        module.type === MODULE_TYPE_CALCULATOR ? (
+                            <ModuleSwitch
+                                key={module.type}
+                                type={MODULE_TYPE_CALCULATOR}
+                                checked={hasCalculator}
+                                disabled={hasRegularAction}
+                                onChange={(checked) => onToggleModule(block.client_key, MODULE_TYPE_CALCULATOR, checked)}
+                            />
+                        ) : (
+                            <FutureModuleSlot key={module.type} type={module.type} label={module.label} />
+                        )
                     ))}
                 </div>
             </section>
@@ -4515,7 +4628,7 @@ function BlockPanel({
                         <em>{activeModules} активн.</em>
                     </div>
                     <div className="ac-v3-builder__module-stack">
-                        {MODULE_ORDER.filter((type) => activeModuleTypes.has(type)).map((type) => (
+                        {MODULE_DISPLAY_ORDER.filter((type) => activeModuleTypes.has(type)).map((type) => (
                             <ModuleConfigCard
                                 key={type}
                                 type={type}
@@ -4568,6 +4681,13 @@ function BlockPanel({
                                         blockKey={block.client_key}
                                         onUpdateModulePayload={onUpdateModulePayload}
                                         dialogFieldKeys={dialogFieldKeys}
+                                    />
+                                ) : null}
+                                {type === MODULE_TYPE_CALCULATOR ? (
+                                    <CalculatorFields
+                                        action={action}
+                                        blockKey={block.client_key}
+                                        onUpdateModulePayload={onUpdateModulePayload}
                                     />
                                 ) : null}
                             </ModuleConfigCard>
@@ -5203,10 +5323,40 @@ function VariableHelpPopover({ title, ariaLabel, onClose, onInsert = null }) {
 function MessageFields({ message, blockKey, onUpdateModulePayload }) {
     const [isVariableHelpOpen, setIsVariableHelpOpen] = useState(false);
     const textareaRef = useRef(null);
-    const text = message?.payload?.text ?? '';
+    const payload = message?.payload ?? {};
+    const text = payload.text ?? '';
+    const textMode = payload.text_mode === 'by_dialog_variable' ? 'by_dialog_variable' : 'static';
+    const variableTextVariants = normalizeMessageVariableTextVariants(payload.variable_text_variants);
 
     function updateText(value) {
         onUpdateModulePayload(blockKey, 'message', { text: value });
+    }
+
+    function updateVariant(index, patch) {
+        onUpdateModulePayload(blockKey, 'message', {
+            variable_text_variants: variableTextVariants.map((variant, variantIndex) => (
+                variantIndex === index ? { ...variant, ...patch } : variant
+            )),
+        });
+    }
+
+    function addVariant() {
+        onUpdateModulePayload(blockKey, 'message', {
+            variable_text_variants: [
+                ...variableTextVariants,
+                { value: String(variableTextVariants.length + 1), text: '' },
+            ],
+        });
+    }
+
+    function removeVariant(index) {
+        if (variableTextVariants.length <= 1) {
+            return;
+        }
+
+        onUpdateModulePayload(blockKey, 'message', {
+            variable_text_variants: variableTextVariants.filter((_, variantIndex) => variantIndex !== index),
+        });
     }
 
     function insertToken(token) {
@@ -5255,8 +5405,100 @@ function MessageFields({ message, blockKey, onUpdateModulePayload }) {
                     onInsert={insertToken}
                 />
             ) : null}
+            <label className="ac-v3-builder__compact-label">
+                <span>Режим текста</span>
+                <select
+                    value={textMode}
+                    onChange={(event) => onUpdateModulePayload(blockKey, 'message', {
+                        text_mode: event.target.value,
+                        variable_key: event.target.value === 'by_dialog_variable'
+                            ? (payload.variable_key || 'счетчик')
+                            : '',
+                        variable_text_variants: event.target.value === 'by_dialog_variable'
+                            ? variableTextVariants
+                            : [],
+                        fallback_text: event.target.value === 'by_dialog_variable'
+                            ? (payload.fallback_text ?? text)
+                            : '',
+                    })}
+                >
+                    <option value="static">Один текст</option>
+                    <option value="by_dialog_variable">Текст по переменной</option>
+                </select>
+            </label>
+            {textMode === 'by_dialog_variable' ? (
+                <div className="ac-v3-builder__action-list">
+                    <label>
+                        <span>Переменная</span>
+                        <input
+                            value={payload.variable_key ?? ''}
+                            placeholder="счетчик"
+                            onChange={(event) => onUpdateModulePayload(blockKey, 'message', {
+                                variable_key: normalizeDialogFieldKey(event.target.value),
+                            })}
+                        />
+                    </label>
+                    <label>
+                        <span>Текст по умолчанию</span>
+                        <AutoGrowTextarea
+                            value={payload.fallback_text ?? ''}
+                            maxHeight={120}
+                            onChange={(event) => onUpdateModulePayload(blockKey, 'message', {
+                                fallback_text: event.target.value,
+                            })}
+                        />
+                    </label>
+                    <div className="ac-v3-builder__ai-outputs-head">
+                        <span>Варианты</span>
+                        <button type="button" onClick={addVariant}>Добавить</button>
+                    </div>
+                    {variableTextVariants.map((variant, index) => (
+                        <div key={index} className="ac-v3-builder__action-row">
+                            <label>
+                                <span>Значение</span>
+                                <input
+                                    value={variant.value}
+                                    placeholder="1"
+                                    onChange={(event) => updateVariant(index, { value: event.target.value })}
+                                />
+                            </label>
+                            <label>
+                                <span>Текст</span>
+                                <input
+                                    value={variant.text}
+                                    placeholder="Как тебя зовут?"
+                                    onChange={(event) => updateVariant(index, { text: event.target.value })}
+                                />
+                            </label>
+                            <button
+                                type="button"
+                                title="Удалить вариант"
+                                disabled={variableTextVariants.length <= 1}
+                                onClick={() => removeVariant(index)}
+                            >
+                                ×
+                            </button>
+                        </div>
+                    ))}
+                </div>
+            ) : null}
         </div>
     );
+}
+
+function normalizeMessageVariableTextVariants(variants) {
+    const normalized = Array.isArray(variants)
+        ? variants
+            .filter((variant) => variant && typeof variant === 'object')
+            .map((variant) => ({
+                value: String(variant.value ?? ''),
+                text: String(variant.text ?? ''),
+            }))
+            .filter((variant) => variant.value !== '')
+            .slice(0, 20)
+        : [];
+
+    return normalized.length > 0 ? normalized : [{ value: '1', text: '' }];
 }
 
 function ActionFields({ action, blocks = [], blockKey, onUpdateModulePayload, dialogFieldKeys = [] }) {
@@ -5313,6 +5555,9 @@ function ActionFields({ action, blocks = [], blockKey, onUpdateModulePayload, di
                             <option value="edit_message">Изменить сообщение</option>
                             <option value="calculate_distance_to_moscow">Рассчитать расстояние до Москвы</option>
                             <option value="resolve_geo_city">Распознать географию</option>
+                            {item.type === ACTION_TYPE_VARIABLES ? (
+                                <option value="variables">Калькулятор</option>
+                            ) : null}
                         </select>
                     </label>
                     {item.type === ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW ? (
@@ -5324,6 +5569,14 @@ function ActionFields({ action, blocks = [], blockKey, onUpdateModulePayload, di
                         <GeoCityActionFields
                             item={item}
                             aiSourceBlocks={aiSourceBlocks}
+                            onChange={(patch) => updateItem(index, normalizeActionItemForType({
+                                ...item,
+                                ...patch,
+                            }))}
+                        />
+                    ) : item.type === ACTION_TYPE_VARIABLES ? (
+                        <VariablesActionFields
+                            item={item}
                             onChange={(patch) => updateItem(index, normalizeActionItemForType({
                                 ...item,
                                 ...patch,
@@ -5504,6 +5757,19 @@ function ActionFields({ action, blocks = [], blockKey, onUpdateModulePayload, di
     );
 }
 
+function CalculatorFields({ action, blockKey, onUpdateModulePayload }) {
+    const item = calculatorActionItem(action);
+
+    return (
+        <VariablesActionFields
+            item={item}
+            onChange={(patch) => onUpdateModulePayload(blockKey, 'action', {
+                actions: [normalizeActionItemForType({ ...item, ...patch, type: ACTION_TYPE_VARIABLES })],
+            })}
+        />
+    );
+}
+
 function GeoCityActionFields({ item, aiSourceBlocks, onChange }) {
     const selectedBlock = aiSourceBlocks.find((block) => block.client_key === item.source_block_client_key) ?? null;
     const selectedAiModule = selectedBlock ? findModule(selectedBlock.settings_payload, 'ai') : null;
@@ -5594,6 +5860,98 @@ function GeoCityAiFieldSelect({ label, value, fieldOptions, onChange }) {
                 ))}
             </select>
         </label>
+    );
+}
+
+function VariablesActionFields({ item, onChange }) {
+    const operations = normalizeVariableOperations(item.operations);
+
+    function updateOperation(index, patch) {
+        onChange({
+            operations: operations.map((operation, operationIndex) => (
+                operationIndex === index ? normalizeVariableOperation({ ...operation, ...patch }) : operation
+            )),
+        });
+    }
+
+    function addOperation() {
+        onChange({
+            operations: [...operations, defaultVariableOperation()],
+        });
+    }
+
+    function removeOperation(index) {
+        if (operations.length <= 1) {
+            return;
+        }
+
+        onChange({
+            operations: operations.filter((_, operationIndex) => operationIndex !== index),
+        });
+    }
+
+    return (
+        <div className="ac-v3-builder__action-list">
+            <div className="ac-v3-builder__ai-outputs-head">
+                <span>Переменные диалога</span>
+                <button type="button" onClick={addOperation}>Добавить</button>
+            </div>
+            {operations.map((operation, index) => (
+                <div key={index} className="ac-v3-builder__action-row">
+                    <label>
+                        <span>Переменная</span>
+                        <input
+                            value={operation.field_key}
+                            placeholder="счетчик"
+                            onChange={(event) => updateOperation(index, {
+                                field_key: normalizeDialogFieldKey(event.target.value),
+                            })}
+                        />
+                    </label>
+                    <label>
+                        <span>Что сделать</span>
+                        <select
+                            value={operation.operation}
+                            onChange={(event) => updateOperation(index, { operation: event.target.value })}
+                        >
+                            <option value="set">Приравнять</option>
+                            <option value="increment">Увеличить</option>
+                            <option value="clear">Очистить</option>
+                        </select>
+                    </label>
+                    {operation.operation === 'increment' ? (
+                        <label>
+                            <span>На сколько</span>
+                            <input
+                                type="number"
+                                min="1"
+                                max="100"
+                                step="1"
+                                value={operation.amount}
+                                onChange={(event) => updateOperation(index, { amount: event.target.value })}
+                            />
+                        </label>
+                    ) : operation.operation === 'set' ? (
+                        <label>
+                            <span>Значение</span>
+                            <input
+                                value={operation.value}
+                                placeholder="1"
+                                onChange={(event) => updateOperation(index, { value: event.target.value })}
+                            />
+                        </label>
+                    ) : null}
+                    <button
+                        type="button"
+                        title="Удалить операцию"
+                        disabled={operations.length <= 1}
+                        onClick={() => removeOperation(index)}
+                    >
+                        ×
+                    </button>
+                </div>
+            ))}
+        </div>
     );
 }
 
@@ -5892,6 +6250,10 @@ function ModuleIcon({ type }) {
         return <BotIcon />;
     }
 
+    if (type === MODULE_TYPE_CALCULATOR) {
+        return <CalculatorIcon />;
+    }
+
     if (type === 'code') {
         return <CodeIcon />;
     }
@@ -5928,7 +6290,9 @@ function normalizeDialogFieldKey(value) {
 }
 
 function isValidDialogFieldKey(value) {
-    return DIALOG_FIELD_KEY_PATTERN.test(normalizeDialogFieldKey(value));
+    const key = normalizeDialogFieldKey(value);
+
+    return DIALOG_FIELD_KEY_PATTERN.test(key) && ! RESERVED_DIALOG_FIELD_KEYS.has(key);
 }
 
 function currentFieldDictionary() {
@@ -6223,7 +6587,7 @@ function fieldTypeLabel(type) {
     return 'Текст';
 }
 
-function dialogFieldKeysFromEdges(edges, fieldDictionary = currentFieldDictionary()) {
+function dialogFieldKeysFromBuilder(blocks, edges, fieldDictionary = currentFieldDictionary()) {
     const keys = new Set();
 
     fieldDictionary.dialog.forEach((field) => {
@@ -6232,10 +6596,37 @@ function dialogFieldKeysFromEdges(edges, fieldDictionary = currentFieldDictionar
         }
     });
 
+    blocks.forEach((block) => {
+        modulesFrom(block.settings_payload).forEach((module) => {
+            const payload = module.payload ?? {};
+
+            if (module.type === 'message' && isValidDialogFieldKey(payload.variable_key)) {
+                keys.add(normalizeDialogFieldKey(payload.variable_key));
+            }
+
+            if (module.type === 'action') {
+                actionItems(module).forEach((item) => {
+                    if (item.type === ACTION_TYPE_VARIABLES) {
+                        normalizeVariableOperations(item.operations).forEach((operation) => {
+                            if (isValidDialogFieldKey(operation.field_key)) {
+                                keys.add(normalizeDialogFieldKey(operation.field_key));
+                            }
+                        });
+                    }
+
+                    if (item.target_scope === 'dialog' && isValidDialogFieldKey(item.target_field)) {
+                        keys.add(normalizeDialogFieldKey(item.target_field));
+                    }
+                });
+            }
+        });
+    });
+
     edges.forEach((edge) => {
         const payload = edge.condition_payload ?? {};
         const capture = payload.input_capture ?? {};
         const fieldCondition = payload.field_condition ?? {};
+        const transitionActions = transitionActionItems(payload.transition_actions);
 
         if (capture.enabled === true && (capture.field_scope ?? 'dialog') === 'dialog' && isValidDialogFieldKey(capture.field_key)) {
             keys.add(normalizeDialogFieldKey(capture.field_key));
@@ -6244,6 +6635,12 @@ function dialogFieldKeysFromEdges(edges, fieldDictionary = currentFieldDictionar
         if (fieldCondition.enabled === true && (fieldCondition.field_scope ?? 'dialog') === 'dialog' && isValidDialogFieldKey(fieldCondition.field_key)) {
             keys.add(normalizeDialogFieldKey(fieldCondition.field_key));
         }
+
+        transitionActions.forEach((item) => {
+            if (item.target_scope === 'dialog' && isValidDialogFieldKey(item.target_field)) {
+                keys.add(normalizeDialogFieldKey(item.target_field));
+            }
+        });
     });
 
     return Array.from(keys).sort((left, right) => left.localeCompare(right, 'ru'));
@@ -6292,11 +6689,11 @@ function DialogFieldKeyInput({ value, onChange, placeholder, suggestions = [], p
                     data-role="scenario-edge-dialog-field-key-error"
                     data-validation-status="invalid"
                 >
-                    Латиница, цифры и _, начинается с буквы.
+                    Буквы, цифры и _, начинается с буквы.
                 </p>
             ) : (
                 <p className="ac-v3-builder__field-hint">
-                    Латиница, цифры и _, начинается с буквы. Например: client_phone
+                    Буквы, цифры и _, начинается с буквы. Например: сколько_раз_спросили_имя
                 </p>
             )}
         </div>
@@ -6349,9 +6746,10 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
     const scheduledTransitions = edgeScheduledTransitions(edge);
     const showsAutoLabelControls = ! edgeUsesOutputLabel(edge, isButton);
     const labelMode = edgeLabelMode(edge);
-    const canvasLabelPreview = edgeLabel(edge, isButton);
     const transitionActions = transitionActionItems(payload.transition_actions);
     const waypointCount = edgeWaypoints(edge).length;
+    const edgeTitlePlaceholder = edgeAutoLabel(edge) || DEFAULT_OUTPUT.label;
+    const edgeTitle = edgeFullLabel(edge, isButton) || DEFAULT_OUTPUT.label;
 
     function updatePayload(patch) {
         onUpdateConditionPayload((current) => ({
@@ -6468,10 +6866,20 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                         <LinkIcon />
                     </span>
                     <div className="ac-v3-builder__panel-title-field">
-                        <span>Свойства связи</span>
-                        <strong className="ac-v3-builder__panel-title-static">
-                            {source?.title ?? 'Источник'} → {target?.title ?? 'Цель'}
-                        </strong>
+                        {showsAutoLabelControls ? (
+                            <input
+                                className="ac-v3-builder__panel-title-input ac-v3-builder__edge-title-input"
+                                value={payload.label ?? ''}
+                                placeholder={edgeTitlePlaceholder}
+                                title={payload.label || edgeTitlePlaceholder}
+                                aria-label="Название стрелки"
+                                onChange={(event) => updateEdgeLabel(event.target.value)}
+                            />
+                        ) : (
+                            <strong className="ac-v3-builder__panel-title-static" title={edgeTitle}>
+                                {edgeTitle}
+                            </strong>
+                        )}
                     </div>
                     <button
                         type="button"
@@ -6491,50 +6899,44 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                 </div>
             </div>
             <section className="ac-v3-builder__module-section">
-                <span>Режим</span>
-                {isAi ? (
-                    <p className="ac-v3-builder__readonly">Переход по результату ИИ-анализа</p>
-                ) : isButton ? (
-                    <p className="ac-v3-builder__readonly">Переход по кнопке</p>
-                ) : (
-                    <div className="ac-v3-builder__edge-mode" role="group" aria-label="Режим связи">
-                        <button
-                            type="button"
-                            className={edgeMode === 'wait_reply' ? 'is-active' : ''}
-                            onClick={() => updatePayload({ mode: 'wait_reply' })}
-                        >
-                            Ждёт ответ
-                        </button>
-                        <button
-                            type="button"
-                            className={edgeMode === 'automatic' ? 'is-active' : ''}
-                            onClick={() => updatePayload({
-                                mode: 'automatic',
-                                delay,
-                                input_capture: {
-                                    enabled: false,
-                                    field_scope: 'dialog',
-                                    field_key: '',
-                                    data_type: 'any_text',
-                                },
-                            })}
-                        >
-                            Автоматически
-                        </button>
-                    </div>
-                )}
+                <div className="ac-v3-builder__edge-mode-row">
+                    <span>Режим</span>
+                    {isAi ? (
+                        <p className="ac-v3-builder__readonly">Переход по результату ИИ-анализа</p>
+                    ) : isButton ? (
+                        <p className="ac-v3-builder__readonly">Переход по кнопке</p>
+                    ) : (
+                        <div className="ac-v3-builder__edge-mode ac-v3-builder__edge-mode--inline" role="group" aria-label="Режим связи">
+                            <button
+                                type="button"
+                                className={edgeMode === 'wait_reply' ? 'is-active' : ''}
+                                onClick={() => updatePayload({ mode: 'wait_reply' })}
+                            >
+                                Ждёт ответ
+                            </button>
+                            <button
+                                type="button"
+                                className={edgeMode === 'automatic' ? 'is-active' : ''}
+                                onClick={() => updatePayload({
+                                    mode: 'automatic',
+                                    delay,
+                                    input_capture: {
+                                        enabled: false,
+                                        field_scope: 'dialog',
+                                        field_key: '',
+                                        data_type: 'any_text',
+                                    },
+                                })}
+                            >
+                                Автоматически
+                            </button>
+                        </div>
+                    )}
+                </div>
                 {showsAutoLabelControls ? (
-                    <>
-                        <label>
-                            <span>Название стрелки</span>
-                            <input
-                                value={payload.label ?? ''}
-                                placeholder="Авто: по условиям"
-                                onChange={(event) => updateEdgeLabel(event.target.value)}
-                            />
-                        </label>
-                        <span>Подпись на холсте</span>
-                        <div className="ac-v3-builder__edge-mode" role="group" aria-label="Подпись на холсте">
+                    <div className="ac-v3-builder__edge-mode-row">
+                        <span>Подпись</span>
+                        <div className="ac-v3-builder__edge-mode ac-v3-builder__edge-mode--inline" role="group" aria-label="Подпись на холсте">
                             <button
                                 type="button"
                                 className={labelMode === EDGE_LABEL_MODE_AUTO ? 'is-active' : ''}
@@ -6550,10 +6952,7 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                                 Вручную
                             </button>
                         </div>
-                        <p className="ac-v3-builder__field-hint">
-                            На холсте: {canvasLabelPreview}
-                        </p>
-                    </>
+                    </div>
                 ) : null}
                 <label className="ac-v3-builder__field-row">
                     <span>Телефон контакта</span>
@@ -6587,9 +6986,6 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                         onChange={(event) => updatePayload({ expression: event.target.value })}
                     />
                 </label>
-                <p className="ac-v3-builder__field-hint">
-                    Пример: {'{{contact.gender}} == "male" or {{contact.gender}} == "female"'}
-                </p>
                 <label className="ac-v3-builder__check">
                     <input
                         type="checkbox"
@@ -7107,15 +7503,13 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                         </div>
                     )}
                 </div>
-                <div className="ac-v3-builder__edge-shape">
-                    <div>
-                        <strong>Форма стрелки</strong>
-                        <span>{waypointCount > 0 ? `Точек маршрута: ${waypointCount}` : 'Двойной клик по линии добавляет точку маршрута.'}</span>
+                {waypointCount > 0 ? (
+                    <div className="ac-v3-builder__edge-shape ac-v3-builder__edge-shape--compact">
+                        <button type="button" onClick={onResetWaypoints}>
+                            Сбросить форму стрелки
+                        </button>
                     </div>
-                    <button type="button" disabled={waypointCount === 0} onClick={onResetWaypoints}>
-                        Сбросить форму стрелки
-                    </button>
-                </div>
+                ) : null}
                 <button type="button" className="ac-v3-builder__danger" onClick={onRemove}>Удалить связь</button>
             </section>
         </div>
@@ -7311,6 +7705,7 @@ function blockOutputs(block) {
             label: output.label || output.id,
             kind: output.source || 'button',
             caption: output.source === 'ai' ? 'ИИ' : (output.source === 'action' ? 'Действие' : null),
+            legacy: Boolean(output.legacy) || output.id === ACTION_GEO_CITY_LEGACY_LIMIT_OUTPUT.id,
         }));
     }
 
@@ -7330,6 +7725,59 @@ function blockOutputs(block) {
 
 function visibleBlockOutputs(block) {
     return blockOutputs(block).filter((output) => output.id !== null && output.kind !== 'default');
+}
+
+function isReadonlyOutput(output) {
+    return Boolean(output?.legacy);
+}
+
+function blockHasGeoCityAction(block) {
+    return actionItems(findModule(block?.settings_payload, 'action'))
+        .some((item) => isGeoCityResultActionType(item.type));
+}
+
+function blockHasGeoLimitEdge(block, edges) {
+    return edges.some((edge) => (
+        edge?.source?.client_key === block?.client_key
+        && edge?.source?.output_id === ACTION_GEO_CITY_LEGACY_LIMIT_OUTPUT.id
+    ));
+}
+
+function geoLimitOutputForBlock(block) {
+    const action = findModule(block?.settings_payload, 'action');
+
+    return {
+        ...ACTION_GEO_CITY_LEGACY_LIMIT_OUTPUT,
+        module_id: action?.id ?? 'mod_action',
+    };
+}
+
+function blockWithGeoLegacyLimitOutput(block, edges) {
+    if (! blockHasGeoCityAction(block)) {
+        return block;
+    }
+
+    const settings = normalizeSettings(block?.settings_payload);
+    const outputs = Array.isArray(settings.outputs) ? settings.outputs : [];
+    const regularOutputs = outputs.filter((output) => output?.id !== ACTION_GEO_CITY_LEGACY_LIMIT_OUTPUT.id);
+    const nextOutputs = blockHasGeoLimitEdge(block, edges)
+        ? [...regularOutputs, geoLimitOutputForBlock(block)]
+        : regularOutputs;
+
+    if (
+        outputs.length === nextOutputs.length
+        && outputs.every((output, index) => output?.id === nextOutputs[index]?.id)
+    ) {
+        return block;
+    }
+
+    return {
+        ...block,
+        settings_payload: {
+            ...settings,
+            outputs: nextOutputs,
+        },
+    };
 }
 
 function outputAnchor(block, outputId, side = 'right') {
@@ -7353,11 +7801,15 @@ function nearestBlockSideAnchor(block, targetPoint, anchors = {}) {
     const dx = targetPoint.x - center.x;
     const dy = targetPoint.y - center.y;
 
-    if (Math.abs(dx) >= Math.abs(dy)) {
+    if (Math.abs(dx) > Math.abs(dy)) {
         return blockSideAnchor(block, dx >= 0 ? 'right' : 'left', anchors);
     }
 
     return blockSideAnchor(block, dy >= 0 ? 'bottom' : 'top', anchors);
+}
+
+function blockHorizontalSideToward(block, targetPoint, anchors = {}) {
+    return targetPoint.x < blockCenter(block, anchors).x ? 'left' : 'right';
 }
 
 function blockSideAnchor(block, side, anchors = {}) {
@@ -7504,6 +7956,7 @@ function normalizeSettings(settingsPayload) {
             width: settingsPayload?.ui?.width ?? 320,
             collapsed: Boolean(settingsPayload?.ui?.collapsed ?? false),
             card_id: settingsPayload?.ui?.card_id ?? '',
+            display_number: settingsPayload?.ui?.display_number ?? '',
         },
         modules: sortModules(modulesFrom(settingsPayload)),
         outputs: Array.isArray(settingsPayload?.outputs) ? settingsPayload.outputs : [],
@@ -7524,6 +7977,42 @@ function modulesFrom(settingsPayload) {
 
 function findModule(settingsPayload, type) {
     return modulesFrom(settingsPayload).find((module) => module.type === type) ?? null;
+}
+
+function isCalculatorActionModule(actionModule) {
+    if (! actionModule || actionModule.type !== 'action') {
+        return false;
+    }
+
+    const rawItems = Array.isArray(actionModule?.payload?.actions) ? actionModule.payload.actions : [];
+
+    if (rawItems.length === 0) {
+        return false;
+    }
+
+    const items = actionItems(actionModule);
+
+    return items.length > 0 && items.every((item) => item.type === ACTION_TYPE_VARIABLES);
+}
+
+function calculatorActionModulePayload() {
+    return {
+        actions: [
+            {
+                type: ACTION_TYPE_VARIABLES,
+                operations: [defaultVariableOperation()],
+            },
+        ],
+    };
+}
+
+function calculatorModuleTemplate() {
+    return {
+        id: 'mod_action',
+        type: 'action',
+        enabled: true,
+        payload: calculatorActionModulePayload(),
+    };
 }
 
 function moduleTemplate(type, channels, blocks = [], currentBlockKey = null) {
@@ -7708,6 +8197,12 @@ function actionItemSummary(item) {
             : 'География → ответ клиента';
     }
 
+    if (item.type === ACTION_TYPE_VARIABLES) {
+        const count = normalizeVariableOperations(item.operations).length;
+
+        return `Калькулятор → ${count} ${pluralActions(count)}`;
+    }
+
     if (item.type === ACTION_TYPE_WRITE_CONTACT_FIELD) {
         const scope = ACTION_TARGET_SCOPE_OPTIONS.find(([value]) => value === item.target_scope)?.[1] ?? 'Данные';
         const field = item.target_scope === 'contact'
@@ -7857,6 +8352,67 @@ function isGeoCityResultActionType(type) {
     return type === ACTION_TYPE_RESOLVE_GEO_CITY;
 }
 
+function normalizeVariableOperations(operations) {
+    const normalized = Array.isArray(operations)
+        ? operations
+            .filter((operation) => operation && typeof operation === 'object')
+            .map((operation) => normalizeVariableOperation(operation))
+            .filter((operation) => operation.field_key !== '')
+            .slice(0, 10)
+        : [];
+
+    return normalized.length > 0 ? normalized : [defaultVariableOperation()];
+}
+
+function normalizeVariableOperation(operation) {
+    const type = ['set', 'increment', 'clear'].includes(operation.operation)
+        ? operation.operation
+        : 'set';
+    const fieldKey = normalizeDialogFieldKey(operation.field_key || 'счетчик');
+
+    if (type === 'increment') {
+        const amount = Math.max(1, Math.min(100, Math.floor(Number(operation.amount) || 1)));
+
+        return {
+            operation: 'increment',
+            field_key: fieldKey,
+            amount,
+        };
+    }
+
+    if (type === 'clear') {
+        return {
+            operation: 'clear',
+            field_key: fieldKey,
+        };
+    }
+
+    return {
+        operation: 'set',
+        field_key: fieldKey,
+        value: String(operation.value ?? ''),
+    };
+}
+
+function defaultVariableOperation() {
+    return {
+        operation: 'increment',
+        field_key: 'счетчик',
+        amount: 1,
+    };
+}
+
+function calculatorActionItem(actionModule) {
+    const operations = actionItems(actionModule)
+        .filter((item) => item.type === ACTION_TYPE_VARIABLES)
+        .flatMap((item) => normalizeVariableOperations(item.operations));
+
+    return {
+        type: ACTION_TYPE_VARIABLES,
+        operations: operations.length > 0 ? operations : [defaultVariableOperation()],
+    };
+}
+
 function actionItems(actionModule) {
     const rawItems = Array.isArray(actionModule?.payload?.actions) ? actionModule.payload.actions : [];
     const normalizedItems = rawItems
@@ -7867,6 +8423,7 @@ function actionItems(actionModule) {
             || item.type === ACTION_TYPE_EDIT_MESSAGE
             || item.type === ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW
             || isGeoCityResultActionType(item.type)
+            || item.type === ACTION_TYPE_VARIABLES
             || item.target_field !== ''
         ));
 
@@ -7882,7 +8439,9 @@ function normalizeActionItemForType(item) {
                 ? ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW
                 : (isGeoCityResultActionType(item.type)
                     ? item.type
-                    : ACTION_TYPE_WRITE_CONTACT_FIELD)));
+                    : (item.type === ACTION_TYPE_VARIABLES
+                        ? ACTION_TYPE_VARIABLES
+                        : ACTION_TYPE_WRITE_CONTACT_FIELD))));
 
     if (type === ACTION_TYPE_EDIT_MESSAGE) {
         const operation = item.operation === ACTION_EDIT_MESSAGE_OPERATION_DELETE_MESSAGE
@@ -7923,6 +8482,13 @@ function normalizeActionItemForType(item) {
 
     if (type === ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW) {
         return { type };
+    }
+
+    if (type === ACTION_TYPE_VARIABLES) {
+        return {
+            type,
+            operations: normalizeVariableOperations(item.operations),
+        };
     }
 
     if (isGeoCityResultActionType(type)) {
@@ -8536,6 +9102,15 @@ function BotIcon() {
         <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
             <rect x="3" y="5" width="10" height="7.5" rx="2" stroke="currentColor" strokeWidth="1.35" />
             <path d="M8 5V2.8M5.8 8.4h.1M10.1 8.4h.1M6.2 12.5 5.5 14M9.8 12.5l.7 1.5" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" />
+        </svg>
+    );
+}
+
+function CalculatorIcon() {
+    return (
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+            <rect x="3" y="2.5" width="10" height="11" rx="1.8" stroke="currentColor" strokeWidth="1.35" />
+            <path d="M5.4 5.5h5.2M5.5 8.1h1.1M8 8.1h1.1M10.5 8.1h.1M5.5 10.5h1.1M8 10.5h1.1M10.5 10.5h.1" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" />
         </svg>
     );
 }

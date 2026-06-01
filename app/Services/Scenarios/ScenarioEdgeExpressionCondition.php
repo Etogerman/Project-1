@@ -79,14 +79,58 @@ class ScenarioEdgeExpressionCondition
      */
     private function evaluateComparison(array $node, Message $message): bool
     {
+        $operator = (string) ($node['operator'] ?? '');
+
+        if (($node['value_type'] ?? 'string') === 'number') {
+            $actualValue = $this->numericVariableValue((string) ($node['variable'] ?? ''), $message);
+            $expectedValue = (float) ($node['value'] ?? 0);
+
+            if ($actualValue === null) {
+                return false;
+            }
+
+            return match ($operator) {
+                '>' => $actualValue > $expectedValue,
+                '>=' => $actualValue >= $expectedValue,
+                '<' => $actualValue < $expectedValue,
+                '<=' => $actualValue <= $expectedValue,
+                '!=' => $actualValue != $expectedValue,
+                default => $actualValue == $expectedValue,
+            };
+        }
+
         $actualValue = $this->variableValue((string) ($node['variable'] ?? ''), $message);
         $expectedValue = (string) ($node['value'] ?? '');
         $matches = $actualValue === $expectedValue;
 
-        return ($node['operator'] ?? '') === '!=' ? ! $matches : $matches;
+        return $operator === '!=' ? ! $matches : $matches;
     }
 
     private function variableValue(string $variable, Message $message): string
+    {
+        return $this->normalizeValue($this->rawVariableValue($variable, $message));
+    }
+
+    private function numericVariableValue(string $variable, Message $message): ?float
+    {
+        $value = $this->rawVariableValue($variable, $message);
+
+        if ($value === null || $value === '') {
+            return 0.0;
+        }
+
+        if (is_int($value) || is_float($value)) {
+            return (float) $value;
+        }
+
+        if (is_string($value) && is_numeric(trim($value))) {
+            return (float) trim($value);
+        }
+
+        return null;
+    }
+
+    private function rawVariableValue(string $variable, Message $message): mixed
     {
         if (str_starts_with($variable, 'contact.')) {
             $field = substr($variable, strlen('contact.'));
@@ -95,17 +139,17 @@ class ScenarioEdgeExpressionCondition
                 throw new InvalidArgumentException('Unsupported contact variable.');
             }
 
-            return $this->normalizeValue($this->contactValue($field, $message));
+            return $this->contactValue($field, $message);
         }
 
         if (str_starts_with($variable, 'dialog.')) {
             $field = substr($variable, strlen('dialog.'));
 
-            if (! preg_match('/^[A-Za-z][A-Za-z0-9_]*$/', $field)) {
+            if (! $this->validDialogVariableKey($field)) {
                 throw new InvalidArgumentException('Unsupported dialog variable.');
             }
 
-            return $this->normalizeValue($this->dialogValue($field, $message));
+            return $this->dialogValue($field, $message);
         }
 
         throw new InvalidArgumentException('Unsupported variable.');
@@ -162,6 +206,19 @@ class ScenarioEdgeExpressionCondition
 
         throw new InvalidArgumentException('Expression variable value must be scalar.');
     }
+
+    private function validDialogVariableKey(string $key): bool
+    {
+        if ($key === '' || mb_strlen($key) > 64) {
+            return false;
+        }
+
+        if (in_array($key, ['__proto__', 'constructor', 'prototype'], true)) {
+            return false;
+        }
+
+        return preg_match('/^(?!_)[\p{L}][\p{L}\p{N}_]{0,63}$/u', $key) === 1;
+    }
 }
 
 class ScenarioEdgeExpressionParser
@@ -209,10 +266,10 @@ class ScenarioEdgeExpressionParser
      */
     private function parseAnd(): array
     {
-        $items = [$this->parseComparison()];
+        $items = [$this->parseFactor()];
 
         while ($this->readKeyword('and')) {
-            $items[] = $this->parseComparison();
+            $items[] = $this->parseFactor();
         }
 
         return count($items) === 1 ? $items[0] : [
@@ -224,17 +281,46 @@ class ScenarioEdgeExpressionParser
     /**
      * @return array<string, mixed>
      */
+    private function parseFactor(): array
+    {
+        $this->skipWhitespace();
+
+        if (($this->expression[$this->position] ?? null) === '(') {
+            $this->position++;
+            $node = $this->parseOr();
+            $this->skipWhitespace();
+
+            if (($this->expression[$this->position] ?? null) !== ')') {
+                throw new InvalidArgumentException('Expected closing parenthesis.');
+            }
+
+            $this->position++;
+
+            return $node;
+        }
+
+        return $this->parseComparison();
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
     private function parseComparison(): array
     {
         $variable = $this->readVariable();
         $operator = $this->readOperator();
-        $value = $this->readString();
+        $literal = $this->readLiteral();
+
+        if ($literal['type'] === 'string' && ! in_array($operator, ['==', '!='], true)) {
+            throw new InvalidArgumentException('String literal supports only equality operators.');
+        }
 
         return [
             'type' => 'comparison',
             'variable' => $variable,
             'operator' => $operator,
-            'value' => $value,
+            'value' => $literal['value'],
+            'value_type' => $literal['type'],
         ];
     }
 
@@ -259,7 +345,13 @@ class ScenarioEdgeExpressionParser
             return $variable;
         }
 
-        if (preg_match('/^dialog\.[A-Za-z][A-Za-z0-9_]*$/', $variable)) {
+        if (preg_match('/^dialog\.(?!_)[\p{L}][\p{L}\p{N}_]{0,63}$/u', $variable)) {
+            $field = substr($variable, strlen('dialog.'));
+
+            if (in_array($field, ['__proto__', 'constructor', 'prototype'], true)) {
+                throw new InvalidArgumentException('Unsupported variable.');
+            }
+
             return $variable;
         }
 
@@ -270,7 +362,7 @@ class ScenarioEdgeExpressionParser
     {
         $this->skipWhitespace();
 
-        foreach (['==', '!='] as $operator) {
+        foreach (['>=', '<=', '==', '!=', '>', '<'] as $operator) {
             if (str_starts_with(substr($this->expression, $this->position), $operator)) {
                 $this->position += strlen($operator);
 
@@ -279,6 +371,26 @@ class ScenarioEdgeExpressionParser
         }
 
         throw new InvalidArgumentException('Expected comparison operator.');
+    }
+
+    /**
+     * @return array{type: string, value: string|float}
+     */
+    private function readLiteral(): array
+    {
+        $this->skipWhitespace();
+
+        if (($this->expression[$this->position] ?? null) === '"') {
+            return [
+                'type' => 'string',
+                'value' => $this->readString(),
+            ];
+        }
+
+        return [
+            'type' => 'number',
+            'value' => $this->readNumber(),
+        ];
     }
 
     private function readString(): string
@@ -312,6 +424,21 @@ class ScenarioEdgeExpressionParser
         throw new InvalidArgumentException('Unclosed string literal.');
     }
 
+    private function readNumber(): float
+    {
+        $this->skipWhitespace();
+        $tail = substr($this->expression, $this->position);
+
+        if (! preg_match('/^-?\d+(?:\.\d+)?/', $tail, $matches)) {
+            throw new InvalidArgumentException('Expected number literal.');
+        }
+
+        $number = $matches[0];
+        $this->position += strlen($number);
+
+        return (float) $number;
+    }
+
     private function readKeyword(string $keyword): bool
     {
         $this->skipWhitespace();
@@ -322,7 +449,7 @@ class ScenarioEdgeExpressionParser
 
         $next = $this->expression[$this->position + strlen($keyword)] ?? '';
 
-        if ($next !== '' && preg_match('/[A-Za-z0-9_]/', $next)) {
+        if ($next !== '' && preg_match('/[\p{L}\p{N}_]/u', $next)) {
             return false;
         }
 

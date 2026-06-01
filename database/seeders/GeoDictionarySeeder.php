@@ -193,6 +193,7 @@ class GeoDictionarySeeder extends Seeder
     {
         return [
             ['alias' => 'москва', 'city_key' => 'moscow', 'alias_type' => GeoAlias::TYPE_CANONICAL, 'confidence' => 100],
+            ['alias' => 'масква', 'city_key' => 'moscow', 'alias_type' => GeoAlias::TYPE_TYPO, 'confidence' => 90],
             ['alias' => 'мск', 'city_key' => 'moscow', 'alias_type' => GeoAlias::TYPE_SHORT, 'confidence' => 95],
             ['alias' => 'moscow', 'city_key' => 'moscow', 'alias_type' => GeoAlias::TYPE_TRANSLIT, 'confidence' => 95, 'language' => 'en'],
             ['alias' => 'москве', 'city_key' => 'moscow', 'alias_type' => GeoAlias::TYPE_CASE_FORM, 'confidence' => 90],

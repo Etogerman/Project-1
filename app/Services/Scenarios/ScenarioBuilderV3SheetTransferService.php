@@ -569,6 +569,7 @@ class ScenarioBuilderV3SheetTransferService
         $settingsPayload['ui'] = array_filter([
             'width' => $ui['width'] ?? null,
             'collapsed' => $ui['collapsed'] ?? null,
+            'display_number' => $ui['display_number'] ?? null,
         ], fn (mixed $value): bool => $value !== null);
 
         return $settingsPayload;
@@ -589,6 +590,7 @@ class ScenarioBuilderV3SheetTransferService
         $settingsPayload['ui'] = is_array($settingsPayload['ui'] ?? null) ? $settingsPayload['ui'] : [];
         $settingsPayload['ui']['sheet_id'] = $sheetId;
         unset($settingsPayload['ui']['card_id']);
+        unset($settingsPayload['ui']['display_number']);
         $settingsPayload['modules'] = is_array($settingsPayload['modules'] ?? null) && array_is_list($settingsPayload['modules'])
             ? $settingsPayload['modules']
             : [];

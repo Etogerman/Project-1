@@ -44,6 +44,7 @@ use App\Services\Dialogs\DeleteLastOutboundDialogMessageAction;
 use App\Services\Geo\ResolveGeoCityAction;
 use App\Services\Scenarios\DispatchStoredInboundScenarioAction;
 use App\Services\Scenarios\GenericDbScenarioRuntime;
+use App\Services\Scenarios\ScenarioEdgeExpressionCondition;
 use App\Services\Scenarios\ScenarioRegistry;
 use Database\Seeders\GeoDictionarySeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -1339,6 +1340,220 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame('female', data_get($dialog->fields_payload, 'selected_gender'));
     }
 
+    public function test_v3_variables_action_increments_dialog_variable_and_follows_automatic_edge(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9710],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('v3_variables_increment', $this->v3VariablesRuntimeSchema($channel->id));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $dialog->refresh();
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->assertSame(1, data_get($dialog->fields_payload, 'спросили_имя'));
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('done', $run->current_step);
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['text'] === 'Попытка записана');
+    }
+
+    public function test_v3_variables_action_fails_and_rolls_back_when_increment_value_is_not_numeric(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9711],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $dialog->forceFill(['fields_payload' => ['спросили_имя' => 'abc', 'другое' => 'ok']])->save();
+        $scenario = $this->createPublishedScenario('v3_variables_failed', $this->v3VariablesRuntimeSchema($channel->id));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $dialog->refresh();
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->assertSame('abc', data_get($dialog->fields_payload, 'спросили_имя'));
+        $this->assertSame('ok', data_get($dialog->fields_payload, 'другое'));
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('variables', $run->current_step);
+
+        Http::assertNothingSent();
+    }
+
+    public function test_v3_message_can_pick_text_by_dialog_variable(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9712],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $dialog->forceFill(['fields_payload' => ['спросили_имя' => 2]])->save();
+        $scenario = $this->createPublishedScenario('v3_variable_message', $this->v3VariableMessageRuntimeSchema($channel->id));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['text'] === 'Напиши имя полностью');
+    }
+
+    public function test_v3_edge_expression_supports_numeric_dialog_variables_with_cyrillic_keys(): void
+    {
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $dialog->forceFill(['fields_payload' => ['спросили_имя' => '2']])->save();
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'ответ',
+        ]);
+
+        $condition = app(ScenarioEdgeExpressionCondition::class);
+
+        $this->assertTrue($condition->evaluate('{{dialog.спросили_имя}} < 3', $message));
+        $this->assertFalse($condition->evaluate('{{dialog.спросили_имя}} >= 3', $message));
+        $this->assertTrue($condition->evaluate('{{dialog.новая_переменная}} == 0', $message));
+    }
+
+    public function test_v3_edge_expression_supports_parentheses_for_grouped_conditions(): void
+    {
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $dialog->forceFill(['fields_payload' => ['сколько_раз_спросили_имя' => 1]])->save();
+        $contact->forceFill([
+            'first_name' => '',
+            'first_name_source' => 'auto',
+        ])->save();
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'ответ',
+        ]);
+
+        $condition = app(ScenarioEdgeExpressionCondition::class);
+        $expression = '({{contact.first_name}} == "" or {{contact.first_name_source}} == "" or {{contact.first_name_source}} == "auto") and {{dialog.сколько_раз_спросили_имя}} == 1';
+
+        $this->assertTrue($condition->evaluate($expression, $message));
+        $this->assertFalse($condition->evaluate(str_replace('== 1', '== 2', $expression), $message));
+    }
+
+    public function test_v3_edge_expression_keeps_and_priority_over_or_without_parentheses(): void
+    {
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $dialog->forceFill(['fields_payload' => ['count' => 2]])->save();
+        $contact->forceFill(['first_name' => 'Герман'])->save();
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'ответ',
+        ]);
+
+        $condition = app(ScenarioEdgeExpressionCondition::class);
+
+        $this->assertTrue($condition->evaluate('{{dialog.count}} == 2 or {{dialog.count}} == 3 and {{contact.first_name}} == ""', $message));
+        $this->assertFalse($condition->evaluate('({{dialog.count}} == 2 or {{dialog.count}} == 3) and {{contact.first_name}} == ""', $message));
+    }
+
+    public function test_v3_edge_expression_rejects_unclosed_parenthesis(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        app(ScenarioEdgeExpressionCondition::class)
+            ->assertValid('({{dialog.count}} == 1 or {{dialog.count}} == 2');
+    }
+
     public function test_v3_distance_to_moscow_action_calculates_for_ru_country_and_follows_resolved_edge(): void
     {
         Http::fake([
@@ -1478,7 +1693,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
             && $request['text'] === 'Город найден');
     }
 
-    public function test_v3_geo_city_action_routes_ambiguous_to_not_found_without_mutating_contact(): void
+    public function test_v3_geo_city_action_routes_ambiguous_to_manual_required_without_mutating_contact(): void
     {
         Http::fake([
             'https://api.telegram.org/*' => Http::sequence()
@@ -1526,11 +1741,13 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $run->refresh();
         $contact->refresh();
 
-        $this->assertSame('geo_not_found_done', $run->current_step);
+        $this->assertSame('geo_manual_required_done', $run->current_step);
         $this->assertSame('Россия', $contact->country);
         $this->assertSame('Старый регион', $contact->region);
         $this->assertSame('Старый город', $contact->city);
         $this->assertSame(1, data_get($run->state_payload, 'v3.geo_resolution_attempts.resolve_geo'));
+        $this->assertSame('ambiguous_city', data_get($run->state_payload, 'v3.geo_resolution_pending.resolve_geo.reason'));
+        $this->assertCount(2, data_get($run->state_payload, 'v3.geo_resolution_pending.resolve_geo.candidates'));
 
         $this->assertDatabaseHas('geo_resolution_events', [
             'contact_id' => $contact->id,
@@ -1644,7 +1861,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame('missing_current_inbound_message', data_get($event->payload, 'reason'));
     }
 
-    public function test_v3_geo_city_action_uses_limit_without_resolver_event(): void
+    public function test_v3_geo_city_action_uses_limit_without_running_resolver(): void
     {
         Http::fake([
             'https://api.telegram.org/*' => Http::sequence()
@@ -1704,7 +1921,10 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame('geo_limit_reached_done', $run->current_step);
         $this->assertSame(3, data_get($run->state_payload, 'v3.geo_resolution_attempts.resolve_geo'));
         $this->assertNull($contact->country);
-        $this->assertSame(0, GeoResolutionEvent::query()->count());
+        $event = GeoResolutionEvent::query()->where('contact_id', $contact->id)->firstOrFail();
+        $this->assertSame('limit_reached', data_get($event->payload, 'reason'));
+        $this->assertSame('not_started', data_get($event->payload, 'resolver_status'));
+        $this->assertSame('geo_limit_reached', data_get($event->payload, 'final_output'));
     }
 
     public function test_v3_geo_city_action_writes_contact_from_ai_analysis_data(): void
@@ -1963,7 +2183,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
                 'v3' => [
                     'ai_analysis' => [
                         'ai_city' => [
-                            'output_id' => 'city_not_found',
+                            'output_id' => 'city_found',
                             'label' => 'Город не найден',
                             'data' => [
                                 'geo_region' => 'Московская область',
@@ -2052,7 +2272,9 @@ class GenericDbScenarioRuntimeTest extends TestCase
 
         $this->assertSame('geo_limit_reached_done', $run->current_step);
         $this->assertSame(3, data_get($run->state_payload, 'v3.geo_resolution_attempts.resolve_geo'));
-        $this->assertSame(0, GeoResolutionEvent::query()->count());
+        $event = GeoResolutionEvent::query()->where('contact_id', $contact->id)->firstOrFail();
+        $this->assertSame('limit_reached', data_get($event->payload, 'reason'));
+        $this->assertSame('not_started', data_get($event->payload, 'resolver_status'));
     }
 
     public function test_v3_unsupported_legacy_action_uses_failed_output(): void
@@ -9475,6 +9697,129 @@ class GenericDbScenarioRuntimeTest extends TestCase
     /**
      * @return array<string, mixed>
      */
+    private function v3VariablesRuntimeSchema(int $channelId): array
+    {
+        $doneEdge = [
+            'id' => '10',
+            'edge_key' => 'edge_variables_done',
+            'mode' => 'automatic',
+            'priority' => 10,
+            'transition_limit' => 0,
+            'source_block_id' => 'variables',
+            'target_block_id' => 'done',
+            'from_output_id' => null,
+            'label' => 'Дальше',
+        ];
+
+        return [
+            'version' => 3,
+            'builder_v3_runtime' => [
+                'schema_version' => 3,
+                'source_revision' => 'v3:test',
+                'compiled_at' => now()->toISOString(),
+                'entrypoints' => [[
+                    'block_id' => 'variables',
+                    'channel_ids' => [$channelId],
+                    'match' => 'strict',
+                    'values' => ['старт'],
+                    'priority' => 10,
+                ]],
+                'blocks' => [
+                    'variables' => [
+                        'id' => 'variables',
+                        'db_id' => 1,
+                        'kind' => 'state',
+                        'title' => 'Калькулятор',
+                        'actions' => [[
+                            'type' => 'variables',
+                            'operations' => [[
+                                'operation' => 'increment',
+                                'field_key' => 'спросили_имя',
+                                'amount' => 1,
+                            ]],
+                        ]],
+                        'message' => null,
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [$doneEdge],
+                        'action_result_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                    'done' => [
+                        'id' => 'done',
+                        'db_id' => 2,
+                        'kind' => 'state',
+                        'title' => 'Готово',
+                        'message' => [
+                            'text' => 'Попытка записана',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                ],
+                'edges' => [$doneEdge],
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function v3VariableMessageRuntimeSchema(int $channelId): array
+    {
+        return [
+            'version' => 3,
+            'builder_v3_runtime' => [
+                'schema_version' => 3,
+                'source_revision' => 'v3:test',
+                'compiled_at' => now()->toISOString(),
+                'entrypoints' => [[
+                    'block_id' => 'ask_name',
+                    'channel_ids' => [$channelId],
+                    'match' => 'strict',
+                    'values' => ['старт'],
+                    'priority' => 10,
+                ]],
+                'blocks' => [
+                    'ask_name' => [
+                        'id' => 'ask_name',
+                        'db_id' => 1,
+                        'kind' => 'state',
+                        'title' => 'Спросить имя',
+                        'message' => [
+                            'text' => 'Как тебя зовут?',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                            'text_mode' => 'by_dialog_variable',
+                            'variable_key' => 'спросили_имя',
+                            'variable_text_variants' => [
+                                [
+                                    'value' => '1',
+                                    'text' => 'Как тебя зовут?',
+                                ],
+                                [
+                                    'value' => '2',
+                                    'text' => 'Напиши имя полностью',
+                                ],
+                            ],
+                            'fallback_text' => 'Напиши своё имя',
+                        ],
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                ],
+                'edges' => [],
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
     private function v3GeoCityRuntimeSchema(
         int $channelId,
         bool $legacyGeoOutputs = false,
@@ -9502,18 +9847,19 @@ class GenericDbScenarioRuntimeTest extends TestCase
             ]
             : [
                 $foundEdge,
+                $manualRequiredEdge,
                 $notFoundEdge,
                 $limitEdge,
             ];
         $doneBlockLabels = [
             'geo_found_done' => 'Город найден',
+            'geo_manual_required_done' => 'Нужно уточнить город',
             'geo_not_found_done' => 'Город не найден',
             'geo_limit_reached_done' => 'Лимит попыток',
         ];
 
         if ($legacyGeoOutputs) {
             $doneBlockLabels += [
-                'geo_manual_required_done' => 'Нужно уточнить город',
                 'geo_ambiguous_done' => 'Нашли несколько вариантов',
                 'geo_below_threshold_done' => 'Нужна проверка города',
                 'geo_inactive_done' => 'Вариант отключён',

@@ -64,7 +64,8 @@ class SaveScenarioBuilderV3StateAction
             $this->deleteRemovedEdges($version, $validated['builder']['edges'], $serverVisibleScope, $blockMap['deleted_block_ids']);
             $this->saveEdges($version, $validated['builder']['edges'], $serverVisibleScope, $blockMap['block_ids_by_client_key'], $idMap);
             $this->deleteRemovedBlocks($version, $blockMap['deleted_block_ids']);
-            $this->persistBuilderProjection($version, $validated['builder']);
+            $displayNumberMeta = $this->normalizeDisplayNumbers($version, $validated['builder']);
+            $this->persistBuilderProjection($version, $validated['builder'], $displayNumberMeta);
         });
 
         return $this->buildScenarioBuilderV3StateAction->handle($scenario->fresh(['draftVersion']), auth()->user(), $idMap);
@@ -480,6 +481,183 @@ class SaveScenarioBuilderV3StateAction
     }
 
     /**
+     * @param  array<string, mixed>  $builder
+     * @return array{next_display_number: int, display_numbers_initialized: bool}
+     */
+    private function normalizeDisplayNumbers(ScenarioVersion $version, array $builder): array
+    {
+        $blocks = $version->builderBlocks()
+            ->orderBy('id')
+            ->get();
+        $schemaPayload = $this->schemaPayload($version);
+        $displayNumbersInitialized = (bool) data_get($schemaPayload, 'builder_v3.meta.display_numbers_initialized', false);
+        $storedNextDisplayNumber = $this->positiveIntegerOrNull(data_get($schemaPayload, 'builder_v3.meta.next_display_number')) ?? 1;
+        $hasAnyDisplayNumber = $blocks->contains(fn (ScenarioBuilderBlock $block): bool => $this->displayNumberForBlock($block) !== null);
+        $orderedBlocks = $this->blocksInDisplayNumberOrder($blocks, $builder);
+
+        if (! $displayNumbersInitialized && ! $hasAnyDisplayNumber) {
+            $nextDisplayNumber = 1;
+
+            foreach ($orderedBlocks as $block) {
+                $this->saveBlockDisplayNumber($block, $nextDisplayNumber);
+                $nextDisplayNumber++;
+            }
+
+            return [
+                'next_display_number' => $nextDisplayNumber,
+                'display_numbers_initialized' => true,
+            ];
+        }
+
+        $ownersByDisplayNumber = [];
+
+        foreach ($blocks->sortBy('id') as $block) {
+            $displayNumber = $this->displayNumberForBlock($block);
+
+            if ($displayNumber === null || isset($ownersByDisplayNumber[$displayNumber])) {
+                continue;
+            }
+
+            $ownersByDisplayNumber[$displayNumber] = (int) $block->id;
+        }
+
+        $usedDisplayNumbers = [];
+        $nextDisplayNumber = max($storedNextDisplayNumber, max([0, ...array_keys($ownersByDisplayNumber)]) + 1);
+
+        foreach ($orderedBlocks as $block) {
+            $currentDisplayNumber = $this->displayNumberForBlock($block);
+            $isOwner = $currentDisplayNumber !== null
+                && ($ownersByDisplayNumber[$currentDisplayNumber] ?? null) === (int) $block->id
+                && ! isset($usedDisplayNumbers[$currentDisplayNumber]);
+
+            if ($isOwner) {
+                $assignedDisplayNumber = $currentDisplayNumber;
+            } else {
+                while (isset($usedDisplayNumbers[$nextDisplayNumber]) || isset($ownersByDisplayNumber[$nextDisplayNumber])) {
+                    $nextDisplayNumber++;
+                }
+
+                $assignedDisplayNumber = $nextDisplayNumber;
+                $nextDisplayNumber++;
+            }
+
+            $usedDisplayNumbers[$assignedDisplayNumber] = true;
+            $this->saveBlockDisplayNumber($block, $assignedDisplayNumber);
+        }
+
+        $maxDisplayNumber = max([0, ...array_keys($usedDisplayNumbers)]);
+
+        return [
+            'next_display_number' => max($nextDisplayNumber, $maxDisplayNumber + 1),
+            'display_numbers_initialized' => true,
+        ];
+    }
+
+    /**
+     * @param  \Illuminate\Support\Collection<int, ScenarioBuilderBlock>  $blocks
+     * @param  array<string, mixed>  $builder
+     * @return list<ScenarioBuilderBlock>
+     */
+    private function blocksInDisplayNumberOrder($blocks, array $builder): array
+    {
+        $sheetOrder = $this->displayNumberSheetOrder($builder);
+
+        return $blocks
+            ->sort(function (ScenarioBuilderBlock $left, ScenarioBuilderBlock $right) use ($sheetOrder): int {
+                $leftSheet = $this->blockSheetId($left);
+                $rightSheet = $this->blockSheetId($right);
+                $leftSheetIndex = $sheetOrder[$leftSheet] ?? PHP_INT_MAX;
+                $rightSheetIndex = $sheetOrder[$rightSheet] ?? PHP_INT_MAX;
+
+                return [$leftSheetIndex, $leftSheet, (int) $left->position_y, (int) $left->position_x, (int) $left->id]
+                    <=> [$rightSheetIndex, $rightSheet, (int) $right->position_y, (int) $right->position_x, (int) $right->id];
+            })
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  array<string, mixed>  $builder
+     * @return array<string, int>
+     */
+    private function displayNumberSheetOrder(array $builder): array
+    {
+        $sheetIds = collect($builder['sheets'] ?? [])
+            ->filter(fn (mixed $sheet): bool => is_array($sheet))
+            ->map(fn (array $sheet): string => trim((string) ($sheet['id'] ?? '')))
+            ->filter(fn (string $sheetId): bool => $sheetId !== '')
+            ->values()
+            ->all();
+
+        $orderedSheetIds = ['main'];
+
+        foreach ($sheetIds as $sheetId) {
+            if ($sheetId === 'main' || in_array($sheetId, $orderedSheetIds, true)) {
+                continue;
+            }
+
+            $orderedSheetIds[] = $sheetId;
+        }
+
+        return collect($orderedSheetIds)
+            ->values()
+            ->mapWithKeys(fn (string $sheetId, int $index): array => [$sheetId => $index])
+            ->all();
+    }
+
+    private function blockSheetId(ScenarioBuilderBlock $block): string
+    {
+        $sheetId = trim((string) data_get($this->blockSettingsPayload($block), 'ui.sheet_id', 'main'));
+
+        return $sheetId !== '' ? $sheetId : 'main';
+    }
+
+    private function displayNumberForBlock(ScenarioBuilderBlock $block): ?int
+    {
+        return $this->positiveIntegerOrNull(data_get($this->blockSettingsPayload($block), 'ui.display_number'));
+    }
+
+    private function saveBlockDisplayNumber(ScenarioBuilderBlock $block, int $displayNumber): void
+    {
+        $settingsPayload = $this->blockSettingsPayload($block);
+
+        if (data_get($settingsPayload, 'ui.display_number') === $displayNumber) {
+            return;
+        }
+
+        data_set($settingsPayload, 'ui.display_number', $displayNumber);
+
+        $block->forceFill([
+            'settings_payload' => $settingsPayload,
+        ])->save();
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function blockSettingsPayload(ScenarioBuilderBlock $block): array
+    {
+        return is_array($block->settings_payload) ? $block->settings_payload : [];
+    }
+
+    private function positiveIntegerOrNull(mixed $value): ?int
+    {
+        if (is_int($value)) {
+            return $value > 0 ? $value : null;
+        }
+
+        $string = trim((string) $value);
+
+        if ($string === '' || ! ctype_digit($string)) {
+            return null;
+        }
+
+        $integer = (int) $string;
+
+        return $integer > 0 ? $integer : null;
+    }
+
+    /**
      * @param  array<string, mixed>  $settingsPayload
      * @return array<string, mixed>
      */
@@ -559,15 +737,18 @@ class SaveScenarioBuilderV3StateAction
     /**
      * @param  array<string, mixed>  $builder
      */
-    private function persistBuilderProjection(ScenarioVersion $version, array $builder): void
+    private function persistBuilderProjection(ScenarioVersion $version, array $builder, array $displayNumberMeta): void
     {
         $schemaPayload = $this->schemaPayload($version);
+        $builderProjection = is_array($schemaPayload['builder_v3'] ?? null) ? $schemaPayload['builder_v3'] : [];
+        $meta = is_array($builderProjection['meta'] ?? null) ? $builderProjection['meta'] : [];
         $revision = 'v3:'.CarbonImmutable::now()->utc()->format('Y-m-d\TH:i:s.u\Z');
 
         data_set($schemaPayload, 'builder_v3', [
             'revision' => $revision,
             'active_sheet_id' => $builder['active_sheet_id'],
             'sheets' => $builder['sheets'],
+            'meta' => array_merge($meta, $displayNumberMeta),
             'visible_scope' => $this->buildScenarioBuilderV3StateAction->visibleScopeFor($version),
             'warnings' => [],
         ]);
