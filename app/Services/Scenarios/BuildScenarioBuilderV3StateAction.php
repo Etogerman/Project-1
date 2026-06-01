@@ -23,8 +23,6 @@ class BuildScenarioBuilderV3StateAction
 
     private const GEO_CITY_OUTPUT_MANUAL_REQUIRED = 'geo_manual_required';
 
-    private const GEO_CITY_OUTPUT_LIMIT_REACHED = 'geo_limit_reached';
-
     private const GEO_CITY_LEGACY_MANUAL_REQUIRED_OUTPUTS = [
         'geo_manual_required',
         'geo_ambiguous',
@@ -328,10 +326,7 @@ class BuildScenarioBuilderV3StateAction
         $settingsPayload['outputs'] = is_array($settingsPayload['outputs'] ?? null) ? array_values($settingsPayload['outputs']) : [];
 
         if ($this->hasResolveGeoCityAction($settingsPayload['modules'])) {
-            $settingsPayload['outputs'] = $this->geoCityCanonicalOutputs(
-                $settingsPayload['modules'],
-                $this->hasGeoLimitReachedEdge($block),
-            );
+            $settingsPayload['outputs'] = $this->geoCityCanonicalOutputs($settingsPayload['modules']);
         } elseif ($this->hasVariablesAction($settingsPayload['modules'])) {
             $settingsPayload['outputs'] = $this->withoutLegacyVariableOutputs($settingsPayload['outputs']);
         }
@@ -601,7 +596,7 @@ class BuildScenarioBuilderV3StateAction
      * @param  list<array<string, mixed>>  $modules
      * @return list<array<string, mixed>>
      */
-    private function geoCityCanonicalOutputs(array $modules, bool $includeLegacyLimit = false): array
+    private function geoCityCanonicalOutputs(array $modules): array
     {
         $moduleId = 'mod_action';
 
@@ -612,7 +607,7 @@ class BuildScenarioBuilderV3StateAction
             }
         }
 
-        $outputs = [
+        return [
             [
                 'id' => 'geo_found',
                 'label' => 'Город найден',
@@ -635,28 +630,6 @@ class BuildScenarioBuilderV3StateAction
                 'action_result_id' => 'geo_not_found',
             ],
         ];
-
-        if ($includeLegacyLimit) {
-            $outputs[] = [
-                'id' => self::GEO_CITY_OUTPUT_LIMIT_REACHED,
-                'label' => 'Превышено попыток',
-                'source' => 'action',
-                'module_id' => $moduleId,
-                'action_result_id' => self::GEO_CITY_OUTPUT_LIMIT_REACHED,
-                'legacy' => true,
-            ];
-        }
-
-        return $outputs;
-    }
-
-    private function hasGeoLimitReachedEdge(ScenarioBuilderBlock $block): bool
-    {
-        $edges = $block->relationLoaded('outgoingEdges')
-            ? $block->outgoingEdges
-            : $block->outgoingEdges()->get();
-
-        return $edges->contains(fn (ScenarioBuilderEdge $edge): bool => data_get($edge->condition_payload, 'from_output_id') === self::GEO_CITY_OUTPUT_LIMIT_REACHED);
     }
 
     /**

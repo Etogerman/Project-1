@@ -69,6 +69,7 @@ const EDGE_CONTACT_FIELD_OPTIONS = [
     ['first_name', 'Имя', 'any_text'],
     ['last_name', 'Фамилия', 'any_text'],
     ['country', 'Страна', 'any_text'],
+    ['region', 'Регион', 'any_text'],
     ['city', 'Город', 'any_text'],
     ['gender', 'Пол', 'any_text'],
     ['age_years', 'Возраст', 'number'],
@@ -124,6 +125,7 @@ const CONTACT_RUNTIME_WRITABLE_FIELD_KEYS = new Set([
     'first_name',
     'last_name',
     'country',
+    'region',
     'city',
     'gender',
     'age_years',
@@ -136,6 +138,7 @@ const TRANSITION_CONTACT_WRITABLE_FIELD_KEYS = new Set([
     'first_name',
     'last_name',
     'country',
+    'region',
     'city',
     'gender',
     'gender_source',
@@ -150,6 +153,7 @@ const CONTACT_RUNTIME_CONDITION_FIELD_KEYS = new Set([
     'first_name_source',
     'last_name',
     'country',
+    'region',
     'city',
     'gender',
     'age_years',
@@ -789,13 +793,11 @@ export default function App({
                 ...currentAllEdges.filter((edge) => ! currentSheetEdgeKeys.has(edgeIdentityKey(edge))),
                 ...resolvedSheetEdges,
             ];
-            const resolvedAllBlocks = currentAllBlocks.map((block) => blockWithGeoLegacyLimitOutput(block, resolvedAllEdges));
-
             return {
                 ...current,
                 builder: {
                     ...current.builder,
-                    blocks: resolvedAllBlocks,
+                    blocks: currentAllBlocks,
                     edges: resolvedAllEdges,
                 },
             };
@@ -1708,17 +1710,21 @@ export default function App({
             updateBlockSettings(clientKey, (settings) => {
                 const modules = modulesFrom(settings);
                 const actionModule = findModule(settings, 'action');
+                const regularItems = regularActionItems(actionModule);
+                const calculatorItems = calculatorActionItems(actionModule);
 
-                if (enabled && actionModule && ! isCalculatorActionModule(actionModule)) {
-                    return settings;
-                }
-
-                const nextModules = enabled
+                const nextItems = enabled
                     ? [
-                        ...modules.filter((module) => module.type !== 'action'),
-                        calculatorModuleTemplate(),
+                        ...regularItems,
+                        ...(calculatorItems.length > 0 ? calculatorItems : [normalizeActionItemForType({
+                            type: ACTION_TYPE_VARIABLES,
+                            operations: [defaultVariableOperation()],
+                        })]),
                     ]
-                    : modules.filter((module) => ! (module.type === 'action' && isCalculatorActionModule(module)));
+                    : regularItems;
+                const nextModules = nextItems.length > 0
+                    ? replaceActionModule(modules, actionModule, nextItems)
+                    : modules.filter((module) => module.type !== 'action');
 
                 return syncOutputs({
                     ...settings,
@@ -1741,17 +1747,23 @@ export default function App({
 
             if (type === 'action') {
                 const actionModule = findModule(settings, 'action');
+                const regularItems = regularActionItems(actionModule);
+                const calculatorItems = calculatorActionItems(actionModule);
+                const nextItems = enabled
+                    ? [
+                        ...(regularItems.length > 0 ? regularItems : [defaultActionItem()]),
+                        ...calculatorItems,
+                    ]
+                    : calculatorItems;
 
-                if (enabled && actionModule && isCalculatorActionModule(actionModule)) {
-                    return settings;
-                }
-            }
-
-            if (enabled && ! modules.some((module) => module.type === type)) {
+                modules = nextItems.length > 0
+                    ? replaceActionModule(modules, actionModule, nextItems)
+                    : modules.filter((module) => module.type !== 'action');
+            } else if (enabled && ! modules.some((module) => module.type === type)) {
                 modules = [...modules, moduleTemplate(type, channels, blocks, clientKey)];
             }
 
-            if (! enabled) {
+            if (! enabled && type !== 'action') {
                 modules = modules.filter((module) => module.type !== type);
             }
 
@@ -1850,7 +1862,7 @@ export default function App({
             const nextActionOutputIds = new Set([
                 ...(hasCheckData ? ACTION_CHECK_DATA_OUTPUTS : []),
                 ...(hasDistanceToMoscow ? ACTION_DISTANCE_TO_MOSCOW_OUTPUTS : []),
-                ...(hasGeoCity ? ACTION_GEO_CITY_OUTPUTS_WITH_LEGACY : []),
+                ...(hasGeoCity ? ACTION_GEO_CITY_OUTPUTS : []),
             ].map((output) => output.id));
 
             updateEdges(edges.filter((edge) => (
@@ -3247,13 +3259,14 @@ function ScenarioNode({
     const buttons = findModule(block.settings_payload, 'buttons');
     const ai = findModule(block.settings_payload, 'ai');
     const action = findModule(block.settings_payload, 'action');
-    const hasCalculator = isCalculatorActionModule(action);
+    const hasCalculator = hasCalculatorAction(action);
+    const hasAction = hasRegularAction(action);
     const position = blockPosition(block);
     const modules = modulesFrom(block.settings_payload);
     const displayModuleTypes = MODULE_DISPLAY_ORDER.filter((type) => (
         type === MODULE_TYPE_CALCULATOR
             ? hasCalculator
-            : modules.some((module) => module.type === type && ! (type === 'action' && hasCalculator))
+            : (type === 'action' ? hasAction : modules.some((module) => module.type === type))
     ));
     const blockKind = block.settings_payload?.kind === 'non_state' ? 'non_state' : 'state';
 
@@ -3342,11 +3355,11 @@ function ScenarioNode({
                 {ai ? (
                     <ModulePreview type="ai" label="ИИ" value={aiSummary(ai)} />
                 ) : null}
-                {action && ! hasCalculator ? (
-                    <ModulePreview type="action" label="Действие" value={actionSummary(action)} />
+                {hasAction ? (
+                    <ModulePreview type="action" label="Действие" value={regularActionSummary(action)} />
                 ) : null}
                 {hasCalculator ? (
-                    <ModulePreview type={MODULE_TYPE_CALCULATOR} label="Калькулятор" value={actionSummary(action)} />
+                    <ModulePreview type={MODULE_TYPE_CALCULATOR} label="Калькулятор" value={calculatorSummary(action)} />
                 ) : null}
             </div>
 
@@ -4484,15 +4497,30 @@ function BlockPanel({
     const buttons = findModule(block.settings_payload, 'buttons');
     const ai = findModule(block.settings_payload, 'ai');
     const action = findModule(block.settings_payload, 'action');
-    const hasCalculator = isCalculatorActionModule(action);
-    const hasRegularAction = Boolean(action) && ! hasCalculator;
+    const hasCalculator = hasCalculatorAction(action);
+    const hasAction = hasRegularAction(action);
     const startChannels = start?.payload?.channels?.ids ?? [];
     const buttonsSummary = buttons ? buttonSummary(buttons) : '';
-    const activeModules = modulesFrom(block.settings_payload).length;
     const blockKind = block.settings_payload?.kind === 'non_state' ? 'non_state' : 'state';
-    const activeModuleTypes = new Set(modulesFrom(block.settings_payload).map((module) => (
-        module.type === 'action' && hasCalculator ? MODULE_TYPE_CALCULATOR : module.type
-    )));
+    const activeModuleTypes = new Set();
+
+    modulesFrom(block.settings_payload).forEach((module) => {
+        if (module.type === 'action') {
+            if (hasAction) {
+                activeModuleTypes.add('action');
+            }
+
+            if (hasCalculator) {
+                activeModuleTypes.add(MODULE_TYPE_CALCULATOR);
+            }
+
+            return;
+        }
+
+        activeModuleTypes.add(module.type);
+    });
+
+    const activeModules = activeModuleTypes.size;
 
     function updateBlockKind(kind) {
         onUpdateBlock(block.client_key, (current) => {
@@ -4601,8 +4629,7 @@ function BlockPanel({
                     />
                     <ModuleSwitch
                         type="action"
-                        checked={hasRegularAction}
-                        disabled={hasCalculator}
+                        checked={hasAction}
                         onChange={(checked) => onToggleModule(block.client_key, 'action', checked)}
                     />
                     {FUTURE_MODULE_META.map((module) => (
@@ -4611,7 +4638,6 @@ function BlockPanel({
                                 key={module.type}
                                 type={MODULE_TYPE_CALCULATOR}
                                 checked={hasCalculator}
-                                disabled={hasRegularAction}
                                 onChange={(checked) => onToggleModule(block.client_key, MODULE_TYPE_CALCULATOR, checked)}
                             />
                         ) : (
@@ -5502,15 +5528,20 @@ function normalizeMessageVariableTextVariants(variants) {
 }
 
 function ActionFields({ action, blocks = [], blockKey, onUpdateModulePayload, dialogFieldKeys = [] }) {
-    const items = actionItems(action);
+    const items = regularActionItems(action);
+    const calculatorItems = calculatorActionItems(action);
     const aiSourceBlocks = aiBlocksForGeoSource(blocks, blockKey);
 
-    function updateItem(index, patch) {
+    function updateRegularItems(nextItems) {
         onUpdateModulePayload(blockKey, 'action', {
-            actions: items.map((item, itemIndex) => (
-                itemIndex === index ? { ...item, ...patch } : item
-            )),
+            actions: [...nextItems, ...calculatorItems],
         });
+    }
+
+    function updateItem(index, patch) {
+        updateRegularItems(items.map((item, itemIndex) => (
+            itemIndex === index ? { ...item, ...patch } : item
+        )));
     }
 
     function updateChangeDataItem(index, patch) {
@@ -5521,9 +5552,7 @@ function ActionFields({ action, blocks = [], blockKey, onUpdateModulePayload, di
     }
 
     function addItem() {
-        onUpdateModulePayload(blockKey, 'action', {
-            actions: [...items, defaultActionItem()],
-        });
+        updateRegularItems([...items, defaultActionItem()]);
     }
 
     function removeItem(index) {
@@ -5531,9 +5560,7 @@ function ActionFields({ action, blocks = [], blockKey, onUpdateModulePayload, di
             return;
         }
 
-        onUpdateModulePayload(blockKey, 'action', {
-            actions: items.filter((_, itemIndex) => itemIndex !== index),
-        });
+        updateRegularItems(items.filter((_, itemIndex) => itemIndex !== index));
     }
 
     return (
@@ -5759,12 +5786,16 @@ function ActionFields({ action, blocks = [], blockKey, onUpdateModulePayload, di
 
 function CalculatorFields({ action, blockKey, onUpdateModulePayload }) {
     const item = calculatorActionItem(action);
+    const regularItems = regularActionItems(action);
 
     return (
         <VariablesActionFields
             item={item}
             onChange={(patch) => onUpdateModulePayload(blockKey, 'action', {
-                actions: [normalizeActionItemForType({ ...item, ...patch, type: ACTION_TYPE_VARIABLES })],
+                actions: [
+                    ...regularItems,
+                    normalizeActionItemForType({ ...item, ...patch, type: ACTION_TYPE_VARIABLES }),
+                ],
             })}
         />
     );
@@ -7736,50 +7767,6 @@ function blockHasGeoCityAction(block) {
         .some((item) => isGeoCityResultActionType(item.type));
 }
 
-function blockHasGeoLimitEdge(block, edges) {
-    return edges.some((edge) => (
-        edge?.source?.client_key === block?.client_key
-        && edge?.source?.output_id === ACTION_GEO_CITY_LEGACY_LIMIT_OUTPUT.id
-    ));
-}
-
-function geoLimitOutputForBlock(block) {
-    const action = findModule(block?.settings_payload, 'action');
-
-    return {
-        ...ACTION_GEO_CITY_LEGACY_LIMIT_OUTPUT,
-        module_id: action?.id ?? 'mod_action',
-    };
-}
-
-function blockWithGeoLegacyLimitOutput(block, edges) {
-    if (! blockHasGeoCityAction(block)) {
-        return block;
-    }
-
-    const settings = normalizeSettings(block?.settings_payload);
-    const outputs = Array.isArray(settings.outputs) ? settings.outputs : [];
-    const regularOutputs = outputs.filter((output) => output?.id !== ACTION_GEO_CITY_LEGACY_LIMIT_OUTPUT.id);
-    const nextOutputs = blockHasGeoLimitEdge(block, edges)
-        ? [...regularOutputs, geoLimitOutputForBlock(block)]
-        : regularOutputs;
-
-    if (
-        outputs.length === nextOutputs.length
-        && outputs.every((output, index) => output?.id === nextOutputs[index]?.id)
-    ) {
-        return block;
-    }
-
-    return {
-        ...block,
-        settings_payload: {
-            ...settings,
-            outputs: nextOutputs,
-        },
-    };
-}
-
 function outputAnchor(block, outputId, side = 'right') {
     if (outputId === null) {
         return blockSideAnchor(block, 'right');
@@ -7979,20 +7966,60 @@ function findModule(settingsPayload, type) {
     return modulesFrom(settingsPayload).find((module) => module.type === type) ?? null;
 }
 
-function isCalculatorActionModule(actionModule) {
+function existingActionItems(actionModule) {
     if (! actionModule || actionModule.type !== 'action') {
-        return false;
+        return [];
     }
 
     const rawItems = Array.isArray(actionModule?.payload?.actions) ? actionModule.payload.actions : [];
 
     if (rawItems.length === 0) {
+        return [];
+    }
+
+    return actionItems(actionModule);
+}
+
+function regularActionItems(actionModule) {
+    return existingActionItems(actionModule).filter((item) => item.type !== ACTION_TYPE_VARIABLES);
+}
+
+function calculatorActionItems(actionModule) {
+    return existingActionItems(actionModule).filter((item) => item.type === ACTION_TYPE_VARIABLES);
+}
+
+function hasRegularAction(actionModule) {
+    return regularActionItems(actionModule).length > 0;
+}
+
+function hasCalculatorAction(actionModule) {
+    return calculatorActionItems(actionModule).length > 0;
+}
+
+function isCalculatorActionModule(actionModule) {
+    if (! actionModule || actionModule.type !== 'action') {
         return false;
     }
 
-    const items = actionItems(actionModule);
+    return hasCalculatorAction(actionModule) && ! hasRegularAction(actionModule);
+}
 
-    return items.length > 0 && items.every((item) => item.type === ACTION_TYPE_VARIABLES);
+function replaceActionModule(modules, actionModule, items) {
+    const nextActionModule = {
+        ...(actionModule ?? {}),
+        id: actionModule?.id ?? 'mod_action',
+        type: 'action',
+        enabled: true,
+        payload: {
+            ...(actionModule?.payload ?? {}),
+            actions: items,
+        },
+    };
+
+    return [
+        ...modules.filter((module) => module.type !== 'action'),
+        nextActionModule,
+    ];
 }
 
 function calculatorActionModulePayload() {
@@ -8153,7 +8180,18 @@ function buttonSummary(buttonsModule) {
 }
 
 function actionSummary(actionModule) {
-    const items = actionItems(actionModule, []);
+    return actionItemsSummary(existingActionItems(actionModule));
+}
+
+function regularActionSummary(actionModule) {
+    return actionItemsSummary(regularActionItems(actionModule));
+}
+
+function calculatorSummary(actionModule) {
+    return actionItemSummary(calculatorActionItem(actionModule)) || 'Нет действий';
+}
+
+function actionItemsSummary(items) {
     const summaries = items
         .map(actionItemSummary)
         .filter((summary) => summary !== '');

@@ -2209,6 +2209,18 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
     color: inherit;
 }
 
+.ac-v3-builder__module-switch.is-on.is-ai {
+    border-style: solid;
+    border-color: color-mix(in oklch, var(--edge-ai) 32%, var(--border));
+    background: color-mix(in oklch, var(--edge-ai) 13%, var(--surface));
+    color: color-mix(in oklch, var(--edge-ai) 74%, var(--text));
+    box-shadow: 0 1px 2px rgba(20, 20, 20, 0.04);
+}
+
+.ac-v3-builder__module-switch.is-on.is-ai b {
+    color: inherit;
+}
+
 .ac-v3-builder__module-switch.is-on.is-action {
     border-style: solid;
     border-color: color-mix(in oklch, var(--action) 32%, var(--border));

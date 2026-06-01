@@ -128,10 +128,6 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
     private const V3_GEO_CITY_OUTPUT_FAILED = 'geo_failed';
 
-    private const V3_GEO_CITY_OUTPUT_LIMIT_REACHED = 'geo_limit_reached';
-
-    private const V3_GEO_CITY_ATTEMPT_LIMIT = 3;
-
     private const V3_GEO_CITY_LEGACY_OUTPUTS_BY_STATUS = [
         ResolveGeoCityAction::STATUS_MANUAL_REQUIRED => self::V3_GEO_CITY_OUTPUT_MANUAL_REQUIRED,
         ResolveGeoCityAction::STATUS_AMBIGUOUS => self::V3_GEO_CITY_OUTPUT_AMBIGUOUS,
@@ -152,6 +148,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         'first_name',
         'last_name',
         'country',
+        'region',
         'city',
         'gender',
         'age_years',
@@ -163,6 +160,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         'first_name' => 'any_text',
         'last_name' => 'any_text',
         'country' => 'any_text',
+        'region' => 'any_text',
         'city' => 'any_text',
         'gender' => 'any_text',
         'age_years' => 'number',
@@ -173,6 +171,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         'first_name',
         'last_name',
         'country',
+        'region',
         'city',
         'gender',
         'gender_source',
@@ -188,6 +187,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         'first_name_source',
         'last_name',
         'country',
+        'region',
         'city',
         'gender',
         'age_years',
@@ -2267,7 +2267,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                     messageId: $message->id,
                 ),
             ),
-            'last_name', 'country', 'city' => $this->applyV3ContactStringCapture($lockedContact, $fieldKey, $value),
+            'last_name', 'country', 'region', 'city' => $this->applyV3ContactStringCapture($lockedContact, $fieldKey, $value),
             'gender' => $this->applyV3ContactEnumCapture($lockedContact, $fieldKey, $value, Contact::genderOptions()),
             'gender_source' => $this->applyV3ContactEnumCapture($lockedContact, $fieldKey, $value, Contact::genderSourceOptions()),
             'age_range' => $this->applyV3ContactEnumCapture($lockedContact, $fieldKey, $value, Contact::ageRangeOptions()),
@@ -2334,7 +2334,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                         messageId: $message->id,
                     ),
             ),
-            'last_name', 'country', 'city' => $this->applyV3ContactStringCapture($lockedContact, $fieldKey, $value),
+            'last_name', 'country', 'region', 'city' => $this->applyV3ContactStringCapture($lockedContact, $fieldKey, $value),
             'gender' => $this->applyV3ContactEnumCapture($lockedContact, $fieldKey, $value, Contact::genderOptions()),
             'age_range' => $this->applyV3ContactEnumCapture($lockedContact, $fieldKey, $value, Contact::ageRangeOptions()),
             'age_years' => $this->applyV3ContactAgeYearsCapture($lockedContact, $value),
@@ -2912,13 +2912,21 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             }
 
             if (($action['type'] ?? null) === 'variables') {
-                return $this->applyV3VariablesAction(
+                $result = $this->applyV3VariablesAction(
                     $message,
                     $action,
                     $statePayload,
                     filled($block['id'] ?? null) ? (string) $block['id'] : null,
                     $run,
                 );
+
+                $statePayload = $result['state_payload'] ?? $statePayload;
+
+                if (($result['stop_current_execution'] ?? false) === true || ($result['output_id'] ?? null) !== null) {
+                    return $result;
+                }
+
+                continue;
             }
 
             if (($action['type'] ?? null) !== 'write_contact_field') {
@@ -3490,29 +3498,6 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             ? $message->dialog
             : ($message->dialog_id !== null ? Dialog::query()->find($message->dialog_id) : null);
 
-        if ($attempts >= self::V3_GEO_CITY_ATTEMPT_LIMIT) {
-            Log::info('scenario.v3_geo_city_attempt_limit_reached', [
-                'scenario_code' => $this->code(),
-                'dialog_id' => $message->dialog_id,
-                'message_id' => $message->id,
-                'block_id' => $blockId,
-                'attempts' => $attempts,
-            ]);
-
-            $this->applyGeoResolutionToContactAction->createEvent(
-                $rootContact,
-                $this->v3GeoCityLimitResult($message, $action, $attempts),
-                $dialog,
-                $message,
-            );
-            $this->v3ClearGeoCityPending($statePayload, $blockId);
-
-            return [
-                'state_payload' => $statePayload,
-                'output_id' => self::V3_GEO_CITY_OUTPUT_LIMIT_REACHED,
-            ];
-        }
-
         if (($action['source'] ?? 'current_inbound_message') === 'ai_data') {
             return $this->applyV3ResolveGeoCityFromAiDataAction(
                 message: $message,
@@ -3747,31 +3732,6 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         return [
             'state_payload' => $statePayload,
             'output_id' => $outputId,
-        ];
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    private function v3GeoCityLimitResult(Message $message, array $action, int $attempts): array
-    {
-        $source = (string) ($action['source'] ?? 'current_inbound_message');
-        $text = $message->direction === Message::DIRECTION_INBOUND
-            && $message->sent_by_type === Message::SENT_BY_TYPE_CONTACT
-            ? trim((string) ($message->text ?? ''))
-            : null;
-
-        return [
-            'status' => ResolveGeoCityAction::STATUS_NOT_FOUND,
-            'source_text' => $text !== '' ? $text : null,
-            'payload' => [
-                'source' => $source,
-                'reason' => 'limit_reached',
-                'attempt_count' => $attempts,
-                'resolver_status' => 'not_started',
-                'resolver_ran' => false,
-                'final_output' => self::V3_GEO_CITY_OUTPUT_LIMIT_REACHED,
-            ],
         ];
     }
 
@@ -5025,6 +4985,7 @@ TEXT;
             'first_name_source',
             'last_name',
             'country',
+            'region',
             'city',
             'gender',
             'age_years',

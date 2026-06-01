@@ -3748,7 +3748,7 @@ class ScenarioBuilderV3StateTest extends TestCase
         $this->assertSame('Нужно уточнить', data_get($saved, 'builder.edges.0.condition_payload.label'));
     }
 
-    public function test_state_keeps_geo_limit_output_only_for_existing_legacy_edge(): void
+    public function test_state_hides_geo_limit_output_even_for_existing_legacy_edge(): void
     {
         $admin = $this->adminUser();
         $scenario = app(CreateScenarioAction::class)->handle([
@@ -3793,8 +3793,7 @@ class ScenarioBuilderV3StateTest extends TestCase
         $this->assertSame('geo_found', data_get($saved, 'builder.blocks.0.settings_payload.outputs.0.id'));
         $this->assertSame('geo_manual_required', data_get($saved, 'builder.blocks.0.settings_payload.outputs.1.id'));
         $this->assertSame('geo_not_found', data_get($saved, 'builder.blocks.0.settings_payload.outputs.2.id'));
-        $this->assertSame('geo_limit_reached', data_get($saved, 'builder.blocks.0.settings_payload.outputs.3.id'));
-        $this->assertTrue((bool) data_get($saved, 'builder.blocks.0.settings_payload.outputs.3.legacy'));
+        $this->assertCount(3, data_get($saved, 'builder.blocks.0.settings_payload.outputs'));
         $this->assertSame('geo_limit_reached', data_get($saved, 'builder.edges.0.source.output_id'));
 
         $savedWithoutLimitEdge = $this->actingAs($admin)

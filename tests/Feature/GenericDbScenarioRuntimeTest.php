@@ -1070,12 +1070,13 @@ class GenericDbScenarioRuntimeTest extends TestCase
         [$contact, $identity, $dialog] = $this->createDialogContext($channel, [
             'gender' => 'male',
             'city' => 'Москва',
+            'region' => 'Москва',
         ]);
         $schema = $this->v3AiNameRuntimeSchema($channel->id);
         data_set(
             $schema,
             'builder_v3_runtime.blocks.ai.ai_analysis.prompt',
-            "Найди имя.\nПол: {{contact.gender|unknown}}\nГород: {{contact.city|none}}\nСообщения:\n{{input.client_messages}}\nПрошлое имя: {{variables.previous_name|empty}}",
+            "Найди имя.\nПол: {{contact.gender|unknown}}\nГород: {{contact.city|none}}\nРегион: {{contact.region|none}}\nСообщения:\n{{input.client_messages}}\nПрошлое имя: {{variables.previous_name|empty}}",
         );
         $scenario = $this->createPublishedScenario('v3_ai_prompt_variables', $schema);
 
@@ -1118,6 +1119,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
 
         $this->assertStringContainsString('Пол: male', $captured['system']);
         $this->assertStringContainsString('Город: Москва', $captured['system']);
+        $this->assertStringContainsString('Регион: Москва', $captured['system']);
         $this->assertStringContainsString("Сообщения:\nКоля", $captured['system']);
         $this->assertStringContainsString('Прошлое имя: empty', $captured['system']);
         $this->assertStringContainsString('ID 1: Имя найдено', $captured['system']);
@@ -1337,6 +1339,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $dialog->refresh();
 
         $this->assertSame('female', $contact->gender);
+        $this->assertSame('Московская область', $contact->region);
         $this->assertSame('female', data_get($dialog->fields_payload, 'selected_gender'));
     }
 
@@ -1861,7 +1864,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame('missing_current_inbound_message', data_get($event->payload, 'reason'));
     }
 
-    public function test_v3_geo_city_action_uses_limit_without_running_resolver(): void
+    public function test_v3_geo_city_action_ignores_legacy_internal_limit_and_runs_resolver(): void
     {
         Http::fake([
             'https://api.telegram.org/*' => Http::sequence()
@@ -1918,13 +1921,15 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $run->refresh();
         $contact->refresh();
 
-        $this->assertSame('geo_limit_reached_done', $run->current_step);
-        $this->assertSame(3, data_get($run->state_payload, 'v3.geo_resolution_attempts.resolve_geo'));
-        $this->assertNull($contact->country);
+        $this->assertSame('geo_found_done', $run->current_step);
+        $this->assertNull(data_get($run->state_payload, 'v3.geo_resolution_attempts.resolve_geo'));
+        $this->assertSame('Россия', $contact->country);
+        $this->assertSame('Москва', $contact->region);
+        $this->assertSame('Москва', $contact->city);
         $event = GeoResolutionEvent::query()->where('contact_id', $contact->id)->firstOrFail();
-        $this->assertSame('limit_reached', data_get($event->payload, 'reason'));
-        $this->assertSame('not_started', data_get($event->payload, 'resolver_status'));
-        $this->assertSame('geo_limit_reached', data_get($event->payload, 'final_output'));
+        $this->assertSame(ResolveGeoCityAction::STATUS_MATCHED_CITY, $event->status);
+        $this->assertSame('matched_city', data_get($event->payload, 'resolver_status'));
+        $this->assertSame('geo_found', data_get($event->payload, 'final_output'));
     }
 
     public function test_v3_geo_city_action_writes_contact_from_ai_analysis_data(): void
@@ -2207,7 +2212,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertFalse(data_get($event->payload, 'resolver_ran'));
     }
 
-    public function test_v3_geo_city_action_checks_limit_before_reading_ai_data(): void
+    public function test_v3_geo_city_action_uses_ai_data_even_when_legacy_internal_limit_exists(): void
     {
         Http::fake([
             'https://api.telegram.org/*' => Http::sequence()
@@ -2270,11 +2275,18 @@ class GenericDbScenarioRuntimeTest extends TestCase
 
         $run->refresh();
 
-        $this->assertSame('geo_limit_reached_done', $run->current_step);
-        $this->assertSame(3, data_get($run->state_payload, 'v3.geo_resolution_attempts.resolve_geo'));
+        $contact->refresh();
+
+        $this->assertSame('geo_found_done', $run->current_step);
+        $this->assertNull(data_get($run->state_payload, 'v3.geo_resolution_attempts.resolve_geo'));
+        $this->assertSame('Россия', $contact->country);
+        $this->assertSame('Московская область', $contact->region);
+        $this->assertSame('Химки', $contact->city);
         $event = GeoResolutionEvent::query()->where('contact_id', $contact->id)->firstOrFail();
-        $this->assertSame('limit_reached', data_get($event->payload, 'reason'));
-        $this->assertSame('not_started', data_get($event->payload, 'resolver_status'));
+        $this->assertSame(ResolveGeoCityAction::STATUS_MATCHED_CITY, $event->status);
+        $this->assertSame('ai_data', data_get($event->payload, 'source'));
+        $this->assertSame('matched_city', data_get($event->payload, 'resolver_status'));
+        $this->assertSame('geo_found', data_get($event->payload, 'final_output'));
     }
 
     public function test_v3_unsupported_legacy_action_uses_failed_output(): void
@@ -9666,6 +9678,15 @@ class GenericDbScenarioRuntimeTest extends TestCase
                             [
                                 'type' => 'write_contact_field',
                                 'source_type' => 'static_value',
+                                'static_value' => 'Московская область',
+                                'source_block_id' => '',
+                                'source_field_key' => '',
+                                'target_scope' => 'contact',
+                                'target_field' => 'region',
+                            ],
+                            [
+                                'type' => 'write_contact_field',
+                                'source_type' => 'static_value',
                                 'static_value' => 'female',
                                 'source_block_id' => '',
                                 'source_field_key' => '',
@@ -9849,13 +9870,11 @@ class GenericDbScenarioRuntimeTest extends TestCase
                 $foundEdge,
                 $manualRequiredEdge,
                 $notFoundEdge,
-                $limitEdge,
             ];
         $doneBlockLabels = [
             'geo_found_done' => 'Город найден',
             'geo_manual_required_done' => 'Нужно уточнить город',
             'geo_not_found_done' => 'Город не найден',
-            'geo_limit_reached_done' => 'Лимит попыток',
         ];
 
         if ($legacyGeoOutputs) {
@@ -9864,6 +9883,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
                 'geo_below_threshold_done' => 'Нужна проверка города',
                 'geo_inactive_done' => 'Вариант отключён',
                 'geo_failed_done' => 'Ошибка распознавания',
+                'geo_limit_reached_done' => 'Лимит попыток',
             ];
         }
 
