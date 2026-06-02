@@ -13,6 +13,8 @@ class AiTask extends Model
 
     public const KEY_ADDRESS_RESOLUTION = 'address_resolution';
 
+    public const KEY_SCENARIO_V3_AI_ANALYSIS = 'scenario_v3_ai_analysis';
+
     public const KEY_OTHER = 'other';
 
     /**

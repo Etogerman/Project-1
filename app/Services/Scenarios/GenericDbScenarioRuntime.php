@@ -2771,7 +2771,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         Message $message,
         array $runtime,
         array $block,
-        array $statePayload,
+        array &$statePayload,
         int $remainingTransitions,
         ?ScenarioRun $run,
         bool $allowDelayedOutputs = true,
@@ -2798,6 +2798,8 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             'first_name_resolution_correlation_id' => is_string($result['first_name_resolution_correlation_id'] ?? null)
                 ? $result['first_name_resolution_correlation_id']
                 : null,
+            'error' => (bool) ($result['error'] ?? false),
+            'error_reason' => filled($result['error_reason'] ?? null) ? (string) $result['error_reason'] : null,
         ]);
 
         $edges = $this->v3AiAnalysisEdges($analysis, $outputId);
@@ -4718,7 +4720,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
     /**
      * @param  array<string, mixed>  $analysis
-     * @return array{output_id: string, label: string, delay_seconds: int, data: array<string, mixed>}
+     * @return array{output_id: string, label: string, delay_seconds: int, data: array<string, mixed>, ai_request_id?: ?int, first_name_resolution_event_id?: ?int, first_name_resolution_correlation_id?: ?string, error?: bool, error_reason?: ?string}
      */
     private function v3AiAnalysisResult(Message $message, array $analysis, array $statePayload, string $blockId): array
     {
@@ -4726,25 +4728,48 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         $extractFields = $this->v3AiAnalysisExtractFields($analysis);
 
         if ($outputs === []) {
-            return ['output_id' => '', 'label' => '', 'delay_seconds' => 0, 'data' => []];
+            return [
+                'output_id' => '',
+                'label' => '',
+                'delay_seconds' => 0,
+                'data' => [],
+                'error' => true,
+                'error_reason' => 'missing_outputs',
+            ];
         }
+
+        $tracksNameResolution = $this->v3AiAnalysisTracksNameResolution($message, $extractFields);
+        $aiResult = null;
+        $aiRequestId = null;
 
         try {
             $systemPrompt = $this->v3AiAnalysisSystemPrompt($message, $analysis, $outputs, $extractFields, $statePayload, $blockId);
             $userPrompt = $this->v3AiAnalysisUserPrompt($message, $analysis, $statePayload, $blockId);
-            $aiResult = $this->v3AiAnalysisTracksNameResolution($message, $extractFields)
-                ? $this->aiStructuredGenerationService->generateStructuredWithAnalytics(
+            $aiContext = $this->v3AiAnalysisContext($message, $blockId);
+
+            if ($aiContext instanceof AiGenerationContext) {
+                $aiResult = $this->aiStructuredGenerationService->generateStructuredWithAnalytics(
                     $systemPrompt,
                     $userPrompt,
                     $this->v3AiAnalysisSchema($outputs, $extractFields),
-                    $this->v3NameResolutionAiContext($message, $blockId),
-                )
-                : null;
-            $response = $aiResult?->data ?? $this->aiStructuredGenerationService->generateStructured(
-                $systemPrompt,
-                $userPrompt,
-                $this->v3AiAnalysisSchema($outputs, $extractFields),
-            );
+                    $aiContext,
+                );
+                $aiRequestId = $aiResult->aiRequestId;
+                $response = $aiResult->data;
+            } else {
+                Log::warning('scenario.v3_ai_analysis_missing_contact', [
+                    'scenario_code' => $this->code(),
+                    'dialog_id' => $message->dialog_id,
+                    'message_id' => $message->id,
+                    'block_id' => $blockId,
+                ]);
+
+                $response = $this->aiStructuredGenerationService->generateStructured(
+                    $systemPrompt,
+                    $userPrompt,
+                    $this->v3AiAnalysisSchema($outputs, $extractFields),
+                );
+            }
         } catch (Throwable $throwable) {
             Log::warning('scenario.v3_ai_analysis_failed', [
                 'scenario_code' => $this->code(),
@@ -4755,10 +4780,22 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             ]);
 
             if ($throwable instanceof AiStructuredGenerationException) {
-                $this->recordV3AiNameResolutionError($message, $blockId, $throwable->aiRequestId);
+                $aiRequestId = $throwable->aiRequestId;
             }
 
-            return ['output_id' => '', 'label' => '', 'delay_seconds' => 0, 'data' => []];
+            if ($tracksNameResolution && $throwable instanceof AiStructuredGenerationException) {
+                $this->recordV3AiNameResolutionError($message, $blockId, $aiRequestId);
+            }
+
+            return [
+                'output_id' => '',
+                'label' => '',
+                'delay_seconds' => 0,
+                'data' => [],
+                'ai_request_id' => $aiRequestId,
+                'error' => true,
+                'error_reason' => 'ai_failed',
+            ];
         }
 
         $outputId = trim((string) ($response['output_id'] ?? ''));
@@ -4774,19 +4811,27 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 'output_id' => $outputId,
             ]);
 
-            return ['output_id' => '', 'label' => '', 'delay_seconds' => 0, 'data' => []];
+            return [
+                'output_id' => '',
+                'label' => '',
+                'delay_seconds' => 0,
+                'data' => [],
+                'ai_request_id' => $aiRequestId,
+                'error' => true,
+                'error_reason' => 'unknown_output',
+            ];
         }
 
         $data = $this->v3AiAnalysisData($response['data'] ?? [], $extractFields);
         $resolutionEvent = null;
 
-        if (isset($aiResult) && $aiResult !== null) {
+        if ($tracksNameResolution && $aiResult !== null) {
             $resolutionEvent = $this->recordV3AiNameResolutionResult(
                 message: $message,
                 blockId: $blockId,
                 outputId: (string) $output['id'],
                 data: $data,
-                aiRequestId: $aiResult->aiRequestId,
+                aiRequestId: $aiRequestId,
             );
         }
 
@@ -4795,9 +4840,11 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             'label' => (string) $output['label'],
             'delay_seconds' => max(0, min(300, (int) ($output['delay_seconds'] ?? 0))),
             'data' => $data,
-            'ai_request_id' => isset($aiResult) && $aiResult !== null ? $aiResult->aiRequestId : null,
+            'ai_request_id' => $aiRequestId,
             'first_name_resolution_event_id' => $resolutionEvent?->id,
             'first_name_resolution_correlation_id' => $resolutionEvent?->correlation_id,
+            'error' => false,
+            'error_reason' => null,
         ];
     }
 
@@ -4911,20 +4958,27 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             && collect($extractFields)->contains(fn (array $field): bool => $field['key'] === 'first_name');
     }
 
-    private function v3NameResolutionAiContext(Message $message, string $blockId): AiGenerationContext
+    private function v3AiAnalysisContext(Message $message, string $blockId): ?AiGenerationContext
     {
         $contact = $message->contact instanceof Contact
             ? $this->resolveRootContactAction->handle($message->contact)
             : null;
+        $contactId = is_numeric($contact?->id ?? $message->contact_id)
+            ? (int) ($contact?->id ?? $message->contact_id)
+            : 0;
+
+        if ($contactId <= 0) {
+            return null;
+        }
 
         return new AiGenerationContext(
-            taskKey: AiTask::KEY_NAME_RESOLUTION,
-            contactId: (int) ($contact?->id ?? $message->contact_id),
+            taskKey: AiTask::KEY_SCENARIO_V3_AI_ANALYSIS,
+            contactId: $contactId,
             dialogId: $message->dialog_id,
             channelId: $message->channel_id,
             scenarioId: $this->scenario->id,
             scenarioBlockId: $blockId,
-            promptKey: 'scenario_v3_ai_analysis:first_name',
+            promptKey: 'scenario_v3_ai_analysis:'.$blockId,
         );
     }
 

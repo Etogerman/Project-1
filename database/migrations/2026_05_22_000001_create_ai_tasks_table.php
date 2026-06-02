@@ -13,6 +13,7 @@ return new class extends Migration
     private const STARTER_TASKS = [
         ['key' => 'name_resolution', 'name' => 'Распознавание имени'],
         ['key' => 'address_resolution', 'name' => 'Распознавание адреса'],
+        ['key' => 'scenario_v3_ai_analysis', 'name' => 'V3 ИИ-анализ'],
         ['key' => 'other', 'name' => 'Другое'],
     ];
 

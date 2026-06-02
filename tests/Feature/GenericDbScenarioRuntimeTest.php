@@ -14,6 +14,8 @@ use App\Jobs\ProcessScenarioStartJob;
 use App\Jobs\ProcessScenarioV3AiAnalysisJob;
 use App\Jobs\ProcessScenarioV3OutboundMessageJob;
 use App\Jobs\ProcessScenarioV3ScheduledTransitionJob;
+use App\Models\AiRequest;
+use App\Models\AiTask;
 use App\Models\AutoReplyRule;
 use App\Models\Channel;
 use App\Models\Contact;
@@ -33,6 +35,7 @@ use App\Models\ScenarioV3OutboundMessage;
 use App\Models\ScenarioV3ScheduledTransition;
 use App\Models\ScenarioVersion;
 use App\Models\Tag;
+use App\Services\AI\AiProviderRequestException;
 use App\Services\AI\GeminiApiService;
 use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
 use App\Services\Bots\DispatchStoredInboundBotMessageAction;
@@ -1129,6 +1132,343 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $contact->refresh();
         $this->assertSame('Николай', $contact->first_name);
         $this->assertSame(Contact::FIRST_NAME_RESOLUTION_METHOD_AI_ANALYSIS, $contact->first_name_resolution_method);
+    }
+
+    public function test_v3_ai_analysis_logs_non_name_request_to_ai_requests(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9361]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9362]]),
+        ]);
+
+        $gemini = Mockery::mock(GeminiApiService::class);
+        $gemini
+            ->shouldReceive('generateStructuredWithMetadata')
+            ->once()
+            ->andReturn(new AiProviderStructuredResult(
+                provider: 'gemini',
+                model: 'test-gemini',
+                parsedPayload: ['output_id' => '1', 'data' => ['geo_city' => 'Москва']],
+                requestBodyRaw: '{"request":true}',
+                responseBodyRaw: '{"output_id":"1"}',
+                httpStatus: 200,
+                inputTokens: 10,
+                outputTokens: 5,
+                totalTokens: 15,
+            ));
+        $this->app->instance(GeminiApiService::class, $gemini);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $schema = $this->v3AiNameRuntimeSchema($channel->id);
+        data_set($schema, 'builder_v3_runtime.blocks.ask_name.message.text', 'В каком городе живете?');
+        data_set($schema, 'builder_v3_runtime.blocks.ai.title', 'ИИ анализирует город');
+        data_set($schema, 'builder_v3_runtime.blocks.ai.ai_analysis.prompt', 'Определи город клиента.');
+        data_set($schema, 'builder_v3_runtime.blocks.ai.ai_analysis.extract_fields', [[
+            'key' => 'geo_city',
+            'label' => 'Город',
+            'type' => 'text',
+        ]]);
+        data_set($schema, 'builder_v3_runtime.blocks.ai.ai_analysis.outputs.0.label', 'Город найден');
+        data_set($schema, 'builder_v3_runtime.blocks.ai.ai_analysis.outputs.1.label', 'Город не найден');
+        data_set($schema, 'builder_v3_runtime.blocks.accepted.actions', []);
+        $scenario = $this->createPublishedScenario('v3_ai_geo_city_analytics', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $answer = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'Москва',
+        ]);
+
+        (new ProcessScenarioInboundJob($answer->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $request = AiRequest::query()->sole();
+        $run->refresh();
+
+        $this->assertSame(AiTask::KEY_SCENARIO_V3_AI_ANALYSIS, $request->task_key);
+        $this->assertSame(AiRequest::STATUS_SUCCESS, $request->status);
+        $this->assertSame($contact->id, $request->contact_id);
+        $this->assertSame($dialog->id, $request->dialog_id);
+        $this->assertSame($channel->id, $request->channel_id);
+        $this->assertSame($scenario->id, $request->scenario_id);
+        $this->assertSame('ai', $request->scenario_block_id);
+        $this->assertSame('scenario_v3_ai_analysis:ai', $request->prompt_key);
+        $this->assertSame($request->id, data_get($run->state_payload, 'v3.ai_analysis.ai.ai_request_id'));
+        $this->assertSame('Москва', data_get($run->state_payload, 'v3.ai_analysis.ai.data.geo_city'));
+        $this->assertFalse(data_get($run->state_payload, 'v3.ai_analysis.ai.error'));
+        $this->assertNull(data_get($run->state_payload, 'v3.ai_analysis.ai.error_reason'));
+    }
+
+    public function test_v3_ai_analysis_first_name_uses_universal_ai_request_and_name_event(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9363]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9364]]),
+        ]);
+
+        $gemini = Mockery::mock(GeminiApiService::class);
+        $gemini
+            ->shouldReceive('generateStructuredWithMetadata')
+            ->once()
+            ->andReturn(new AiProviderStructuredResult(
+                provider: 'gemini',
+                model: 'test-gemini',
+                parsedPayload: ['output_id' => '1', 'data' => ['first_name' => 'Николай']],
+                requestBodyRaw: '{}',
+                responseBodyRaw: '{}',
+                httpStatus: 200,
+                inputTokens: 10,
+                outputTokens: 5,
+                totalTokens: 15,
+            ));
+        $this->app->instance(GeminiApiService::class, $gemini);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('v3_ai_first_name_universal_analytics', $this->v3AiNameRuntimeSchema($channel->id));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $answer = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'Николай',
+        ]);
+
+        (new ProcessScenarioInboundJob($answer->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $request = AiRequest::query()->sole();
+        $run->refresh();
+
+        $this->assertSame(AiTask::KEY_SCENARIO_V3_AI_ANALYSIS, $request->task_key);
+        $this->assertSame('scenario_v3_ai_analysis:ai', $request->prompt_key);
+        $this->assertSame('ai', $request->scenario_block_id);
+        $this->assertSame($request->id, data_get($run->state_payload, 'v3.ai_analysis.ai.ai_request_id'));
+        $this->assertDatabaseHas('contact_first_name_resolution_events', [
+            'contact_id' => $contact->id,
+            'dialog_id' => $dialog->id,
+            'scenario_id' => $scenario->id,
+            'scenario_block_id' => 'ai',
+            'ai_request_id' => $request->id,
+        ]);
+    }
+
+    public function test_v3_ai_analysis_unknown_output_keeps_successful_ai_request_and_state_warning(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9365]]),
+        ]);
+
+        $gemini = Mockery::mock(GeminiApiService::class);
+        $gemini
+            ->shouldReceive('generateStructuredWithMetadata')
+            ->once()
+            ->andReturn(new AiProviderStructuredResult(
+                provider: 'gemini',
+                model: 'test-gemini',
+                parsedPayload: ['output_id' => 'unexpected', 'data' => ['geo_city' => 'Москва']],
+                requestBodyRaw: '{}',
+                responseBodyRaw: '{}',
+                httpStatus: 200,
+                inputTokens: 10,
+                outputTokens: 5,
+                totalTokens: 15,
+            ));
+        $this->app->instance(GeminiApiService::class, $gemini);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $schema = $this->v3AiNameRuntimeSchema($channel->id);
+        data_set($schema, 'builder_v3_runtime.blocks.ai.ai_analysis.extract_fields', [[
+            'key' => 'geo_city',
+            'label' => 'Город',
+            'type' => 'text',
+        ]]);
+        data_set($schema, 'builder_v3_runtime.blocks.accepted.actions', []);
+        $scenario = $this->createPublishedScenario('v3_ai_unknown_output_analytics', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $answer = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'Москва',
+        ]);
+
+        (new ProcessScenarioInboundJob($answer->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $request = AiRequest::query()->sole();
+        $run->refresh();
+
+        $this->assertSame(AiRequest::STATUS_SUCCESS, $request->status);
+        $this->assertSame($request->id, data_get($run->state_payload, 'v3.ai_analysis.ai.ai_request_id'));
+        $this->assertTrue(data_get($run->state_payload, 'v3.ai_analysis.ai.error'));
+        $this->assertSame('unknown_output', data_get($run->state_payload, 'v3.ai_analysis.ai.error_reason'));
+        $this->assertSame([], data_get($run->state_payload, 'v3.ai_analysis.ai.data'));
+    }
+
+    public function test_v3_ai_analysis_provider_error_keeps_error_request_and_state_error(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9366]]),
+        ]);
+
+        $gemini = Mockery::mock(GeminiApiService::class);
+        $gemini
+            ->shouldReceive('generateStructuredWithMetadata')
+            ->once()
+            ->andThrow(new AiProviderRequestException(
+                message: 'quota exceeded',
+                provider: 'gemini',
+                model: 'test-gemini',
+                requestBodyRaw: '{}',
+                responseBodyRaw: '{"error":"quota"}',
+                httpStatus: 429,
+            ));
+        $this->app->instance(GeminiApiService::class, $gemini);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $schema = $this->v3AiNameRuntimeSchema($channel->id);
+        data_set($schema, 'builder_v3_runtime.blocks.ai.ai_analysis.extract_fields', [[
+            'key' => 'geo_city',
+            'label' => 'Город',
+            'type' => 'text',
+        ]]);
+        $scenario = $this->createPublishedScenario('v3_ai_provider_error_analytics', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $answer = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'Москва',
+        ]);
+
+        (new ProcessScenarioInboundJob($answer->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $request = AiRequest::query()->with('attempts')->sole();
+        $run->refresh();
+
+        $this->assertSame(AiRequest::STATUS_ERROR, $request->status);
+        $this->assertSame($request->id, data_get($run->state_payload, 'v3.ai_analysis.ai.ai_request_id'));
+        $this->assertTrue(data_get($run->state_payload, 'v3.ai_analysis.ai.error'));
+        $this->assertSame('ai_failed', data_get($run->state_payload, 'v3.ai_analysis.ai.error_reason'));
+        $this->assertCount(1, $request->attempts);
     }
 
     public function test_v3_ai_analysis_normalizes_first_name_with_dictionary_before_contact_write(): void
