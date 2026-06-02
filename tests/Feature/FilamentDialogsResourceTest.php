@@ -1423,6 +1423,45 @@ class FilamentDialogsResourceTest extends TestCase
         $this->assertFalse($user->canReplyInDialogs());
     }
 
+    public function test_dialog_delete_policy_uses_hidden_dialogs_delete_permission(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+        $dialog = $this->createDialogWithMessages();
+
+        $this->assertTrue(Gate::forUser($admin)->allows('delete', $dialog));
+        $this->assertTrue(Gate::forUser($admin)->allows('deleteAny', Dialog::class));
+        $this->assertFalse(Gate::forUser($employee)->allows('delete', $dialog));
+        $this->assertFalse(Gate::forUser($employee)->allows('deleteAny', Dialog::class));
+    }
+
+    public function test_admin_can_bulk_delete_selected_dialogs_from_table(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $firstDialog = $this->createDialogWithMessages();
+        $secondDialog = $this->createDialogWithMessages();
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->assertTableBulkActionVisible('delete')
+            ->assertTableBulkActionHasLabel('delete', 'Удалить выбранные')
+            ->callTableBulkAction('delete', [$firstDialog, $secondDialog])
+            ->assertHasNoTableBulkActionErrors();
+
+        $this->assertModelMissing($firstDialog);
+        $this->assertModelMissing($secondDialog);
+    }
+
     public function test_dialogs_inbox_defaults_to_requires_manual_reply_filter(): void
     {
         $admin = User::factory()->create([

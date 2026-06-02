@@ -202,6 +202,8 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
     private ?string $matchedV3RuntimeBlockId = null;
 
+    private int $v3SimulateStartDepth = 0;
+
     private int $v3ScenarioMessageDeferralDepth = 0;
 
     /**
@@ -449,6 +451,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         $this->matchedBuilderRuntimeBlockId = null;
         $this->matchedV3StartMessageId = null;
         $this->matchedV3RuntimeBlockId = null;
+        $this->v3SimulateStartDepth = 0;
 
         if (
             ! in_array($message->channel?->platform, [Channel::PLATFORM_TELEGRAM, Channel::PLATFORM_MAX], true)
@@ -2511,7 +2514,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         $waitingButtonRows = $this->v3WaitingButtonRows($block, $message->channel);
         $buttonPlacement = $this->v3ButtonPlacement($block);
 
-        $actionResult = $this->applyV3ActionModule($message, $block, $statePayload, $run);
+        $actionResult = $this->applyV3ActionModule($message, $runtime, $block, $statePayload, $run);
 
         if ($actionResult === null) {
             $activeBlockId = $isNonStateBlock && $previousBlockId !== null ? $previousBlockId : $blockId;
@@ -2520,6 +2523,27 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         }
 
         $statePayload = $actionResult['state_payload'];
+
+        if (filled($actionResult['reroute_block_id'] ?? null)) {
+            $rerouteMessage = ($actionResult['reroute_message'] ?? null) instanceof Message
+                ? $actionResult['reroute_message']
+                : $message;
+
+            $this->v3SimulateStartDepth++;
+
+            try {
+                return $this->advanceV3FromBlock(
+                    $rerouteMessage,
+                    $runtime,
+                    (string) $actionResult['reroute_block_id'],
+                    $statePayload,
+                    $remainingTransitions - 1,
+                    $run,
+                );
+            } finally {
+                $this->v3SimulateStartDepth = max(0, $this->v3SimulateStartDepth - 1);
+            }
+        }
 
         if (($actionResult['stop_current_execution'] ?? false) === true) {
             $activeBlockId = $isNonStateBlock && $previousBlockId !== null ? $previousBlockId : $blockId;
@@ -2861,11 +2885,12 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
     }
 
     /**
+     * @param  array<string, mixed>  $runtime
      * @param  array<string, mixed>  $block
      * @param  array<string, mixed>  $statePayload
-     * @return array{state_payload: array<string, mixed>, output_id: ?string, stop_current_execution?: bool}|null
+     * @return array{state_payload: array<string, mixed>, output_id: ?string, stop_current_execution?: bool, reroute_block_id?: string, reroute_message?: Message}|null
      */
-    private function applyV3ActionModule(Message $message, array $block, array $statePayload, ?ScenarioRun $run): ?array
+    private function applyV3ActionModule(Message $message, array $runtime, array $block, array $statePayload, ?ScenarioRun $run): ?array
     {
         $actions = is_array($block['actions'] ?? null) ? $block['actions'] : [];
 
@@ -2929,6 +2954,25 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 continue;
             }
 
+            if (($action['type'] ?? null) === 'simulate_start_parameter') {
+                $result = $this->applyV3SimulateStartParameterAction(
+                    $message,
+                    $runtime,
+                    $action,
+                    $block,
+                    $statePayload,
+                    $run,
+                );
+
+                if (filled($result['reroute_block_id'] ?? null)) {
+                    return $result;
+                }
+
+                $statePayload = $result['state_payload'] ?? $statePayload;
+
+                continue;
+            }
+
             if (($action['type'] ?? null) !== 'write_contact_field') {
                 Log::warning('scenario.v3_unsupported_action_skipped', [
                     'scenario_code' => $this->code(),
@@ -2949,6 +2993,102 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         }
 
         return ['state_payload' => $statePayload, 'output_id' => null];
+    }
+
+    /**
+     * @param  array<string, mixed>  $runtime
+     * @param  array<string, mixed>  $action
+     * @param  array<string, mixed>  $block
+     * @param  array<string, mixed>  $statePayload
+     * @return array{state_payload: array<string, mixed>, output_id: ?string, reroute_block_id?: string, reroute_message?: Message}
+     */
+    private function applyV3SimulateStartParameterAction(
+        Message $message,
+        array $runtime,
+        array $action,
+        array $block,
+        array $statePayload,
+        ?ScenarioRun $run,
+    ): array {
+        $blockId = filled($block['id'] ?? null) ? (string) $block['id'] : null;
+        $sourceScope = (string) ($action['source_scope'] ?? 'dialog');
+        $sourceFieldKey = trim((string) ($action['source_field_key'] ?? ''));
+
+        if ($sourceScope !== 'dialog' || ! $this->validV3DialogVariableKey($sourceFieldKey)) {
+            $this->logV3SimulateStartParameter($message, $run, $blockId, 'invalid_action', [
+                'source_scope' => $sourceScope,
+                'source_field_key' => $sourceFieldKey,
+            ]);
+
+            return ['state_payload' => $statePayload, 'output_id' => null];
+        }
+
+        if ($this->v3SimulateStartDepth > 0) {
+            $this->logV3SimulateStartParameter($message, $run, $blockId, 'loop_guard', [
+                'source_field_key' => $sourceFieldKey,
+            ]);
+
+            return ['state_payload' => $statePayload, 'output_id' => null];
+        }
+
+        $parameter = $this->v3DialogFieldStringValue($message, $sourceFieldKey);
+
+        if ($parameter === '') {
+            $this->logV3SimulateStartParameter($message, $run, $blockId, 'empty_parameter', [
+                'source_field_key' => $sourceFieldKey,
+            ]);
+
+            return ['state_payload' => $statePayload, 'output_id' => null];
+        }
+
+        if (mb_strlen($parameter) > 255) {
+            $this->logV3SimulateStartParameter($message, $run, $blockId, 'parameter_too_long', [
+                'source_field_key' => $sourceFieldKey,
+                'parameter_length' => mb_strlen($parameter),
+            ]);
+
+            return ['state_payload' => $statePayload, 'output_id' => null];
+        }
+
+        $startMessage = $this->v3VirtualStartParameterMessage($message, $parameter);
+        $targetBlockId = $this->matchingV3EntrypointBlockId($startMessage, $runtime);
+
+        if ($targetBlockId === null) {
+            $this->logV3SimulateStartParameter($message, $run, $blockId, 'start_block_not_found', [
+                'source_field_key' => $sourceFieldKey,
+                'parameter' => $parameter,
+            ]);
+
+            return ['state_payload' => $statePayload, 'output_id' => null];
+        }
+
+        if ($blockId !== null && $targetBlockId === $blockId) {
+            $this->logV3SimulateStartParameter($message, $run, $blockId, 'same_block_noop', [
+                'source_field_key' => $sourceFieldKey,
+                'parameter' => $parameter,
+                'target_block_id' => $targetBlockId,
+            ]);
+
+            return ['state_payload' => $statePayload, 'output_id' => null];
+        }
+
+        $this->logV3SimulateStartParameter($message, $run, $blockId, 'start_block_matched', [
+            'source_field_key' => $sourceFieldKey,
+            'parameter' => $parameter,
+            'target_block_id' => $targetBlockId,
+        ]);
+        $this->logV3SimulateStartParameter($message, $run, $blockId, 'rerouted', [
+            'source_field_key' => $sourceFieldKey,
+            'parameter' => $parameter,
+            'target_block_id' => $targetBlockId,
+        ]);
+
+        return [
+            'state_payload' => $statePayload,
+            'output_id' => null,
+            'reroute_block_id' => $targetBlockId,
+            'reroute_message' => $startMessage,
+        ];
     }
 
     /**
@@ -4036,7 +4176,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                         return false;
                     }
 
-                    $failure = $this->applyV3DialogVariableOperation($fields, $operation, $index);
+                    $failure = $this->applyV3DialogVariableOperation($message, $fields, $operation, $index);
 
                     if ($failure !== null) {
                         return false;
@@ -4116,7 +4256,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
      * @param  array<string, mixed>  $operation
      * @return array<string, mixed>|null
      */
-    private function applyV3DialogVariableOperation(array &$fields, array $operation, int $index): ?array
+    private function applyV3DialogVariableOperation(Message $message, array &$fields, array $operation, int $index): ?array
     {
         $type = (string) ($operation['operation'] ?? '');
         $fieldKey = trim((string) ($operation['field_key'] ?? ''));
@@ -4167,7 +4307,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         }
 
         if ($type === 'set') {
-            $value = $operation['value'] ?? '';
+            $value = $this->v3DialogVariableSetValue($message, $operation);
 
             if (! is_scalar($value) && $value !== null) {
                 return [
@@ -4195,6 +4335,93 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             'operation_index' => $index,
             'field_key' => $fieldKey,
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $operation
+     */
+    private function v3DialogVariableSetValue(Message $message, array $operation): mixed
+    {
+        $source = (string) ($operation['value_source'] ?? 'static_value');
+
+        return match ($source) {
+            'current_message' => trim((string) $message->text),
+            'start_param' => $this->v3StartParameterFromMessage($message),
+            default => $operation['value'] ?? '',
+        };
+    }
+
+    private function v3StartParameterFromMessage(Message $message): string
+    {
+        $messageParameter = trim((string) $message->message_parameter);
+
+        if ($messageParameter !== '') {
+            return $messageParameter;
+        }
+
+        $text = trim((string) $message->text);
+
+        if ($text === '') {
+            return '';
+        }
+
+        if (preg_match('/^\/start(?:@[A-Za-z0-9_]+)?(?:\s+(.+))?$/u', $text, $matches) !== 1) {
+            return '';
+        }
+
+        return trim((string) ($matches[1] ?? ''));
+    }
+
+    private function v3DialogFieldStringValue(Message $message, string $fieldKey): string
+    {
+        if (! $this->validV3DialogVariableKey($fieldKey)) {
+            return '';
+        }
+
+        $dialog = $message->dialog_id !== null
+            ? Dialog::query()->find($message->dialog_id)
+            : ($message->relationLoaded('dialog') ? $message->dialog : null);
+
+        if (! $dialog instanceof Dialog) {
+            return '';
+        }
+
+        $fields = is_array($dialog->fields_payload) ? $dialog->fields_payload : [];
+        $value = $fields[$fieldKey] ?? null;
+
+        return trim((string) ($value ?? ''));
+    }
+
+    private function v3VirtualStartParameterMessage(Message $message, string $parameter): Message
+    {
+        $startMessage = clone $message;
+        $startMessage->forceFill([
+            'text' => '/start '.$parameter,
+            'message_parameter' => $parameter,
+        ]);
+
+        return $startMessage;
+    }
+
+    /**
+     * @param  array<string, mixed>  $context
+     */
+    private function logV3SimulateStartParameter(
+        Message $message,
+        ?ScenarioRun $run,
+        ?string $blockId,
+        string $status,
+        array $context = [],
+    ): void {
+        Log::info('scenario.v3_simulate_start_parameter', [
+            'scenario_code' => $this->code(),
+            'scenario_run_id' => $run?->id,
+            'dialog_id' => $message->dialog_id,
+            'message_id' => $message->id,
+            'block_id' => $blockId,
+            'status' => $status,
+            ...$context,
+        ]);
     }
 
     /**
@@ -4931,12 +5158,44 @@ TEXT;
                 continue;
             }
 
-            if (trim((string) ($variant['value'] ?? '')) === $value) {
+            if ($this->v3MessageVariableVariantMatches($value, $variant)) {
                 return (string) ($variant['text'] ?? '');
             }
         }
 
         return (string) ($messagePayload['fallback_text'] ?? '');
+    }
+
+    /**
+     * @param  array<string, mixed>  $variant
+     */
+    private function v3MessageVariableVariantMatches(string $actualValue, array $variant): bool
+    {
+        $operator = (string) ($variant['operator'] ?? 'eq');
+        $expectedValue = trim((string) ($variant['value'] ?? ''));
+
+        if ($operator === 'eq' || $operator === '') {
+            return $expectedValue === $actualValue;
+        }
+
+        if (! in_array($operator, ['gt', 'gte', 'lt', 'lte'], true)) {
+            return false;
+        }
+
+        if (! is_numeric($actualValue) || ! is_numeric($expectedValue)) {
+            return false;
+        }
+
+        $actual = (float) $actualValue;
+        $expected = (float) $expectedValue;
+
+        return match ($operator) {
+            'gt' => $actual > $expected,
+            'gte' => $actual >= $expected,
+            'lt' => $actual < $expected,
+            'lte' => $actual <= $expected,
+            default => false,
+        };
     }
 
     /**
@@ -4956,6 +5215,10 @@ TEXT;
 
         if ($path === 'input.current_message') {
             return trim((string) $message->text);
+        }
+
+        if ($path === 'input.start_param') {
+            return $this->v3StartParameterFromMessage($message);
         }
 
         if (str_starts_with($path, 'contact.')) {

@@ -19,6 +19,8 @@ use App\Services\Dialogs\ResolveDialogRouteStatusAction;
 use App\Services\Dialogs\ResolveDialogStageAction;
 use BackedEnum;
 use Closure;
+use Filament\Actions\Action;
+use Filament\Actions\DeleteBulkAction;
 use Filament\Resources\Resource;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
@@ -130,6 +132,7 @@ class DialogResource extends Resource
         return $table
             ->poll('10s')
             ->splitSearchTerms(false)
+            ->header(view('filament.dialogs.partials.table-header'))
             ->searchPlaceholder('Поиск диалога')
             ->columns([
                 TextColumn::make('contact_label')
@@ -263,6 +266,17 @@ class DialogResource extends Resource
                 Filter::make('route_problem')
                     ->label('Проблема маршрута')
                     ->query(fn (Builder $query): Builder => $query->whereRouteProblem()),
+            ])
+            ->filtersTriggerAction(
+                fn (Action $action): Action => $action
+                    ->button()
+                    ->label('Фильтры')
+                    ->extraAttributes(['class' => 'ac-dialogs-filter-trigger'], merge: true),
+            )
+            ->selectable()
+            ->toolbarActions([
+                DeleteBulkAction::make()
+                    ->label('Удалить выбранные'),
             ])
             ->defaultSort('last_message_at', 'desc')
             ->recordUrl(fn (Dialog $record): string => static::getUrl('view', [

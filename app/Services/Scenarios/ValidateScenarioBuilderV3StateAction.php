@@ -51,9 +51,10 @@ class ValidateScenarioBuilderV3StateAction
         'calculate_distance_to_moscow',
         'resolve_geo_city',
         'variables',
+        'simulate_start_parameter',
     ];
 
-    private const ACTION_RESULT_TYPES = ['check_data', 'calculate_distance_to_moscow', 'resolve_geo_city', 'variables'];
+    private const ACTION_RESULT_TYPES = ['check_data', 'calculate_distance_to_moscow', 'resolve_geo_city'];
 
     private const VARIABLE_OPERATIONS = ['set', 'increment', 'clear'];
 
@@ -90,6 +91,8 @@ class ValidateScenarioBuilderV3StateAction
     private const ACTION_EDIT_MESSAGE_OPERATIONS = ['remove_buttons', 'delete_message'];
 
     private const ACTION_EDIT_MESSAGE_TARGETS = ['last_current_run_outbound_with_inline_buttons', 'last_current_run_outbound'];
+
+    private const VARIABLE_SET_VALUE_SOURCES = ['static_value', 'current_message', 'start_param'];
 
     private const BLOCK_KINDS = ['state', 'non_state'];
 
@@ -529,11 +532,20 @@ class ValidateScenarioBuilderV3StateAction
 
         foreach ($variants as $variantIndex => $variant) {
             $variant = $this->arrayValue($variant, "builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.variable_text_variants.$variantIndex");
+            $operator = (string) ($variant['operator'] ?? 'eq');
             $value = trim((string) ($variant['value'] ?? ''));
             $variantText = (string) ($variant['text'] ?? '');
 
+            if (! in_array($operator, ['eq', 'gt', 'gte', 'lt', 'lte'], true)) {
+                $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.variable_text_variants.$variantIndex.operator", 'Invalid variant operator.');
+            }
+
             if ($value === '') {
                 $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.variable_text_variants.$variantIndex.value", 'Variant value is required.');
+            }
+
+            if ($operator !== 'eq' && ! is_numeric($value)) {
+                $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.variable_text_variants.$variantIndex.value", 'Numeric operator requires numeric value.');
             }
 
             if (mb_strlen($value) > 100) {
@@ -545,6 +557,7 @@ class ValidateScenarioBuilderV3StateAction
             }
 
             $normalizedVariants[] = [
+                'operator' => $operator,
                 'value' => $value,
                 'text' => $variantText,
             ];
@@ -821,6 +834,8 @@ class ValidateScenarioBuilderV3StateAction
             $geoCityFieldKey = trim((string) ($action['city_field_key'] ?? $action['source_field_key'] ?? 'geo_city'));
             $geoRegionFieldKey = trim((string) ($action['region_field_key'] ?? 'geo_region'));
             $geoCountryFieldKey = trim((string) ($action['country_field_key'] ?? 'geo_country'));
+            $simulateStartSourceScope = trim((string) ($action['source_scope'] ?? 'dialog'));
+            $simulateStartSourceFieldKey = trim((string) ($action['source_field_key'] ?? ''));
 
             if (! in_array($type, self::ACTION_TYPES, true)) {
                 $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.type", 'Unknown action type.');
@@ -953,6 +968,24 @@ class ValidateScenarioBuilderV3StateAction
                 continue;
             }
 
+            if ($type === 'simulate_start_parameter') {
+                if ($simulateStartSourceScope !== 'dialog') {
+                    $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.source_scope", 'Unknown start parameter source.');
+                }
+
+                if (! $this->validDialogVariableKey($simulateStartSourceFieldKey)) {
+                    $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.source_field_key", 'Invalid start parameter field.');
+                }
+
+                $normalized[] = [
+                    'type' => $type,
+                    'source_scope' => 'dialog',
+                    'source_field_key' => $simulateStartSourceFieldKey,
+                ];
+
+                continue;
+            }
+
             if (! in_array($sourceType, self::ACTION_SOURCE_TYPES, true)) {
                 $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.source_type", 'Unknown action source.');
             }
@@ -1062,7 +1095,12 @@ class ValidateScenarioBuilderV3StateAction
                 continue;
             }
 
+            $valueSource = trim((string) ($operation['value_source'] ?? 'static_value'));
             $value = $operation['value'] ?? '';
+
+            if (! in_array($valueSource, self::VARIABLE_SET_VALUE_SOURCES, true)) {
+                $this->fail("$path.$index.value_source", 'Unknown variable value source.');
+            }
 
             if (! is_scalar($value) && $value !== null) {
                 $this->fail("$path.$index.value", 'Variable value must be scalar.');
@@ -1075,6 +1113,7 @@ class ValidateScenarioBuilderV3StateAction
             $normalized[] = [
                 'operation' => 'set',
                 'field_key' => $fieldKey,
+                'value_source' => $valueSource,
                 'value' => $value,
             ];
         }

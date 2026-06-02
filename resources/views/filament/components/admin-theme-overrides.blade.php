@@ -8436,6 +8436,10 @@
         --ac-dialogs-row-h: 3.25rem;
     }
 
+    .fi-resource-dialogs .fi-page-header-main-ctn > .fi-header {
+        display: none;
+    }
+
     .fi-resource-dialogs .fi-header {
         align-items: center;
         border: 0;
@@ -8475,20 +8479,79 @@
     }
 
     .fi-resource-dialogs .fi-ta-ctn {
-        overflow: hidden;
+        overflow: visible;
         border-radius: 12px;
         background: var(--ac-surface);
         box-shadow: none;
     }
 
     .fi-resource-dialogs .fi-ta-header-ctn {
-        padding: 0.75rem 0.85rem 0;
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        align-items: center;
+        gap: 0.7rem;
+        padding: 0.75rem 0.85rem;
+    }
+
+    .fi-resource-dialogs .ac-dialogs-table-hero {
+        min-width: 0;
+    }
+
+    .fi-resource-dialogs .ac-dialogs-table-hero .ac-kanban-hero__top {
+        justify-content: flex-start;
+        gap: 0.7rem;
+        flex-wrap: nowrap;
+    }
+
+    .fi-resource-dialogs .ac-dialogs-table-hero .ac-kanban-hero__title {
+        font-size: 1.55rem;
+    }
+
+    .fi-resource-dialogs .fi-ta-header {
+        align-items: center;
+        gap: 0.7rem;
+        min-width: 0;
+    }
+
+    .fi-resource-dialogs .fi-ta-header-heading {
+        margin: 0;
+        font-size: 1.55rem;
+        font-weight: 760;
+        line-height: 1;
+        letter-spacing: -0.035em;
+        color: var(--ac-text);
+    }
+
+    .fi-resource-dialogs .fi-ta-header .fi-ta-actions {
+        gap: 0.45rem;
+        flex-wrap: nowrap;
+    }
+
+    .fi-resource-dialogs .fi-ta-header .fi-btn {
+        min-height: 2.15rem;
+        border: 1px solid var(--ac-border);
+        border-radius: 8px;
+        background: var(--ac-surface) !important;
+        color: var(--ac-text) !important;
+        box-shadow: none;
     }
 
     .fi-resource-dialogs .fi-ta-header-toolbar {
+        min-width: 0;
         margin-top: 0;
-        padding: 0 0 0.65rem;
+        padding: 0;
         border-top: 0;
+        justify-content: flex-end;
+    }
+
+    .fi-resource-dialogs .fi-ta-header-toolbar > :first-child:empty {
+        display: none;
+    }
+
+    .fi-resource-dialogs .fi-ta-header-toolbar > :last-child {
+        min-width: 0;
+        margin-inline-start: 0;
+        justify-content: flex-end;
     }
 
     :is(.fi-resource-dialogs, .fi-resource-contacts) .fi-ta-header-toolbar > :last-child > .fi-ta-search-field {
@@ -8552,6 +8615,55 @@
         box-shadow: none;
     }
 
+    .fi-resource-dialogs .fi-ta-header-toolbar .ac-dialogs-filter-trigger.fi-btn {
+        min-height: 2.3rem;
+        border-color: #e5e3df;
+        border-radius: 0.6rem;
+        background: #ffffff !important;
+        color: #343434 !important;
+        font-size: 0.84rem;
+        font-weight: 700;
+        box-shadow: none;
+    }
+
+    .fi-resource-dialogs .fi-ta-header-toolbar .ac-dialogs-filter-trigger.fi-btn:hover {
+        border-color: #d6d2cb;
+        background: #ffffff !important;
+    }
+
+    .fi-resource-dialogs .fi-ta-filters-dropdown > .fi-dropdown-panel {
+        width: min(22rem, calc(100vw - 2rem)) !important;
+        max-height: min(72vh, calc(100dvh - 8.5rem));
+        overflow: hidden;
+        border: 1px solid var(--ac-border);
+        border-radius: 12px;
+        background: var(--ac-surface) !important;
+        box-shadow: var(--ac-shadow-pop);
+        z-index: 80;
+    }
+
+    .fi-resource-dialogs .fi-ta-filters-dropdown > .fi-dropdown-panel .fi-ta-filters {
+        max-height: min(68vh, calc(100dvh - 10rem));
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        background: var(--ac-surface);
+        scrollbar-gutter: stable;
+    }
+
+    .fi-resource-dialogs .fi-ta-filters-dropdown > .fi-dropdown-panel .fi-ta-filters::-webkit-scrollbar {
+        width: 0.55rem;
+    }
+
+    .fi-resource-dialogs .fi-ta-filters-dropdown > .fi-dropdown-panel .fi-ta-filters::-webkit-scrollbar-track {
+        background: transparent;
+    }
+
+    .fi-resource-dialogs .fi-ta-filters-dropdown > .fi-dropdown-panel .fi-ta-filters::-webkit-scrollbar-thumb {
+        border: 2px solid var(--ac-surface);
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--ac-text-soft) 54%, transparent);
+    }
+
     .fi-resource-dialogs .fi-ta-filter-indicators {
         margin: 0;
         padding: 0.55rem 0.85rem;
@@ -8562,6 +8674,19 @@
     .fi-resource-dialogs .fi-ta-filter-indicators-label {
         font-size: 0.7rem;
         letter-spacing: 0.06em;
+    }
+
+    .fi-resource-dialogs .fi-ta-selection-indicator {
+        margin: 0;
+        padding: 0.55rem 0.85rem;
+        border-top: 1px solid var(--ac-border);
+        background: var(--ac-surface);
+        color: var(--ac-text);
+        font-size: 0.82rem;
+    }
+
+    .fi-resource-dialogs .fi-ta-selection-indicator-actions-ctn {
+        gap: 0.75rem;
     }
 
     .fi-resource-dialogs .fi-ta-content-ctn {
@@ -8604,6 +8729,27 @@
 
     .fi-resource-dialogs .fi-ta-table th {
         padding: 0.45rem 0.7rem;
+    }
+
+    .fi-resource-dialogs .fi-ta-selection-cell,
+    .fi-resource-dialogs .fi-ta-table th:first-child:has(.fi-checkbox-input) {
+        width: 3rem;
+        min-width: 3rem;
+        max-width: 3rem;
+        text-align: center;
+    }
+
+    .fi-resource-dialogs .fi-ta-selection-cell .fi-ta-col {
+        justify-content: center;
+        min-height: var(--ac-dialogs-row-h);
+        padding-inline: 0.45rem;
+    }
+
+    .fi-resource-dialogs .fi-ta-table .fi-checkbox-input {
+        width: 1rem;
+        height: 1rem;
+        border-radius: 4px;
+        accent-color: var(--ac-primary);
     }
 
     .fi-resource-dialogs .fi-ta-header-cell-contact-label,
@@ -8794,6 +8940,14 @@
         flex: 0 0 auto;
     }
 
+    .fi-resource-dialogs .ac-dialogs-view-switch {
+        flex: 0 0 auto;
+    }
+
+    .fi-resource-dialogs .ac-dialogs-sort-wrap .ac-kanban-sort-popover[hidden] {
+        display: none !important;
+    }
+
     .fi-resource-dialogs .ac-dialogs-table-scroll {
         position: relative;
         scrollbar-gutter: stable;
@@ -8949,6 +9103,7 @@
     .fi-resource-dialogs .ac-dialogs-columns-button {
         display: inline-flex;
         align-items: center;
+        justify-content: center;
         gap: 0.42rem;
         border: 1px solid var(--ac-border);
         border-radius: 8px;
@@ -8956,9 +9111,36 @@
         background: var(--ac-surface);
     }
 
+    .fi-resource-dialogs .ac-dialogs-columns-gear {
+        position: relative;
+        width: 2.3rem;
+        height: 2.3rem;
+        min-height: 2.3rem;
+        border-color: #e5e3df;
+        border-radius: 0.6rem;
+        color: #777;
+    }
+
     .fi-resource-dialogs .ac-dialogs-columns-button-count {
         color: var(--ac-text-muted);
         font-weight: 600;
+    }
+
+    .fi-resource-dialogs .ac-dialogs-columns-gear .ac-dialogs-columns-button-count {
+        position: absolute;
+        top: -0.38rem;
+        right: -0.38rem;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 1.25rem;
+        min-height: 1.25rem;
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--ac-warning) 18%, var(--ac-surface-strong));
+        color: var(--ac-warning);
+        font-size: 0.64rem;
+        font-weight: 800;
+        line-height: 1;
     }
 
     .fi-resource-dialogs .ac-dialogs-columns-popover {
@@ -9216,6 +9398,12 @@
         const toolbarSelector = '.fi-resource-dialogs .fi-ta-header-toolbar';
         const scrollSelector = '.fi-resource-dialogs .fi-ta-content-ctn';
         const configByFilament = new Map(columnConfig.map((column) => [column.filament, column]));
+        const tableSortOptions = [
+            { code: 'last_message_at:desc', label: 'Сначала новые' },
+            { code: 'last_message_at:asc', label: 'Сначала старые' },
+            { code: 'id:desc', label: 'ID по убыванию' },
+            { code: 'id:asc', label: 'ID по возрастанию' },
+        ];
         let sortFallbackListenerReady = false;
         let rowNavigationFallbackReady = false;
 
@@ -9241,6 +9429,26 @@
 
         const resetSettings = () => {
             window.localStorage.removeItem(storageKey);
+        };
+
+        const currentTableSort = () => {
+            return new URL(window.location.href).searchParams.get('sort') || 'last_message_at:desc';
+        };
+
+        const tableSortUrl = (sortCode) => {
+            const url = new URL(window.location.href);
+            url.searchParams.set('sort', sortCode);
+            url.searchParams.delete('page');
+
+            return url.toString();
+        };
+
+        const dialogsKanbanUrl = () => {
+            const url = new URL(window.location.href);
+            url.pathname = '/admin/dialogs/kanban';
+            url.search = '';
+
+            return url.toString();
         };
 
         const resolveSortColumn = (button) => {
@@ -9788,6 +9996,26 @@
             count.textContent = `${visible}/${columns.length}`;
         };
 
+        const syncSortTools = (tools) => {
+            const current = currentTableSort();
+            const button = tools?.querySelector('[data-ac-dialogs-sort-toggle]');
+
+            tools?.querySelectorAll('[data-ac-dialogs-sort-option]').forEach((link) => {
+                const sortCode = link.dataset.acDialogsSortOption || '';
+                const isActive = sortCode === current;
+
+                link.href = tableSortUrl(sortCode);
+                link.classList.toggle('is-active', isActive);
+                link.setAttribute('aria-checked', isActive ? 'true' : 'false');
+                link.querySelector('[data-ac-dialogs-sort-mark]')?.toggleAttribute('hidden', !isActive);
+            });
+
+            if (button) {
+                button.classList.toggle('ac-button--warning-soft', current !== 'last_message_at:desc');
+                button.classList.toggle('ac-button--secondary', current === 'last_message_at:desc');
+            }
+        };
+
         const ensureTools = (table, columns, state) => {
             const tableContainer = table.closest('.fi-ta-ctn');
             const toolbar = document.querySelector(toolbarSelector);
@@ -9796,9 +10024,13 @@
                 return null;
             }
 
+            const controls = Array.from(toolbar.children)
+                .find((child) => child.querySelector?.('.fi-ta-search-field'))
+                || toolbar;
+
             let tools = toolbar.querySelector('[data-ac-dialogs-tools]');
 
-            if (tools && tools.__acDialogsTable !== table) {
+            if (tools && (tools.__acDialogsTable !== table || tools.parentElement !== controls)) {
                 tools.remove();
                 tools = null;
             }
@@ -9808,14 +10040,51 @@
                 tools.className = 'ac-dialogs-table-tools';
                 tools.dataset.acDialogsTools = '1';
                 tools.innerHTML = `
-                    <div class="ac-dialogs-scroll-buttons" aria-label="Прокрутка таблицы">
-                        <button type="button" data-ac-dialogs-scroll-left aria-label="Прокрутить влево">‹</button>
-                        <button type="button" data-ac-dialogs-scroll-right aria-label="Прокрутить вправо">›</button>
+                    <div class="ac-kanban-sort-wrap ac-dialogs-sort-wrap" data-ac-dialogs-sort-wrap>
+                        <button
+                            type="button"
+                            class="ac-button ac-button--secondary ac-kanban-sort-button"
+                            data-ac-dialogs-sort-toggle
+                            aria-haspopup="menu"
+                            aria-expanded="false"
+                        >
+                            Сортировка
+                        </button>
+                        <div hidden class="ac-kanban-sort-popover" role="menu" data-ac-dialogs-sort-popover>
+                            <div class="ac-kanban-sort-popover__head">
+                                <span>Сортировка</span>
+                            </div>
+                            <div class="ac-kanban-sort-popover__list">
+                                ${tableSortOptions.map((option) => `
+                                    <a
+                                        href="${tableSortUrl(option.code)}"
+                                        class="ac-kanban-sort-option"
+                                        data-ac-dialogs-sort-option="${option.code}"
+                                        role="menuitemradio"
+                                        aria-checked="false"
+                                    >
+                                        <span>${option.label}</span>
+                                        <span hidden class="ac-kanban-sort-option__mark" data-ac-dialogs-sort-mark>✓</span>
+                                    </a>
+                                `).join('')}
+                            </div>
+                        </div>
                     </div>
+                    <span class="ac-kanban-view-switch ac-dialogs-view-switch" role="group" aria-label="Вид диалогов">
+                        <a href="${dialogsKanbanUrl()}" class="ac-kanban-view-switch__item">
+                            Канбан
+                        </a>
+                        <span class="ac-kanban-view-switch__item is-active">
+                            Таблица
+                        </span>
+                    </span>
                     <details class="ac-dialogs-columns">
                         <summary>
-                            <span class="ac-dialogs-columns-button">
-                                <span>Колонки</span>
+                            <span class="ac-dialogs-columns-button ac-dialogs-columns-gear" title="Настроить колонки" aria-label="Настроить колонки">
+                                <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" fill="none">
+                                    <circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.5"/>
+                                    <path d="M8 1.5v2M8 12.5v2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M1.5 8h2M12.5 8h2M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                </svg>
                                 <span class="ac-dialogs-columns-button-count" data-ac-dialogs-columns-count></span>
                             </span>
                         </summary>
@@ -9834,7 +10103,7 @@
                         </div>
                     </details>
                 `;
-                toolbar.appendChild(tools);
+                controls.appendChild(tools);
 
                 tools.querySelector('[data-ac-dialogs-scroll-left]')?.addEventListener('click', () => {
                     table.closest(scrollSelector)?.scrollBy({ left: -420, behavior: 'smooth' });
@@ -9845,6 +10114,34 @@
             }
 
             tools.__acDialogsTable = table;
+            const sortWrap = tools.querySelector('[data-ac-dialogs-sort-wrap]');
+
+            if (sortWrap && sortWrap.dataset.acDialogsBound !== '1') {
+                sortWrap.dataset.acDialogsBound = '1';
+                const sortButton = sortWrap.querySelector('[data-ac-dialogs-sort-toggle]');
+                const sortPopover = sortWrap.querySelector('[data-ac-dialogs-sort-popover]');
+
+                sortButton?.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    const isOpen = sortPopover?.hidden === false;
+
+                    if (sortPopover) {
+                        sortPopover.hidden = isOpen;
+                    }
+
+                    sortButton.setAttribute('aria-expanded', isOpen ? 'false' : 'true');
+                });
+
+                document.addEventListener('click', (event) => {
+                    if (!sortPopover || sortPopover.hidden || sortWrap.contains(event.target)) {
+                        return;
+                    }
+
+                    sortPopover.hidden = true;
+                    sortButton?.setAttribute('aria-expanded', 'false');
+                });
+            }
+
             const details = tools.querySelector('.ac-dialogs-columns');
 
             if (details && details.dataset.acDialogsBound !== '1') {
@@ -9948,6 +10245,7 @@
             }
 
             syncToolsCount(tools, columns, state);
+            syncSortTools(tools);
 
             return tools;
         };

@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Filament\Resources\Channels\ChannelResource;
 use App\Filament\Resources\Channels\Pages\ManageChannels;
+use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Channel;
 use App\Models\ChannelActivityLog;
 use App\Models\ChannelRuntimeState;
@@ -12,6 +13,7 @@ use App\Models\ContactIdentity;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\Scenario;
+use App\Models\ScenarioBuilderBlock;
 use App\Models\ScenarioChannelBinding;
 use App\Models\ScenarioVersion;
 use App\Models\User;
@@ -745,7 +747,7 @@ class FilamentChannelsResourceTest extends TestCase
         $this->assertModelMissing($channel);
     }
 
-    public function test_used_channel_delete_action_is_disabled(): void
+    public function test_used_channel_delete_action_keeps_channel_when_blocked(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -766,11 +768,48 @@ class FilamentChannelsResourceTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ManageChannels::class)
             ->assertTableActionVisible('delete', $channel)
-            ->assertTableActionDisabled('delete', $channel);
+            ->assertTableActionEnabled('delete', $channel)
+            ->callTableAction('delete', $channel)
+            ->assertHasNoTableActionErrors();
 
         $this->assertDatabaseHas('channels', [
             'id' => $channel->id,
         ]);
+    }
+
+    public function test_admin_can_delete_channel_with_history_after_dialogs_are_removed(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+        ]);
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => null,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->assertTableActionVisible('delete', $channel)
+            ->assertTableActionEnabled('delete', $channel)
+            ->callTableAction('delete', $channel)
+            ->assertHasNoTableActionErrors();
+
+        $this->assertModelMissing($channel);
+        $this->assertModelMissing($identity);
+        $this->assertModelMissing($message);
     }
 
     public function test_channel_defaults_to_rules_only_when_not_explicitly_set(): void
@@ -1024,6 +1063,78 @@ class FilamentChannelsResourceTest extends TestCase
             'channel_id' => $channel->id,
             'scenario_code' => Scenario::CONSTRUCTOR_WORKSPACE_CODE,
             'is_active' => true,
+        ]);
+    }
+
+    public function test_channel_delete_blockers_ignore_inactive_scenario_bindings_and_archived_v3_blocks(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $scenario = Scenario::query()->create([
+            'code' => 'delete_blockers_cleanup',
+            'name' => 'Delete Blockers Cleanup',
+            'is_active' => true,
+        ]);
+        $archivedVersion = ScenarioVersion::query()->create([
+            'scenario_id' => $scenario->id,
+            'version_number' => 1,
+            'status' => ScenarioVersion::STATUS_ARCHIVED,
+            'schema_payload' => [],
+        ]);
+        $archivedBlock = ScenarioBuilderBlock::query()->create([
+            'scenario_version_id' => $archivedVersion->id,
+            'type' => ScenarioBuilderBlock::TYPE_START_CONDITION,
+            'title' => 'Старый старт',
+            'settings_payload' => [],
+        ]);
+
+        $archivedBlock->channels()->sync([$channel->id]);
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => 'warmup',
+            'is_active' => false,
+        ]);
+
+        $this->assertSame([], $this->channelDeleteBlockers($channel));
+    }
+
+    public function test_channel_delete_auto_cleans_inactive_bitrix24_routes_without_dialogs(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+        $profileId = DB::table('bitrix24_profiles')->insertGetId([
+            'portal_domain' => 'stagecrm.example',
+            'profile_key' => 'staging',
+            'profile_type' => 'full_live',
+            'display_name' => 'Staging',
+            'callback_base_url' => 'https://example.test/callbacks/bitrix24',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        $route = Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profileId,
+            'channel_id' => $channel->id,
+            'portal_domain' => 'stagecrm.example',
+            'profile_key' => 'staging',
+            'channel_type' => Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT,
+            'connector_code' => 'abc_telegram',
+            'source_id' => 'ABC_TELEGRAM',
+            'status' => Bitrix24OpenLineRoute::STATUS_INACTIVE,
+        ]);
+
+        $this->assertSame([], $this->channelDeleteBlockers($channel));
+        $this->assertStringContainsString(
+            'Неактивные Bitrix24-маршруты без диалогов будут очищены автоматически: 1',
+            $this->channelDeleteModalDescription($channel),
+        );
+
+        $this->deleteAutoCleanableBitrix24Routes($channel);
+
+        $this->assertDatabaseMissing('bitrix24_open_line_routes', [
+            'id' => $route->id,
         ]);
     }
 
@@ -1591,6 +1702,33 @@ class FilamentChannelsResourceTest extends TestCase
             ->where('role', $role)
             ->where('permission_key', $permissionKey)
             ->update(['granted' => $granted]);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function channelDeleteBlockers(Channel $channel): array
+    {
+        $method = new ReflectionMethod(ChannelResource::class, 'channelDeleteBlockers');
+        $method->setAccessible(true);
+
+        return $method->invoke(null, $channel);
+    }
+
+    private function channelDeleteModalDescription(Channel $channel): string
+    {
+        $method = new ReflectionMethod(ChannelResource::class, 'channelDeleteModalDescription');
+        $method->setAccessible(true);
+
+        return (string) $method->invoke(null, $channel);
+    }
+
+    private function deleteAutoCleanableBitrix24Routes(Channel $channel): void
+    {
+        $method = new ReflectionMethod(ChannelResource::class, 'deleteAutoCleanableBitrix24Routes');
+        $method->setAccessible(true);
+
+        $method->invoke(null, $channel);
     }
 
     private function assertHttpForbidden(callable $callback): void

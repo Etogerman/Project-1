@@ -172,6 +172,7 @@ class CompileScenarioBuilderV3RuntimeAction
             'variable_text_variants' => collect(data_get($message, 'payload.variable_text_variants', []))
                 ->filter(fn (mixed $variant): bool => is_array($variant))
                 ->map(fn (array $variant): array => [
+                    'operator' => (string) ($variant['operator'] ?? 'eq'),
                     'value' => (string) ($variant['value'] ?? ''),
                     'text' => (string) ($variant['text'] ?? ''),
                 ])
@@ -341,6 +342,7 @@ class CompileScenarioBuilderV3RuntimeAction
                                 if (($compiled['operation'] ?? null) === 'increment') {
                                     $compiled['amount'] = (int) ($operation['amount'] ?? 1);
                                 } elseif (($compiled['operation'] ?? null) === 'set') {
+                                    $compiled['value_source'] = (string) ($operation['value_source'] ?? 'static_value');
                                     $compiled['value'] = $operation['value'] ?? '';
                                 }
 
@@ -349,6 +351,14 @@ class CompileScenarioBuilderV3RuntimeAction
                             ->filter(fn (array $operation): bool => ($operation['field_key'] ?? '') !== '')
                             ->values()
                             ->all(),
+                    ];
+                }
+
+                if ($type === 'simulate_start_parameter') {
+                    return [
+                        'type' => 'simulate_start_parameter',
+                        'source_scope' => 'dialog',
+                        'source_field_key' => (string) ($item['source_field_key'] ?? ''),
                     ];
                 }
 
@@ -380,6 +390,8 @@ class CompileScenarioBuilderV3RuntimeAction
                         && ($item['city_field_key'] ?? '') !== ''
                     ),
                 'variables' => ($item['operations'] ?? []) !== [],
+                'simulate_start_parameter' => ($item['source_scope'] ?? '') === 'dialog'
+                    && ($item['source_field_key'] ?? '') !== '',
                 default => (($item['target_field'] ?? '') !== ''
                     && (($item['source_type'] ?? '') === 'static_value'
                         ? trim((string) ($item['static_value'] ?? '')) !== ''

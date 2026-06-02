@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
     applyScenarioBuilderSheetImport,
     exportScenarioBuilderSheet,
@@ -85,6 +86,7 @@ const ACTION_TYPE_EDIT_MESSAGE = 'edit_message';
 const ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW = 'calculate_distance_to_moscow';
 const ACTION_TYPE_RESOLVE_GEO_CITY = 'resolve_geo_city';
 const ACTION_TYPE_VARIABLES = 'variables';
+const ACTION_TYPE_SIMULATE_START_PARAMETER = 'simulate_start_parameter';
 const ACTION_EDIT_MESSAGE_OPERATION_REMOVE_BUTTONS = 'remove_buttons';
 const ACTION_EDIT_MESSAGE_OPERATION_DELETE_MESSAGE = 'delete_message';
 const ACTION_EDIT_MESSAGE_TARGET_LAST_CURRENT_RUN_OUTBOUND_WITH_INLINE_BUTTONS = 'last_current_run_outbound_with_inline_buttons';
@@ -96,6 +98,18 @@ const ACTION_TARGET_SCOPE_OPTIONS = [
 const ACTION_VALUE_SOURCE_OPTIONS = [
     ['static_value', 'Заданное значение'],
     ['ai_data', 'Переменная или результат ИИ'],
+];
+const VARIABLE_SET_VALUE_SOURCE_OPTIONS = [
+    ['static_value', 'Заданное значение'],
+    ['current_message', 'Весь текст сообщения'],
+    ['start_param', 'Параметр запуска'],
+];
+const MESSAGE_VARIABLE_TEXT_OPERATORS = [
+    ['eq', '='],
+    ['gt', '>'],
+    ['gte', '>='],
+    ['lt', '<'],
+    ['lte', '<='],
 ];
 const GEO_CITY_SOURCE_OPTIONS = [
     ['current_inbound_message', 'Последний ответ клиента'],
@@ -244,7 +258,6 @@ const PANEL_WIDTH_MIN = 320;
 const PANEL_WIDTH_MAX = 620;
 const DIALOG_FIELD_KEY_PATTERN = /^(?!_)\p{L}[\p{L}\p{N}_]{0,63}$/u;
 const RESERVED_DIALOG_FIELD_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
-const DIALOG_FIELD_KEY_SUGGESTION_LIMIT = 12;
 const DIAGNOSTICS_REFRESH_INTERVAL_MS = 10000;
 const LOG_STATUS_FILTERS = [
     ['all', 'Все'],
@@ -315,6 +328,12 @@ const AI_PROMPT_VARIABLE_GROUPS = [
                 label: 'Пакет сообщений клиента',
                 source: 'Все сообщения клиента после предыдущего сообщения бота.',
                 type: 'Текст, несколько строк',
+            },
+            {
+                token: '{{input.start_param}}',
+                label: 'Параметр запуска',
+                source: 'Значение после команды /start.',
+                type: 'Текст',
             },
         ],
     },
@@ -412,7 +431,6 @@ const MODULE_META = {
 
 const FUTURE_MODULE_META = [
     { type: 'attachment', label: 'Вложение' },
-    { type: MODULE_TYPE_CALCULATOR, label: 'Калькулятор' },
     { type: 'cloud', label: 'Интеграция' },
     { type: 'analytics', label: 'Аналитика' },
 ];
@@ -590,7 +608,7 @@ export default function App({
     const edges = useMemo(() => filterEdgesForBlocks(allEdges, blocks), [allEdges, blocks]);
     const selectedBlock = blocks.find((block) => block.client_key === selectedBlockKey) ?? null;
     const selectedEdge = edges.find((edge) => edge.client_key === selectedEdgeKey) ?? null;
-    const dialogFieldKeys = useMemo(() => dialogFieldKeysFromBuilder(blocks, edges, fieldDictionary), [blocks, edges, fieldDictionary]);
+    const dialogFieldKeys = useMemo(() => dialogFieldSuggestionsFromDictionary(fieldDictionary), [fieldDictionary]);
     const blockSearchMatches = useMemo(() => searchBlocks(blocks, blockSearchQuery), [blocks, blockSearchQuery]);
     const canSave = state?.permissions?.can_update === true
         && status === 'ready'
@@ -1747,14 +1765,10 @@ export default function App({
 
             if (type === 'action') {
                 const actionModule = findModule(settings, 'action');
-                const regularItems = regularActionItems(actionModule);
-                const calculatorItems = calculatorActionItems(actionModule);
+                const currentItems = existingActionItems(actionModule);
                 const nextItems = enabled
-                    ? [
-                        ...(regularItems.length > 0 ? regularItems : [defaultActionItem()]),
-                        ...calculatorItems,
-                    ]
-                    : calculatorItems;
+                    ? (currentItems.length > 0 ? currentItems : [defaultActionItem()])
+                    : [];
 
                 modules = nextItems.length > 0
                     ? replaceActionModule(modules, actionModule, nextItems)
@@ -1806,7 +1820,10 @@ export default function App({
         }
 
         if (type === 'action' && ! enabled) {
-            const actionOutputIds = new Set(ACTION_RESULT_OUTPUTS_WITH_LEGACY.map((output) => output.id));
+            const actionOutputIds = new Set([
+                ...ACTION_RESULT_OUTPUTS_WITH_LEGACY.map((output) => output.id),
+                ...ACTION_VARIABLE_LEGACY_OUTPUT_IDS,
+            ]);
 
             updateEdges(edges.filter((edge) => (
                 edge.source?.client_key !== clientKey
@@ -3259,14 +3276,11 @@ function ScenarioNode({
     const buttons = findModule(block.settings_payload, 'buttons');
     const ai = findModule(block.settings_payload, 'ai');
     const action = findModule(block.settings_payload, 'action');
-    const hasCalculator = hasCalculatorAction(action);
     const hasAction = hasRegularAction(action);
     const position = blockPosition(block);
     const modules = modulesFrom(block.settings_payload);
     const displayModuleTypes = MODULE_DISPLAY_ORDER.filter((type) => (
-        type === MODULE_TYPE_CALCULATOR
-            ? hasCalculator
-            : (type === 'action' ? hasAction : modules.some((module) => module.type === type))
+        type === 'action' ? hasAction : modules.some((module) => module.type === type)
     ));
     const blockKind = block.settings_payload?.kind === 'non_state' ? 'non_state' : 'state';
 
@@ -3356,10 +3370,7 @@ function ScenarioNode({
                     <ModulePreview type="ai" label="ИИ" value={aiSummary(ai)} />
                 ) : null}
                 {hasAction ? (
-                    <ModulePreview type="action" label="Действие" value={regularActionSummary(action)} />
-                ) : null}
-                {hasCalculator ? (
-                    <ModulePreview type={MODULE_TYPE_CALCULATOR} label="Калькулятор" value={calculatorSummary(action)} />
+                    <ModulePreview type="action" label="Действие" value={actionSummary(action)} />
                 ) : null}
             </div>
 
@@ -4497,7 +4508,6 @@ function BlockPanel({
     const buttons = findModule(block.settings_payload, 'buttons');
     const ai = findModule(block.settings_payload, 'ai');
     const action = findModule(block.settings_payload, 'action');
-    const hasCalculator = hasCalculatorAction(action);
     const hasAction = hasRegularAction(action);
     const startChannels = start?.payload?.channels?.ids ?? [];
     const buttonsSummary = buttons ? buttonSummary(buttons) : '';
@@ -4508,10 +4518,6 @@ function BlockPanel({
         if (module.type === 'action') {
             if (hasAction) {
                 activeModuleTypes.add('action');
-            }
-
-            if (hasCalculator) {
-                activeModuleTypes.add(MODULE_TYPE_CALCULATOR);
             }
 
             return;
@@ -4633,16 +4639,7 @@ function BlockPanel({
                         onChange={(checked) => onToggleModule(block.client_key, 'action', checked)}
                     />
                     {FUTURE_MODULE_META.map((module) => (
-                        module.type === MODULE_TYPE_CALCULATOR ? (
-                            <ModuleSwitch
-                                key={module.type}
-                                type={MODULE_TYPE_CALCULATOR}
-                                checked={hasCalculator}
-                                onChange={(checked) => onToggleModule(block.client_key, MODULE_TYPE_CALCULATOR, checked)}
-                            />
-                        ) : (
-                            <FutureModuleSlot key={module.type} type={module.type} label={module.label} />
-                        )
+                        <FutureModuleSlot key={module.type} type={module.type} label={module.label} />
                     ))}
                 </div>
             </section>
@@ -4707,13 +4704,6 @@ function BlockPanel({
                                         blockKey={block.client_key}
                                         onUpdateModulePayload={onUpdateModulePayload}
                                         dialogFieldKeys={dialogFieldKeys}
-                                    />
-                                ) : null}
-                                {type === MODULE_TYPE_CALCULATOR ? (
-                                    <CalculatorFields
-                                        action={action}
-                                        blockKey={block.client_key}
-                                        onUpdateModulePayload={onUpdateModulePayload}
                                     />
                                 ) : null}
                             </ModuleConfigCard>
@@ -5370,7 +5360,7 @@ function MessageFields({ message, blockKey, onUpdateModulePayload }) {
         onUpdateModulePayload(blockKey, 'message', {
             variable_text_variants: [
                 ...variableTextVariants,
-                { value: String(variableTextVariants.length + 1), text: '' },
+                { operator: 'eq', value: String(variableTextVariants.length + 1), text: '' },
             ],
         });
     }
@@ -5479,31 +5469,44 @@ function MessageFields({ message, blockKey, onUpdateModulePayload }) {
                         <button type="button" onClick={addVariant}>Добавить</button>
                     </div>
                     {variableTextVariants.map((variant, index) => (
-                        <div key={index} className="ac-v3-builder__action-row">
-                            <label>
-                                <span>Значение</span>
-                                <input
-                                    value={variant.value}
-                                    placeholder="1"
-                                    onChange={(event) => updateVariant(index, { value: event.target.value })}
-                                />
-                            </label>
+                        <div key={index} className="ac-v3-builder__message-variant-row">
+                            <div className="ac-v3-builder__message-variant-value-row">
+                                <label>
+                                    <span>Значение</span>
+                                    <div className="ac-v3-builder__message-variant-condition">
+                                        <select
+                                            value={variant.operator}
+                                            onChange={(event) => updateVariant(index, { operator: normalizeMessageVariableTextOperator(event.target.value) })}
+                                        >
+                                            {MESSAGE_VARIABLE_TEXT_OPERATORS.map(([operator, label]) => (
+                                                <option key={operator} value={operator}>{label}</option>
+                                            ))}
+                                        </select>
+                                        <input
+                                            value={variant.value}
+                                            placeholder="1"
+                                            onChange={(event) => updateVariant(index, { value: event.target.value })}
+                                        />
+                                    </div>
+                                </label>
+                                <button
+                                    type="button"
+                                    title="Удалить вариант"
+                                    disabled={variableTextVariants.length <= 1}
+                                    onClick={() => removeVariant(index)}
+                                >
+                                    ×
+                                </button>
+                            </div>
                             <label>
                                 <span>Текст</span>
-                                <input
+                                <AutoGrowTextarea
                                     value={variant.text}
+                                    maxHeight={160}
                                     placeholder="Как тебя зовут?"
                                     onChange={(event) => updateVariant(index, { text: event.target.value })}
                                 />
                             </label>
-                            <button
-                                type="button"
-                                title="Удалить вариант"
-                                disabled={variableTextVariants.length <= 1}
-                                onClick={() => removeVariant(index)}
-                            >
-                                ×
-                            </button>
                         </div>
                     ))}
                 </div>
@@ -5517,6 +5520,7 @@ function normalizeMessageVariableTextVariants(variants) {
         ? variants
             .filter((variant) => variant && typeof variant === 'object')
             .map((variant) => ({
+                operator: normalizeMessageVariableTextOperator(variant.operator),
                 value: String(variant.value ?? ''),
                 text: String(variant.text ?? ''),
             }))
@@ -5524,22 +5528,25 @@ function normalizeMessageVariableTextVariants(variants) {
             .slice(0, 20)
         : [];
 
-    return normalized.length > 0 ? normalized : [{ value: '1', text: '' }];
+    return normalized.length > 0 ? normalized : [{ operator: 'eq', value: '1', text: '' }];
+}
+
+function normalizeMessageVariableTextOperator(operator) {
+    return MESSAGE_VARIABLE_TEXT_OPERATORS.some(([value]) => value === operator) ? operator : 'eq';
 }
 
 function ActionFields({ action, blocks = [], blockKey, onUpdateModulePayload, dialogFieldKeys = [] }) {
-    const items = regularActionItems(action);
-    const calculatorItems = calculatorActionItems(action);
+    const items = existingActionItems(action);
     const aiSourceBlocks = aiBlocksForGeoSource(blocks, blockKey);
 
-    function updateRegularItems(nextItems) {
+    function updateItems(nextItems) {
         onUpdateModulePayload(blockKey, 'action', {
-            actions: [...nextItems, ...calculatorItems],
+            actions: nextItems,
         });
     }
 
     function updateItem(index, patch) {
-        updateRegularItems(items.map((item, itemIndex) => (
+        updateItems(items.map((item, itemIndex) => (
             itemIndex === index ? { ...item, ...patch } : item
         )));
     }
@@ -5552,7 +5559,7 @@ function ActionFields({ action, blocks = [], blockKey, onUpdateModulePayload, di
     }
 
     function addItem() {
-        updateRegularItems([...items, defaultActionItem()]);
+        updateItems([...items, defaultActionItem()]);
     }
 
     function removeItem(index) {
@@ -5560,7 +5567,7 @@ function ActionFields({ action, blocks = [], blockKey, onUpdateModulePayload, di
             return;
         }
 
-        updateRegularItems(items.filter((_, itemIndex) => itemIndex !== index));
+        updateItems(items.filter((_, itemIndex) => itemIndex !== index));
     }
 
     return (
@@ -5582,9 +5589,8 @@ function ActionFields({ action, blocks = [], blockKey, onUpdateModulePayload, di
                             <option value="edit_message">Изменить сообщение</option>
                             <option value="calculate_distance_to_moscow">Рассчитать расстояние до Москвы</option>
                             <option value="resolve_geo_city">Распознать географию</option>
-                            {item.type === ACTION_TYPE_VARIABLES ? (
-                                <option value="variables">Калькулятор</option>
-                            ) : null}
+                            <option value="variables">Изменить переменные</option>
+                            <option value="simulate_start_parameter">Имитировать старт с параметром</option>
                         </select>
                     </label>
                     {item.type === ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW ? (
@@ -5604,6 +5610,15 @@ function ActionFields({ action, blocks = [], blockKey, onUpdateModulePayload, di
                     ) : item.type === ACTION_TYPE_VARIABLES ? (
                         <VariablesActionFields
                             item={item}
+                            onChange={(patch) => updateItem(index, normalizeActionItemForType({
+                                ...item,
+                                ...patch,
+                            }))}
+                        />
+                    ) : item.type === ACTION_TYPE_SIMULATE_START_PARAMETER ? (
+                        <SimulateStartParameterActionFields
+                            item={item}
+                            dialogFieldKeys={dialogFieldKeys}
                             onChange={(patch) => updateItem(index, normalizeActionItemForType({
                                 ...item,
                                 ...patch,
@@ -5801,6 +5816,30 @@ function CalculatorFields({ action, blockKey, onUpdateModulePayload }) {
     );
 }
 
+function SimulateStartParameterActionFields({ item, dialogFieldKeys = [], onChange }) {
+    return (
+        <>
+            <label>
+                <span>Откуда взять параметр</span>
+                <input value="Диалог" readOnly />
+            </label>
+            <label>
+                <span>Поле диалога</span>
+                <DialogFieldKeyInput
+                    value={item.source_field_key}
+                    placeholder="start_param"
+                    onChange={(fieldKey) => onChange({
+                        source_scope: 'dialog',
+                        source_field_key: normalizeDialogFieldKey(fieldKey),
+                    })}
+                    suggestions={dialogFieldKeys}
+                    purpose="action"
+                />
+            </label>
+        </>
+    );
+}
+
 function GeoCityActionFields({ item, aiSourceBlocks, onChange }) {
     const selectedBlock = aiSourceBlocks.find((block) => block.client_key === item.source_block_client_key) ?? null;
     const selectedAiModule = selectedBlock ? findModule(selectedBlock.settings_payload, 'ai') : null;
@@ -5963,14 +6002,29 @@ function VariablesActionFields({ item, onChange }) {
                             />
                         </label>
                     ) : operation.operation === 'set' ? (
-                        <label>
-                            <span>Значение</span>
-                            <input
-                                value={operation.value}
-                                placeholder="1"
-                                onChange={(event) => updateOperation(index, { value: event.target.value })}
-                            />
-                        </label>
+                        <>
+                            <label>
+                                <span>Источник</span>
+                                <select
+                                    value={operation.value_source}
+                                    onChange={(event) => updateOperation(index, { value_source: event.target.value })}
+                                >
+                                    {VARIABLE_SET_VALUE_SOURCE_OPTIONS.map(([value, label]) => (
+                                        <option key={value} value={value}>{label}</option>
+                                    ))}
+                                </select>
+                            </label>
+                            {operation.value_source === 'static_value' ? (
+                                <label>
+                                    <span>Значение</span>
+                                    <input
+                                        value={operation.value}
+                                        placeholder="1"
+                                        onChange={(event) => updateOperation(index, { value: event.target.value })}
+                                    />
+                                </label>
+                            ) : null}
+                        </>
                     ) : null}
                     <button
                         type="button"
@@ -6339,26 +6393,32 @@ function normalizeFieldDictionary(catalog) {
         [FIELD_DICTIONARY_ENTITY_CONTACT]: new Map(),
         [FIELD_DICTIONARY_ENTITY_DIALOG]: new Map(),
     };
+    const rowsByEntity = catalog && typeof catalog === 'object' ? catalog : null;
+    const hasServerCatalog = rowsByEntity !== null
+        && (
+            Array.isArray(rowsByEntity[FIELD_DICTIONARY_ENTITY_CONTACT])
+            || Array.isArray(rowsByEntity[FIELD_DICTIONARY_ENTITY_DIALOG])
+        );
 
-    EDGE_CONTACT_CONDITION_FIELD_OPTIONS.forEach(([key, label, dataType]) => {
-        byEntity[FIELD_DICTIONARY_ENTITY_CONTACT].set(key, {
-            key,
-            label,
-            type: dataType === 'number' ? 'number' : (dataType === 'phone' ? 'phone' : 'text'),
-            dataType,
-            options: fallbackFieldOptions(FIELD_DICTIONARY_ENTITY_CONTACT, key),
-            sourceFieldKey: null,
-            isMultiple: false,
-            isSystem: true,
-            isFallback: true,
-            sortOrder: 1000,
+    if (! hasServerCatalog) {
+        EDGE_CONTACT_CONDITION_FIELD_OPTIONS.forEach(([key, label, dataType]) => {
+            byEntity[FIELD_DICTIONARY_ENTITY_CONTACT].set(key, {
+                key,
+                label,
+                type: dataType === 'number' ? 'number' : (dataType === 'phone' ? 'phone' : 'text'),
+                dataType,
+                options: fallbackFieldOptions(FIELD_DICTIONARY_ENTITY_CONTACT, key),
+                sourceFieldKey: null,
+                isMultiple: false,
+                isSystem: true,
+                isFallback: true,
+                sortOrder: 1000,
+            });
         });
-    });
-
-    const rowsByEntity = catalog && typeof catalog === 'object' ? catalog : {};
+    }
 
     [FIELD_DICTIONARY_ENTITY_CONTACT, FIELD_DICTIONARY_ENTITY_DIALOG].forEach((entity) => {
-        const rows = Array.isArray(rowsByEntity[entity]) ? rowsByEntity[entity] : [];
+        const rows = Array.isArray(rowsByEntity?.[entity]) ? rowsByEntity[entity] : [];
 
         rows.forEach((row) => {
             const key = normalizeDictionaryFieldKey(row?.key ?? row?.field_key);
@@ -6618,102 +6678,165 @@ function fieldTypeLabel(type) {
     return 'Текст';
 }
 
-function dialogFieldKeysFromBuilder(blocks, edges, fieldDictionary = currentFieldDictionary()) {
-    const keys = new Set();
-
-    fieldDictionary.dialog.forEach((field) => {
-        if (isValidDialogFieldKey(field.key)) {
-            keys.add(field.key);
-        }
-    });
-
-    blocks.forEach((block) => {
-        modulesFrom(block.settings_payload).forEach((module) => {
-            const payload = module.payload ?? {};
-
-            if (module.type === 'message' && isValidDialogFieldKey(payload.variable_key)) {
-                keys.add(normalizeDialogFieldKey(payload.variable_key));
-            }
-
-            if (module.type === 'action') {
-                actionItems(module).forEach((item) => {
-                    if (item.type === ACTION_TYPE_VARIABLES) {
-                        normalizeVariableOperations(item.operations).forEach((operation) => {
-                            if (isValidDialogFieldKey(operation.field_key)) {
-                                keys.add(normalizeDialogFieldKey(operation.field_key));
-                            }
-                        });
-                    }
-
-                    if (item.target_scope === 'dialog' && isValidDialogFieldKey(item.target_field)) {
-                        keys.add(normalizeDialogFieldKey(item.target_field));
-                    }
-                });
-            }
-        });
-    });
-
-    edges.forEach((edge) => {
-        const payload = edge.condition_payload ?? {};
-        const capture = payload.input_capture ?? {};
-        const fieldCondition = payload.field_condition ?? {};
-        const transitionActions = transitionActionItems(payload.transition_actions);
-
-        if (capture.enabled === true && (capture.field_scope ?? 'dialog') === 'dialog' && isValidDialogFieldKey(capture.field_key)) {
-            keys.add(normalizeDialogFieldKey(capture.field_key));
-        }
-
-        if (fieldCondition.enabled === true && (fieldCondition.field_scope ?? 'dialog') === 'dialog' && isValidDialogFieldKey(fieldCondition.field_key)) {
-            keys.add(normalizeDialogFieldKey(fieldCondition.field_key));
-        }
-
-        transitionActions.forEach((item) => {
-            if (item.target_scope === 'dialog' && isValidDialogFieldKey(item.target_field)) {
-                keys.add(normalizeDialogFieldKey(item.target_field));
-            }
-        });
-    });
-
-    return Array.from(keys).sort((left, right) => left.localeCompare(right, 'ru'));
+function dialogFieldSuggestionsFromDictionary(fieldDictionary = currentFieldDictionary()) {
+    return fieldDictionary.dialog
+        .filter((field) => isValidDialogFieldKey(field.key))
+        .map((field) => ({
+            key: field.key,
+            label: field.label || field.key,
+            group: field.group || '',
+        }));
 }
 
 function DialogFieldKeyInput({ value, onChange, placeholder, suggestions = [], purpose }) {
+    const wrapperRef = useRef(null);
+    const suggestionsRef = useRef(null);
+    const [isSuggestionsOpen, setIsSuggestionsOpen] = useState(false);
+    const [suggestionsStyle, setSuggestionsStyle] = useState(null);
     const fieldKey = String(value ?? '');
     const normalizedFieldKey = normalizeDialogFieldKey(fieldKey);
     const isInvalid = normalizedFieldKey !== '' && ! isValidDialogFieldKey(normalizedFieldKey);
     const visibleSuggestions = suggestions
-        .filter((suggestion) => suggestion !== normalizedFieldKey)
-        .slice(0, DIALOG_FIELD_KEY_SUGGESTION_LIMIT);
+        .map((suggestion) => {
+            if (suggestion && typeof suggestion === 'object') {
+                const key = normalizeDialogFieldKey(suggestion.key);
+
+                return {
+                    key,
+                    label: String(suggestion.label ?? key),
+                    group: String(suggestion.group ?? ''),
+                };
+            }
+
+            const key = normalizeDialogFieldKey(suggestion);
+
+            return { key, label: key, group: '' };
+        })
+        .filter((suggestion) => suggestion.key !== '');
+
+    const updateSuggestionsPosition = useCallback(() => {
+        if (! wrapperRef.current || typeof window === 'undefined') {
+            return;
+        }
+
+        const rect = wrapperRef.current.getBoundingClientRect();
+        const viewportWidth = window.innerWidth || 0;
+        const viewportHeight = window.innerHeight || 0;
+        const preferredWidth = Math.max(260, rect.width);
+        const width = Math.min(preferredWidth, Math.max(220, viewportWidth - 24));
+        const left = Math.min(Math.max(12, rect.right - width), Math.max(12, viewportWidth - width - 12));
+        const belowSpace = viewportHeight - rect.bottom - 12;
+        const aboveSpace = rect.top - 12;
+        const openBelow = belowSpace >= 180 || belowSpace >= aboveSpace;
+        const availableHeight = openBelow ? belowSpace : aboveSpace;
+        const maxHeight = Math.max(140, Math.min(320, availableHeight));
+        const top = openBelow
+            ? rect.bottom + 6
+            : Math.max(12, rect.top - maxHeight - 6);
+
+        setSuggestionsStyle({
+            left: `${left}px`,
+            top: `${top}px`,
+            width: `${width}px`,
+            maxHeight: `${maxHeight}px`,
+        });
+    }, []);
+
+    useEffect(() => {
+        if (! isSuggestionsOpen) {
+            return undefined;
+        }
+
+        function handlePointerDown(event) {
+            const target = event.target;
+            const isInsideField = wrapperRef.current?.contains(target);
+            const isInsideSuggestions = suggestionsRef.current?.contains(target);
+
+            if (! isInsideField && ! isInsideSuggestions) {
+                setIsSuggestionsOpen(false);
+            }
+        }
+
+        function handleKeyDown(event) {
+            if (event.key === 'Escape') {
+                setIsSuggestionsOpen(false);
+            }
+        }
+
+        function handleViewportChange() {
+            updateSuggestionsPosition();
+        }
+
+        document.addEventListener('pointerdown', handlePointerDown);
+        document.addEventListener('keydown', handleKeyDown);
+        window.addEventListener('resize', handleViewportChange);
+        window.addEventListener('scroll', handleViewportChange, true);
+
+        return () => {
+            document.removeEventListener('pointerdown', handlePointerDown);
+            document.removeEventListener('keydown', handleKeyDown);
+            window.removeEventListener('resize', handleViewportChange);
+            window.removeEventListener('scroll', handleViewportChange, true);
+        };
+    }, [isSuggestionsOpen, updateSuggestionsPosition]);
+
+    useLayoutEffect(() => {
+        if (isSuggestionsOpen) {
+            updateSuggestionsPosition();
+        }
+    }, [isSuggestionsOpen, visibleSuggestions.length, updateSuggestionsPosition]);
+
+    const suggestionsList = isSuggestionsOpen && visibleSuggestions.length > 0 && typeof document !== 'undefined' ? createPortal(
+        <div
+            ref={suggestionsRef}
+            className="ac-v3-builder__dialog-field-suggestions"
+            data-role="scenario-edge-dialog-field-key-suggestions"
+            data-field-key-purpose={purpose}
+            style={suggestionsStyle ?? undefined}
+        >
+            {visibleSuggestions.map((suggestion) => (
+                <button
+                    key={suggestion.key}
+                    type="button"
+                    data-role="scenario-edge-dialog-field-key-option"
+                    data-field-key={suggestion.key}
+                    title={`${suggestion.key} — ${suggestion.label}`}
+                    onClick={() => {
+                        onChange(suggestion.key);
+                        setIsSuggestionsOpen(false);
+                    }}
+                >
+                    <strong>{suggestion.key}</strong>
+                    <span>{suggestion.label}</span>
+                </button>
+            ))}
+        </div>,
+        document.body,
+    ) : null;
 
     return (
-        <div className="ac-v3-builder__dialog-field-key">
-            <input
-                data-role="scenario-edge-dialog-field-key-input"
-                data-field-key-purpose={purpose}
-                aria-invalid={isInvalid ? 'true' : 'false'}
-                value={fieldKey}
-                placeholder={placeholder}
-                onChange={(event) => onChange(event.target.value)}
-            />
-            {visibleSuggestions.length > 0 ? (
-                <div
-                    className="ac-v3-builder__dialog-field-suggestions"
-                    data-role="scenario-edge-dialog-field-key-suggestions"
+        <div className="ac-v3-builder__dialog-field-key" ref={wrapperRef}>
+            <div className="ac-v3-builder__dialog-field-key-control">
+                <input
+                    data-role="scenario-edge-dialog-field-key-input"
                     data-field-key-purpose={purpose}
-                >
-                    {visibleSuggestions.map((suggestion) => (
-                        <button
-                            key={suggestion}
-                            type="button"
-                            data-role="scenario-edge-dialog-field-key-option"
-                            data-field-key={suggestion}
-                            onClick={() => onChange(suggestion)}
-                        >
-                            {suggestion}
-                        </button>
-                    ))}
-                </div>
-            ) : null}
+                    aria-invalid={isInvalid ? 'true' : 'false'}
+                    value={fieldKey}
+                    placeholder={placeholder}
+                    onChange={(event) => onChange(event.target.value)}
+                />
+                {visibleSuggestions.length > 0 ? (
+                    <button
+                        type="button"
+                        className="ac-v3-builder__dialog-field-suggestions-toggle"
+                        aria-expanded={isSuggestionsOpen ? 'true' : 'false'}
+                        onClick={() => setIsSuggestionsOpen((value) => ! value)}
+                    >
+                        Поля
+                    </button>
+                ) : null}
+                {suggestionsList}
+            </div>
             {isInvalid ? (
                 <p
                     className="ac-v3-builder__field-error"
@@ -7981,7 +8104,7 @@ function existingActionItems(actionModule) {
 }
 
 function regularActionItems(actionModule) {
-    return existingActionItems(actionModule).filter((item) => item.type !== ACTION_TYPE_VARIABLES);
+    return existingActionItems(actionModule);
 }
 
 function calculatorActionItems(actionModule) {
@@ -8238,7 +8361,11 @@ function actionItemSummary(item) {
     if (item.type === ACTION_TYPE_VARIABLES) {
         const count = normalizeVariableOperations(item.operations).length;
 
-        return `Калькулятор → ${count} ${pluralActions(count)}`;
+        return `Переменные → ${count} ${pluralActions(count)}`;
+    }
+
+    if (item.type === ACTION_TYPE_SIMULATE_START_PARAMETER) {
+        return `Старт → {{dialog.${item.source_field_key || 'start_param'}}}`;
     }
 
     if (item.type === ACTION_TYPE_WRITE_CONTACT_FIELD) {
@@ -8428,6 +8555,9 @@ function normalizeVariableOperation(operation) {
     return {
         operation: 'set',
         field_key: fieldKey,
+        value_source: VARIABLE_SET_VALUE_SOURCE_OPTIONS.some(([value]) => value === operation.value_source)
+            ? operation.value_source
+            : 'static_value',
         value: String(operation.value ?? ''),
     };
 }
@@ -8462,6 +8592,7 @@ function actionItems(actionModule) {
             || item.type === ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW
             || isGeoCityResultActionType(item.type)
             || item.type === ACTION_TYPE_VARIABLES
+            || item.type === ACTION_TYPE_SIMULATE_START_PARAMETER
             || item.target_field !== ''
         ));
 
@@ -8475,11 +8606,13 @@ function normalizeActionItemForType(item) {
             ? ACTION_TYPE_EDIT_MESSAGE
             : (item.type === ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW
                 ? ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW
-                : (isGeoCityResultActionType(item.type)
-                    ? item.type
-                    : (item.type === ACTION_TYPE_VARIABLES
-                        ? ACTION_TYPE_VARIABLES
-                        : ACTION_TYPE_WRITE_CONTACT_FIELD))));
+                    : (isGeoCityResultActionType(item.type)
+                        ? item.type
+                        : (item.type === ACTION_TYPE_VARIABLES
+                            ? ACTION_TYPE_VARIABLES
+                            : (item.type === ACTION_TYPE_SIMULATE_START_PARAMETER
+                                ? ACTION_TYPE_SIMULATE_START_PARAMETER
+                                : ACTION_TYPE_WRITE_CONTACT_FIELD)))));
 
     if (type === ACTION_TYPE_EDIT_MESSAGE) {
         const operation = item.operation === ACTION_EDIT_MESSAGE_OPERATION_DELETE_MESSAGE
@@ -8526,6 +8659,14 @@ function normalizeActionItemForType(item) {
         return {
             type,
             operations: normalizeVariableOperations(item.operations),
+        };
+    }
+
+    if (type === ACTION_TYPE_SIMULATE_START_PARAMETER) {
+        return {
+            type,
+            source_scope: 'dialog',
+            source_field_key: normalizeDialogFieldKey(item.source_field_key || 'start_param'),
         };
     }
 

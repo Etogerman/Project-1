@@ -3482,6 +3482,7 @@ class ScenarioBuilderV3StateTest extends TestCase
             ->assertJsonPath('builder.edges.1.condition_payload.mode', 'automatic')
             ->assertJsonPath('builder.blocks.2.settings_payload.modules.0.payload.text_mode', 'by_dialog_variable')
             ->assertJsonPath('builder.blocks.2.settings_payload.modules.0.payload.variable_key', 'спросили_имя')
+            ->assertJsonPath('builder.blocks.2.settings_payload.modules.0.payload.variable_text_variants.1.operator', 'gte')
             ->json();
 
         $this->actingAs($admin)
@@ -3521,6 +3522,10 @@ class ScenarioBuilderV3StateTest extends TestCase
         $this->assertSame(
             'спросили_имя',
             data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$messageBlockId.message.variable_key"),
+        );
+        $this->assertSame(
+            'gte',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$messageBlockId.message.variable_text_variants.1.operator"),
         );
     }
 
@@ -4144,8 +4149,8 @@ class ScenarioBuilderV3StateTest extends TestCase
         data_set($settings, 'modules.0.payload.text_mode', 'by_dialog_variable');
         data_set($settings, 'modules.0.payload.variable_key', 'спросили_имя');
         data_set($settings, 'modules.0.payload.variable_text_variants', [
-            ['value' => '1', 'text' => 'Как тебя зовут?'],
-            ['value' => '2', 'text' => 'Напиши полное нормальное имя'],
+            ['operator' => 'eq', 'value' => '1', 'text' => 'Как тебя зовут?'],
+            ['operator' => 'gte', 'value' => '2', 'text' => 'Напиши полное нормальное имя'],
         ]);
         data_set($settings, 'modules.0.payload.fallback_text', 'Подскажи имя');
 

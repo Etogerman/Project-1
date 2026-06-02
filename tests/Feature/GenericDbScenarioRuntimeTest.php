@@ -1388,6 +1388,204 @@ class GenericDbScenarioRuntimeTest extends TestCase
             && $request['text'] === 'Попытка записана');
     }
 
+    public function test_v3_variables_action_can_store_start_parameter(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9713],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $schema = $this->v3VariablesRuntimeSchema($channel->id);
+        data_set($schema, 'builder_v3_runtime.entrypoints.0.values', ['/start 123321']);
+        data_set($schema, 'builder_v3_runtime.blocks.variables.actions.0.operations', [[
+            'operation' => 'set',
+            'field_key' => 'start_param',
+            'value_source' => 'start_param',
+            'value' => '',
+        ]]);
+        $scenario = $this->createPublishedScenario('v3_variables_start_param', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => '/start 123321',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $dialog->refresh();
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->assertSame('123321', data_get($dialog->fields_payload, 'start_param'));
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('done', $run->current_step);
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['text'] === 'Попытка записана');
+    }
+
+    public function test_v3_variables_action_can_store_message_parameter_start_parameter(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9714],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $schema = $this->v3VariablesRuntimeSchema($channel->id);
+        data_set($schema, 'builder_v3_runtime.entrypoints.0.values', ['/start fallback']);
+        data_set($schema, 'builder_v3_runtime.blocks.variables.actions.0.operations', [[
+            'operation' => 'set',
+            'field_key' => 'start_param',
+            'value_source' => 'start_param',
+            'value' => '',
+        ]]);
+        $scenario = $this->createPublishedScenario('v3_variables_message_parameter_start_param', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => '/start fallback',
+            'message_parameter' => '123321',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $dialog->refresh();
+
+        $this->assertSame('123321', data_get($dialog->fields_payload, 'start_param'));
+    }
+
+    public function test_v3_simulate_start_parameter_reroutes_to_matching_start_block(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9715],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $dialog->forceFill(['fields_payload' => ['start_param' => 'payload_42']])->save();
+        $scenario = $this->createPublishedScenario('v3_simulate_start_parameter', $this->v3SimulateStartParameterRuntimeSchema($channel->id));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'анкета',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $dialog->refresh();
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->assertSame('payload_42', data_get($dialog->fields_payload, 'start_param'));
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('payload_start', $run->current_step);
+        $this->assertSame('payload_start', data_get($run->state_payload, 'v3.current_block_id'));
+        $this->assertSame(1, Message::query()
+            ->where('dialog_id', $dialog->id)
+            ->where('direction', Message::DIRECTION_INBOUND)
+            ->count());
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['text'] === 'Сработал параметр payload_42');
+        Http::assertNotSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['text'] === 'Обычное продолжение');
+    }
+
+    public function test_v3_simulate_start_parameter_continues_when_parameter_has_no_start_block(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9716],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $dialog->forceFill(['fields_payload' => ['start_param' => 'unknown_payload']])->save();
+        $scenario = $this->createPublishedScenario('v3_simulate_start_parameter_noop', $this->v3SimulateStartParameterRuntimeSchema($channel->id));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'анкета',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('after_noop', $run->current_step);
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['text'] === 'Обычное продолжение');
+    }
+
     public function test_v3_variables_action_fails_and_rolls_back_when_increment_value_is_not_numeric(): void
     {
         Http::fake([
@@ -1471,6 +1669,58 @@ class GenericDbScenarioRuntimeTest extends TestCase
 
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && $request['text'] === 'Напиши имя полностью');
+    }
+
+    public function test_v3_message_can_pick_text_by_numeric_dialog_variable_operator(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9713],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $dialog->forceFill(['fields_payload' => ['спросили_имя' => 3]])->save();
+        $schema = $this->v3VariableMessageRuntimeSchema($channel->id);
+        data_set($schema, 'builder_v3_runtime.blocks.ask_name.message.variable_text_variants', [
+            [
+                'operator' => 'eq',
+                'value' => '1',
+                'text' => 'Как тебя зовут?',
+            ],
+            [
+                'operator' => 'gte',
+                'value' => '3',
+                'text' => "Три попытки прошло\nПередаю оператору",
+            ],
+        ]);
+        $scenario = $this->createPublishedScenario('v3_variable_message_operator', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['text'] === "Три попытки прошло\nПередаю оператору");
     }
 
     public function test_v3_edge_expression_supports_numeric_dialog_variables_with_cyrillic_keys(): void
@@ -9782,6 +10032,97 @@ class GenericDbScenarioRuntimeTest extends TestCase
                     ],
                 ],
                 'edges' => [$doneEdge],
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function v3SimulateStartParameterRuntimeSchema(int $channelId): array
+    {
+        $afterNoopEdge = [
+            'id' => '20',
+            'edge_key' => 'edge_after_noop',
+            'mode' => 'automatic',
+            'priority' => 10,
+            'transition_limit' => 0,
+            'source_block_id' => 'simulate',
+            'target_block_id' => 'after_noop',
+            'from_output_id' => null,
+            'label' => 'Дальше',
+        ];
+
+        return [
+            'version' => 3,
+            'builder_v3_runtime' => [
+                'schema_version' => 3,
+                'source_revision' => 'v3:test',
+                'compiled_at' => now()->toISOString(),
+                'entrypoints' => [
+                    [
+                        'block_id' => 'simulate',
+                        'channel_ids' => [$channelId],
+                        'match' => 'strict',
+                        'values' => ['анкета'],
+                        'priority' => 10,
+                    ],
+                    [
+                        'block_id' => 'payload_start',
+                        'channel_ids' => [$channelId],
+                        'match' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+                        'values' => ['payload_42'],
+                        'priority' => 10,
+                    ],
+                ],
+                'blocks' => [
+                    'simulate' => [
+                        'id' => 'simulate',
+                        'db_id' => 1,
+                        'kind' => 'state',
+                        'title' => 'Имитировать старт',
+                        'actions' => [[
+                            'type' => 'simulate_start_parameter',
+                            'source_scope' => 'dialog',
+                            'source_field_key' => 'start_param',
+                        ]],
+                        'message' => null,
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [$afterNoopEdge],
+                        'action_result_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                    'payload_start' => [
+                        'id' => 'payload_start',
+                        'db_id' => 2,
+                        'kind' => 'state',
+                        'title' => 'Старт по параметру',
+                        'message' => [
+                            'text' => 'Сработал параметр {{input.start_param}}',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                    'after_noop' => [
+                        'id' => 'after_noop',
+                        'db_id' => 3,
+                        'kind' => 'state',
+                        'title' => 'Обычное продолжение',
+                        'message' => [
+                            'text' => 'Обычное продолжение',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                ],
+                'edges' => [$afterNoopEdge],
             ],
         ];
     }

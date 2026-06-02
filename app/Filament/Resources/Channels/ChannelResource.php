@@ -3,11 +3,13 @@
 namespace App\Filament\Resources\Channels;
 
 use App\Filament\Resources\Channels\Pages\ManageChannels;
+use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Channel;
 use App\Models\ChannelActivityLog;
 use App\Models\ChannelConnectionType;
 use App\Models\ChannelRuntimeState;
 use App\Models\Message;
+use App\Models\ScenarioVersion;
 use App\Services\Bots\CheckChannelConnectionAction;
 use App\Services\Bots\RegisterChannelWebhookAction;
 use App\Services\Bots\SyncChannelBotMetadataAction;
@@ -783,10 +785,14 @@ class ChannelResource extends Resource
                         ? 'Удалить канал'
                         : 'Удаление недоступно: '.implode('; ', static::channelDeleteBlockers($record)))
                     ->visible(fn (Channel $record): bool => static::canDeleteChannel($record))
-                    ->disabled(fn (Channel $record): bool => static::channelDeleteBlockers($record) !== [])
                     ->requiresConfirmation()
-                    ->modalHeading(fn (Channel $record): string => "Удалить канал «{$record->name}»?")
-                    ->modalDescription('Канал будет удалён только если он ещё не используется в диалогах, сообщениях, сценариях, автоответах или Bitrix24-маршрутах.')
+                    ->modalHeading(fn (Channel $record): string => static::channelDeleteBlockers($record) === []
+                        ? "Удалить канал «{$record->name}»?"
+                        : "Канал «{$record->name}» нельзя удалить")
+                    ->modalDescription(fn (Channel $record): string|HtmlString => static::channelDeleteModalDescription($record))
+                    ->modalSubmitActionLabel(fn (Channel $record): string => static::channelDeleteBlockers($record) === []
+                        ? 'Удалить'
+                        : 'Понятно')
                     ->action(function (Channel $record): void {
                         static::authorizeChannelDelete($record);
 
@@ -802,7 +808,11 @@ class ChannelResource extends Resource
                             return;
                         }
 
-                        DB::transaction(fn (): ?bool => $record->delete());
+                        DB::transaction(function () use ($record): void {
+                            static::deleteAutoCleanableBitrix24Routes($record);
+
+                            $record->delete();
+                        });
 
                         Notification::make()
                             ->success()
@@ -839,12 +849,19 @@ class ChannelResource extends Resource
     protected static function channelDeleteBlockers(Channel $record): array
     {
         $channelId = (int) $record->getKey();
+
         $checks = [
             'диалоги' => $record->dialogs()->count(),
-            'сообщения' => $record->messages()->count(),
-            'идентификаторы контактов' => $record->contactIdentities()->count(),
-            'Bitrix24-маршруты' => $record->bitrix24OpenLineRoutes()->count(),
-            'сценарии канала' => $record->scenarioBindings()->count(),
+            'сообщения активных диалогов' => $record->messages()
+                ->whereNotNull('dialog_id')
+                ->count(),
+            'идентификаторы контактов активных диалогов' => $record->contactIdentities()
+                ->whereHas('currentDialogs')
+                ->count(),
+            'Bitrix24-маршруты' => static::blockingBitrix24RoutesQuery($record)->count(),
+            'активные сценарии канала' => $record->scenarioBindings()
+                ->where('is_active', true)
+                ->count(),
             'правила автоответа' => DB::table('auto_reply_rules')
                 ->where('channel_id', $channelId)
                 ->count(),
@@ -855,7 +872,13 @@ class ChannelResource extends Resource
                 ->where('channel_id', $channelId)
                 ->count(),
             'блоки V3-конструктора' => DB::table('scenario_builder_block_channels')
-                ->where('channel_id', $channelId)
+                ->join('scenario_builder_blocks', 'scenario_builder_blocks.id', '=', 'scenario_builder_block_channels.scenario_builder_block_id')
+                ->join('scenario_versions', 'scenario_versions.id', '=', 'scenario_builder_blocks.scenario_version_id')
+                ->where('scenario_builder_block_channels.channel_id', $channelId)
+                ->whereIn('scenario_versions.status', [
+                    ScenarioVersion::STATUS_DRAFT,
+                    ScenarioVersion::STATUS_PUBLISHED,
+                ])
                 ->count(),
             'запуски старого конструктора' => DB::table('bot_constructor_executions')
                 ->where('channel_id', $channelId)
@@ -876,6 +899,75 @@ class ChannelResource extends Resource
             ->map(fn (int $count, string $label): string => "{$label}: {$count}")
             ->values()
             ->all();
+    }
+
+    protected static function channelDeleteModalDescription(Channel $record): string|HtmlString
+    {
+        $blockers = static::channelDeleteBlockers($record);
+        $autoCleanableRouteCount = static::autoCleanableBitrix24RoutesQuery($record)->count();
+        $autoCleanableHistoryCounts = static::autoCleanableChannelHistoryCounts($record);
+
+        if ($blockers === []) {
+            $hasAutoCleanableHistory = $autoCleanableHistoryCounts['messages'] > 0
+                || $autoCleanableHistoryCounts['contactIdentities'] > 0;
+
+            $description = 'Канал можно удалить. Активных диалогов для него нет.';
+
+            if ($autoCleanableRouteCount > 0) {
+                $description .= " Неактивные Bitrix24-маршруты без диалогов будут очищены автоматически: {$autoCleanableRouteCount}.";
+            }
+
+            if ($hasAutoCleanableHistory) {
+                $description .= ' Старая история канала без диалогов очистится вместе с каналом.';
+            }
+
+            return $description;
+        }
+
+        $blockerLines = collect($blockers)
+            ->map(fn (string $blocker): string => '• '.e($blocker))
+            ->implode('<br>');
+
+        return new HtmlString("Сначала уберите связанные данные:<br><br>{$blockerLines}");
+    }
+
+    protected static function blockingBitrix24RoutesQuery(Channel $record): Builder
+    {
+        return Bitrix24OpenLineRoute::query()
+            ->where('channel_id', (int) $record->getKey())
+            ->where(function (Builder $query): void {
+                $query
+                    ->where('status', '!=', Bitrix24OpenLineRoute::STATUS_INACTIVE)
+                    ->orWhereHas('dialogs');
+            });
+    }
+
+    protected static function autoCleanableBitrix24RoutesQuery(Channel $record): Builder
+    {
+        return Bitrix24OpenLineRoute::query()
+            ->where('channel_id', (int) $record->getKey())
+            ->where('status', Bitrix24OpenLineRoute::STATUS_INACTIVE)
+            ->whereDoesntHave('dialogs');
+    }
+
+    protected static function deleteAutoCleanableBitrix24Routes(Channel $record): void
+    {
+        static::autoCleanableBitrix24RoutesQuery($record)->delete();
+    }
+
+    /**
+     * @return array{messages:int, contactIdentities:int}
+     */
+    protected static function autoCleanableChannelHistoryCounts(Channel $record): array
+    {
+        return [
+            'messages' => $record->messages()
+                ->whereNull('dialog_id')
+                ->count(),
+            'contactIdentities' => $record->contactIdentities()
+                ->whereDoesntHave('currentDialogs')
+                ->count(),
+        ];
     }
 
     public static function getPages(): array
