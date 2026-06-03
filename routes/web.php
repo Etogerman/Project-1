@@ -64,6 +64,9 @@ Route::middleware('auth')
 
         Route::post('/sheet/import/apply', [ScenarioBuilderV3StateController::class, 'applySheetImport'])
             ->name('sheet.import.apply');
+
+        Route::post('/auto-reply/import/preview', [ScenarioBuilderV3StateController::class, 'previewAutoReplyImport'])
+            ->name('auto-reply.import.preview');
     });
 
 Route::match(['GET', 'POST'], '/callbacks/bitrix24/install', [Bitrix24CallbackController::class, 'install'])

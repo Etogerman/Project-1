@@ -8,8 +8,10 @@ use App\Models\User;
 use App\Services\Scenarios\BuildScenarioBuilderV3StateAction;
 use App\Services\Scenarios\PublishScenarioBuilderV3Action;
 use App\Services\Scenarios\SaveScenarioBuilderV3StateAction;
+use App\Services\Scenarios\ScenarioBuilderV3AutoReplyImportPlanService;
 use App\Services\Scenarios\ScenarioBuilderV3SheetTransferService;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
 
@@ -45,6 +47,7 @@ class ScenarioBuilderV3StateController extends Controller
         $draftVersionId = (int) ($request->integer('draft_version_id') ?: $request->integer('editable_version_id'));
         $baseRevision = trim((string) $request->input('base_revision', ''));
         $scheduledTransitionPolicy = trim((string) $request->input('scheduled_transition_policy', ''));
+        $confirmAutoReplyImportRisk = $request->boolean('confirm_auto_reply_import_double_response_risk');
 
         if (
             $scheduledTransitionPolicy !== ''
@@ -56,6 +59,18 @@ class ScenarioBuilderV3StateController extends Controller
             throw ValidationException::withMessages([
                 'scheduled_transition_policy' => 'Неизвестное действие для запланированных переходов.',
             ]);
+        }
+
+        $autoReplyImportSummary = $publishScenarioBuilderV3Action->autoReplyImportSummary($scenario, $draftVersionId);
+
+        if ($autoReplyImportSummary['count'] > 0 && ! $confirmAutoReplyImportRisk) {
+            return response()->json([
+                'message' => 'В сценарии есть импортированные автоответы. Подтвердите риск двойных ответов перед публикацией.',
+                'code' => 'auto_reply_import_double_response_risk',
+                'warning' => [
+                    'auto_reply_import' => $autoReplyImportSummary,
+                ],
+            ], 409);
         }
 
         $scheduledTransitions = $publishScenarioBuilderV3Action->pendingScheduledTransitionsSummary($scenario);
@@ -126,6 +141,62 @@ class ScenarioBuilderV3StateController extends Controller
         $user = $this->authorizeScenarioBuilderAccess($request, $scenario);
 
         return response()->json($sheetTransferService->apply($scenario, $user, $request->all()));
+    }
+
+    public function previewAutoReplyImport(
+        Request $request,
+        Scenario $scenario,
+        ScenarioBuilderV3AutoReplyImportPlanService $autoReplyImportPlanService,
+    ): JsonResponse {
+        $user = $this->authorizeScenarioBuilderAccess($request, $scenario);
+
+        $request->validate([
+            'workbook' => ['required', 'file', 'mimes:xlsx', 'max:10240'],
+        ]);
+
+        $workbook = $request->file('workbook');
+
+        if (! $workbook instanceof UploadedFile) {
+            throw ValidationException::withMessages([
+                'workbook' => 'Нужно выбрать XLSX-файл.',
+            ]);
+        }
+
+        return response()->json($autoReplyImportPlanService->preview(
+            $scenario,
+            $user,
+            $workbook,
+            $this->decodeAutoReplyImportPayload($request),
+        ));
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function decodeAutoReplyImportPayload(Request $request): array
+    {
+        $payload = [];
+
+        foreach ([
+            'builder_state',
+            'channel_mappings',
+            'tag_mappings',
+            'excluded_row_numbers',
+            'overwrite_conflict_row_numbers',
+        ] as $key) {
+            $value = $request->input($key);
+
+            if (is_string($value)) {
+                $decoded = json_decode($value, true);
+                $payload[$key] = is_array($decoded) ? $decoded : $value;
+
+                continue;
+            }
+
+            $payload[$key] = $value;
+        }
+
+        return $payload;
     }
 
     private function authorizeScenarioBuilderAccess(Request $request, Scenario $scenario): User

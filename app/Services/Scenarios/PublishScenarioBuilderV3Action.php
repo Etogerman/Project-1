@@ -147,6 +147,47 @@ class PublishScenarioBuilderV3Action
         ];
     }
 
+    /**
+     * @return array{count: int, items: list<array{block_id: int, title: string, source_rule_id: int|null, source_rule_name: string}>}
+     */
+    public function autoReplyImportSummary(Scenario $scenario, int $draftVersionId): array
+    {
+        $version = ScenarioVersion::query()
+            ->whereKey($draftVersionId)
+            ->where('scenario_id', $scenario->id)
+            ->where('status', ScenarioVersion::STATUS_DRAFT)
+            ->first();
+
+        if (! $version instanceof ScenarioVersion) {
+            return [
+                'count' => 0,
+                'items' => [],
+            ];
+        }
+
+        $blocks = $version->builderBlocks()
+            ->orderBy('id')
+            ->get()
+            ->filter(fn ($block): bool => data_get($block->settings_payload, 'ui.import_source.type') === 'auto_reply_rule_xlsx')
+            ->values();
+
+        return [
+            'count' => $blocks->count(),
+            'items' => $blocks
+                ->take(5)
+                ->map(fn ($block): array => [
+                    'block_id' => (int) $block->id,
+                    'title' => (string) $block->title,
+                    'source_rule_id' => data_get($block->settings_payload, 'ui.import_source.source_rule_id') !== null
+                        ? (int) data_get($block->settings_payload, 'ui.import_source.source_rule_id')
+                        : null,
+                    'source_rule_name' => (string) data_get($block->settings_payload, 'ui.import_source.source_rule_name', ''),
+                ])
+                ->values()
+                ->all(),
+        ];
+    }
+
     private function syncScenarioBindings(ScenarioVersion $publishedVersion, User $user): void
     {
         $scenario = $publishedVersion->scenario()->firstOrFail();

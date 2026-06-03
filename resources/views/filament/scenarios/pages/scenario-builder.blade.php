@@ -11,6 +11,7 @@
         data-sheet-export-url="{{ $scenarioBuilderV3Config['sheetExportUrl'] }}"
         data-sheet-import-preview-url="{{ $scenarioBuilderV3Config['sheetImportPreviewUrl'] }}"
         data-sheet-import-apply-url="{{ $scenarioBuilderV3Config['sheetImportApplyUrl'] }}"
+        data-auto-reply-import-preview-url="{{ $scenarioBuilderV3Config['autoReplyImportPreviewUrl'] }}"
         data-csrf-token="{{ $scenarioBuilderV3Config['csrfToken'] }}"
     >
         <section class="ac-v3-builder" data-status="loading">

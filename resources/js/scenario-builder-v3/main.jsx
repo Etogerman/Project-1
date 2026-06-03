@@ -18,6 +18,7 @@ document.querySelectorAll('[data-scenario-builder-v3]').forEach((element) => {
             sheetExportUrl={element.dataset.sheetExportUrl}
             sheetImportPreviewUrl={element.dataset.sheetImportPreviewUrl}
             sheetImportApplyUrl={element.dataset.sheetImportApplyUrl}
+            autoReplyImportPreviewUrl={element.dataset.autoReplyImportPreviewUrl}
             csrfToken={element.dataset.csrfToken}
         />,
     );

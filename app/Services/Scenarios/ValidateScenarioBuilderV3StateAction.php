@@ -4,6 +4,7 @@ namespace App\Services\Scenarios;
 
 use App\Models\AutoReplyRule;
 use App\Models\Channel;
+use App\Models\Tag;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Collection;
 use Illuminate\Validation\ValidationException;
@@ -62,6 +63,7 @@ class ValidateScenarioBuilderV3StateAction
         'resolve_geo_city',
         'variables',
         'simulate_start_parameter',
+        'tag_effects',
     ];
 
     private const ACTION_RESULT_TYPES = ['check_data', 'calculate_distance_to_moscow', 'resolve_geo_city'];
@@ -103,6 +105,8 @@ class ValidateScenarioBuilderV3StateAction
     private const ACTION_EDIT_MESSAGE_TARGETS = ['last_current_run_outbound_with_inline_buttons', 'last_current_run_outbound'];
 
     private const VARIABLE_SET_VALUE_SOURCES = ['static_value', 'current_message', 'start_param'];
+
+    private const MAX_TAG_EFFECT_IDS = 20;
 
     private const BLOCK_KINDS = ['state', 'non_state'];
 

@@ -11,6 +11,7 @@ use App\Models\ScenarioBuilderEdge;
 use App\Models\ScenarioV3OutboundMessage;
 use App\Models\ScenarioV3ScheduledTransition;
 use App\Models\ScenarioVersion;
+use App\Models\Tag;
 use App\Models\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
@@ -71,6 +72,7 @@ class BuildScenarioBuilderV3StateAction
             'builder' => $builder,
             'catalogs' => [
                 'channels' => $this->channelsCatalog($user),
+                'tags' => $this->tagsCatalog(),
                 'field_dictionary' => FieldDictionaryField::constructorCatalog(),
                 'module_types' => ['start_condition', 'message', 'buttons'],
             ],
@@ -143,6 +145,24 @@ class BuildScenarioBuilderV3StateAction
             'timezone_abbr' => $now->format('T'),
             'utc_offset' => $now->format('P'),
         ];
+    }
+
+    /**
+     * @return list<array{id: int, name: string, color: string}>
+     */
+    private function tagsCatalog(): array
+    {
+        return Tag::query()
+            ->active()
+            ->orderBy('name')
+            ->get()
+            ->map(fn (Tag $tag): array => [
+                'id' => (int) $tag->id,
+                'name' => (string) $tag->name,
+                'color' => (string) $tag->color,
+            ])
+            ->values()
+            ->all();
     }
 
     /**
