@@ -3475,6 +3475,12 @@
         padding: 0.55rem 0.75rem;
     }
 
+    .ac-dialog-side-list .ac-meta--assignee-editing {
+        grid-template-columns: minmax(6.8rem, 0.72fr) minmax(0, 1fr);
+        align-items: center;
+        gap: 0.7rem;
+    }
+
     .ac-dialog-status-toggle {
         justify-self: end;
         display: inline-flex;
@@ -3512,6 +3518,63 @@
         min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;
+    }
+
+    .ac-dialog-assignee-editor {
+        justify-self: end;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 0.3rem;
+        min-width: 0;
+        width: fit-content;
+        max-width: 100%;
+    }
+
+    .ac-dialog-assignee-editor .ac-select {
+        flex: 0 1 auto;
+        width: auto;
+        min-width: 8.25rem;
+        max-width: min(11.75rem, 100%);
+        min-height: 1.72rem;
+        padding: 0.28rem 0.52rem;
+        font-size: 0.74rem;
+    }
+
+    .ac-dialog-assignee-save {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 1.65rem;
+        min-height: 1.65rem;
+        height: 1.65rem;
+        flex: 0 0 1.65rem;
+        border: 1px solid color-mix(in srgb, var(--ac-success) 42%, transparent);
+        border-radius: 0.38rem;
+        background: var(--ac-success);
+        color: #ffffff;
+        font-size: 0.82rem;
+        font-weight: 800;
+        line-height: 1;
+        cursor: pointer;
+        box-shadow: var(--ac-shadow-sm);
+        transition: background 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+    }
+
+    .ac-dialog-assignee-save:hover:not(:disabled),
+    .ac-dialog-assignee-save:focus-visible:not(:disabled) {
+        background: color-mix(in srgb, var(--ac-success) 88%, var(--ac-text));
+        box-shadow: 0 12px 22px -18px color-mix(in srgb, var(--ac-success) 55%, transparent);
+    }
+
+    .ac-dialog-assignee-save:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--ac-success) 32%, transparent);
+        outline-offset: 2px;
+    }
+
+    .ac-dialog-assignee-save:disabled {
+        cursor: wait;
+        opacity: 0.7;
     }
 
     .ac-surface {
@@ -9307,6 +9370,17 @@
 
         .ac-dialog-status-toggle {
             justify-self: stretch;
+        }
+
+        .ac-dialog-assignee-editor {
+            justify-self: stretch;
+            flex-wrap: wrap;
+        }
+
+        .ac-dialog-assignee-editor .ac-select {
+            flex: 1 1 11rem;
+            width: auto;
+            max-width: 100%;
         }
 
         .ac-composer {

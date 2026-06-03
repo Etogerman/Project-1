@@ -1078,10 +1078,13 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('Статус')
             ->assertSee('Требует ответа')
             ->assertSee('Не требует ответа')
+            ->assertSee('data-role="dialog-system-fields-section"', escape: false)
+            ->assertSee('data-field-key="status"', escape: false)
             ->assertSee('data-role="dialog-inbox-status-toggle"', escape: false)
             ->assertSee('data-role="dialog-inbox-status-current"', escape: false)
             ->assertSee('wire:click="setDialogInboxStatus', escape: false)
             ->assertSee('Сменить на: Не требует ответа')
+            ->assertDontSee('data-role="dialog-params-card"', escape: false)
             ->assertDontSee('data-role="dialog-inbox-status-option"', escape: false)
             ->assertDontSee('data-role="dialog-inbox-status-select"', escape: false)
             ->assertDontSee('data-role="dialog-inbox-status-help"', escape: false)
@@ -1090,6 +1093,136 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertDontSee('<p class="ac-field-help">', escape: false)
             ->assertDontSee('Рабочее место оператора')
             ->assertDontSee('Здесь показаны только сообщения текущего диалога в хронологическом порядке.');
+    }
+
+    public function test_dialog_view_renders_assignee_toggle_in_system_fields(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $assignee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'name' => 'Сотрудник Диалога',
+            'last_name' => 'Иванов',
+        ]);
+        $dialog = $this->createInboxDialog([
+            'assignedUserId' => $assignee->id,
+        ]);
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]))
+            ->assertOk()
+            ->assertSee('data-role="dialog-system-fields-section"', escape: false)
+            ->assertSee('data-field-key="assigned_user_id"', escape: false)
+            ->assertSee('data-role="dialog-assignee-toggle"', escape: false)
+            ->assertSee('data-role="dialog-assignee-current"', escape: false)
+            ->assertSee('wire:click="openDialogAssigneeEditor"', escape: false)
+            ->assertSee('Сотрудник Диалога Иванов')
+            ->assertDontSee('data-role="dialog-assignee-editor"', escape: false)
+            ->assertDontSee('data-role="dialog-assignee-dialog"', escape: false);
+    }
+
+    public function test_dialog_view_can_update_contact_assignee_from_system_fields(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $assignee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'name' => 'Новый Ответственный',
+            'last_name' => 'Петров',
+        ]);
+        $dialog = $this->createInboxDialog([
+            'assignedUserId' => null,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee('data-role="dialog-assignee-toggle"', escape: false)
+            ->call('openDialogAssigneeEditor')
+            ->assertSet('isDialogAssigneeEditing', true)
+            ->assertSet('selectedDialogAssigneeId', '')
+            ->assertSee('data-role="dialog-assignee-editor"', escape: false)
+            ->assertSee('data-role="dialog-assignee-select"', escape: false)
+            ->assertSee('data-role="dialog-save-assignee-button"', escape: false)
+            ->assertSee('aria-label="Сохранить ответственного"', escape: false)
+            ->assertSee('Новый Ответственный Петров')
+            ->set('selectedDialogAssigneeId', (string) $assignee->id)
+            ->call('saveDialogAssignee')
+            ->assertNotified()
+            ->assertSet('isDialogAssigneeEditing', false)
+            ->assertSee('Новый Ответственный Петров');
+
+        $this->assertSame($assignee->id, $dialog->contact->fresh()->assigned_user_id);
+    }
+
+    public function test_dialog_view_can_release_contact_assignee_from_system_fields(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $owner = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'name' => 'Текущий Ответственный',
+        ]);
+        $dialog = $this->createInboxDialog([
+            'assignedUserId' => $owner->id,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->call('openDialogAssigneeEditor')
+            ->assertSet('isDialogAssigneeEditing', true)
+            ->assertSet('selectedDialogAssigneeId', (string) $owner->id)
+            ->assertSee('data-role="dialog-assignee-select"', escape: false)
+            ->assertSee('data-role="dialog-save-assignee-button"', escape: false)
+            ->assertSee('aria-label="Сохранить ответственного"', escape: false)
+            ->assertSee('Свободен')
+            ->set('selectedDialogAssigneeId', '')
+            ->call('saveDialogAssignee')
+            ->assertNotified()
+            ->assertSet('isDialogAssigneeEditing', false)
+            ->assertSee('Свободен');
+
+        $this->assertNull($dialog->contact->fresh()->assigned_user_id);
+    }
+
+    public function test_dialog_view_renders_assignee_as_text_when_contact_ownership_is_forbidden(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+        $assignee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+            'name' => 'Видимый Ответственный',
+        ]);
+        $dialog = $this->createInboxDialog([
+            'assignedUserId' => $assignee->id,
+        ]);
+
+        DB::table('role_permissions')
+            ->where('role', User::ROLE_EMPLOYEE)
+            ->where('permission_key', 'contacts.edit')
+            ->update(['granted' => false]);
+
+        $employee = User::query()->findOrFail($employee->id);
+
+        $this->actingAs($employee)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]))
+            ->assertOk()
+            ->assertSee('data-field-key="assigned_user_id"', escape: false)
+            ->assertSee('Видимый Ответственный')
+            ->assertDontSee('data-role="dialog-assignee-toggle"', escape: false)
+            ->assertDontSee('wire:click="openDialogAssigneeEditor"', escape: false);
     }
 
     public function test_dialog_view_renders_dialog_stage_strip_instead_of_stage_select(): void

@@ -12,6 +12,7 @@ use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\FieldDictionaryField;
 use App\Models\Message;
+use App\Models\User;
 use App\Services\Contacts\ResolveContactDisplayNameAction;
 use App\Services\Dialogs\BuildConversationFeedViewDataAction;
 use App\Services\Dialogs\MessageChronology;
@@ -162,8 +163,8 @@ class DialogResource extends Resource
                     ->toggleable(),
                 TextColumn::make('assigned_user')
                     ->label('Ответственный')
-                    ->state(fn (Dialog $record): string => filled($record->contact?->assignedUser?->name)
-                        ? (string) $record->contact->assignedUser->name
+                    ->state(fn (Dialog $record): string => $record->contact?->assignedUser instanceof User
+                        ? $record->contact->assignedUser->getFilamentName()
                         : 'Свободен')
                     ->toggleable(),
                 TextColumn::make('channel_label')

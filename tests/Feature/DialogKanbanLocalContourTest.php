@@ -36,9 +36,16 @@ class DialogKanbanLocalContourTest extends TestCase
     public function test_active_admin_can_open_dialog_kanban_page(): void
     {
         $admin = $this->createAdmin();
+        $assignee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'name' => 'Оператор Канбана',
+            'last_name' => 'Петров',
+        ]);
         $dialog = $this->createKanbanDialog([
             'contactName' => 'Канбан Клиент',
             'stage' => Dialog::STAGE_NEW_DIALOG,
+            'assignedUserId' => $assignee->id,
         ]);
 
         $this->actingAs($admin)
@@ -53,6 +60,7 @@ class DialogKanbanLocalContourTest extends TestCase
             ->assertDontSee('Сортировка появится следующим срезом')
             ->assertDontSee('Требует проверки')
             ->assertSee($dialog->contact->display_name)
+            ->assertSee('Оператор Канбана Петров')
             ->assertSee('Открыть диалог');
     }
 
@@ -308,6 +316,8 @@ class DialogKanbanLocalContourTest extends TestCase
         $assignee = User::factory()->create([
             'is_active' => true,
             'is_admin' => false,
+            'name' => 'German',
+            'last_name' => 'Abrikosov',
         ]);
 
         Livewire::withQueryParams([
@@ -325,6 +335,7 @@ class DialogKanbanLocalContourTest extends TestCase
             ->assertSet('selectedInboxStatus', DialogInboxStatusData::CODE_NO_NEW)
             ->assertSet('search', '@german_abrikosov')
             ->assertSet('filtersPanelOpen', true)
+            ->assertSee('German Abrikosov')
             ->assertSeeInOrder(['Поиск', 'Канал', 'Ответственный', 'Маршрут', 'Статус диалога']);
     }
 
@@ -792,6 +803,7 @@ class DialogKanbanLocalContourTest extends TestCase
     {
         $contact = Contact::factory()->create([
             'name' => $overrides['contactName'] ?? 'Контакт канбана',
+            'assigned_user_id' => $overrides['assignedUserId'] ?? null,
         ]);
         $channel = Channel::factory()->create($overrides['channelAttributes'] ?? []);
         $identity = ContactIdentity::factory()->create([

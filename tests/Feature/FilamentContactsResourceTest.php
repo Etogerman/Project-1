@@ -1434,6 +1434,7 @@ class FilamentContactsResourceTest extends TestCase
             'is_active' => true,
             'is_admin' => false,
             'name' => 'Новый оператор',
+            'last_name' => 'Иванов',
         ]);
         $contact = Contact::factory()->create([
             'assigned_user_id' => $owner->id,
@@ -1443,11 +1444,11 @@ class FilamentContactsResourceTest extends TestCase
 
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->call('openAssignContactDialog')
-            ->assertSee('Новый оператор')
+            ->assertSee('Новый оператор Иванов')
             ->set('selectedAssigneeId', (string) $target->id)
             ->call('saveMountedContactAssignee')
             ->assertNotified()
-            ->assertSee('Новый оператор');
+            ->assertSee('Новый оператор Иванов');
 
         $contact->refresh();
 
@@ -4151,6 +4152,7 @@ class FilamentContactsResourceTest extends TestCase
             'is_active' => true,
             'is_admin' => true,
             'name' => 'Второй администратор',
+            'last_name' => 'Сидоров',
         ]);
         $contact = Contact::factory()->create();
 
@@ -4161,7 +4163,7 @@ class FilamentContactsResourceTest extends TestCase
             ->set('selectedAssigneeId', (string) $secondAdmin->id)
             ->call('saveMountedContactAssignee')
             ->assertNotified()
-            ->assertSee('Второй администратор');
+            ->assertSee('Второй администратор Сидоров');
 
         $contact->refresh();
 

@@ -1778,8 +1778,7 @@ class ContactResource extends Resource
             ->orderBy('name')
             ->get()
             ->filter(fn (User $user): bool => $user->canBeAssignedToContacts())
-            ->pluck('name', 'id')
-            ->map(fn (string $name, int|string $id): string => filled($name) ? $name : 'Сотрудник #'.$id)
+            ->mapWithKeys(fn (User $user): array => [$user->id => $user->getFilamentName()])
             ->all();
     }
 
@@ -1825,8 +1824,8 @@ class ContactResource extends Resource
     {
         $record->loadMissing('assignedUser');
 
-        return filled($record->assignedUser?->name)
-            ? (string) $record->assignedUser->name
+        return $record->assignedUser instanceof User
+            ? $record->assignedUser->getFilamentName()
             : 'Свободен';
     }
 
@@ -1834,8 +1833,8 @@ class ContactResource extends Resource
     {
         return match (static::getContactOwnershipState($record)) {
             'mine' => 'Контакт закреплён за вами.',
-            'other' => filled($record->assignedUser?->name)
-                ? 'Контакт закреплён за '.$record->assignedUser->name.'.'
+            'other' => $record->assignedUser instanceof User
+                ? 'Контакт закреплён за '.$record->assignedUser->getFilamentName().'.'
                 : 'Контакт уже назначен другому сотруднику.',
             default => 'Контакт пока свободен. Можно выбрать ответственного или оставить контакт свободным.',
         };

@@ -20,6 +20,7 @@ use App\Services\Bots\ContactIdentityAvatarStorage;
 use App\Services\Bots\SendManualDialogReplyAction;
 use App\Services\Contacts\ResolveContactDisplayNameAction;
 use App\Services\Contacts\ResolveRootContactAction;
+use App\Services\Contacts\SetContactAssigneeAction;
 use App\Services\Dialogs\BuildConversationFeedViewDataAction;
 use App\Services\Dialogs\LoadDialogMessagesPageAction;
 use App\Services\Dialogs\ResolveDialogInboxStatusAction;
@@ -78,6 +79,10 @@ class ViewDialog extends ViewRecord
     public string $dialogInboxStatusSelection = DialogInboxStatusData::CODE_NO_NEW;
 
     public string $dialogStageSelection = '';
+
+    public bool $isDialogAssigneeEditing = false;
+
+    public string $selectedDialogAssigneeId = '';
 
     public string $conversationDisplayMode = self::CONVERSATION_DISPLAY_MODE_FORMATTED;
 
@@ -239,6 +244,92 @@ class ViewDialog extends ViewRecord
 
         $this->dialogInboxStatusSelection = $status;
         $this->updateDialogInboxStatus();
+    }
+
+    public function openDialogAssigneeEditor(): void
+    {
+        if (! $this->canCurrentUserManageDialogContactOwnership()) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось открыть выбор ответственного')
+                ->body('Недостаточно прав для изменения ответственного.')
+                ->send();
+
+            return;
+        }
+
+        $contact = $this->resolveReplyOwnerContact();
+
+        if (! $contact instanceof Contact) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось открыть выбор ответственного')
+                ->body('У диалога нет связанного контакта.')
+                ->send();
+
+            return;
+        }
+
+        $this->selectedDialogAssigneeId = filled($contact->assigned_user_id)
+            ? (string) $contact->assigned_user_id
+            : '';
+        $this->isDialogAssigneeEditing = true;
+    }
+
+    public function closeDialogAssigneeEditor(): void
+    {
+        $this->isDialogAssigneeEditing = false;
+        $this->selectedDialogAssigneeId = '';
+    }
+
+    public function saveDialogAssignee(): void
+    {
+        if (! $this->canCurrentUserManageDialogContactOwnership()) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось сохранить ответственного')
+                ->body('Недостаточно прав для изменения ответственного.')
+                ->send();
+
+            return;
+        }
+
+        $contact = $this->resolveReplyOwnerContact();
+
+        if (! $contact instanceof Contact) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось сохранить ответственного')
+                ->body('У диалога нет связанного контакта.')
+                ->send();
+
+            return;
+        }
+
+        try {
+            $employee = $this->resolveCurrentEmployee();
+            $assigneeId = $this->selectedDialogAssigneeId !== ''
+                ? (int) $this->selectedDialogAssigneeId
+                : null;
+
+            app(SetContactAssigneeAction::class)->handle($contact, $employee, $assigneeId);
+
+            $this->isDialogAssigneeEditing = false;
+            $this->selectedDialogAssigneeId = '';
+            $this->refreshDialogRecord();
+
+            Notification::make()
+                ->success()
+                ->title('Ответственный обновлён')
+                ->body('Изменения сохранены.')
+                ->send();
+        } catch (Throwable $throwable) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось сохранить ответственного')
+                ->body($throwable->getMessage())
+                ->send();
+        }
     }
 
     public function updateDialogStage(): void
@@ -425,6 +516,7 @@ class ViewDialog extends ViewRecord
             'contactUrl' => $this->getContactViewUrl(),
             'dialogInboxStatus' => $this->getDialogInboxStatusViewData(),
             'dialogStage' => $this->getDialogStageViewData(),
+            'dialogAssignee' => $this->getDialogAssigneeViewData(),
             'conversationDisplayModeOptions' => $this->getConversationDisplayModeOptions(),
             'liveRefreshPollIntervalMs' => static::LIVE_REFRESH_INTERVAL_MS,
             'replyComposer' => $this->getReplyComposerViewData(),
@@ -561,6 +653,21 @@ class ViewDialog extends ViewRecord
                 ])
                 ->values()
                 ->all(),
+        ];
+    }
+
+    /**
+     * @return array{
+     *     can_manage:bool,
+     *     available_assignees:array<string, string>
+     * }
+     */
+    protected function getDialogAssigneeViewData(): array
+    {
+        return [
+            'can_manage' => $this->canCurrentUserManageDialogContactOwnership()
+                && $this->getRecord()->contact instanceof Contact,
+            'available_assignees' => $this->getAssignableUserOptions(),
         ];
     }
 
@@ -1545,6 +1652,14 @@ class ViewDialog extends ViewRecord
         return $this->canCurrentUserManageDialogReplies();
     }
 
+    protected function canCurrentUserManageDialogContactOwnership(): bool
+    {
+        $employee = auth()->user();
+
+        return $employee instanceof User
+            && $employee->canManageContactOwnership();
+    }
+
     protected function getDialogReplyBlockedReason(): ?string
     {
         return $this->getDialogRouteBlockedReason();
@@ -1607,9 +1722,26 @@ class ViewDialog extends ViewRecord
             return 'Свободен';
         }
 
-        return filled($contact->assignedUser?->name)
-            ? (string) $contact->assignedUser->name
+        return $contact->assignedUser instanceof User
+            ? $contact->assignedUser->getFilamentName()
             : 'Свободен';
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    protected function getAssignableUserOptions(): array
+    {
+        return User::query()
+            ->where('is_active', true)
+            ->orderBy('name')
+            ->orderBy('id')
+            ->get()
+            ->filter(fn (User $user): bool => $user->canBeAssignedToContacts())
+            ->mapWithKeys(fn (User $user): array => [
+                (string) $user->id => $user->getFilamentName(),
+            ])
+            ->all();
     }
 
     protected function formatChannelLabel(?Channel $channel, string $fallback = '—'): string

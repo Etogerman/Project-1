@@ -310,44 +310,20 @@
             </div>
 
             <aside data-role="dialog-side-panel" class="ac-dialog-side-column">
-                <section class="ac-surface ac-dialog-side-card" data-role="dialog-params-card">
-                    <p class="ac-dialog-summary__section-title">Параметры</p>
-                    <div class="ac-dialog-side-list">
-                        <div class="ac-meta">
-                            <p class="ac-meta__label">
-                                {{ $dialogFieldLabel('status', 'Статус') }}
-                            </p>
-                            @php
-                                $statusOptions = $dialogInboxStatus['options'];
-                                $currentStatusLabel = $statusOptions[$dialogInboxStatusSelection] ?? (array_values($statusOptions)[0] ?? '—');
-                                $nextStatusValue = collect($statusOptions)
-                                    ->keys()
-                                    ->first(fn ($statusValue) => $statusValue !== $dialogInboxStatusSelection);
-                                $nextStatusLabel = $nextStatusValue !== null ? ($statusOptions[$nextStatusValue] ?? null) : null;
-                            @endphp
-                            <button
-                                type="button"
-                                class="ac-dialog-status-toggle"
-                                data-role="dialog-inbox-status-toggle"
-                                wire:click="setDialogInboxStatus(@js($nextStatusValue))"
-                                wire:loading.attr="disabled"
-                                wire:target="setDialogInboxStatus"
-                                aria-label="{{ $dialogFieldLabel('status', 'Статус') }}"
-                                title="{{ $nextStatusLabel ? 'Сменить на: '.$nextStatusLabel : $currentStatusLabel }}"
-                                @disabled(! $dialogInboxStatus['is_editable'] || $nextStatusValue === null)
-                            >
-                                <span data-role="dialog-inbox-status-current">{{ $currentStatusLabel }}</span>
-                            </button>
-                        </div>
-                    </div>
-                </section>
-
                 <section class="ac-surface ac-dialog-side-card" data-role="dialog-system-fields-section">
                     <p class="ac-dialog-summary__section-title">Системные поля</p>
+                    @php
+                        $statusOptions = $dialogInboxStatus['options'];
+                        $currentStatusLabel = $statusOptions[$dialogInboxStatusSelection] ?? (array_values($statusOptions)[0] ?? '—');
+                        $nextStatusValue = collect($statusOptions)
+                            ->keys()
+                            ->first(fn ($statusValue) => $statusValue !== $dialogInboxStatusSelection);
+                        $nextStatusLabel = $nextStatusValue !== null ? ($statusOptions[$nextStatusValue] ?? null) : null;
+                    @endphp
                     <div class="ac-dialog-side-list">
                         @foreach ($dialogSystemFields['rows'] as $systemField)
                             <div
-                                class="ac-meta"
+                                class="ac-meta @if ($systemField['key'] === 'assigned_user_id' && $this->isDialogAssigneeEditing) ac-meta--assignee-editing @endif"
                                 data-role="dialog-system-field-row"
                                 data-field-key="{{ $systemField['key'] }}"
                                 @if (filled($systemField['tone'])) data-tone="{{ $systemField['tone'] }}" @endif
@@ -355,19 +331,78 @@
                                 <p class="ac-meta__label">
                                     {{ $systemField['label'] }}
                                 </p>
-                                <p
-                                    @if (filled($systemField['value_role'])) data-role="{{ $systemField['value_role'] }}" @endif
-                                    class="ac-meta__value"
-                                    title="{{ $systemField['value'] }}"
-                                >
-                                    @if (filled($systemField['url']))
-                                        <a class="ac-meta__link" href="{{ $systemField['url'] }}" title="{{ $systemField['value'] }}">
-                                            {{ $systemField['value'] }}
-                                        </a>
+                                @if ($systemField['key'] === 'status')
+                                    <button
+                                        type="button"
+                                        class="ac-dialog-status-toggle"
+                                        data-role="dialog-inbox-status-toggle"
+                                        wire:click="setDialogInboxStatus(@js($nextStatusValue))"
+                                        wire:loading.attr="disabled"
+                                        wire:target="setDialogInboxStatus"
+                                        aria-label="{{ $dialogFieldLabel('status', 'Статус') }}"
+                                        title="{{ $nextStatusLabel ? 'Сменить на: '.$nextStatusLabel : $currentStatusLabel }}"
+                                        @disabled(! $dialogInboxStatus['is_editable'] || $nextStatusValue === null)
+                                    >
+                                        <span data-role="dialog-inbox-status-current">{{ $currentStatusLabel }}</span>
+                                    </button>
+                                @elseif ($systemField['key'] === 'assigned_user_id' && $dialogAssignee['can_manage'])
+                                    @if ($this->isDialogAssigneeEditing)
+                                        <div class="ac-dialog-assignee-editor" data-role="dialog-assignee-editor">
+                                            <select
+                                                id="dialog-assignee-select"
+                                                data-role="dialog-assignee-select"
+                                                wire:model="selectedDialogAssigneeId"
+                                                class="ac-select"
+                                            >
+                                                <option value="">Свободен</option>
+                                                @foreach ($dialogAssignee['available_assignees'] as $userId => $userName)
+                                                    <option value="{{ $userId }}">{{ $userName }}</option>
+                                                @endforeach
+                                            </select>
+
+                                            <button
+                                                data-role="dialog-save-assignee-button"
+                                                type="button"
+                                                wire:click="saveDialogAssignee"
+                                                wire:loading.attr="disabled"
+                                                wire:target="saveDialogAssignee"
+                                                class="ac-dialog-assignee-save"
+                                                aria-label="Сохранить ответственного"
+                                                title="Сохранить"
+                                            >
+                                                <span wire:loading.remove wire:target="saveDialogAssignee" aria-hidden="true">✓</span>
+                                                <span wire:loading wire:target="saveDialogAssignee" aria-hidden="true">…</span>
+                                            </button>
+                                        </div>
                                     @else
-                                        {{ $systemField['value'] }}
+                                        <button
+                                            type="button"
+                                            class="ac-dialog-status-toggle ac-dialog-assignee-toggle"
+                                            data-role="dialog-assignee-toggle"
+                                            wire:click="openDialogAssigneeEditor"
+                                            wire:loading.attr="disabled"
+                                            wire:target="openDialogAssigneeEditor,saveDialogAssignee"
+                                            aria-label="Изменить ответственного за контакт"
+                                            title="Изменить ответственного за контакт"
+                                        >
+                                            <span data-role="dialog-assignee-current">{{ $systemField['value'] }}</span>
+                                        </button>
                                     @endif
-                                </p>
+                                @else
+                                    <p
+                                        @if (filled($systemField['value_role'])) data-role="{{ $systemField['value_role'] }}" @endif
+                                        class="ac-meta__value"
+                                        title="{{ $systemField['value'] }}"
+                                    >
+                                        @if (filled($systemField['url']))
+                                            <a class="ac-meta__link" href="{{ $systemField['url'] }}" title="{{ $systemField['value'] }}">
+                                                {{ $systemField['value'] }}
+                                            </a>
+                                        @else
+                                            {{ $systemField['value'] }}
+                                        @endif
+                                    </p>
+                                @endif
                                 @if (filled($systemField['detail']))
                                     <p class="ac-meta__value ac-meta__value--muted" title="{{ $systemField['detail'] }}">
                                         {{ $systemField['detail'] }}

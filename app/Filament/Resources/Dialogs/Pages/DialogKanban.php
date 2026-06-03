@@ -505,8 +505,8 @@ class DialogKanban extends Page
             'id' => $dialog->id,
             'contact_label' => $this->resolveContactLabel($dialog),
             'channel_label' => $this->formatChannelLabel($dialog),
-            'assigned_user_label' => filled($dialog->contact?->assignedUser?->name)
-                ? (string) $dialog->contact->assignedUser->name
+            'assigned_user_label' => $dialog->contact?->assignedUser instanceof User
+                ? $dialog->contact->assignedUser->getFilamentName()
                 : 'Свободен',
             'preview_text' => $this->resolvePreviewText($dialog),
             'activity_label' => $dialog->last_message_at?->format('d.m.Y H:i') ?? '—',
@@ -732,7 +732,7 @@ class DialogKanban extends Page
             ->orderBy('id')
             ->get()
             ->filter(fn (User $user): bool => $user->canBeAssignedToContacts())
-            ->mapWithKeys(fn (User $user): array => [(string) $user->id => (string) $user->name])
+            ->mapWithKeys(fn (User $user): array => [(string) $user->id => $user->getFilamentName()])
             ->all();
     }
 
