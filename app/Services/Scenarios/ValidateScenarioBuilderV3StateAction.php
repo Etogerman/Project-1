@@ -27,6 +27,16 @@ class ValidateScenarioBuilderV3StateAction
 
     private const MAX_MESSAGE_VARIABLE_VARIANTS = 20;
 
+    private const MAX_SHEETS = 20;
+
+    private const MAX_SHEET_NAME_LENGTH = 40;
+
+    private const DEFAULT_SHEET_ID = 'main';
+
+    private const DEFAULT_SHEET_NAME = 'Главный';
+
+    private const SHEET_COLORS = ['none', 'blue', 'green', 'yellow', 'red', 'purple', 'teal', 'gray'];
+
     private const MODULE_TYPES = ['start_condition', 'message', 'buttons', 'ai', 'action'];
 
     private const AI_SOURCES = [
@@ -209,18 +219,24 @@ class ValidateScenarioBuilderV3StateAction
             $this->fail('builder.schema_version', 'V3 builder must use schema_version = 3.');
         }
 
+        $sheets = $this->normalizeSheets($builder['sheets'] ?? []);
+        $sheetIds = collect($sheets)->pluck('id')->all();
+        $activeSheetId = $this->normalizeActiveSheetId($builder['active_sheet_id'] ?? null, $sheetIds);
         $blocks = $this->normalizeBlocks($builder['blocks'] ?? []);
+        $this->guardBlockSheetIds($blocks, $sheetIds);
         $this->validateGeoAiDataSources($blocks);
 
         $edges = $this->normalizeEdges($builder['edges'] ?? [], $blocks);
+        $this->guardEdgesWithinSingleSheet($edges, $blocks);
 
         return [
             'draft_version_id' => $this->integerValue($input['draft_version_id'] ?? $input['editable_version_id'] ?? null, 'draft_version_id'),
             'base_revision' => $this->stringValue($input['base_revision'] ?? null, 'base_revision'),
             'builder' => [
                 'schema_version' => BuildScenarioBuilderV3StateAction::SCHEMA_VERSION,
-                'active_sheet_id' => (string) ($builder['active_sheet_id'] ?? 'main'),
-                'sheets' => $this->normalizeSheets($builder['sheets'] ?? []),
+                'active_sheet_id' => $activeSheetId,
+                'sheets' => $sheets,
+                'meta' => $this->normalizeBuilderMeta($builder['meta'] ?? [], $sheets),
                 'blocks' => $blocks,
                 'edges' => $edges,
                 'visible_scope' => $this->normalizeVisibleScope($builder['visible_scope'] ?? []),
@@ -2136,9 +2152,18 @@ class ValidateScenarioBuilderV3StateAction
     private function normalizeBlockUi(mixed $ui, int $blockIndex): array
     {
         $ui = is_array($ui) ? $ui : [];
+        $sheetId = trim((string) ($ui['sheet_id'] ?? self::DEFAULT_SHEET_ID));
+
+        if ($sheetId === '') {
+            $sheetId = self::DEFAULT_SHEET_ID;
+        }
+
+        if (! $this->isValidSheetId($sheetId)) {
+            $this->fail("builder.blocks.$blockIndex.settings_payload.ui.sheet_id", 'Некорректный ID листа блока.');
+        }
 
         return [
-            'sheet_id' => (string) ($ui['sheet_id'] ?? 'main'),
+            'sheet_id' => $sheetId,
             'width' => (int) ($ui['width'] ?? 320),
             'collapsed' => (bool) ($ui['collapsed'] ?? false),
             'card_id' => $this->optionalStringValue($ui['card_id'] ?? '', "builder.blocks.$blockIndex.settings_payload.ui.card_id", ''),
@@ -2152,30 +2177,190 @@ class ValidateScenarioBuilderV3StateAction
     private function normalizeSheets(mixed $sheets): array
     {
         if (! is_array($sheets) || $sheets === []) {
-            return [
-                [
-                    'id' => 'main',
-                    'name' => 'Главный',
-                    'color' => 'none',
-                    'view' => ['tx' => 0, 'ty' => 0, 'zoom' => 1],
-                ],
+            return [$this->defaultSheet()];
+        }
+
+        if (! array_is_list($sheets)) {
+            $this->fail('builder.sheets', 'Список листов конструктора должен быть списком.');
+        }
+
+        if (count($sheets) > self::MAX_SHEETS) {
+            $this->fail('builder.sheets', 'Превышен лимит листов конструктора.');
+        }
+
+        $seen = [];
+        $normalized = [];
+
+        foreach ($sheets as $index => $sheet) {
+            $sheet = $this->arrayValue($sheet, "builder.sheets.$index");
+            $id = trim((string) ($sheet['id'] ?? ''));
+
+            if (! $this->isValidSheetId($id)) {
+                $this->fail("builder.sheets.$index.id", 'Некорректный ID листа.');
+            }
+
+            if (isset($seen[$id])) {
+                $this->fail("builder.sheets.$index.id", 'ID листа должен быть уникальным.');
+            }
+
+            $seen[$id] = true;
+
+            $name = trim((string) ($sheet['name'] ?? ''));
+
+            if ($id === self::DEFAULT_SHEET_ID && $name === '') {
+                $name = self::DEFAULT_SHEET_NAME;
+            }
+
+            if ($name === '' || mb_strlen($name) > self::MAX_SHEET_NAME_LENGTH) {
+                $this->fail("builder.sheets.$index.name", 'Название листа должно быть от 1 до 40 символов.');
+            }
+
+            $color = trim((string) ($sheet['color'] ?? 'none'));
+            $color = $color !== '' ? $color : 'none';
+
+            if (! in_array($color, self::SHEET_COLORS, true)) {
+                $this->fail("builder.sheets.$index.color", 'Некорректный цвет листа.');
+            }
+
+            $normalized[] = [
+                'id' => $id,
+                'name' => $name,
+                'color' => $color,
+                'view' => $this->normalizeSheetView($sheet['view'] ?? [], $index),
             ];
         }
 
-        return collect($sheets)
-            ->filter(fn (mixed $sheet): bool => is_array($sheet))
-            ->map(fn (array $sheet): array => [
-                'id' => (string) ($sheet['id'] ?? 'main'),
-                'name' => (string) ($sheet['name'] ?? 'Главный'),
-                'color' => (string) ($sheet['color'] ?? 'none'),
-                'view' => [
-                    'tx' => (float) data_get($sheet, 'view.tx', 0),
-                    'ty' => (float) data_get($sheet, 'view.ty', 0),
-                    'zoom' => (float) data_get($sheet, 'view.zoom', 1),
-                ],
-            ])
+        if (! isset($seen[self::DEFAULT_SHEET_ID])) {
+            array_unshift($normalized, $this->defaultSheet());
+        }
+
+        $mainSheet = collect($normalized)->firstWhere('id', self::DEFAULT_SHEET_ID) ?? $this->defaultSheet();
+        $otherSheets = collect($normalized)
+            ->reject(fn (array $sheet): bool => $sheet['id'] === self::DEFAULT_SHEET_ID)
             ->values()
             ->all();
+
+        return [$mainSheet, ...$otherSheets];
+    }
+
+    /**
+     * @return array{id: string, name: string, color: string, view: array{tx: float, ty: float, zoom: float}}
+     */
+    private function defaultSheet(): array
+    {
+        return [
+            'id' => self::DEFAULT_SHEET_ID,
+            'name' => self::DEFAULT_SHEET_NAME,
+            'color' => 'none',
+            'view' => ['tx' => 0, 'ty' => 0, 'zoom' => 1],
+        ];
+    }
+
+    /**
+     * @return array{tx: float, ty: float, zoom: float}
+     */
+    private function normalizeSheetView(mixed $view, int $sheetIndex): array
+    {
+        $view = is_array($view) ? $view : [];
+        $tx = $this->finiteFloatValue($view['tx'] ?? 0, "builder.sheets.$sheetIndex.view.tx");
+        $ty = $this->finiteFloatValue($view['ty'] ?? 0, "builder.sheets.$sheetIndex.view.ty");
+        $zoom = $this->finiteFloatValue($view['zoom'] ?? 1, "builder.sheets.$sheetIndex.view.zoom");
+
+        if ($tx < -100000 || $tx > 100000 || $ty < -100000 || $ty > 100000) {
+            $this->fail("builder.sheets.$sheetIndex.view", 'Позиция листа вне допустимых границ.');
+        }
+
+        if ($zoom < 0.35 || $zoom > 2.2) {
+            $this->fail("builder.sheets.$sheetIndex.view.zoom", 'Масштаб листа вне допустимых границ.');
+        }
+
+        return [
+            'tx' => round($tx, 2),
+            'ty' => round($ty, 2),
+            'zoom' => round($zoom, 3),
+        ];
+    }
+
+    /**
+     * @param  list<string>  $sheetIds
+     */
+    private function normalizeActiveSheetId(mixed $value, array $sheetIds): string
+    {
+        $activeSheetId = trim((string) ($value ?? self::DEFAULT_SHEET_ID));
+        $activeSheetId = $activeSheetId !== '' ? $activeSheetId : self::DEFAULT_SHEET_ID;
+
+        if (! in_array($activeSheetId, $sheetIds, true)) {
+            $this->fail('builder.active_sheet_id', 'Активный лист не найден.');
+        }
+
+        return $activeSheetId;
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $blocks
+     * @param  list<string>  $sheetIds
+     */
+    private function guardBlockSheetIds(array $blocks, array $sheetIds): void
+    {
+        foreach ($blocks as $index => $block) {
+            $sheetId = (string) data_get($block, 'settings_payload.ui.sheet_id', self::DEFAULT_SHEET_ID);
+
+            if (! in_array($sheetId, $sheetIds, true)) {
+                $this->fail("builder.blocks.$index.settings_payload.ui.sheet_id", 'Лист блока не найден.');
+            }
+        }
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $edges
+     * @param  list<array<string, mixed>>  $blocks
+     */
+    private function guardEdgesWithinSingleSheet(array $edges, array $blocks): void
+    {
+        $sheetsByClientKey = collect($blocks)
+            ->mapWithKeys(fn (array $block): array => [
+                (string) $block['client_key'] => (string) data_get($block, 'settings_payload.ui.sheet_id', self::DEFAULT_SHEET_ID),
+            ]);
+
+        foreach ($edges as $index => $edge) {
+            $sourceSheet = $sheetsByClientKey->get((string) data_get($edge, 'source.client_key'));
+            $targetSheet = $sheetsByClientKey->get((string) data_get($edge, 'target.client_key'));
+
+            if ($sourceSheet !== null && $targetSheet !== null && $sourceSheet !== $targetSheet) {
+                $this->fail("builder.edges.$index", 'Связи между разными листами запрещены.');
+            }
+        }
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $sheets
+     * @return array{next_sheet_number: int}
+     */
+    private function normalizeBuilderMeta(mixed $meta, array $sheets): array
+    {
+        $meta = is_array($meta) ? $meta : [];
+        $storedNext = $this->positiveIntegerOrNull($meta['next_sheet_number'] ?? null) ?? 1;
+        $nextFromSheets = collect($sheets)
+            ->map(fn (array $sheet): int => $this->sheetNumberFromId((string) $sheet['id']) ?? 0)
+            ->max() + 1;
+
+        return [
+            'next_sheet_number' => max($storedNext, $nextFromSheets),
+        ];
+    }
+
+    private function sheetNumberFromId(string $sheetId): ?int
+    {
+        if (! preg_match('/^sheet_(\d+)$/', $sheetId, $matches)) {
+            return null;
+        }
+
+        return max(1, (int) $matches[1]);
+    }
+
+    private function isValidSheetId(string $sheetId): bool
+    {
+        return strlen($sheetId) <= 40 && preg_match('/^[a-z][a-z0-9_]*$/', $sheetId) === 1;
     }
 
     /**
@@ -2305,6 +2490,38 @@ class ValidateScenarioBuilderV3StateAction
         }
 
         return $integer;
+    }
+
+    private function positiveIntegerOrNull(mixed $value): ?int
+    {
+        if (is_int($value)) {
+            return $value > 0 ? $value : null;
+        }
+
+        $string = trim((string) $value);
+
+        if ($string === '' || ! ctype_digit($string)) {
+            return null;
+        }
+
+        $integer = (int) $string;
+
+        return $integer > 0 ? $integer : null;
+    }
+
+    private function finiteFloatValue(mixed $value, string $key): float
+    {
+        if (! is_int($value) && ! is_float($value) && ! (is_string($value) && is_numeric($value))) {
+            $this->fail($key, 'Value must be a finite number.');
+        }
+
+        $float = (float) $value;
+
+        if (! is_finite($float)) {
+            $this->fail($key, 'Value must be a finite number.');
+        }
+
+        return $float;
     }
 
     private function stringValue(mixed $value, string $key): string

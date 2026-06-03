@@ -222,6 +222,160 @@ class ScenarioBuilderV3StateTest extends TestCase
         $this->assertSame('3', $secondState['builder']['blocks'][2]['settings_payload']['ui']['display_number'] ?? null);
     }
 
+    public function test_put_state_persists_multiple_sheets_and_normalizes_main_first(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_sheets_save',
+            'name' => 'V3 Sheets Save',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $settings = $this->messageSettings('Блок на втором листе');
+        $settings['ui']['sheet_id'] = 'sheet_2';
+        $payload = $this->payloadFromState($state, [[
+            'id' => null,
+            'client_key' => 'tmp_sheet_block',
+            'type' => 'state',
+            'title' => 'Второй лист',
+            'position' => ['x' => 120, 'y' => 160],
+            'settings_payload' => $settings,
+        ]]);
+        $payload['builder']['active_sheet_id'] = 'sheet_2';
+        $payload['builder']['sheets'] = [[
+            'id' => 'sheet_2',
+            'name' => 'Адрес',
+            'color' => 'blue',
+            'view' => ['tx' => 10, 'ty' => 20, 'zoom' => 1.2],
+        ]];
+
+        $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $payload)
+            ->assertOk()
+            ->assertJsonPath('builder.active_sheet_id', 'sheet_2')
+            ->assertJsonPath('builder.sheets.0.id', 'main')
+            ->assertJsonPath('builder.sheets.0.name', 'Главный')
+            ->assertJsonPath('builder.sheets.1.id', 'sheet_2')
+            ->assertJsonPath('builder.sheets.1.color', 'blue')
+            ->assertJsonPath('builder.meta.next_sheet_number', 3)
+            ->assertJsonPath('builder.blocks.0.settings_payload.ui.sheet_id', 'sheet_2');
+    }
+
+    public function test_put_state_rejects_cross_sheet_edges(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_cross_sheet_edge',
+            'name' => 'V3 Cross Sheet Edge',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $secondarySettings = $this->messageSettings('Другой лист');
+        $secondarySettings['ui']['sheet_id'] = 'sheet_2';
+        $payload = $this->payloadFromState($state, [
+            [
+                'id' => null,
+                'client_key' => 'tmp_main',
+                'type' => 'state',
+                'title' => 'Главный',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Главный'),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_secondary',
+                'type' => 'state',
+                'title' => 'Другой лист',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $secondarySettings,
+            ],
+        ], [[
+            'id' => null,
+            'client_key' => 'tmp_cross_edge',
+            'source' => ['block_id' => null, 'client_key' => 'tmp_main', 'output_id' => null],
+            'target' => ['block_id' => null, 'client_key' => 'tmp_secondary'],
+            'condition_payload' => $this->edgePayload(null, 'Между листами'),
+        ]]);
+        $payload['builder']['sheets'][] = [
+            'id' => 'sheet_2',
+            'name' => 'Другой',
+            'color' => 'none',
+            'view' => ['tx' => 0, 'ty' => 0, 'zoom' => 1],
+        ];
+
+        $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $payload)
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['builder.edges.0']);
+    }
+
+    public function test_put_state_deletes_sheet_blocks_and_edges_when_missing_from_final_payload(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_sheet_delete',
+            'name' => 'V3 Sheet Delete',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $sourceSettings = $this->messageSettings('Источник');
+        $targetSettings = $this->messageSettings('Цель');
+        $sourceSettings['ui']['sheet_id'] = 'sheet_2';
+        $targetSettings['ui']['sheet_id'] = 'sheet_2';
+        $payload = $this->payloadFromState($state, [
+            [
+                'id' => null,
+                'client_key' => 'tmp_source',
+                'type' => 'state',
+                'title' => 'Источник',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $sourceSettings,
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_target',
+                'type' => 'state',
+                'title' => 'Цель',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $targetSettings,
+            ],
+        ], [[
+            'id' => null,
+            'client_key' => 'tmp_edge',
+            'source' => ['block_id' => null, 'client_key' => 'tmp_source', 'output_id' => null],
+            'target' => ['block_id' => null, 'client_key' => 'tmp_target'],
+            'condition_payload' => $this->edgePayload(null, 'Дальше'),
+        ]]);
+        $payload['builder']['active_sheet_id'] = 'sheet_2';
+        $payload['builder']['sheets'][] = [
+            'id' => 'sheet_2',
+            'name' => 'Удаляемый',
+            'color' => 'none',
+            'view' => ['tx' => 0, 'ty' => 0, 'zoom' => 1],
+        ];
+
+        $saved = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $payload)
+            ->assertOk()
+            ->json();
+
+        $sourceId = $saved['id_map']['blocks']['tmp_source'];
+        $targetId = $saved['id_map']['blocks']['tmp_target'];
+        $edgeId = $saved['id_map']['edges']['tmp_edge'];
+        $deletePayload = $this->payloadFromState($saved, [], []);
+        $deletePayload['builder']['active_sheet_id'] = 'main';
+        $deletePayload['builder']['sheets'] = [$saved['builder']['sheets'][0]];
+
+        $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $deletePayload)
+            ->assertOk()
+            ->assertJsonPath('builder.active_sheet_id', 'main')
+            ->assertJsonCount(1, 'builder.sheets')
+            ->assertJsonCount(0, 'builder.blocks')
+            ->assertJsonCount(0, 'builder.edges');
+
+        $this->assertNull(ScenarioBuilderBlock::query()->find($sourceId));
+        $this->assertNull(ScenarioBuilderBlock::query()->find($targetId));
+        $this->assertNull(ScenarioBuilderEdge::query()->find($edgeId));
+    }
+
     public function test_sheet_export_treats_blocks_without_sheet_id_as_main(): void
     {
         $admin = $this->adminUser();
@@ -3950,6 +4104,7 @@ class ScenarioBuilderV3StateTest extends TestCase
                 'schema_version' => 3,
                 'active_sheet_id' => 'main',
                 'sheets' => $state['builder']['sheets'],
+                'meta' => $state['builder']['meta'] ?? [],
                 'blocks' => $blocks,
                 'edges' => $edges,
                 'visible_scope' => $state['builder']['visible_scope'],

@@ -180,6 +180,7 @@ class BuildScenarioBuilderV3StateAction
         $builderProjection = is_array($schemaPayload['builder_v3'] ?? null) ? $schemaPayload['builder_v3'] : [];
         $visibleScope = $this->visibleScopeFor($version);
         $sheets = $this->normalizeSheets(data_get($builderProjection, 'sheets'));
+        $meta = is_array($builderProjection['meta'] ?? null) ? $builderProjection['meta'] : [];
 
         $blocks = $version->builderBlocks()
             ->with(['channels', 'conditions', 'outgoingEdges'])
@@ -206,6 +207,10 @@ class BuildScenarioBuilderV3StateAction
             'revision' => $this->revisionFor($version),
             'active_sheet_id' => (string) (data_get($builderProjection, 'active_sheet_id') ?: self::DEFAULT_SHEET_ID),
             'sheets' => $sheets,
+            'meta' => [
+                ...$meta,
+                'next_sheet_number' => $this->nextSheetNumber($meta['next_sheet_number'] ?? null, $sheets),
+            ],
             'blocks' => $blocks,
             'edges' => $edges,
             'visible_scope' => $visibleScope,
@@ -226,6 +231,7 @@ class BuildScenarioBuilderV3StateAction
             'revision' => $version instanceof ScenarioVersion ? $this->revisionFor($version) : 'v3:empty',
             'active_sheet_id' => self::DEFAULT_SHEET_ID,
             'sheets' => $this->normalizeSheets(null),
+            'meta' => ['next_sheet_number' => 1],
             'blocks' => [],
             'edges' => [],
             'visible_scope' => [
@@ -268,6 +274,33 @@ class BuildScenarioBuilderV3StateAction
             ])
             ->values()
             ->all() ?: $this->normalizeSheets(null);
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $sheets
+     */
+    private function nextSheetNumber(mixed $storedValue, array $sheets): int
+    {
+        $stored = is_int($storedValue) && $storedValue > 0 ? $storedValue : null;
+
+        if ($stored === null) {
+            $string = trim((string) $storedValue);
+            $stored = $string !== '' && ctype_digit($string) ? (int) $string : 1;
+        }
+
+        $nextFromSheets = collect($sheets)
+            ->map(function (array $sheet): int {
+                $id = (string) ($sheet['id'] ?? '');
+
+                if (! preg_match('/^sheet_(\d+)$/', $id, $matches)) {
+                    return 0;
+                }
+
+                return (int) $matches[1];
+            })
+            ->max() + 1;
+
+        return max(1, $stored, $nextFromSheets);
     }
 
     /**

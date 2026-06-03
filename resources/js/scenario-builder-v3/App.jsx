@@ -15,6 +15,16 @@ const MAIN_SHEET = {
     color: 'none',
     view: { tx: 120, ty: 88, zoom: 1 },
 };
+const SHEET_COLORS = [
+    ['none', 'Без цвета'],
+    ['blue', 'Синий'],
+    ['green', 'Зелёный'],
+    ['yellow', 'Жёлтый'],
+    ['red', 'Красный'],
+    ['purple', 'Фиолетовый'],
+    ['teal', 'Бирюзовый'],
+    ['gray', 'Серый'],
+];
 
 const NODE_WIDTH = 286;
 const NODE_HEADER_HEIGHT = 54;
@@ -476,6 +486,7 @@ export default function App({
     const [sheetImportPreview, setSheetImportPreview] = useState(null);
     const [sheetImportSelection, setSheetImportSelection] = useState({});
     const [sheetImportError, setSheetImportError] = useState(null);
+    const [sheetDialog, setSheetDialog] = useState(null);
     const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
     const [blockSearchQuery, setBlockSearchQuery] = useState('');
     const [blockSearchIndex, setBlockSearchIndex] = useState(0);
@@ -845,6 +856,147 @@ export default function App({
         setPendingConnection(null);
         setRewireTargetKey(null);
         setNotice(null);
+    }
+
+    function addSheet() {
+        if (! builder) {
+            return;
+        }
+
+        if (sheets.length >= 20) {
+            setNotice('Можно создать не больше 20 листов.');
+
+            return;
+        }
+
+        const nextNumber = nextSheetNumberFromBuilder(builder, sheets);
+        const sheetId = uniqueSheetIdForNumber(sheets, nextNumber);
+        const sheetNumber = sheetNumberFromId(sheetId) ?? nextNumber;
+        const nextSheet = {
+            id: sheetId,
+            name: `Лист ${sheetNumber}`,
+            color: 'none',
+            view: MAIN_SHEET.view,
+        };
+
+        updateBuilder({
+            active_sheet_id: sheetId,
+            sheets: [...sheets, nextSheet],
+            meta: {
+                ...(builder.meta ?? {}),
+                next_sheet_number: sheetNumber + 1,
+            },
+        });
+        setSelectedBlockKey(null);
+        setSelectedEdgeKey(null);
+        setSelectedWaypoint(null);
+        setIsPanelCollapsed(false);
+        setPendingConnection(null);
+        setRewireTargetKey(null);
+        setNotice('Лист добавлен. Нажмите «Сохранить», чтобы записать изменение.');
+    }
+
+    function openRenameSheet(sheet) {
+        if (! sheet) {
+            return;
+        }
+
+        setSheetDialog({
+            type: 'rename',
+            sheetId: sheet.id,
+            name: sheet.name || '',
+            color: sheet.color || 'none',
+        });
+    }
+
+    function renameSheet(sheetId, name, color = 'none') {
+        const nextName = String(name ?? '').trim();
+        const nextColor = SHEET_COLORS.some(([value]) => value === color) ? color : 'none';
+
+        if (nextName === '') {
+            setNotice('Название листа не может быть пустым.');
+
+            return;
+        }
+
+        if (nextName.length > 40) {
+            setNotice('Название листа должно быть до 40 символов.');
+
+            return;
+        }
+
+        updateBuilder({
+            sheets: sheets.map((sheet) => (
+                sheet.id === sheetId ? { ...sheet, name: nextName, color: nextColor } : sheet
+            )),
+        });
+        setSheetDialog(null);
+        setNotice('Лист переименован. Нажмите «Сохранить», чтобы записать изменение.');
+    }
+
+    function openDeleteSheet(sheet) {
+        if (! sheet || sheet.id === MAIN_SHEET.id) {
+            setNotice('Главный лист удалить нельзя.');
+
+            return;
+        }
+
+        setSheetDialog({
+            type: 'delete',
+            sheetId: sheet.id,
+            name: sheet.name || sheet.id,
+            blockCount: sheetBlockCount(allBlocks, sheet.id),
+        });
+    }
+
+    function deleteSheet(sheetId) {
+        if (! sheetId || sheetId === MAIN_SHEET.id) {
+            return;
+        }
+
+        setState((current) => {
+            const currentBuilder = current?.builder ?? {};
+            const currentSheets = sheetsFrom(currentBuilder);
+            const index = currentSheets.findIndex((sheet) => sheet.id === sheetId);
+
+            if (index < 0) {
+                return current;
+            }
+
+            const nextSheets = currentSheets.filter((sheet) => sheet.id !== sheetId);
+            const fallbackSheet = nextSheets[Math.max(0, index - 1)] ?? nextSheets[index] ?? MAIN_SHEET;
+            const currentBlocks = currentBuilder.blocks ?? [];
+            const removedBlockKeys = new Set(
+                currentBlocks
+                    .filter((block) => blockSheetId(block) === sheetId)
+                    .map((block) => block.client_key),
+            );
+            const nextBlocks = currentBlocks.filter((block) => ! removedBlockKeys.has(block.client_key));
+            const nextEdges = (currentBuilder.edges ?? []).filter((edge) => (
+                ! removedBlockKeys.has(edge.source?.client_key)
+                && ! removedBlockKeys.has(edge.target?.client_key)
+            ));
+
+            return {
+                ...current,
+                builder: {
+                    ...currentBuilder,
+                    active_sheet_id: fallbackSheet.id,
+                    sheets: nextSheets.length > 0 ? nextSheets : [MAIN_SHEET],
+                    blocks: nextBlocks,
+                    edges: nextEdges,
+                },
+            };
+        });
+
+        setSelectedBlockKey(null);
+        setSelectedEdgeKey(null);
+        setSelectedWaypoint(null);
+        setIsPanelCollapsed(false);
+        setPendingConnection(null);
+        setRewireTargetKey(null);
+        setSheetDialog(null);
+        setNotice('Лист удалён локально вместе с блоками и связями. Нажмите «Сохранить», чтобы записать изменение.');
     }
 
     function selectBlock(clientKey) {
@@ -2087,6 +2239,7 @@ export default function App({
                 schema_version: 3,
                 active_sheet_id: state.builder.active_sheet_id || 'main',
                 sheets,
+                meta: state.builder.meta ?? {},
                 blocks: blocksForSave,
                 edges: edgesForSave,
                 visible_scope: state.builder.visible_scope || { block_ids: [], edge_ids: [] },
@@ -2475,7 +2628,7 @@ export default function App({
     }
 
     return (
-        <section className="ac-v3-builder">
+        <section className="ac-v3-builder" data-active-sheet-color={activeSheet.color || 'none'}>
             <header className="ac-v3-builder__topbar">
                 <div className="ac-v3-builder__crumb">
                     <strong>{state?.scenario?.name ?? 'Сценарий'}</strong>
@@ -2614,14 +2767,38 @@ export default function App({
                         key={sheet.id}
                         type="button"
                         className={sheet.id === activeSheet.id ? 'is-active' : ''}
-                        onClick={() => switchSheet(sheet.id)}
+                        data-sheet-color={sheet.color || 'none'}
+                        onClick={(event) => {
+                            if (event.target.closest('[data-sheet-rename]')) {
+                                openRenameSheet(sheet);
+
+                                return;
+                            }
+
+                            switchSheet(sheet.id);
+                        }}
                     >
                         <span>{sheet.name}</span>
                         <b>{sheetBlockCount(allBlocks, sheet.id)}</b>
-                        {sheet.id === activeSheet.id ? <GearIcon /> : null}
+                        {sheet.id === activeSheet.id ? (
+                            <span className="ac-v3-builder__sheet-tab-gear" title="Переименовать лист" data-sheet-rename>
+                                <GearIcon />
+                            </span>
+                        ) : null}
                     </button>
                 ))}
-                <button type="button" className="ac-v3-builder__tab-add" onClick={() => setNotice('В первом релизе используется один лист.')}>+</button>
+                <button type="button" className="ac-v3-builder__tab-add" title="Добавить лист" onClick={addSheet}>+</button>
+                <div className="ac-v3-builder__sheet-actions" aria-label="Действия с активным листом">
+                    <button
+                        type="button"
+                        className="is-danger"
+                        title={activeSheet.id === MAIN_SHEET.id ? 'Главный лист удалить нельзя' : 'Удалить лист'}
+                        disabled={activeSheet.id === MAIN_SHEET.id}
+                        onClick={() => openDeleteSheet(activeSheet)}
+                    >
+                        <TrashIcon />
+                    </button>
+                </div>
             </div>
 
             {error ? (
@@ -2671,6 +2848,15 @@ export default function App({
                     onDownloadBackup={downloadSheetBackup}
                     onApply={applySheetImport}
                     onClose={closeSheetImportPreview}
+                />
+            ) : null}
+
+            {sheetDialog ? (
+                <SheetManageDialog
+                    dialog={sheetDialog}
+                    onRename={renameSheet}
+                    onDelete={deleteSheet}
+                    onClose={() => setSheetDialog(null)}
                 />
             ) : null}
 
@@ -2861,6 +3047,80 @@ function Notice({ kind, children, onClose }) {
         <div className="ac-v3-builder__notice" data-kind={kind}>
             <div className="ac-v3-builder__notice-body">{children}</div>
             <button type="button" onClick={onClose}>Закрыть</button>
+        </div>
+    );
+}
+
+function SheetManageDialog({ dialog, onRename, onDelete, onClose }) {
+    const [name, setName] = useState(dialog.name ?? '');
+    const [color, setColor] = useState(dialog.color ?? 'none');
+    const isDelete = dialog.type === 'delete';
+
+    function handleSubmit(event) {
+        event.preventDefault();
+
+        if (isDelete) {
+            onDelete(dialog.sheetId);
+
+            return;
+        }
+
+        onRename(dialog.sheetId, name, color);
+    }
+
+    return (
+        <div className="ac-v3-builder__dialog-backdrop" role="presentation">
+            <form className="ac-v3-builder__sheet-dialog" role="dialog" aria-modal="true" aria-labelledby="sheet-dialog-title" onSubmit={handleSubmit}>
+                <div className="ac-v3-builder__publish-dialog-head">
+                    <h2 id="sheet-dialog-title">{isDelete ? 'Удалить лист' : 'Переименовать лист'}</h2>
+                    <button type="button" title="Закрыть" onClick={onClose}>×</button>
+                </div>
+
+                <div className="ac-v3-builder__publish-dialog-body">
+                    {isDelete ? (
+                        <p>
+                            Лист <strong>{dialog.name}</strong> будет удалён вместе с блоками и связями на нём.
+                            Блоков на листе: <strong>{dialog.blockCount ?? 0}</strong>.
+                        </p>
+                    ) : (
+                        <div className="ac-v3-builder__sheet-dialog-field">
+                            <label>
+                                <span>Название листа</span>
+                                <input
+                                    type="text"
+                                    value={name}
+                                    maxLength={40}
+                                    autoFocus
+                                    onChange={(event) => setName(event.target.value)}
+                                />
+                            </label>
+                            <span>Цвет листа</span>
+                            <div className="ac-v3-builder__sheet-color-grid" role="radiogroup" aria-label="Цвет листа">
+                                {SHEET_COLORS.map(([value, label]) => (
+                                    <button
+                                        key={value}
+                                        type="button"
+                                        className={color === value ? 'is-active' : ''}
+                                        data-sheet-color={value}
+                                        aria-pressed={color === value ? 'true' : 'false'}
+                                        onClick={() => setColor(value)}
+                                    >
+                                        <i aria-hidden="true" />
+                                        <span>{label}</span>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                <div className="ac-v3-builder__publish-dialog-footer">
+                    <button type="button" onClick={onClose}>Отмена</button>
+                    <button type="submit" className={isDelete ? 'is-danger' : ''}>
+                        {isDelete ? 'Удалить' : 'Сохранить'}
+                    </button>
+                </div>
+            </form>
         </div>
     );
 }
@@ -7740,6 +8000,32 @@ function blocksForSheet(blocks, sheetId) {
 
 function sheetBlockCount(blocks, sheetId) {
     return blocksForSheet(blocks, sheetId).length;
+}
+
+function nextSheetNumberFromBuilder(builder, sheets) {
+    const stored = Number(builder?.meta?.next_sheet_number);
+    const nextFromSheets = (Array.isArray(sheets) ? sheets : [])
+        .map((sheet) => sheetNumberFromId(sheet?.id) ?? 0)
+        .reduce((max, number) => Math.max(max, number), 0) + 1;
+
+    return Math.max(Number.isFinite(stored) && stored > 0 ? Math.floor(stored) : 1, nextFromSheets);
+}
+
+function sheetNumberFromId(sheetId) {
+    const match = String(sheetId ?? '').match(/^sheet_(\d+)$/);
+
+    return match ? Math.max(1, Number(match[1]) || 1) : null;
+}
+
+function uniqueSheetIdForNumber(sheets, number) {
+    const used = new Set((Array.isArray(sheets) ? sheets : []).map((sheet) => String(sheet?.id ?? '')));
+    let next = Math.max(1, Math.floor(Number(number) || 1));
+
+    while (used.has(`sheet_${next}`)) {
+        next += 1;
+    }
+
+    return `sheet_${next}`;
 }
 
 function edgeIdentityKey(edge) {

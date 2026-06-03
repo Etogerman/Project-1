@@ -748,7 +748,7 @@ class SaveScenarioBuilderV3StateAction
             'revision' => $revision,
             'active_sheet_id' => $builder['active_sheet_id'],
             'sheets' => $builder['sheets'],
-            'meta' => array_merge($meta, $displayNumberMeta),
+            'meta' => array_merge($meta, $builder['meta'] ?? [], $displayNumberMeta),
             'visible_scope' => $this->buildScenarioBuilderV3StateAction->visibleScopeFor($version),
             'warnings' => [],
         ]);

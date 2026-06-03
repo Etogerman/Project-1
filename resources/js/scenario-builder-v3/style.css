@@ -437,6 +437,84 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
     color: var(--text);
 }
 
+.ac-v3-builder__tabs button[data-sheet-color="blue"],
+.ac-v3-builder__sheet-color-grid button[data-sheet-color="blue"] {
+    --sheet-color: #3b82f6;
+}
+
+.ac-v3-builder__tabs button[data-sheet-color="green"],
+.ac-v3-builder__sheet-color-grid button[data-sheet-color="green"] {
+    --sheet-color: #22c55e;
+}
+
+.ac-v3-builder__tabs button[data-sheet-color="yellow"],
+.ac-v3-builder__sheet-color-grid button[data-sheet-color="yellow"] {
+    --sheet-color: #eab308;
+}
+
+.ac-v3-builder__tabs button[data-sheet-color="red"],
+.ac-v3-builder__sheet-color-grid button[data-sheet-color="red"] {
+    --sheet-color: #ef4444;
+}
+
+.ac-v3-builder__tabs button[data-sheet-color="purple"],
+.ac-v3-builder__sheet-color-grid button[data-sheet-color="purple"] {
+    --sheet-color: #8b5cf6;
+}
+
+.ac-v3-builder__tabs button[data-sheet-color="teal"],
+.ac-v3-builder__sheet-color-grid button[data-sheet-color="teal"] {
+    --sheet-color: #14b8a6;
+}
+
+.ac-v3-builder__tabs button[data-sheet-color="gray"],
+.ac-v3-builder__sheet-color-grid button[data-sheet-color="gray"] {
+    --sheet-color: #64748b;
+}
+
+.ac-v3-builder[data-active-sheet-color="blue"] {
+    --active-sheet-color: #3b82f6;
+}
+
+.ac-v3-builder[data-active-sheet-color="green"] {
+    --active-sheet-color: #22c55e;
+}
+
+.ac-v3-builder[data-active-sheet-color="yellow"] {
+    --active-sheet-color: #eab308;
+}
+
+.ac-v3-builder[data-active-sheet-color="red"] {
+    --active-sheet-color: #ef4444;
+}
+
+.ac-v3-builder[data-active-sheet-color="purple"] {
+    --active-sheet-color: #8b5cf6;
+}
+
+.ac-v3-builder[data-active-sheet-color="teal"] {
+    --active-sheet-color: #14b8a6;
+}
+
+.ac-v3-builder[data-active-sheet-color="gray"] {
+    --active-sheet-color: #64748b;
+}
+
+.ac-v3-builder__tabs button.is-active[data-sheet-color]:not([data-sheet-color="none"]) {
+    border-color: color-mix(in oklch, var(--sheet-color) 58%, var(--border));
+    background: color-mix(in oklch, var(--sheet-color) 18%, var(--surface));
+    color: color-mix(in oklch, var(--sheet-color) 64%, var(--text));
+}
+
+.ac-v3-builder__tabs button[data-sheet-color]:not([data-sheet-color="none"])::before {
+    display: block;
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    background: var(--sheet-color);
+    content: '';
+}
+
 .ac-v3-builder__tabs b {
     min-width: 18px;
     border-radius: 999px;
@@ -447,10 +525,49 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
     text-align: center;
 }
 
+.ac-v3-builder__sheet-tab-gear {
+    display: inline-flex;
+    width: 18px;
+    height: 18px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    color: var(--accent);
+}
+
+.ac-v3-builder__sheet-tab-gear:hover {
+    background: color-mix(in oklch, var(--accent) 12%, transparent);
+}
+
 .ac-v3-builder__tab-add {
     width: 24px;
     justify-content: center;
     padding: 0 !important;
+}
+
+.ac-v3-builder__sheet-actions {
+    display: inline-flex;
+    align-items: center;
+    border-left: 1px solid var(--border);
+    gap: 4px;
+    margin-left: 2px;
+    padding-left: 6px;
+}
+
+.ac-v3-builder__sheet-actions button {
+    width: 24px;
+    justify-content: center;
+    padding: 0 !important;
+}
+
+.ac-v3-builder__sheet-actions button.is-danger {
+    color: color-mix(in oklch, var(--danger) 78%, var(--text-2));
+}
+
+.ac-v3-builder__sheet-actions button:hover:not(:disabled) {
+    border-color: color-mix(in oklch, var(--accent) 34%, var(--border));
+    background: color-mix(in oklch, var(--accent) 8%, transparent);
+    color: var(--accent);
 }
 
 .ac-v3-builder__notice {
@@ -563,6 +680,7 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
 .ac-v3-builder__canvas {
     position: relative;
     overflow: hidden;
+    background-color: color-mix(in oklch, var(--active-sheet-color, var(--surface)) 5%, var(--surface));
     background-image:
         radial-gradient(circle, var(--grid-strong) 1.1px, transparent 1.1px),
         radial-gradient(circle, var(--grid) 0.9px, transparent 0.9px);
@@ -3150,6 +3268,80 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
     border-radius: 14px;
     background: var(--surface);
     box-shadow: 0 22px 68px rgba(0, 0, 0, 0.28);
+}
+
+.ac-v3-builder__sheet-dialog {
+    display: grid;
+    width: min(460px, calc(100vw - 32px));
+    overflow: hidden;
+    border: 1px solid var(--border-strong);
+    border-radius: 14px;
+    background: var(--surface);
+    box-shadow: 0 22px 68px rgba(0, 0, 0, 0.28);
+}
+
+.ac-v3-builder__sheet-dialog-field {
+    display: grid;
+    gap: 12px;
+}
+
+.ac-v3-builder__sheet-dialog-field label {
+    display: grid;
+    gap: 8px;
+}
+
+.ac-v3-builder__sheet-dialog-field span {
+    color: var(--text-2);
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.ac-v3-builder__sheet-dialog-field input {
+    width: 100%;
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--text);
+    outline: 0;
+    padding: 10px 12px;
+}
+
+.ac-v3-builder__sheet-dialog-field input:focus {
+    border-color: color-mix(in oklch, var(--accent) 42%, var(--border));
+    box-shadow: 0 0 0 2px color-mix(in oklch, var(--accent) 12%, transparent);
+}
+
+.ac-v3-builder__sheet-color-grid {
+    display: grid;
+    gap: 8px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ac-v3-builder__sheet-color-grid button {
+    display: inline-flex;
+    min-height: 36px;
+    align-items: center;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: var(--surface);
+    color: var(--text-2);
+    gap: 8px;
+    justify-content: flex-start;
+    padding: 0 10px;
+}
+
+.ac-v3-builder__sheet-color-grid button.is-active {
+    border-color: color-mix(in oklch, var(--accent) 46%, var(--border));
+    background: color-mix(in oklch, var(--accent) 7%, var(--surface));
+    color: var(--text);
+}
+
+.ac-v3-builder__sheet-color-grid i {
+    width: 14px;
+    height: 14px;
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    background: var(--sheet-color, transparent);
 }
 
 .ac-v3-builder__publish-dialog-head {
