@@ -1,6 +1,7 @@
 @php
     use App\Models\Contact;
     use App\Models\Dialog;
+    use App\Filament\Resources\Dialogs\DialogResource;
     use App\Services\Contacts\ResolveContactDisplayNameAction;
 
     $sectionLabels = [
@@ -15,7 +16,33 @@
 
     $firstSegment = request()->segment(2);
     $sectionLabel = $sectionLabels[$firstSegment] ?? 'Админка';
+    $sectionUrl = null;
     $currentLabel = null;
+
+    $resolveDialogsBackUrl = static function (mixed $backTo): ?string {
+        if (! is_string($backTo) || $backTo === '') {
+            return null;
+        }
+
+        $dialogsPaths = collect([
+            DialogResource::getUrl('index'),
+            DialogResource::getUrl('kanban'),
+        ])
+            ->map(static fn (string $url): string => parse_url($url, PHP_URL_PATH) ?: $url)
+            ->filter()
+            ->unique()
+            ->values();
+        $backToPath = parse_url($backTo, PHP_URL_PATH) ?: $backTo;
+
+        if (! $dialogsPaths->contains($backToPath)) {
+            return null;
+        }
+
+        $backToQuery = parse_url($backTo, PHP_URL_QUERY);
+        $safeBackTo = $backToPath.(is_string($backToQuery) && $backToQuery !== '' ? '?'.$backToQuery : '');
+
+        return url($safeBackTo);
+    };
 
     if ($firstSegment === 'contacts') {
         $routeRecord = request()->route('record');
@@ -39,6 +66,7 @@
         }
     } elseif ($firstSegment === 'dialogs') {
         $thirdSegment = request()->segment(3);
+        $sectionUrl = $resolveDialogsBackUrl(request()->query('back_to')) ?? DialogResource::getUrl('index');
 
         if ($thirdSegment === 'kanban') {
             $currentLabel = 'Канбан';
@@ -71,7 +99,11 @@
 
 <div class="ac-admin-topbar-start">
     <nav class="ac-admin-breadcrumbs" aria-label="Хлебные крошки">
-        <span class="ac-admin-breadcrumbs__item">{{ $sectionLabel }}</span>
+        @if (filled($sectionUrl))
+            <a class="ac-admin-breadcrumbs__item" href="{{ $sectionUrl }}">{{ $sectionLabel }}</a>
+        @else
+            <span class="ac-admin-breadcrumbs__item">{{ $sectionLabel }}</span>
+        @endif
 
         @if (filled($currentLabel))
             <span class="ac-admin-breadcrumbs__separator">/</span>

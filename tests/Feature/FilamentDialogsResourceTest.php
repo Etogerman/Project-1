@@ -236,6 +236,8 @@ class FilamentDialogsResourceTest extends TestCase
             ->get(DialogResource::getUrl('view', ['record' => $dialog]))
             ->assertOk()
             ->assertSee('data-role="dialog-system-fields-section"', false)
+            ->assertSee('data-role="dialog-stage-strip"', false)
+            ->assertDontSee('data-field-key="stage"', false)
             ->assertSee('data-field-key="current_block_id"', false)
             ->assertSee('Текущий блок')
             ->assertDontSee('Текущий блок клиента')
@@ -250,6 +252,24 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('data-role="dialog-contact-label"', false)
             ->assertSee('data-role="dialog-channel-label"', false)
             ->assertDontSee('Аватарка');
+    }
+
+    public function test_dialog_view_topbar_dialogs_breadcrumb_links_to_back_to_dialogs_list(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages();
+        $backTo = DialogResource::getUrl('index');
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', [
+                'record' => $dialog,
+                'back_to' => $backTo,
+            ]))
+            ->assertOk()
+            ->assertSee('<a class="ac-admin-breadcrumbs__item" href="'.$backTo.'">Диалоги</a>', false);
     }
 
     public function test_dialog_view_renders_empty_current_block_without_active_run(): void

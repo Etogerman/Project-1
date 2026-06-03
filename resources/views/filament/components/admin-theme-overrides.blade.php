@@ -355,6 +355,18 @@
         white-space: nowrap;
     }
 
+    a.ac-admin-breadcrumbs__item {
+        color: inherit;
+        text-decoration: none;
+        transition: color 0.15s ease;
+    }
+
+    a.ac-admin-breadcrumbs__item:hover,
+    a.ac-admin-breadcrumbs__item:focus-visible {
+        color: var(--ac-text);
+        text-decoration: none;
+    }
+
     .ac-admin-breadcrumbs__item--current {
         color: var(--ac-text);
         font-weight: 750;
@@ -3334,6 +3346,10 @@
         background: #f5f5f3;
     }
 
+    html.dark body:has([data-role="dialog-page"]) .fi-main {
+        background: var(--ac-page-bg);
+    }
+
     body:has([data-role="dialog-page"]) .fi-page {
         gap: 0.5rem;
     }
@@ -3405,6 +3421,15 @@
         line-height: 1.2;
     }
 
+    html.dark .ac-dialog-chat-panel > .ac-surface__header {
+        border-bottom-color: var(--ac-border-strong);
+        background: color-mix(in srgb, var(--ac-surface-muted) 72%, var(--ac-surface));
+    }
+
+    html.dark .ac-dialog-chat-panel > .ac-surface__header .ac-surface__title {
+        color: var(--ac-text);
+    }
+
     .ac-dialog-side-list {
         display: grid;
         gap: 0;
@@ -3446,6 +3471,11 @@
 
     .ac-dialog-side-list .ac-meta__link:hover {
         text-decoration: underline;
+    }
+
+    html.dark .ac-dialog-side-card .ac-dialog-summary__section-title,
+    html.dark .ac-dialog-side-list .ac-meta__label {
+        color: #8b95a7;
     }
 
     .ac-dialog-side-list .ac-meta[data-field-key="current_block_id"] .ac-meta__value,
@@ -3932,6 +3962,47 @@
         --stage-fill-bottom: rgba(219, 226, 235, 0.9);
         --stage-outline: rgba(122, 136, 155, 0.36);
         color: #7b8798;
+    }
+
+    html.dark .ac-dialog-stage-step {
+        --stage-fill-top: #222938;
+        --stage-fill-bottom: #1a202d;
+        --stage-outline: #3a4455;
+        color: #cbd5e1;
+    }
+
+    html.dark .ac-dialog-stage-step[data-state="available"] {
+        --stage-fill-top: #273142;
+        --stage-fill-bottom: #202838;
+        --stage-outline: #4b5b72;
+        color: #d7dee9;
+    }
+
+    html.dark .ac-dialog-stage-step[data-state="available"]:hover,
+    html.dark .ac-dialog-stage-step[data-state="available"]:focus-visible {
+        --stage-fill-top: #203848;
+        --stage-fill-bottom: #182c3a;
+        --stage-outline: #56cfe1;
+        color: #f8fafc;
+    }
+
+    html.dark .ac-dialog-stage-step[data-state="locked"] {
+        --stage-fill-top: #202636;
+        --stage-fill-bottom: #191f2c;
+        --stage-outline: #343d4f;
+        color: #94a3b8;
+    }
+
+    html.dark .ac-dialog-stage-step[data-state="completed"],
+    html.dark .ac-dialog-stage-step[data-state="current"] {
+        --stage-fill-top: #1ea9bd;
+        --stage-fill-bottom: #0e7490;
+        --stage-outline: #38bdf8;
+        color: #ecfeff;
+    }
+
+    html.dark .ac-dialog-stage-step[data-state="current"] {
+        filter: drop-shadow(0 0.7rem 1rem rgba(14, 116, 144, 0.28));
     }
 
     .ac-dialog-stage-step:disabled {
@@ -5974,6 +6045,22 @@
         color: #ffffff;
     }
 
+    html.dark .ac-button--success {
+        border-color: color-mix(in srgb, var(--ac-success) 58%, transparent);
+        background: linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--ac-success) 90%, #bbf7d0 10%) 0%,
+            color-mix(in srgb, var(--ac-success) 82%, #22c55e 18%) 100%
+        );
+        color: #052e16;
+    }
+
+    html.dark .ac-button--success:disabled,
+    html.dark .ac-button--success[disabled] {
+        color: #0b3b22;
+        opacity: 0.78;
+    }
+
     .ac-button--danger {
         border-color: color-mix(in srgb, var(--ac-danger) 45%, transparent);
         background: var(--ac-danger);
@@ -6244,6 +6331,10 @@
         font-size: 0.9rem;
         line-height: 1.36;
         text-align: left;
+    }
+
+    html.dark .ac-message--system .ac-message__text {
+        color: #cbd5e1;
     }
 
     .ac-message__text--html a {
@@ -6540,6 +6631,15 @@
         background: #fff8df;
         box-shadow: none;
         padding: 0.55rem 0.85rem 0.62rem;
+    }
+
+    html.dark .ac-composer--dialog-inline {
+        border-top-color: var(--ac-border-strong);
+        background: color-mix(in srgb, var(--ac-surface-muted) 72%, var(--ac-surface));
+    }
+
+    html.dark .ac-composer--dialog-inline .ac-surface__title {
+        color: var(--ac-text);
     }
 
     .ac-composer--dialog-inline .ac-inline-split {

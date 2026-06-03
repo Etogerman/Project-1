@@ -853,7 +853,6 @@ class ViewDialog extends ViewRecord
         $dialog = $this->getRecord();
         $contactSummary = $this->getContactSummaryViewData();
         $inboxStatus = $this->getDialogInboxStatusViewData();
-        $dialogStage = $this->getDialogStageViewData();
         $currentBlock = $this->getCurrentDialogBlockViewData($dialog);
 
         return [
@@ -870,7 +869,6 @@ class ViewDialog extends ViewRecord
                 ),
                 $this->dialogSystemFieldRow('channel_id', 'Канал', $this->formatChannelLabel($dialog->channel, 'Неизвестный канал'), null, 'dialog-channel-label'),
                 $this->dialogSystemFieldRow('status', 'Статус', $inboxStatus['current_label']),
-                $this->dialogSystemFieldRow('stage', 'Этап', $dialogStage['current_label']),
                 $this->dialogSystemFieldRow('assigned_user_id', 'Ответственный', $contactSummary['assigned_user_label']),
                 $this->dialogSystemFieldRow(
                     'current_block_id',
