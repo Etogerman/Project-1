@@ -27,6 +27,7 @@ use App\Models\ScenarioRun;
 use App\Models\ScenarioV3OutboundMessage;
 use App\Models\ScenarioV3ScheduledTransition;
 use App\Models\ScenarioVersion;
+use App\Models\Tag;
 use App\Services\AI\AiStructuredGenerationException;
 use App\Services\AI\AiStructuredGenerationService;
 use App\Services\Analytics\FirstNameResolutionAnalyticsService;
@@ -2975,6 +2976,23 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 continue;
             }
 
+            if (($action['type'] ?? null) === 'tag_effects') {
+                $result = $this->applyV3TagEffectsAction(
+                    $message,
+                    $action,
+                    $statePayload,
+                    filled($block['id'] ?? null) ? (string) $block['id'] : null,
+                    $run,
+                );
+                $statePayload = $result['state_payload'] ?? $statePayload;
+
+                if (($result['stop_current_execution'] ?? false) === true || ($result['output_id'] ?? null) !== null) {
+                    return $result;
+                }
+
+                continue;
+            }
+
             if (($action['type'] ?? null) !== 'write_contact_field') {
                 Log::warning('scenario.v3_unsupported_action_skipped', [
                     'scenario_code' => $this->code(),
@@ -2995,6 +3013,131 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         }
 
         return ['state_payload' => $statePayload, 'output_id' => null];
+    }
+
+    /**
+     * @param  array<string, mixed>  $action
+     * @param  array<string, mixed>  $statePayload
+     * @return array{state_payload: array<string, mixed>, output_id: ?string, stop_current_execution?: bool}
+     */
+    private function applyV3TagEffectsAction(
+        Message $message,
+        array $action,
+        array $statePayload,
+        ?string $blockId,
+        ?ScenarioRun $run,
+    ): array {
+        $assignTagIds = $this->v3TagEffectIds($action['assign_tag_ids'] ?? []);
+        $removeTagIds = $this->v3TagEffectIds($action['remove_tag_ids'] ?? []);
+        $allTagIds = array_values(array_unique([...$assignTagIds, ...$removeTagIds]));
+
+        if ($allTagIds === []) {
+            return ['state_payload' => $statePayload, 'output_id' => null];
+        }
+
+        if (! $message->contact instanceof Contact) {
+            Log::warning('scenario.v3_tag_effects_failed', [
+                'scenario_code' => $this->code(),
+                'scenario_run_id' => $run?->id,
+                'block_id' => $blockId,
+                'message_id' => $message->id,
+                'reason' => 'missing_contact',
+            ]);
+
+            return [
+                'state_payload' => $statePayload,
+                'output_id' => null,
+                'stop_current_execution' => true,
+            ];
+        }
+
+        $tagsById = Tag::query()
+            ->active()
+            ->whereKey($allTagIds)
+            ->get(['id', 'slug'])
+            ->keyBy(fn (Tag $tag): int => (int) $tag->id);
+
+        if ($tagsById->count() !== count($allTagIds)) {
+            Log::warning('scenario.v3_tag_effects_failed', [
+                'scenario_code' => $this->code(),
+                'scenario_run_id' => $run?->id,
+                'block_id' => $blockId,
+                'message_id' => $message->id,
+                'reason' => 'unknown_tag',
+                'tag_ids' => $allTagIds,
+            ]);
+
+            return [
+                'state_payload' => $statePayload,
+                'output_id' => null,
+                'stop_current_execution' => true,
+            ];
+        }
+
+        $tagActions = [];
+
+        foreach ($assignTagIds as $tagId) {
+            $tag = $tagsById->get($tagId);
+
+            if ($tag instanceof Tag) {
+                $tagActions[] = ['type' => 'set_tag', 'value' => (string) $tag->slug];
+            }
+        }
+
+        foreach ($removeTagIds as $tagId) {
+            $tag = $tagsById->get($tagId);
+
+            if ($tag instanceof Tag) {
+                $tagActions[] = ['type' => 'remove_tag', 'value' => (string) $tag->slug];
+            }
+        }
+
+        try {
+            $this->applyScenarioTagEffectsAction->handle($message->contact, $tagActions);
+        } catch (Throwable $exception) {
+            Log::warning('scenario.v3_tag_effects_failed', [
+                'scenario_code' => $this->code(),
+                'scenario_run_id' => $run?->id,
+                'block_id' => $blockId,
+                'message_id' => $message->id,
+                'reason' => 'runtime_error',
+                'error' => $exception->getMessage(),
+            ]);
+
+            return [
+                'state_payload' => $statePayload,
+                'output_id' => null,
+                'stop_current_execution' => true,
+            ];
+        }
+
+        Log::info('scenario.v3_tag_effects_done', [
+            'scenario_code' => $this->code(),
+            'scenario_run_id' => $run?->id,
+            'block_id' => $blockId,
+            'message_id' => $message->id,
+            'assign_tag_ids' => $assignTagIds,
+            'remove_tag_ids' => $removeTagIds,
+        ]);
+
+        return ['state_payload' => $statePayload, 'output_id' => null];
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function v3TagEffectIds(mixed $ids): array
+    {
+        if (! is_array($ids)) {
+            return [];
+        }
+
+        return collect($ids)
+            ->map(fn (mixed $id): int => (int) $id)
+            ->filter(fn (int $id): bool => $id > 0)
+            ->unique()
+            ->values()
+            ->all();
     }
 
     /**

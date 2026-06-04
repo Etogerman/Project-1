@@ -362,6 +362,14 @@ class CompileScenarioBuilderV3RuntimeAction
                     ];
                 }
 
+                if ($type === 'tag_effects') {
+                    return [
+                        'type' => 'tag_effects',
+                        'assign_tag_ids' => $this->compileIntegerList($item['assign_tag_ids'] ?? []),
+                        'remove_tag_ids' => $this->compileIntegerList($item['remove_tag_ids'] ?? []),
+                    ];
+                }
+
                 return [
                     'type' => $type,
                     'source_type' => (string) ($item['source_type'] ?? 'ai_data'),
@@ -392,11 +400,29 @@ class CompileScenarioBuilderV3RuntimeAction
                 'variables' => ($item['operations'] ?? []) !== [],
                 'simulate_start_parameter' => ($item['source_scope'] ?? '') === 'dialog'
                     && ($item['source_field_key'] ?? '') !== '',
+                'tag_effects' => (($item['assign_tag_ids'] ?? []) !== [] || ($item['remove_tag_ids'] ?? []) !== []),
                 default => (($item['target_field'] ?? '') !== ''
                     && (($item['source_type'] ?? '') === 'static_value'
                         ? trim((string) ($item['static_value'] ?? '')) !== ''
                         : ($item['source_field_key'] ?? '') !== '')),
             })
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function compileIntegerList(mixed $values): array
+    {
+        if (! is_array($values)) {
+            return [];
+        }
+
+        return collect($values)
+            ->map(fn (mixed $value): int => (int) $value)
+            ->filter(fn (int $value): bool => $value > 0)
+            ->unique()
             ->values()
             ->all();
     }

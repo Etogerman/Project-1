@@ -155,6 +155,7 @@ class ScenarioConstructor extends Page
      *     sheetImportPreviewUrl: string|null,
      *     sheetImportApplyUrl: string|null,
      *     autoReplyImportPreviewUrl: string|null,
+     *     autoReplyImportTagStoreUrl: string|null,
      *     csrfToken: string
      * }
      */
@@ -182,6 +183,9 @@ class ScenarioConstructor extends Page
                 : null,
             'autoReplyImportPreviewUrl' => $this->scenarioId !== null
                 ? route('admin.scenario-constructor.v3.auto-reply.import.preview', ['scenario' => $this->scenarioId])
+                : null,
+            'autoReplyImportTagStoreUrl' => $this->scenarioId !== null
+                ? route('admin.scenario-constructor.v3.auto-reply.import.tags.store', ['scenario' => $this->scenarioId])
                 : null,
             'csrfToken' => csrf_token(),
         ];

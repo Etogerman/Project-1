@@ -254,6 +254,66 @@ class GenericDbScenarioRuntimeTest extends TestCase
             && $request['text'] === 'Вот каталог');
     }
 
+    public function test_v3_tag_effects_failure_stops_message_dispatch(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9103],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $tag = Tag::factory()->create(['name' => 'Импортированный тег']);
+        $schema = $this->v3CatalogRuntimeSchema($channel->id);
+        data_set($schema, 'builder_v3_runtime.blocks.start.actions', [[
+            'type' => 'tag_effects',
+            'assign_tag_ids' => [$tag->id],
+            'remove_tag_ids' => [],
+        ]]);
+        data_set($schema, 'builder_v3_runtime.blocks.start.message.text', 'Ответ после тега');
+        data_set($schema, 'builder_v3_runtime.blocks.start.buttons', null);
+        data_set($schema, 'builder_v3_runtime.edges', []);
+
+        $scenario = $this->createPublishedScenario('v3_tag_effects_stop', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $tag->forceFill(['is_active' => false])->save();
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+            'message_parameter' => null,
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        Http::assertNothingSent();
+        $this->assertDatabaseMissing('messages', [
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'text' => 'Ответ после тега',
+        ]);
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('start', $run->current_step);
+    }
+
     public function test_v3_wait_reply_priority_can_beat_matching_button_edge(): void
     {
         Http::fake([

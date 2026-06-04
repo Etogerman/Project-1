@@ -22,6 +22,22 @@ class ScenarioBuilderV3AutoReplyImportPlanService
 
     private const SHEET_COLORS = ['blue', 'green', 'yellow', 'red', 'purple', 'teal', 'gray'];
 
+    private const PLACEMENT_SINGLE_SHEET = 'single_sheet';
+
+    private const PLACEMENT_BY_CATEGORY = 'by_category';
+
+    private const PLACEMENT_CURRENT_SHEET = 'current_sheet';
+
+    private const DEFAULT_IMPORT_SHEET_NAME = 'Импорт автоответов';
+
+    private const IMPORT_LAYOUT_START_X = 80;
+
+    private const IMPORT_LAYOUT_START_Y = 80;
+
+    private const IMPORT_LAYOUT_COLUMN_GAP = 400;
+
+    private const IMPORT_LAYOUT_ROW_GAP = 320;
+
     /**
      * @return array<string, mixed>
      */
@@ -31,6 +47,8 @@ class ScenarioBuilderV3AutoReplyImportPlanService
         $userMappings = $this->userMappings($payload);
         $excludedRows = $this->integerSet($payload['excluded_row_numbers'] ?? []);
         $overwriteRows = $this->integerSet($payload['overwrite_conflict_row_numbers'] ?? []);
+        $placementMode = $this->placementMode($payload['placement_mode'] ?? null);
+        $importBatchId = $this->importBatchId($payload['import_batch_id'] ?? null);
         $parsed = $this->parseWorkbook($file);
         $availableChannels = $this->availableChannels($user);
         $availableTags = $this->availableTags();
@@ -38,7 +56,8 @@ class ScenarioBuilderV3AutoReplyImportPlanService
         $tagRefs = $parsed['tag_refs'];
         $rows = $parsed['rows'];
         $existingBlocks = $this->existingImportedBlocks($builder);
-        $plannedSheets = $this->plannedSheets($builder, $rows);
+        $plannedSheets = $this->plannedSheets($builder);
+        $newBlockLayout = [];
         $usedClientKeys = collect($builder['blocks'] ?? [])
             ->pluck('client_key')
             ->filter(fn (mixed $key): bool => is_string($key) && $key !== '')
@@ -115,49 +134,80 @@ class ScenarioBuilderV3AutoReplyImportPlanService
 
             $existingBlock = $sourceRuleId > 0 ? ($existingBlocks[$sourceRuleId] ?? null) : null;
             $operation = is_array($existingBlock) ? 'update' : 'create';
-            $sheetId = $this->sheetIdForCategory((string) ($row['category_name'] ?? ''));
-            $position = is_array($existingBlock)
-                ? $this->positionFromBlock($existingBlock)
-                : $this->gridPosition($summary['created'] + $summary['updated'], $sheetId, $plannedSheets);
-            $clientKey = is_array($existingBlock)
-                ? (string) ($existingBlock['client_key'] ?? '')
-                : $this->uniqueClientKey("import_auto_reply_{$sourceRuleId}", $usedClientKeys);
+
+            $generatedBlock = null;
+            $clientKey = '';
             $baseBlock = is_array($existingBlock) ? $existingBlock : [];
-            $generatedBlock = $this->buildBlock(
-                $row,
-                $clientKey,
-                $position,
-                $sheetId,
-                $channelResolution['channel_ids'],
-                $tagResolution['assign_tag_ids'],
-                $tagResolution['remove_tag_ids'],
-                $baseBlock,
-                $file->getClientOriginalName(),
-            );
-            $importedPayloadHash = $this->importedPayloadHash($generatedBlock);
-            data_set($generatedBlock, 'settings_payload.ui.import_source.imported_payload_hash', $importedPayloadHash);
 
-            $existingHash = is_array($existingBlock)
-                ? (string) data_get($existingBlock, 'settings_payload.ui.import_source.imported_payload_hash', '')
-                : '';
-            $currentImportedHash = is_array($existingBlock)
-                ? $this->importedPayloadHash($existingBlock)
-                : '';
-            $hasManualConflict = is_array($existingBlock)
-                && $existingHash !== ''
-                && $currentImportedHash !== ''
-                && ! hash_equals($existingHash, $currentImportedHash);
+            if (is_array($existingBlock)) {
+                $sheetId = (string) data_get($existingBlock, 'settings_payload.ui.sheet_id', 'main');
+                $position = $this->positionFromBlock($existingBlock);
+                $clientKey = (string) ($existingBlock['client_key'] ?? '');
+                $generatedBlock = $this->buildBlock(
+                    $row,
+                    $clientKey,
+                    $position,
+                    $sheetId,
+                    $channelResolution['channel_ids'],
+                    $tagResolution['assign_tag_ids'],
+                    $tagResolution['remove_tag_ids'],
+                    $baseBlock,
+                    $file->getClientOriginalName(),
+                    $importBatchId,
+                );
+                $importedPayloadHash = $this->importedPayloadHash($generatedBlock);
+                data_set($generatedBlock, 'settings_payload.ui.import_source.imported_payload_hash', $importedPayloadHash);
 
-            if ($hasManualConflict && ! isset($overwriteRows[$rowNumber])) {
-                $summary['conflicts']++;
-                $rowResults[] = $this->rowResult($row, 'conflict', ['manual_edit_conflict'], $existingBlock);
-                continue;
+                $existingHash = (string) data_get($existingBlock, 'settings_payload.ui.import_source.imported_payload_hash', '');
+                $currentImportedHash = $this->importedPayloadHash($existingBlock);
+                $hasManualConflict = $existingHash !== ''
+                    && $currentImportedHash !== ''
+                    && ! hash_equals($existingHash, $currentImportedHash);
+
+                if ($hasManualConflict && ! isset($overwriteRows[$rowNumber])) {
+                    $summary['conflicts']++;
+                    $rowResults[] = $this->rowResult($row, 'conflict', ['manual_edit_conflict'], $existingBlock);
+                    continue;
+                }
             }
 
             if ($blockers !== []) {
                 $summary['blocked']++;
                 $rowResults[] = $this->rowResult($row, 'blocked', array_values(array_unique($blockers)), $existingBlock);
                 continue;
+            }
+
+            if (! is_array($generatedBlock)) {
+                $sheetId = $this->sheetIdForNewBlock(
+                    $builder,
+                    $plannedSheets,
+                    $placementMode,
+                    (string) ($row['category_name'] ?? ''),
+                    $importBatchId,
+                );
+                $position = $this->gridPosition(
+                    $builder,
+                    $sheetId,
+                    $plannedSheets,
+                    $placementMode,
+                    (string) ($row['category_name'] ?? ''),
+                    $newBlockLayout,
+                );
+                $clientKey = $this->uniqueClientKey("import_auto_reply_{$sourceRuleId}", $usedClientKeys);
+                $generatedBlock = $this->buildBlock(
+                    $row,
+                    $clientKey,
+                    $position,
+                    $sheetId,
+                    $channelResolution['channel_ids'],
+                    $tagResolution['assign_tag_ids'],
+                    $tagResolution['remove_tag_ids'],
+                    $baseBlock,
+                    $file->getClientOriginalName(),
+                    $importBatchId,
+                );
+                $importedPayloadHash = $this->importedPayloadHash($generatedBlock);
+                data_set($generatedBlock, 'settings_payload.ui.import_source.imported_payload_hash', $importedPayloadHash);
             }
 
             $planBlocks[] = [
@@ -185,6 +235,8 @@ class ScenarioBuilderV3AutoReplyImportPlanService
             'scenario_id' => (int) $scenario->id,
             'source_workbook_key' => self::WORKBOOK_KEY,
             'source_file_name' => $file->getClientOriginalName(),
+            'placement_mode' => $placementMode,
+            'import_batch_id' => $importBatchId,
             'summary' => $summary,
             'can_apply' => $canApply,
             'warnings' => [
@@ -265,6 +317,34 @@ class ScenarioBuilderV3AutoReplyImportPlanService
             ->unique()
             ->mapWithKeys(fn (int $value): array => [$value => true])
             ->all();
+    }
+
+    private function placementMode(mixed $value): string
+    {
+        $mode = trim((string) ($value ?? ''));
+
+        return in_array($mode, [
+            self::PLACEMENT_SINGLE_SHEET,
+            self::PLACEMENT_BY_CATEGORY,
+            self::PLACEMENT_CURRENT_SHEET,
+        ], true)
+            ? $mode
+            : self::PLACEMENT_SINGLE_SHEET;
+    }
+
+    private function importBatchId(mixed $value): string
+    {
+        $batchId = trim((string) ($value ?? ''));
+
+        if (
+            $batchId !== ''
+            && mb_strlen($batchId) <= 120
+            && preg_match('/^[A-Za-z0-9_.:-]+$/', $batchId) === 1
+        ) {
+            return $batchId;
+        }
+
+        return 'auto_reply_xlsx_'.now()->format('Ymd_His').'_'.Str::lower(Str::random(6));
     }
 
     /**
@@ -662,6 +742,10 @@ class ScenarioBuilderV3AutoReplyImportPlanService
                 continue;
             }
 
+            if (data_get($block, 'settings_payload.ui.import_source.source_workbook_key') !== self::WORKBOOK_KEY) {
+                continue;
+            }
+
             $sourceRuleId = (int) data_get($block, 'settings_payload.ui.import_source.source_rule_id', 0);
 
             if ($sourceRuleId > 0) {
@@ -673,10 +757,9 @@ class ScenarioBuilderV3AutoReplyImportPlanService
     }
 
     /**
-     * @param  list<array<string, mixed>>  $rows
      * @return array<string, array<string, mixed>>
      */
-    private function plannedSheets(array $builder, array $rows): array
+    private function plannedSheets(array $builder): array
     {
         $existing = collect(is_array($builder['sheets'] ?? null) ? $builder['sheets'] : [])
             ->filter(fn (mixed $sheet): bool => is_array($sheet) && trim((string) ($sheet['id'] ?? '')) !== '')
@@ -699,28 +782,76 @@ class ScenarioBuilderV3AutoReplyImportPlanService
             ];
         }
 
-        $created = 0;
+        return $existing;
+    }
 
-        foreach ($rows as $row) {
-            $sheetId = $this->sheetIdForCategory((string) ($row['category_name'] ?? ''));
+    /**
+     * @param  array<string, array<string, mixed>>  $plannedSheets
+     */
+    private function sheetIdForNewBlock(
+        array $builder,
+        array &$plannedSheets,
+        string $placementMode,
+        string $categoryName,
+        string $importBatchId,
+    ): string {
+        if ($placementMode === self::PLACEMENT_CURRENT_SHEET) {
+            $activeSheetId = trim((string) ($builder['active_sheet_id'] ?? 'main'));
 
-            if (isset($existing[$sheetId])) {
-                continue;
-            }
-
-            $existing[$sheetId] = [
-                'operation' => 'create',
-                'sheet' => [
-                    'id' => $sheetId,
-                    'name' => mb_substr((string) ($row['category_name'] ?? 'Без категории'), 0, 40),
-                    'color' => self::SHEET_COLORS[$created % count(self::SHEET_COLORS)],
-                    'view' => ['tx' => 0, 'ty' => 0, 'zoom' => 1],
-                ],
-            ];
-            $created++;
+            return isset($plannedSheets[$activeSheetId]) ? $activeSheetId : 'main';
         }
 
-        return $existing;
+        if ($placementMode === self::PLACEMENT_BY_CATEGORY) {
+            $sheetId = $this->sheetIdForCategory($categoryName);
+
+            if (! isset($plannedSheets[$sheetId])) {
+                $createdCount = collect($plannedSheets)
+                    ->where('operation', 'create')
+                    ->count();
+                $plannedSheets[$sheetId] = [
+                    'operation' => 'create',
+                    'sheet' => [
+                        'id' => $sheetId,
+                        'name' => $this->uniqueSheetName(
+                            mb_substr(trim($categoryName) !== '' ? trim($categoryName) : 'Без категории', 0, 40),
+                            $plannedSheets,
+                        ),
+                        'color' => self::SHEET_COLORS[$createdCount % count(self::SHEET_COLORS)],
+                        'view' => ['tx' => 0, 'ty' => 0, 'zoom' => 1],
+                        'import_source' => [
+                            'type' => 'auto_reply_rule_xlsx',
+                            'created_batch_id' => $importBatchId,
+                        ],
+                    ],
+                ];
+            }
+
+            return $sheetId;
+        }
+
+        $existingBatchSheetId = $this->plannedSheetIdForBatch($plannedSheets, $importBatchId);
+
+        if ($existingBatchSheetId !== null) {
+            return $existingBatchSheetId;
+        }
+
+        $sheetId = $this->uniqueSheetId($this->sheetIdForImportBatch($importBatchId), $plannedSheets);
+
+        $plannedSheets[$sheetId] = [
+            'operation' => 'create',
+            'sheet' => [
+                'id' => $sheetId,
+                'name' => $this->uniqueSheetName(self::DEFAULT_IMPORT_SHEET_NAME, $plannedSheets),
+                'color' => 'purple',
+                'view' => ['tx' => 0, 'ty' => 0, 'zoom' => 1],
+                'import_source' => [
+                    'type' => 'auto_reply_rule_xlsx',
+                    'created_batch_id' => $importBatchId,
+                ],
+            ],
+        ];
+
+        return $sheetId;
     }
 
     private function sheetIdForCategory(string $categoryName): string
@@ -732,22 +863,152 @@ class ScenarioBuilderV3AutoReplyImportPlanService
             $slug = substr(sha1($name), 0, 10);
         }
 
-        return 'import_'.$slug;
+        $sheetId = 'import_'.$slug;
+
+        if (strlen($sheetId) > 40) {
+            $sheetId = substr($sheetId, 0, 29).'_'.substr(sha1($name), 0, 10);
+        }
+
+        return $sheetId;
+    }
+
+    private function sheetIdForImportBatch(string $importBatchId): string
+    {
+        $suffix = preg_replace('/[^a-z0-9_]+/', '_', Str::lower($importBatchId)) ?: substr(sha1($importBatchId), 0, 8);
+        $suffix = trim($suffix, '_');
+
+        if ($suffix === '') {
+            $suffix = substr(sha1($importBatchId), 0, 8);
+        }
+
+        $suffix = substr($suffix, -14);
+
+        return 'import_auto_reply_'.$suffix;
     }
 
     /**
-     * @param  array<string, mixed>  $plannedSheets
+     * @param  array<string, array<string, mixed>>  $plannedSheets
+     */
+    private function plannedSheetIdForBatch(array $plannedSheets, string $importBatchId): ?string
+    {
+        foreach ($plannedSheets as $sheetId => $item) {
+            if (
+                ($item['operation'] ?? 'use') === 'create'
+                && data_get($item, 'sheet.import_source.type') === 'auto_reply_rule_xlsx'
+                && (string) data_get($item, 'sheet.import_source.created_batch_id') === $importBatchId
+            ) {
+                return (string) $sheetId;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, array<string, mixed>>  $plannedSheets
+     * @param  array<string, mixed>  $layout
      * @return array{x: int, y: int}
      */
-    private function gridPosition(int $index, string $sheetId, array $plannedSheets): array
-    {
-        $sheetIndex = array_search($sheetId, array_keys($plannedSheets), true);
-        $sheetOffset = is_int($sheetIndex) ? $sheetIndex * 24 : 0;
+    private function gridPosition(
+        array $builder,
+        string $sheetId,
+        array $plannedSheets,
+        string $placementMode,
+        string $categoryName,
+        array &$layout,
+    ): array {
+        $isNewSheet = ($plannedSheets[$sheetId]['operation'] ?? 'use') === 'create';
+        $baseY = $isNewSheet ? self::IMPORT_LAYOUT_START_Y : $this->nextSheetBaseY($builder, $sheetId);
+
+        if ($placementMode === self::PLACEMENT_SINGLE_SHEET || $placementMode === self::PLACEMENT_CURRENT_SHEET) {
+            $categoryKey = $this->normalizeName(trim($categoryName) !== '' ? $categoryName : 'Без категории');
+            $categoryKey = $categoryKey !== '' ? $categoryKey : 'no_category';
+            $sheetCategoryKey = $sheetId.'|'.$categoryKey;
+
+            if (! isset($layout['category_columns'][$sheetId][$categoryKey])) {
+                $layout['category_columns'][$sheetId][$categoryKey] = count($layout['category_columns'][$sheetId] ?? []);
+            }
+
+            $columnIndex = (int) $layout['category_columns'][$sheetId][$categoryKey];
+            $rowIndex = (int) ($layout['category_rows'][$sheetCategoryKey] ?? 0);
+            $layout['category_rows'][$sheetCategoryKey] = $rowIndex + 1;
+
+            return [
+                'x' => self::IMPORT_LAYOUT_START_X + ($columnIndex * self::IMPORT_LAYOUT_COLUMN_GAP),
+                'y' => $baseY + ($rowIndex * self::IMPORT_LAYOUT_ROW_GAP),
+            ];
+        }
+
+        $index = (int) ($layout['sheet_rows'][$sheetId] ?? 0);
+        $layout['sheet_rows'][$sheetId] = $index + 1;
 
         return [
-            'x' => 80 + (($index % 3) * 360) + $sheetOffset,
-            'y' => 80 + ((int) floor($index / 3) * 220),
+            'x' => self::IMPORT_LAYOUT_START_X,
+            'y' => $baseY + ($index * self::IMPORT_LAYOUT_ROW_GAP),
         ];
+    }
+
+    private function nextSheetBaseY(array $builder, string $sheetId): int
+    {
+        $blocks = is_array($builder['blocks'] ?? null) ? $builder['blocks'] : [];
+        $maxY = null;
+
+        foreach ($blocks as $block) {
+            if (! is_array($block)) {
+                continue;
+            }
+
+            if ((string) data_get($block, 'settings_payload.ui.sheet_id', 'main') !== $sheetId) {
+                continue;
+            }
+
+            $y = (int) data_get($block, 'position.y', 80);
+            $maxY = $maxY === null ? $y : max($maxY, $y);
+        }
+
+        return $maxY === null ? self::IMPORT_LAYOUT_START_Y : $maxY + self::IMPORT_LAYOUT_ROW_GAP;
+    }
+
+    /**
+     * @param  array<string, array<string, mixed>>  $plannedSheets
+     */
+    private function uniqueSheetId(string $baseId, array $plannedSheets): string
+    {
+        $base = substr($baseId, 0, 40);
+        $candidate = $base;
+        $suffix = 2;
+
+        while (isset($plannedSheets[$candidate])) {
+            $tail = '_'.$suffix;
+            $candidate = substr($base, 0, 40 - strlen($tail)).$tail;
+            $suffix++;
+        }
+
+        return $candidate;
+    }
+
+    /**
+     * @param  array<string, array<string, mixed>>  $plannedSheets
+     */
+    private function uniqueSheetName(string $baseName, array $plannedSheets): string
+    {
+        $base = trim($baseName) !== '' ? trim($baseName) : self::DEFAULT_IMPORT_SHEET_NAME;
+        $base = mb_substr($base, 0, 40);
+        $used = collect($plannedSheets)
+            ->map(fn (array $item): string => (string) data_get($item, 'sheet.name', ''))
+            ->filter()
+            ->map(fn (string $name): string => mb_strtolower($name))
+            ->all();
+        $candidate = $base;
+        $suffix = 2;
+
+        while (in_array(mb_strtolower($candidate), $used, true)) {
+            $tail = ' '.$suffix;
+            $candidate = mb_substr($base, 0, 40 - mb_strlen($tail)).$tail;
+            $suffix++;
+        }
+
+        return $candidate;
     }
 
     /**
@@ -793,10 +1054,18 @@ class ScenarioBuilderV3AutoReplyImportPlanService
         array $removeTagIds,
         array $baseBlock,
         string $sourceFileName,
+        string $importBatchId,
     ): array {
         $sourceRuleId = (int) ($row['id'] ?? 0);
         $baseSettings = is_array($baseBlock['settings_payload'] ?? null) ? $baseBlock['settings_payload'] : [];
         $baseUi = is_array($baseSettings['ui'] ?? null) ? $baseSettings['ui'] : [];
+        $baseImportSource = is_array($baseUi['import_source'] ?? null) ? $baseUi['import_source'] : [];
+        $createdBatchId = trim((string) ($baseImportSource['created_batch_id'] ?? ''));
+
+        if ($createdBatchId === '') {
+            $createdBatchId = $importBatchId;
+        }
+
         $modules = [
             $this->startModule($row, $channelIds),
         ];
@@ -851,6 +1120,8 @@ class ScenarioBuilderV3AutoReplyImportPlanService
                         'type' => 'auto_reply_rule_xlsx',
                         'source_workbook_key' => self::WORKBOOK_KEY,
                         'source_rule_id' => $sourceRuleId,
+                        'created_batch_id' => $createdBatchId,
+                        'last_import_batch_id' => $importBatchId,
                         'source_row_hash' => $this->rowHash($row),
                         'imported_payload_hash' => '',
                         'source_rule_name' => (string) ($row['name'] ?? ''),

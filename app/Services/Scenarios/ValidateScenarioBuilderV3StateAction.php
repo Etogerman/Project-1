@@ -12,9 +12,9 @@ use Throwable;
 
 class ValidateScenarioBuilderV3StateAction
 {
-    private const MAX_BLOCKS = 100;
+    private const MAX_BLOCKS = 500;
 
-    private const MAX_EDGES = 200;
+    private const MAX_EDGES = 1000;
 
     private const MAX_MODULES_PER_BLOCK = 5;
 
@@ -28,7 +28,7 @@ class ValidateScenarioBuilderV3StateAction
 
     private const MAX_MESSAGE_VARIABLE_VARIANTS = 20;
 
-    private const MAX_SHEETS = 20;
+    private const MAX_SHEETS = 80;
 
     private const MAX_SHEET_NAME_LENGTH = 40;
 
@@ -1006,6 +1006,34 @@ class ValidateScenarioBuilderV3StateAction
                 continue;
             }
 
+            if ($type === 'tag_effects') {
+                $assignTagIds = $this->normalizeTagEffectIds(
+                    $action['assign_tag_ids'] ?? [],
+                    "builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.assign_tag_ids",
+                );
+                $removeTagIds = $this->normalizeTagEffectIds(
+                    $action['remove_tag_ids'] ?? [],
+                    "builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.remove_tag_ids",
+                );
+                $allTagIds = array_values(array_unique([...$assignTagIds, ...$removeTagIds]));
+
+                if (array_intersect($assignTagIds, $removeTagIds) !== []) {
+                    $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.remove_tag_ids", 'Tag cannot be assigned and removed in the same action.');
+                }
+
+                if ($allTagIds !== [] && Tag::query()->active()->whereKey($allTagIds)->count() !== count($allTagIds)) {
+                    $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.assign_tag_ids", 'Unknown tag id.');
+                }
+
+                $normalized[] = [
+                    'type' => $type,
+                    'assign_tag_ids' => $assignTagIds,
+                    'remove_tag_ids' => $removeTagIds,
+                ];
+
+                continue;
+            }
+
             if (! in_array($sourceType, self::ACTION_SOURCE_TYPES, true)) {
                 $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.source_type", 'Unknown action source.');
             }
@@ -1047,6 +1075,40 @@ class ValidateScenarioBuilderV3StateAction
         }
 
         return ['actions' => $normalized];
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function normalizeTagEffectIds(mixed $ids, string $path): array
+    {
+        if ($ids === null) {
+            return [];
+        }
+
+        if (! is_array($ids) || ! array_is_list($ids)) {
+            $this->fail($path, 'Tag ids must be a list.');
+        }
+
+        if (count($ids) > self::MAX_TAG_EFFECT_IDS) {
+            $this->fail($path, 'Too many tag ids.');
+        }
+
+        return collect($ids)
+            ->map(function (mixed $id, int $index) use ($path): int {
+                if (is_string($id)) {
+                    $id = trim($id);
+                }
+
+                if (! is_numeric($id) || (int) $id < 1 || (string) (int) $id !== (string) $id) {
+                    $this->fail("$path.$index", 'Tag id must be a positive integer.');
+                }
+
+                return (int) $id;
+            })
+            ->unique()
+            ->values()
+            ->all();
     }
 
     /**
@@ -2166,12 +2228,57 @@ class ValidateScenarioBuilderV3StateAction
             $this->fail("builder.blocks.$blockIndex.settings_payload.ui.sheet_id", 'Некорректный ID листа блока.');
         }
 
-        return [
+        $normalized = [
             'sheet_id' => $sheetId,
             'width' => (int) ($ui['width'] ?? 320),
             'collapsed' => (bool) ($ui['collapsed'] ?? false),
             'card_id' => $this->optionalStringValue($ui['card_id'] ?? '', "builder.blocks.$blockIndex.settings_payload.ui.card_id", ''),
             'display_number' => $this->optionalStringValue($ui['display_number'] ?? '', "builder.blocks.$blockIndex.settings_payload.ui.display_number", ''),
+        ];
+
+        $importSource = $this->normalizeBlockImportSource(
+            $ui['import_source'] ?? null,
+            "builder.blocks.$blockIndex.settings_payload.ui.import_source",
+        );
+
+        if ($importSource !== null) {
+            $normalized['import_source'] = $importSource;
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function normalizeBlockImportSource(mixed $source, string $path): ?array
+    {
+        if ($source === null || $source === '') {
+            return null;
+        }
+
+        $source = $this->arrayValue($source, $path);
+        $type = $this->optionalStringValue($source['type'] ?? '', "$path.type", '');
+
+        if ($type === '') {
+            return null;
+        }
+
+        if ($type !== 'auto_reply_rule_xlsx') {
+            $this->fail("$path.type", 'Unknown import source.');
+        }
+
+        return [
+            'type' => $type,
+            'source_workbook_key' => $this->optionalStringValue($source['source_workbook_key'] ?? '', "$path.source_workbook_key", ''),
+            'source_rule_id' => $this->nonNegativeIntegerValue($source['source_rule_id'] ?? 0, "$path.source_rule_id", 1_000_000_000),
+            'created_batch_id' => $this->optionalStringValue($source['created_batch_id'] ?? '', "$path.created_batch_id", ''),
+            'last_import_batch_id' => $this->optionalStringValue($source['last_import_batch_id'] ?? '', "$path.last_import_batch_id", ''),
+            'source_row_hash' => $this->optionalStringValue($source['source_row_hash'] ?? '', "$path.source_row_hash", ''),
+            'imported_payload_hash' => $this->optionalStringValue($source['imported_payload_hash'] ?? '', "$path.imported_payload_hash", ''),
+            'source_rule_name' => $this->optionalStringValue($source['source_rule_name'] ?? '', "$path.source_rule_name", ''),
+            'source_row_number' => $this->nonNegativeIntegerValue($source['source_row_number'] ?? 0, "$path.source_row_number", 1_000_000_000),
+            'source_file_name' => $this->optionalStringValue($source['source_file_name'] ?? '', "$path.source_file_name", ''),
         ];
     }
 
@@ -2226,12 +2333,23 @@ class ValidateScenarioBuilderV3StateAction
                 $this->fail("builder.sheets.$index.color", 'Некорректный цвет листа.');
             }
 
-            $normalized[] = [
+            $normalizedSheet = [
                 'id' => $id,
                 'name' => $name,
                 'color' => $color,
                 'view' => $this->normalizeSheetView($sheet['view'] ?? [], $index),
             ];
+
+            $importSource = $this->normalizeSheetImportSource(
+                $sheet['import_source'] ?? null,
+                "builder.sheets.$index.import_source",
+            );
+
+            if ($importSource !== null) {
+                $normalizedSheet['import_source'] = $importSource;
+            }
+
+            $normalized[] = $normalizedSheet;
         }
 
         if (! isset($seen[self::DEFAULT_SHEET_ID])) {
@@ -2257,6 +2375,32 @@ class ValidateScenarioBuilderV3StateAction
             'name' => self::DEFAULT_SHEET_NAME,
             'color' => 'none',
             'view' => ['tx' => 0, 'ty' => 0, 'zoom' => 1],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function normalizeSheetImportSource(mixed $source, string $path): ?array
+    {
+        if ($source === null || $source === '') {
+            return null;
+        }
+
+        $source = $this->arrayValue($source, $path);
+        $type = $this->optionalStringValue($source['type'] ?? '', "$path.type", '');
+
+        if ($type === '') {
+            return null;
+        }
+
+        if ($type !== 'auto_reply_rule_xlsx') {
+            $this->fail("$path.type", 'Unknown sheet import source.');
+        }
+
+        return [
+            'type' => $type,
+            'created_batch_id' => $this->optionalStringValue($source['created_batch_id'] ?? '', "$path.created_batch_id", ''),
         ];
     }
 

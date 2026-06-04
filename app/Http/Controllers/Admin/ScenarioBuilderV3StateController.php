@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Scenario;
+use App\Models\Tag;
 use App\Models\User;
 use App\Services\Scenarios\BuildScenarioBuilderV3StateAction;
 use App\Services\Scenarios\PublishScenarioBuilderV3Action;
@@ -170,6 +171,45 @@ class ScenarioBuilderV3StateController extends Controller
         ));
     }
 
+    public function createAutoReplyImportTag(Request $request, Scenario $scenario): JsonResponse
+    {
+        $user = $this->authorizeScenarioBuilderAccess($request, $scenario);
+
+        abort_unless($user->hasRolePermission('tags.edit'), 403);
+
+        $validated = $request->validate([
+            'name' => ['required', 'string', 'max:255'],
+            'color' => ['nullable', 'string', 'in:'.implode(',', array_keys(Tag::colorOptions()))],
+        ]);
+
+        $name = trim((string) $validated['name']);
+        $existingTag = Tag::query()
+            ->where('name', $name)
+            ->first();
+
+        if ($existingTag instanceof Tag) {
+            if (! $existingTag->isActive()) {
+                throw ValidationException::withMessages([
+                    'name' => 'Тег с таким названием уже есть, но он выключен. Включите его в справочнике тегов.',
+                ]);
+            }
+
+            return response()->json([
+                'tag' => $this->tagPayload($existingTag),
+            ]);
+        }
+
+        $tag = Tag::query()->create([
+            'name' => $name,
+            'color' => (string) ($validated['color'] ?? Tag::COLOR_GRAY),
+            'is_active' => true,
+        ]);
+
+        return response()->json([
+            'tag' => $this->tagPayload($tag),
+        ], 201);
+    }
+
     /**
      * @return array<string, mixed>
      */
@@ -183,12 +223,14 @@ class ScenarioBuilderV3StateController extends Controller
             'tag_mappings',
             'excluded_row_numbers',
             'overwrite_conflict_row_numbers',
+            'placement_mode',
+            'import_batch_id',
         ] as $key) {
             $value = $request->input($key);
 
             if (is_string($value)) {
                 $decoded = json_decode($value, true);
-                $payload[$key] = is_array($decoded) ? $decoded : $value;
+                $payload[$key] = json_last_error() === JSON_ERROR_NONE ? $decoded : $value;
 
                 continue;
             }
@@ -208,5 +250,18 @@ class ScenarioBuilderV3StateController extends Controller
         abort_unless($user->can('update', $scenario), 403);
 
         return $user;
+    }
+
+    /**
+     * @return array{id: int, name: string, slug: string, color: string}
+     */
+    private function tagPayload(Tag $tag): array
+    {
+        return [
+            'id' => (int) $tag->id,
+            'name' => (string) $tag->name,
+            'slug' => (string) $tag->slug,
+            'color' => (string) $tag->color,
+        ];
     }
 }

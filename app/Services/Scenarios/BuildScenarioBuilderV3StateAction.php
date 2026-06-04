@@ -79,6 +79,7 @@ class BuildScenarioBuilderV3StateAction
             'permissions' => [
                 'can_update' => $user instanceof User && $user->hasRolePermission('scenarios.edit') && $user->can('update', $scenario),
                 'can_publish' => $user instanceof User && $user->hasRolePermission('scenarios.edit') && $user->can('update', $scenario),
+                'can_create_tags' => $user instanceof User && $user->hasRolePermission('tags.edit'),
             ],
             'server' => $this->serverClock(),
             'warnings' => [],
@@ -282,16 +283,24 @@ class BuildScenarioBuilderV3StateAction
 
         return collect($sheets)
             ->filter(fn (mixed $sheet): bool => is_array($sheet))
-            ->map(fn (array $sheet): array => [
-                'id' => (string) ($sheet['id'] ?? self::DEFAULT_SHEET_ID),
-                'name' => (string) ($sheet['name'] ?? self::DEFAULT_SHEET_NAME),
-                'color' => (string) ($sheet['color'] ?? 'none'),
-                'view' => [
-                    'tx' => (float) data_get($sheet, 'view.tx', 0),
-                    'ty' => (float) data_get($sheet, 'view.ty', 0),
-                    'zoom' => (float) data_get($sheet, 'view.zoom', 1),
-                ],
-            ])
+            ->map(function (array $sheet): array {
+                $normalized = [
+                    'id' => (string) ($sheet['id'] ?? self::DEFAULT_SHEET_ID),
+                    'name' => (string) ($sheet['name'] ?? self::DEFAULT_SHEET_NAME),
+                    'color' => (string) ($sheet['color'] ?? 'none'),
+                    'view' => [
+                        'tx' => (float) data_get($sheet, 'view.tx', 0),
+                        'ty' => (float) data_get($sheet, 'view.ty', 0),
+                        'zoom' => (float) data_get($sheet, 'view.zoom', 1),
+                    ],
+                ];
+
+                if (is_array($sheet['import_source'] ?? null)) {
+                    $normalized['import_source'] = $sheet['import_source'];
+                }
+
+                return $normalized;
+            })
             ->values()
             ->all() ?: $this->normalizeSheets(null);
     }

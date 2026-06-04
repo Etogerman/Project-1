@@ -6,6 +6,7 @@ use App\Models\Channel;
 use App\Models\Dialog;
 use App\Models\FieldDictionaryField;
 use App\Models\Message;
+use App\Models\AutoReplyRule;
 use App\Models\Scenario;
 use App\Models\ScenarioBuilderBlock;
 use App\Models\ScenarioBuilderCondition;
@@ -13,11 +14,16 @@ use App\Models\ScenarioBuilderEdge;
 use App\Models\ScenarioRun;
 use App\Models\ScenarioV3ScheduledTransition;
 use App\Models\ScenarioVersion;
+use App\Models\Tag;
 use App\Models\User;
+use App\Services\AutoReplyRules\AutoReplyRuleWorkbookFormat;
 use App\Services\Scenarios\CreateScenarioAction;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 use Tests\TestCase;
 
 class ScenarioBuilderV3StateTest extends TestCase
@@ -3421,6 +3427,119 @@ class ScenarioBuilderV3StateTest extends TestCase
             ->assertForbidden();
     }
 
+    public function test_auto_reply_import_can_create_missing_tag_from_constructor(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_auto_reply_create_tag',
+            'name' => 'V3 Auto Reply Create Tag',
+        ]);
+
+        $response = $this->actingAs($admin)
+            ->postJson($this->autoReplyImportTagStoreUrl($scenario), [
+                'name' => 'жбот',
+            ])
+            ->assertCreated()
+            ->assertJsonPath('tag.name', 'жбот')
+            ->assertJsonPath('tag.color', Tag::COLOR_GRAY);
+
+        $tagId = (int) $response->json('tag.id');
+
+        $this->assertDatabaseHas('tags', [
+            'id' => $tagId,
+            'name' => 'жбот',
+            'color' => Tag::COLOR_GRAY,
+            'is_active' => true,
+        ]);
+
+        $state = $this->actingAs($admin)
+            ->getJson($this->stateUrl($scenario))
+            ->assertOk()
+            ->json();
+
+        $this->assertTrue($state['permissions']['can_create_tags']);
+        $this->assertContains($tagId, collect($state['catalogs']['tags'])->pluck('id')->all());
+    }
+
+    public function test_auto_reply_import_defaults_to_single_sheet_and_preserves_update_location(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_auto_reply_single_sheet_import',
+            'name' => 'V3 Auto Reply Single Sheet Import',
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+        $state = $this->actingAs($admin)
+            ->getJson($this->stateUrl($scenario))
+            ->assertOk()
+            ->json();
+        $rows = [
+            $this->autoReplyWorkbookRuleRow(1001, 'Правило один', 'Категория 1', 'one', 'Ответ один', $channel),
+            $this->autoReplyWorkbookRuleRow(1002, 'Правило два', 'Категория 2', 'two', 'Ответ два', $channel),
+            $this->autoReplyWorkbookRuleRow(1003, 'Правило три', 'Категория 1', 'three', 'Ответ три', $channel),
+        ];
+
+        $firstPreview = $this->actingAs($admin)
+            ->post($this->autoReplyImportPreviewUrl($scenario), [
+                'workbook' => $this->autoReplyWorkbookFile($rows),
+                'builder_state' => json_encode(['builder' => $state['builder']], JSON_UNESCAPED_UNICODE),
+                'placement_mode' => json_encode('single_sheet'),
+                'import_batch_id' => json_encode('auto_reply_xlsx_20260604_120000_ab12'),
+            ])
+            ->assertOk()
+            ->json();
+
+        $this->assertSame(3, $firstPreview['summary']['created']);
+        $this->assertSame(0, $firstPreview['summary']['blocked']);
+
+        $createdSheets = collect($firstPreview['plan']['sheets'])
+            ->where('operation', 'create')
+            ->values();
+        $this->assertCount(1, $createdSheets);
+        $this->assertSame('Импорт автоответов', $createdSheets[0]['sheet']['name']);
+        $this->assertSame('auto_reply_xlsx_20260604_120000_ab12', $createdSheets[0]['sheet']['import_source']['created_batch_id']);
+
+        $firstBlocks = collect($firstPreview['plan']['blocks'])->pluck('block')->values();
+        $importSheetId = (string) data_get($firstBlocks[0], 'settings_payload.ui.sheet_id');
+        $this->assertSame($importSheetId, (string) data_get($firstBlocks[1], 'settings_payload.ui.sheet_id'));
+        $this->assertSame($importSheetId, (string) data_get($firstBlocks[2], 'settings_payload.ui.sheet_id'));
+        $this->assertSame(data_get($firstBlocks[0], 'position.x'), data_get($firstBlocks[2], 'position.x'));
+        $this->assertSame(data_get($firstBlocks[0], 'position.y') + 320, data_get($firstBlocks[2], 'position.y'));
+        $this->assertGreaterThan(data_get($firstBlocks[0], 'position.x'), data_get($firstBlocks[1], 'position.x'));
+        $this->assertSame(data_get($firstBlocks[0], 'position.y'), data_get($firstBlocks[1], 'position.y'));
+        $this->assertSame('auto_reply_xlsx_20260604_120000_ab12', data_get($firstBlocks[0], 'settings_payload.ui.import_source.created_batch_id'));
+        $this->assertSame('auto_reply_xlsx_20260604_120000_ab12', data_get($firstBlocks[0], 'settings_payload.ui.import_source.last_import_batch_id'));
+
+        $builderAfterApply = $this->builderWithAutoReplyImportPlan($state['builder'], $firstPreview['plan']);
+
+        $secondPreview = $this->actingAs($admin)
+            ->post($this->autoReplyImportPreviewUrl($scenario), [
+                'workbook' => $this->autoReplyWorkbookFile([
+                    $this->autoReplyWorkbookRuleRow(1001, 'Правило один', 'Категория 1', 'one', 'Ответ один обновлён', $channel),
+                    $this->autoReplyWorkbookRuleRow(1002, 'Правило два', 'Категория 2', 'two', 'Ответ два обновлён', $channel),
+                    $this->autoReplyWorkbookRuleRow(1003, 'Правило три', 'Категория 1', 'three', 'Ответ три обновлён', $channel),
+                ]),
+                'builder_state' => json_encode(['builder' => $builderAfterApply], JSON_UNESCAPED_UNICODE),
+                'placement_mode' => json_encode('by_category'),
+                'import_batch_id' => json_encode('auto_reply_xlsx_20260604_121500_cd34'),
+            ])
+            ->assertOk()
+            ->json();
+
+        $this->assertSame(0, $secondPreview['summary']['created']);
+        $this->assertSame(3, $secondPreview['summary']['updated']);
+        $this->assertCount(0, collect($secondPreview['plan']['sheets'])->where('operation', 'create'));
+
+        $updatedBlocks = collect($secondPreview['plan']['blocks'])->pluck('block')->values();
+        $this->assertSame($importSheetId, (string) data_get($updatedBlocks[0], 'settings_payload.ui.sheet_id'));
+        $this->assertSame(data_get($firstBlocks[0], 'position'), data_get($updatedBlocks[0], 'position'));
+        $this->assertSame('auto_reply_xlsx_20260604_120000_ab12', data_get($updatedBlocks[0], 'settings_payload.ui.import_source.created_batch_id'));
+        $this->assertSame('auto_reply_xlsx_20260604_121500_cd34', data_get($updatedBlocks[0], 'settings_payload.ui.import_source.last_import_batch_id'));
+    }
+
     public function test_employee_without_channel_edit_cannot_see_or_save_v3_start_channels(): void
     {
         $employee = User::factory()->create([
@@ -3680,6 +3799,77 @@ class ScenarioBuilderV3StateTest extends TestCase
         $this->assertSame(
             'gte',
             data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$messageBlockId.message.variable_text_variants.1.operator"),
+        );
+    }
+
+    public function test_publish_keeps_tag_effects_action_in_runtime_snapshot(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['name' => 'Telegram Tags']);
+        $assignTag = Tag::factory()->create(['name' => 'Импорт назначить']);
+        $removeTag = Tag::factory()->create(['name' => 'Импорт убрать']);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_tag_effects_action',
+            'name' => 'V3 Tag Effects Action',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_start',
+                'type' => 'state',
+                'title' => 'Старт',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->startSettings('/start', [$channel->id]),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_tags',
+                'type' => 'state',
+                'title' => 'Теги',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->tagEffectsActionSettings([$assignTag->id], [$removeTag->id]),
+            ],
+        ];
+        $edgePayload = $this->edgePayload(null, 'Дальше');
+        $edgePayload['mode'] = 'automatic';
+        $edges = [[
+            'id' => null,
+            'client_key' => 'tmp_start_edge',
+            'source' => ['block_id' => null, 'client_key' => 'tmp_start', 'output_id' => null],
+            'target' => ['block_id' => null, 'client_key' => 'tmp_tags'],
+            'condition_payload' => $edgePayload,
+        ]];
+
+        $saved = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
+            ->assertOk()
+            ->assertJsonPath('builder.blocks.1.settings_payload.modules.0.payload.actions.0.type', 'tag_effects')
+            ->assertJsonPath('builder.blocks.1.settings_payload.modules.0.payload.actions.0.assign_tag_ids.0', $assignTag->id)
+            ->assertJsonPath('builder.blocks.1.settings_payload.modules.0.payload.actions.0.remove_tag_ids.0', $removeTag->id)
+            ->json();
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $saved['scenario']['draft_version_id'],
+                'base_revision' => $saved['builder']['revision'],
+            ])
+            ->assertOk();
+
+        $scenario->refresh()->load('publishedVersion');
+        $tagBlockId = (string) $saved['id_map']['blocks']['tmp_tags'];
+
+        $this->assertSame(
+            'tag_effects',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$tagBlockId.actions.0.type"),
+        );
+        $this->assertSame(
+            [$assignTag->id],
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$tagBlockId.actions.0.assign_tag_ids"),
+        );
+        $this->assertSame(
+            [$removeTag->id],
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$tagBlockId.actions.0.remove_tag_ids"),
         );
     }
 
@@ -4089,6 +4279,16 @@ class ScenarioBuilderV3StateTest extends TestCase
         return route('admin.scenario-constructor.v3.sheet.import.apply', ['scenario' => $scenario]);
     }
 
+    private function autoReplyImportPreviewUrl(Scenario $scenario): string
+    {
+        return route('admin.scenario-constructor.v3.auto-reply.import.preview', ['scenario' => $scenario]);
+    }
+
+    private function autoReplyImportTagStoreUrl(Scenario $scenario): string
+    {
+        return route('admin.scenario-constructor.v3.auto-reply.import.tags.store', ['scenario' => $scenario]);
+    }
+
     /**
      * @param  array<string, mixed>  $state
      * @param  list<array<string, mixed>>  $blocks
@@ -4154,6 +4354,114 @@ class ScenarioBuilderV3StateTest extends TestCase
             'type' => 'state',
             'position' => ['x' => 120, 'y' => 160],
             'settings_payload' => $settings ?? $this->messageSettings('Импортированный блок'),
+        ];
+    }
+
+    /**
+     * @param  list<array<int, mixed>>  $rules
+     */
+    private function autoReplyWorkbookFile(array $rules): UploadedFile
+    {
+        $spreadsheet = new Spreadsheet();
+
+        try {
+            $sheet = $spreadsheet->getActiveSheet();
+            $sheet->setTitle(AutoReplyRuleWorkbookFormat::SHEET_RULES);
+            $sheet->fromArray([AutoReplyRuleWorkbookFormat::rulesColumns()], null, 'A1');
+
+            foreach ($rules as $index => $row) {
+                $sheet->fromArray([$row], null, 'A'.($index + 2));
+            }
+
+            $path = tempnam(sys_get_temp_dir(), 'v3-auto-reply-import');
+
+            if ($path === false) {
+                $this->fail('Failed to allocate temporary workbook path.');
+            }
+
+            $finalPath = $path.'.xlsx';
+
+            if (file_exists($path)) {
+                unlink($path);
+            }
+
+            (new Xlsx($spreadsheet))->save($finalPath);
+
+            return new UploadedFile(
+                $finalPath,
+                'auto-reply-rules-test.xlsx',
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                null,
+                true,
+            );
+        } finally {
+            $spreadsheet->disconnectWorksheets();
+            unset($spreadsheet);
+        }
+    }
+
+    /**
+     * @return array<int, mixed>
+     */
+    private function autoReplyWorkbookRuleRow(
+        int $id,
+        string $name,
+        string $category,
+        string $keyword,
+        string $replyText,
+        Channel $channel,
+    ): array {
+        return [
+            $id,
+            $name,
+            $category,
+            '1',
+            '10',
+            AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+            $keyword,
+            '',
+            $replyText,
+            AutoReplyRuleWorkbookFormat::BUTTON_KIND_NONE,
+            '',
+            '',
+            (string) $channel->id,
+            '',
+            '',
+            '',
+            '',
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $builder
+     * @param  array<string, mixed>  $plan
+     * @return array<string, mixed>
+     */
+    private function builderWithAutoReplyImportPlan(array $builder, array $plan): array
+    {
+        $plannedSheets = collect($plan['sheets'] ?? [])
+            ->map(fn (array $item): array => $item['sheet'] ?? $item)
+            ->keyBy(fn (array $sheet): string => (string) $sheet['id']);
+        $currentSheets = collect($builder['sheets'] ?? []);
+        $sheetIds = $currentSheets->map(fn (array $sheet): string => (string) $sheet['id'])->all();
+        $sheets = $currentSheets
+            ->map(fn (array $sheet): array => $plannedSheets->get((string) $sheet['id'], $sheet))
+            ->values()
+            ->all();
+
+        foreach ($plannedSheets as $sheetId => $sheet) {
+            if (! in_array($sheetId, $sheetIds, true)) {
+                $sheets[] = $sheet;
+            }
+        }
+
+        $plannedBlocks = collect($plan['blocks'] ?? [])->pluck('block')->values()->all();
+
+        return [
+            ...$builder,
+            'active_sheet_id' => (string) ($plan['focus_sheet_id'] ?? $builder['active_sheet_id'] ?? 'main'),
+            'sheets' => $sheets,
+            'blocks' => $plannedBlocks,
         ];
     }
 
@@ -4286,6 +4594,37 @@ class ScenarioBuilderV3StateTest extends TestCase
                                         'amount' => 1,
                                     ],
                                 ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+            'outputs' => [],
+        ];
+    }
+
+    /**
+     * @param  list<int>  $assignTagIds
+     * @param  list<int>  $removeTagIds
+     * @return array<string, mixed>
+     */
+    private function tagEffectsActionSettings(array $assignTagIds, array $removeTagIds): array
+    {
+        return [
+            'schema_version' => 3,
+            'kind' => 'state',
+            'ui' => ['sheet_id' => 'main', 'width' => 320, 'collapsed' => false],
+            'modules' => [
+                [
+                    'id' => 'mod_action',
+                    'type' => 'action',
+                    'enabled' => true,
+                    'payload' => [
+                        'actions' => [
+                            [
+                                'type' => 'tag_effects',
+                                'assign_tag_ids' => $assignTagIds,
+                                'remove_tag_ids' => $removeTagIds,
                             ],
                         ],
                     ],

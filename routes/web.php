@@ -67,6 +67,9 @@ Route::middleware('auth')
 
         Route::post('/auto-reply/import/preview', [ScenarioBuilderV3StateController::class, 'previewAutoReplyImport'])
             ->name('auto-reply.import.preview');
+
+        Route::post('/auto-reply/import/tags', [ScenarioBuilderV3StateController::class, 'createAutoReplyImportTag'])
+            ->name('auto-reply.import.tags.store');
     });
 
 Route::match(['GET', 'POST'], '/callbacks/bitrix24/install', [Bitrix24CallbackController::class, 'install'])
