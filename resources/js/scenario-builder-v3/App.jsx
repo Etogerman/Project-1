@@ -108,6 +108,39 @@ const ACTION_TYPE_RESOLVE_GEO_CITY = 'resolve_geo_city';
 const ACTION_TYPE_VARIABLES = 'variables';
 const ACTION_TYPE_SIMULATE_START_PARAMETER = 'simulate_start_parameter';
 const ACTION_TYPE_TAG_EFFECTS = 'tag_effects';
+const ACTION_TYPE_BITRIX24_SYNC = 'bitrix24_sync';
+const BITRIX24_SYNC_OPERATION_OPTIONS = [
+    ['contact_sync', 'Синхронизировать контакт'],
+    ['deal_sync', 'Синхронизировать сделку'],
+    ['history_export', 'Выгрузить историю переписки'],
+    ['contact_sync_with_followups', 'Синхронизировать контакт и последующие Bitrix-задачи'],
+];
+const BITRIX24_SYNC_OPERATION_HELP = {
+    contact_sync: [
+        'Синхронизировать контакт',
+        'Ставит в очередь обновление карточки контакта в Bitrix24: имя, телефон и другие собранные поля.',
+        'Выбирайте после анкеты или изменения данных клиента.',
+        'Не создаёт сделку и не выгружает переписку.',
+    ].join('\n'),
+    deal_sync: [
+        'Синхронизировать сделку',
+        'Ставит в очередь обновление или создание сделки по текущей Bitrix24-логике проекта.',
+        'Выбирайте, когда клиент уже должен попасть в CRM-процесс по сделке.',
+        'Не заменяет простую синхронизацию контакта.',
+    ].join('\n'),
+    history_export: [
+        'Выгрузить историю переписки',
+        'Ставит в очередь передачу сообщений диалога в Bitrix24.',
+        'Выбирайте перед передачей менеджеру, чтобы в CRM был контекст общения.',
+        'Не обновляет контакт и не запускает сделку.',
+    ].join('\n'),
+    contact_sync_with_followups: [
+        'Синхронизировать контакт и последующие Bitrix-задачи',
+        'Ставит в очередь синхронизацию контакта; последующие Bitrix-задачи запускает существующая логика проекта.',
+        'Выбирайте после полного сбора данных, когда нужен стандартный Bitrix24-процесс.',
+        'Не добавляет отдельные выходы и не ждёт результата в этом блоке.',
+    ].join('\n'),
+};
 const ACTION_EDIT_MESSAGE_OPERATION_REMOVE_BUTTONS = 'remove_buttons';
 const ACTION_EDIT_MESSAGE_OPERATION_DELETE_MESSAGE = 'delete_message';
 const ACTION_EDIT_MESSAGE_TARGET_LAST_CURRENT_RUN_OUTBOUND_WITH_INLINE_BUTTONS = 'last_current_run_outbound_with_inline_buttons';
@@ -194,6 +227,93 @@ const CONTACT_RUNTIME_CONDITION_FIELD_KEYS = new Set([
     'age_years',
     'age_range',
 ]);
+const START_EXPRESSION_CONTACT_FIELD_KEYS = new Set([
+    'id',
+    'phone',
+    'phones',
+    'first_name',
+    'first_name_source',
+    'first_name_resolution_method',
+    'last_name',
+    'country',
+    'city',
+    'region',
+    'gender',
+    'gender_source',
+    'birth_date',
+    'age_years',
+    'age_range',
+    'region_status',
+    'region_source',
+    'distance_to_moscow_km',
+    'distance_to_moscow_status',
+    'distance_to_moscow_calculated_at',
+    'data_collection_status',
+    'data_collection_current_field',
+    'data_collection_last_prompted_field',
+    'data_collection_started_at',
+    'data_collection_current_field_started_at',
+    'data_collection_completed_at',
+    'data_collection_attempts_count',
+    'is_auto_reply_enabled',
+    'assigned_user_id',
+    'bitrix24_contact_id',
+    'bitrix24_sync_status',
+    'bitrix24_last_synced_at',
+    'bitrix24_deal_id',
+    'bitrix24_deal_sync_status',
+    'bitrix24_deal_last_synced_at',
+    'bitrix24_history_sync_status',
+    'bitrix24_history_last_synced_at',
+    'created_at',
+    'updated_at',
+]);
+const START_EXPRESSION_DIALOG_SYSTEM_FIELD_KEYS = new Set([
+    'id',
+    'contact_id',
+    'channel_id',
+    'stage',
+    'phone',
+    'bot_subscription_status',
+    'bot_subscription_changed_at',
+    'external_chat_id',
+    'bitrix24_live_chat_id',
+    'bitrix24_live_status',
+    'bitrix24_live_last_exported_at',
+    'bitrix24_live_last_imported_at',
+    'phone_confirmed_at',
+    'phone_confirmed_via',
+    'last_message_at',
+    'last_inbound_message_at',
+    'last_outbound_message_at',
+    'last_message_id',
+    'last_inbound_message_id',
+    'last_outbound_message_id',
+    'created_at',
+    'updated_at',
+]);
+const START_EXPRESSION_EXAMPLES = [
+    {
+        token: '{{contact.phone}} != ""',
+        label: 'Телефон контакта заполнен',
+    },
+    {
+        token: '{{contact.phone}} == ""',
+        label: 'Телефон контакта не заполнен',
+    },
+    {
+        token: '{{dialog.phone}} != ""',
+        label: 'Телефон мессенджера заполнен',
+    },
+    {
+        token: '{{dialog.phone}} == ""',
+        label: 'Телефон мессенджера не заполнен',
+    },
+    {
+        token: '{{dialog.start_param}} == "123321"',
+        label: 'Параметр запуска равен 123321',
+    },
+];
 const FIELD_TYPE_DATA_TYPE = {
     phone: 'phone',
     email: 'email',
@@ -6503,6 +6623,105 @@ function VariableHelpPopover({ title, ariaLabel, onClose, onInsert = null }) {
     );
 }
 
+function StartExpressionVariablePopover({ anchorRef, onClose, onInsert }) {
+    const [position, setPosition] = useState({ top: 96, left: 24 });
+    const variableGroups = startExpressionVariableGroups();
+
+    useLayoutEffect(() => {
+        const anchor = anchorRef.current;
+
+        if (! anchor) {
+            return undefined;
+        }
+
+        function updatePosition() {
+            const rect = anchor.getBoundingClientRect();
+            const width = Math.min(430, window.innerWidth - 24);
+            const left = Math.max(12, Math.min(rect.left - width + rect.width, window.innerWidth - width - 12));
+            const top = Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 560));
+
+            setPosition({ top, left });
+        }
+
+        updatePosition();
+        window.addEventListener('resize', updatePosition);
+        window.addEventListener('scroll', updatePosition, true);
+
+        return () => {
+            window.removeEventListener('resize', updatePosition);
+            window.removeEventListener('scroll', updatePosition, true);
+        };
+    }, [anchorRef]);
+
+    if (typeof document === 'undefined') {
+        return null;
+    }
+
+    return createPortal(
+        <div
+            className="ac-v3-builder__start-expression-popover"
+            style={{ top: position.top, left: position.left }}
+            role="dialog"
+            aria-label="Переменные для условий запуска"
+        >
+            <div className="ac-v3-builder__start-expression-popover-head">
+                <strong>Переменные условий запуска</strong>
+                <button type="button" aria-label="Закрыть переменные" onClick={onClose}>×</button>
+            </div>
+            <p className="ac-v3-builder__field-hint">
+                Вставьте переменную или пример и допишите сравнение: ==, !=, &gt;, &gt;=, &lt;, &lt;=. Можно использовать and/or и скобки.
+            </p>
+            <div className="ac-v3-builder__start-expression-popover-body">
+                <div className="ac-v3-builder__start-expression-group">
+                    <strong>Готовые примеры</strong>
+                    {START_EXPRESSION_EXAMPLES.map((item) => (
+                        <div
+                            key={item.token}
+                            className="ac-v3-builder__start-expression-variable"
+                        >
+                            <div className="ac-v3-builder__start-expression-variable-text">
+                                <code>{item.token}</code>
+                                <span>{item.label}</span>
+                            </div>
+                            <button
+                                type="button"
+                                className="ac-v3-builder__start-expression-insert"
+                                onClick={() => onInsert(item.token)}
+                            >
+                                Вставить
+                            </button>
+                        </div>
+                    ))}
+                </div>
+                {variableGroups.map((group) => (
+                    <div key={group.title} className="ac-v3-builder__start-expression-group">
+                        <strong>{group.title}</strong>
+                        {group.items.map((item) => (
+                            <div
+                                key={item.token}
+                                className="ac-v3-builder__start-expression-variable"
+                            >
+                                <div className="ac-v3-builder__start-expression-variable-text">
+                                    <code>{item.token}</code>
+                                    <span>{item.label}</span>
+                                </div>
+                                <button
+                                    type="button"
+                                    className="ac-v3-builder__start-expression-insert"
+                                    onClick={() => onInsert(item.token)}
+                                >
+                                    Вставить
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                ))}
+            </div>
+        </div>,
+        document.body,
+    );
+}
+
 function MessageFields({ message, blockKey, onUpdateModulePayload }) {
     const [isVariableHelpOpen, setIsVariableHelpOpen] = useState(false);
     const textareaRef = useRef(null);
@@ -6745,22 +6964,34 @@ function ActionFields({ action, blocks = [], tags = [], blockKey, onUpdateModule
             </div>
             {items.map((item, index) => (
                 <div key={index} className="ac-v3-builder__action-row">
-                    <label>
-                        <span>Действие</span>
-                        <select
-                            value={item.type}
-                            onChange={(event) => updateItem(index, normalizeActionItemForType({ ...item, type: event.target.value }))}
+                    <div className="ac-v3-builder__action-row-head">
+                        <label>
+                            <span>Действие</span>
+                            <select
+                                value={item.type}
+                                onChange={(event) => updateItem(index, normalizeActionItemForType({ ...item, type: event.target.value }))}
+                            >
+                                <option value="write_contact_field">Изменить данные</option>
+                                <option value="check_data">Проверить данные</option>
+                                <option value="edit_message">Изменить сообщение</option>
+                                <option value="calculate_distance_to_moscow">Рассчитать расстояние до Москвы</option>
+                                <option value="resolve_geo_city">Распознать географию</option>
+                                <option value="variables">Изменить переменные</option>
+                                <option value="simulate_start_parameter">Имитировать старт с параметром</option>
+                                <option value="tag_effects">Изменить теги</option>
+                                <option value="bitrix24_sync">Bitrix24</option>
+                            </select>
+                        </label>
+                        <button
+                            type="button"
+                            className="ac-v3-builder__action-remove-btn"
+                            title="Удалить действие"
+                            disabled={items.length <= 1}
+                            onClick={() => removeItem(index)}
                         >
-                            <option value="write_contact_field">Изменить данные</option>
-                            <option value="check_data">Проверить данные</option>
-                            <option value="edit_message">Изменить сообщение</option>
-                            <option value="calculate_distance_to_moscow">Рассчитать расстояние до Москвы</option>
-                            <option value="resolve_geo_city">Распознать географию</option>
-                            <option value="variables">Изменить переменные</option>
-                            <option value="simulate_start_parameter">Имитировать старт с параметром</option>
-                            <option value="tag_effects">Изменить теги</option>
-                        </select>
-                    </label>
+                            ×
+                        </button>
+                    </div>
                     {item.type === ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW ? (
                         <label>
                             <span>Что рассчитать</span>
@@ -6796,6 +7027,14 @@ function ActionFields({ action, blocks = [], tags = [], blockKey, onUpdateModule
                         <TagEffectsActionFields
                             item={item}
                             tags={tags}
+                            onChange={(patch) => updateItem(index, normalizeActionItemForType({
+                                ...item,
+                                ...patch,
+                            }))}
+                        />
+                    ) : item.type === ACTION_TYPE_BITRIX24_SYNC ? (
+                        <Bitrix24SyncActionFields
+                            item={item}
                             onChange={(patch) => updateItem(index, normalizeActionItemForType({
                                 ...item,
                                 ...patch,
@@ -6962,14 +7201,6 @@ function ActionFields({ action, blocks = [], tags = [], blockKey, onUpdateModule
                             )}
                         </>
                     )}
-                    <button
-                        type="button"
-                        title="Удалить действие"
-                        disabled={items.length <= 1}
-                        onClick={() => removeItem(index)}
-                    >
-                        ×
-                    </button>
                 </div>
             ))}
         </div>
@@ -7059,6 +7290,37 @@ function TagEffectsActionFields({ item, tags = [], onChange }) {
                     ))}
                 </select>
             </label>
+        </>
+    );
+}
+
+function Bitrix24SyncActionFields({ item, onChange }) {
+    const operation = normalizeBitrix24SyncOperation(item.operation);
+    const operationHelp = BITRIX24_SYNC_OPERATION_HELP[operation] ?? BITRIX24_SYNC_OPERATION_HELP.contact_sync;
+
+    return (
+        <>
+            <label>
+                <span>Операция</span>
+                <select
+                    value={operation}
+                    onChange={(event) => onChange({ operation: event.target.value })}
+                >
+                    {BITRIX24_SYNC_OPERATION_OPTIONS.map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                    ))}
+                </select>
+            </label>
+            <div className="ac-v3-builder__bitrix-help">
+                <button
+                    type="button"
+                    className="ac-v3-builder__info-tooltip"
+                    aria-label="Что делает выбранная операция Bitrix24"
+                    data-tooltip={operationHelp}
+                >
+                    i
+                </button>
+            </div>
         </>
     );
 }
@@ -7319,6 +7581,79 @@ function TransitionActionValueField({ item, onChange }) {
     );
 }
 
+function startPhoneConditionExpression(scope, condition) {
+    const variable = scope === 'contact' ? '{{contact.phone}}' : '{{dialog.phone}}';
+
+    if (condition === 'has_phone') {
+        return `${variable} != ""`;
+    }
+
+    if (condition === 'missing_phone') {
+        return `${variable} == ""`;
+    }
+
+    return '';
+}
+
+function mergeStartExpressionConditions(expression, additions) {
+    const parts = [
+        String(expression ?? '').trim(),
+        ...additions.map((item) => String(item ?? '').trim()).filter(Boolean),
+    ].filter(Boolean);
+
+    if (parts.length === 0) {
+        return '';
+    }
+
+    const uniqueParts = [];
+
+    parts.forEach((part) => {
+        if (! uniqueParts.includes(part)) {
+            uniqueParts.push(part);
+        }
+    });
+
+    return uniqueParts
+        .map((part) => (part.startsWith('(') && part.endsWith(')') ? part : `(${part})`))
+        .join(' and ');
+}
+
+function migrateStartPhoneConditions(payload = {}) {
+    const additions = [
+        startPhoneConditionExpression('contact', payload.contact_phone_condition),
+        startPhoneConditionExpression('dialog', payload.dialog_phone_condition),
+    ].filter(Boolean);
+
+    if (additions.length === 0) {
+        return null;
+    }
+
+    const expression = mergeStartExpressionConditions(payload.expression, additions);
+
+    return {
+        expression,
+        contact_phone_condition: '',
+        dialog_phone_condition: '',
+    };
+}
+
+function insertTextAtSelection(input, currentValue, text) {
+    const value = String(currentValue ?? '');
+
+    if (! input) {
+        return value ? `${value} ${text}` : text;
+    }
+
+    const start = input.selectionStart ?? value.length;
+    const end = input.selectionEnd ?? value.length;
+    const before = value.slice(0, start);
+    const after = value.slice(end);
+    const prefix = before && ! /\s$/.test(before) ? ' ' : '';
+    const suffix = after && ! /^\s/.test(after) ? ' ' : '';
+
+    return `${before}${prefix}${text}${suffix}${after}`;
+}
+
 function StartConditionFields({
     start,
     channels,
@@ -7327,8 +7662,35 @@ function StartConditionFields({
     onUpdateModulePayload,
     onUpdateStartChannels,
 }) {
+    const [isExpressionHelpOpen, setIsExpressionHelpOpen] = useState(false);
+    const expressionHelpButtonRef = useRef(null);
+    const expressionTextareaRef = useRef(null);
     const selectedMatch = startMatchForUi(start?.payload?.match);
     const usesCommandValue = selectedMatch !== 'any_inbound';
+    const expression = start?.payload?.expression ?? '';
+
+    useEffect(() => {
+        const migration = migrateStartPhoneConditions(start?.payload ?? {});
+
+        if (migration) {
+            onUpdateModulePayload(blockKey, 'start_condition', migration);
+        }
+    }, [
+        blockKey,
+        onUpdateModulePayload,
+        start?.payload?.contact_phone_condition,
+        start?.payload?.dialog_phone_condition,
+        start?.payload?.expression,
+    ]);
+
+    function insertStartExpressionToken(token) {
+        const nextExpression = insertTextAtSelection(expressionTextareaRef.current, expression, token);
+
+        onUpdateModulePayload(blockKey, 'start_condition', { expression: nextExpression });
+        window.requestAnimationFrame(() => {
+            expressionTextareaRef.current?.focus();
+        });
+    }
 
     return (
         <>
@@ -7352,24 +7714,40 @@ function StartConditionFields({
                     />
                 </label>
             ) : null}
-            <label>
-                Телефон контакта
-                <select
-                    value={start?.payload?.contact_phone_condition ?? ''}
-                    onChange={(event) => onUpdateModulePayload(blockKey, 'start_condition', { contact_phone_condition: event.target.value })}
-                >
-                    {PHONE_CONDITION_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                </select>
-            </label>
-            <label>
-                Телефон мессенджера
-                <select
-                    value={start?.payload?.dialog_phone_condition ?? ''}
-                    onChange={(event) => onUpdateModulePayload(blockKey, 'start_condition', { dialog_phone_condition: event.target.value })}
-                >
-                    {PHONE_CONDITION_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                </select>
-            </label>
+            <div className="ac-v3-builder__field">
+                <div className="ac-v3-builder__label-row">
+                    <span className="ac-v3-builder__field-label">Условия запуска</span>
+                    <button
+                        ref={expressionHelpButtonRef}
+                        type="button"
+                        className="ac-v3-builder__inline-help-button ac-v3-builder__inline-help-button--icon"
+                        aria-label="Показать переменные для условий запуска"
+                        aria-expanded={isExpressionHelpOpen}
+                        onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            setIsExpressionHelpOpen((value) => ! value);
+                        }}
+                    >
+                        i
+                    </button>
+                </div>
+                <textarea
+                    ref={expressionTextareaRef}
+                    className="ac-v3-builder__textarea-auto"
+                    rows={3}
+                    value={expression}
+                    placeholder={'{{contact.phone}} != "" and {{dialog.start_param}} == "123321"'}
+                    onChange={(event) => onUpdateModulePayload(blockKey, 'start_condition', { expression: event.target.value })}
+                />
+            </div>
+            {isExpressionHelpOpen ? (
+                <StartExpressionVariablePopover
+                    anchorRef={expressionHelpButtonRef}
+                    onClose={() => setIsExpressionHelpOpen(false)}
+                    onInsert={insertStartExpressionToken}
+                />
+            ) : null}
             <label className="ac-v3-builder__field-row">
                 <span>Приоритет</span>
                 <input
@@ -7857,6 +8235,39 @@ function aiPromptVariableGroups() {
 
         return group;
     });
+}
+
+function startExpressionVariableGroups() {
+    const dictionary = currentFieldDictionary();
+    const contactItems = dictionary.contact
+        .filter((field) => START_EXPRESSION_CONTACT_FIELD_KEYS.has(field.key))
+        .map((field) => ({
+            token: `{{contact.${field.key}}}`,
+            label: field.label,
+        }));
+    const dialogItems = dictionary.dialog
+        .filter((field) => ! field.isSystem || START_EXPRESSION_DIALOG_SYSTEM_FIELD_KEYS.has(field.key))
+        .map((field) => ({
+            token: `{{dialog.${field.key}}}`,
+            label: field.label,
+        }));
+
+    return [
+        {
+            title: 'Контакт',
+            items: contactItems.length > 0 ? contactItems : [
+                { token: '{{contact.phone}}', label: 'Телефон' },
+                { token: '{{contact.first_name}}', label: 'Имя' },
+            ],
+        },
+        {
+            title: 'Диалог',
+            items: dialogItems.length > 0 ? dialogItems : [
+                { token: '{{dialog.phone}}', label: 'Телефон мессенджера' },
+                { token: '{{dialog.start_param}}', label: 'Параметр запуска' },
+            ],
+        },
+    ];
 }
 
 function variableTypeLabel(field) {
@@ -9673,6 +10084,7 @@ function moduleTemplate(type, channels, blocks = [], currentBlockKey = null) {
                 match: 'exact_keyword',
                 variable: '',
                 exclude: '',
+                expression: '',
                 contact_phone_condition: '',
                 dialog_phone_condition: '',
                 priority: 10,
@@ -9870,6 +10282,13 @@ function actionItemSummary(item) {
         return `Теги → ${count} ${pluralActions(count)}`;
     }
 
+    if (item.type === ACTION_TYPE_BITRIX24_SYNC) {
+        const label = BITRIX24_SYNC_OPERATION_OPTIONS
+            .find(([value]) => value === normalizeBitrix24SyncOperation(item.operation))?.[1] ?? 'Синхронизация';
+
+        return `Bitrix24 → ${label}`;
+    }
+
     if (item.type === ACTION_TYPE_WRITE_CONTACT_FIELD) {
         const scope = ACTION_TARGET_SCOPE_OPTIONS.find(([value]) => value === item.target_scope)?.[1] ?? 'Данные';
         const field = item.target_scope === 'contact'
@@ -10037,6 +10456,12 @@ function normalizeIntegerList(values) {
         .filter((value) => Number.isInteger(value) && value > 0)));
 }
 
+function normalizeBitrix24SyncOperation(operation) {
+    return BITRIX24_SYNC_OPERATION_OPTIONS.some(([value]) => value === operation)
+        ? operation
+        : 'contact_sync';
+}
+
 function normalizeVariableOperation(operation) {
     const type = ['set', 'increment', 'clear'].includes(operation.operation)
         ? operation.operation
@@ -10102,6 +10527,7 @@ function actionItems(actionModule) {
             || item.type === ACTION_TYPE_VARIABLES
             || item.type === ACTION_TYPE_SIMULATE_START_PARAMETER
             || item.type === ACTION_TYPE_TAG_EFFECTS
+            || item.type === ACTION_TYPE_BITRIX24_SYNC
             || item.target_field !== ''
         ));
 
@@ -10123,7 +10549,9 @@ function normalizeActionItemForType(item) {
                                 ? ACTION_TYPE_SIMULATE_START_PARAMETER
                                 : (item.type === ACTION_TYPE_TAG_EFFECTS
                                     ? ACTION_TYPE_TAG_EFFECTS
-                                    : ACTION_TYPE_WRITE_CONTACT_FIELD))))));
+                                    : (item.type === ACTION_TYPE_BITRIX24_SYNC
+                                        ? ACTION_TYPE_BITRIX24_SYNC
+                                        : ACTION_TYPE_WRITE_CONTACT_FIELD)))))));
 
     if (type === ACTION_TYPE_EDIT_MESSAGE) {
         const operation = item.operation === ACTION_EDIT_MESSAGE_OPERATION_DELETE_MESSAGE
@@ -10186,6 +10614,13 @@ function normalizeActionItemForType(item) {
             type,
             assign_tag_ids: normalizeIntegerList(item.assign_tag_ids),
             remove_tag_ids: normalizeIntegerList(item.remove_tag_ids),
+        };
+    }
+
+    if (type === ACTION_TYPE_BITRIX24_SYNC) {
+        return {
+            type,
+            operation: normalizeBitrix24SyncOperation(item.operation),
         };
     }
 

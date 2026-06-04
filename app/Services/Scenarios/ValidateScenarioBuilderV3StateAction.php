@@ -64,6 +64,7 @@ class ValidateScenarioBuilderV3StateAction
         'variables',
         'simulate_start_parameter',
         'tag_effects',
+        'bitrix24_sync',
     ];
 
     private const ACTION_RESULT_TYPES = ['check_data', 'calculate_distance_to_moscow', 'resolve_geo_city'];
@@ -107,6 +108,13 @@ class ValidateScenarioBuilderV3StateAction
     private const VARIABLE_SET_VALUE_SOURCES = ['static_value', 'current_message', 'start_param'];
 
     private const MAX_TAG_EFFECT_IDS = 20;
+
+    private const BITRIX24_SYNC_OPERATIONS = [
+        'contact_sync',
+        'deal_sync',
+        'history_export',
+        'contact_sync_with_followups',
+    ];
 
     private const BLOCK_KINDS = ['state', 'non_state'];
 
@@ -418,6 +426,7 @@ class ValidateScenarioBuilderV3StateAction
             'match' => $match,
             'variable' => (string) ($payload['variable'] ?? ''),
             'exclude' => (string) ($payload['exclude'] ?? ''),
+            'expression' => $this->normalizeStartExpression($payload['expression'] ?? '', $blockIndex, $moduleIndex),
             'contact_phone_condition' => $this->normalizeContactPhoneCondition(
                 $payload['contact_phone_condition'] ?? '',
                 $blockIndex,
@@ -450,6 +459,23 @@ class ValidateScenarioBuilderV3StateAction
         }
 
         return $match;
+    }
+
+    private function normalizeStartExpression(mixed $expression, int $blockIndex, int $moduleIndex): string
+    {
+        $expression = app(ScenarioEdgeExpressionCondition::class)->normalize($expression);
+
+        if (mb_strlen($expression) > self::MAX_MESSAGE_LENGTH) {
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.expression", 'Условие запуска слишком длинное.');
+        }
+
+        try {
+            app(ScenarioEdgeExpressionCondition::class)->assertValid($expression);
+        } catch (Throwable) {
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.expression", 'Некорректное условие запуска.');
+        }
+
+        return $expression;
     }
 
     private function normalizeContactPhoneCondition(mixed $value, int $blockIndex, int $moduleIndex, ?string $path = null): string
@@ -856,6 +882,7 @@ class ValidateScenarioBuilderV3StateAction
             $geoCountryFieldKey = trim((string) ($action['country_field_key'] ?? 'geo_country'));
             $simulateStartSourceScope = trim((string) ($action['source_scope'] ?? 'dialog'));
             $simulateStartSourceFieldKey = trim((string) ($action['source_field_key'] ?? ''));
+            $bitrix24Operation = trim((string) ($action['operation'] ?? 'contact_sync'));
 
             if (! in_array($type, self::ACTION_TYPES, true)) {
                 $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.type", 'Unknown action type.');
@@ -1029,6 +1056,19 @@ class ValidateScenarioBuilderV3StateAction
                     'type' => $type,
                     'assign_tag_ids' => $assignTagIds,
                     'remove_tag_ids' => $removeTagIds,
+                ];
+
+                continue;
+            }
+
+            if ($type === 'bitrix24_sync') {
+                if (! in_array($bitrix24Operation, self::BITRIX24_SYNC_OPERATIONS, true)) {
+                    $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.operation", 'Unknown Bitrix24 operation.');
+                }
+
+                $normalized[] = [
+                    'type' => $type,
+                    'operation' => $bitrix24Operation,
                 ];
 
                 continue;

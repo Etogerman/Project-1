@@ -3,6 +3,9 @@
 namespace App\Services\Scenarios;
 
 use App\Data\AI\AiGenerationContext;
+use App\Data\Bitrix24\Bitrix24ContactSyncQueueResultData;
+use App\Data\Bitrix24\Bitrix24DealSyncQueueResultData;
+use App\Data\Bitrix24\Bitrix24HistoryExportQueueResultData;
 use App\Data\Contacts\FirstNameResolutionWriteContext;
 use App\Data\Scenarios\ScenarioInboundResult;
 use App\Jobs\InferContactGenderFromFirstNameJob;
@@ -32,6 +35,8 @@ use App\Services\AI\AiStructuredGenerationException;
 use App\Services\AI\AiStructuredGenerationService;
 use App\Services\Analytics\FirstNameResolutionAnalyticsService;
 use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
+use App\Services\Bitrix24\QueueBitrix24DealSyncAction;
+use App\Services\Bitrix24\QueueBitrix24HistoryExportAction;
 use App\Services\Bots\SendBotDialogTextAction;
 use App\Services\Bots\StoreOutboundScenarioMessageAction;
 use App\Services\Bots\TelegramBotApiService;
@@ -102,6 +107,13 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
     private const V3_SCHEDULED_TRANSITION_PROCESSING_TIMEOUT_SECONDS = 600;
 
     private const V3_OUTBOUND_RETRY_BACKOFF_SECONDS = [10, 30, 60, 180];
+
+    private const V3_BITRIX24_SYNC_OPERATIONS = [
+        'contact_sync',
+        'deal_sync',
+        'history_export',
+        'contact_sync_with_followups',
+    ];
 
     private const TELEGRAM_REPLY_KEYBOARD_CLEANUP_TEXT = "\u{2060}";
 
@@ -232,6 +244,8 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         private readonly AddContactPhoneAction $addContactPhoneAction,
         private readonly ResolveRootContactAction $resolveRootContactAction,
         private readonly QueueBitrix24ContactSyncAction $queueBitrix24ContactSyncAction,
+        private readonly QueueBitrix24DealSyncAction $queueBitrix24DealSyncAction,
+        private readonly QueueBitrix24HistoryExportAction $queueBitrix24HistoryExportAction,
         private readonly SyncContactDistanceToMoscowAction $syncContactDistanceToMoscowAction,
         private readonly ResolveAndApplyGeoCityAction $resolveAndApplyGeoCityAction,
         private readonly ResolveGeoCityAction $resolveGeoCityAction,
@@ -2901,7 +2915,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             return ['state_payload' => $statePayload, 'output_id' => null];
         }
 
-        foreach ($actions as $action) {
+        foreach ($actions as $actionIndex => $action) {
             if (! is_array($action)) {
                 continue;
             }
@@ -2993,6 +3007,20 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 continue;
             }
 
+            if (($action['type'] ?? null) === 'bitrix24_sync') {
+                $result = $this->applyV3Bitrix24SyncAction(
+                    $message,
+                    $action,
+                    $statePayload,
+                    filled($block['id'] ?? null) ? (string) $block['id'] : null,
+                    $run,
+                    (int) $actionIndex,
+                );
+                $statePayload = $result['state_payload'] ?? $statePayload;
+
+                continue;
+            }
+
             if (($action['type'] ?? null) !== 'write_contact_field') {
                 Log::warning('scenario.v3_unsupported_action_skipped', [
                     'scenario_code' => $this->code(),
@@ -3013,6 +3041,207 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         }
 
         return ['state_payload' => $statePayload, 'output_id' => null];
+    }
+
+    /**
+     * @param  array<string, mixed>  $action
+     * @param  array<string, mixed>  $statePayload
+     * @return array{state_payload: array<string, mixed>, output_id: null}
+     */
+    private function applyV3Bitrix24SyncAction(
+        Message $message,
+        array $action,
+        array $statePayload,
+        ?string $blockId,
+        ?ScenarioRun $run,
+        int $actionIndex,
+    ): array {
+        $operation = $this->normalizeV3Bitrix24SyncOperation($action['operation'] ?? null);
+
+        if (! $message->contact instanceof Contact) {
+            $diagnostic = $this->v3Bitrix24SyncDiagnostic(
+                operation: $operation,
+                status: 'missing_contact',
+                blockId: $blockId,
+                actionIndex: $actionIndex,
+                message: $message,
+                run: $run,
+                queued: false,
+                alreadyPending: false,
+                ready: false,
+                rootContactId: null,
+                reason: 'missing_contact',
+            );
+
+            Log::warning('scenario.v3_bitrix24_sync_missing_contact', [
+                'scenario_code' => $this->code(),
+                'scenario_run_id' => $run?->id,
+                'block_id' => $blockId,
+                'action_index' => $actionIndex,
+                'message_id' => $message->id,
+                'operation' => $operation,
+            ]);
+
+            return [
+                'state_payload' => $this->storeV3Bitrix24SyncDiagnostic($statePayload, $blockId, $actionIndex, $diagnostic),
+                'output_id' => null,
+            ];
+        }
+
+        try {
+            $queueResult = match ($operation) {
+                'deal_sync' => $this->queueBitrix24DealSyncAction->handle($message->contact),
+                'history_export' => $this->queueBitrix24HistoryExportAction->handle($message->contact),
+                default => $this->queueBitrix24ContactSyncAction->handle($message->contact),
+            };
+
+            $diagnostic = $this->v3Bitrix24SyncDiagnostic(
+                operation: $operation,
+                status: $this->v3Bitrix24SyncStatus($queueResult),
+                blockId: $blockId,
+                actionIndex: $actionIndex,
+                message: $message,
+                run: $run,
+                queued: $queueResult->queued,
+                alreadyPending: $queueResult->alreadyPending,
+                ready: $queueResult->ready,
+                rootContactId: $queueResult->rootContactId,
+            );
+
+            Log::info('scenario.v3_bitrix24_sync_done', [
+                'scenario_code' => $this->code(),
+                'scenario_run_id' => $run?->id,
+                'block_id' => $blockId,
+                'action_index' => $actionIndex,
+                'message_id' => $message->id,
+                'operation' => $operation,
+                'status' => $diagnostic['status'],
+                'root_contact_id' => $queueResult->rootContactId,
+            ]);
+
+            return [
+                'state_payload' => $this->storeV3Bitrix24SyncDiagnostic($statePayload, $blockId, $actionIndex, $diagnostic),
+                'output_id' => null,
+            ];
+        } catch (Throwable $exception) {
+            $diagnostic = $this->v3Bitrix24SyncDiagnostic(
+                operation: $operation,
+                status: 'failed',
+                blockId: $blockId,
+                actionIndex: $actionIndex,
+                message: $message,
+                run: $run,
+                queued: false,
+                alreadyPending: false,
+                ready: false,
+                rootContactId: null,
+                reason: 'queue_exception',
+            );
+
+            Log::warning('scenario.v3_bitrix24_sync_failed', [
+                'scenario_code' => $this->code(),
+                'scenario_run_id' => $run?->id,
+                'block_id' => $blockId,
+                'action_index' => $actionIndex,
+                'message_id' => $message->id,
+                'operation' => $operation,
+                'error_class' => $exception::class,
+            ]);
+
+            return [
+                'state_payload' => $this->storeV3Bitrix24SyncDiagnostic($statePayload, $blockId, $actionIndex, $diagnostic),
+                'output_id' => null,
+            ];
+        }
+    }
+
+    private function normalizeV3Bitrix24SyncOperation(mixed $operation): string
+    {
+        $value = is_scalar($operation) ? trim((string) $operation) : '';
+
+        return in_array($value, self::V3_BITRIX24_SYNC_OPERATIONS, true)
+            ? $value
+            : 'contact_sync';
+    }
+
+    private function v3Bitrix24SyncStatus(
+        Bitrix24ContactSyncQueueResultData|Bitrix24DealSyncQueueResultData|Bitrix24HistoryExportQueueResultData $queueResult,
+    ): string {
+        if ($queueResult->queued) {
+            return 'queued';
+        }
+
+        if ($queueResult->alreadyPending && $queueResult->ready) {
+            return 'already_pending';
+        }
+
+        if (! $queueResult->ready) {
+            return 'not_ready';
+        }
+
+        return 'failed';
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function v3Bitrix24SyncDiagnostic(
+        string $operation,
+        string $status,
+        ?string $blockId,
+        int $actionIndex,
+        Message $message,
+        ?ScenarioRun $run,
+        bool $queued,
+        bool $alreadyPending,
+        bool $ready,
+        ?int $rootContactId,
+        ?string $reason = null,
+    ): array {
+        return array_filter([
+            'operation' => $operation,
+            'status' => $status,
+            'queued' => $queued,
+            'already_pending' => $alreadyPending,
+            'ready' => $ready,
+            'root_contact_id' => $rootContactId,
+            'block_id' => $blockId,
+            'action_index' => $actionIndex,
+            'message_id' => $message->id,
+            'scenario_run_id' => $run?->id,
+            'reason' => $reason,
+            'executed_at' => now()->toISOString(),
+        ], fn (mixed $value): bool => $value !== null);
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @param  array<string, mixed>  $diagnostic
+     * @return array<string, mixed>
+     */
+    private function storeV3Bitrix24SyncDiagnostic(
+        array $statePayload,
+        ?string $blockId,
+        int $actionIndex,
+        array $diagnostic,
+    ): array {
+        $blockKey = filled($blockId) ? (string) $blockId : 'unknown_block';
+        $entries = data_get($statePayload, 'v3.bitrix24_sync', []);
+
+        if (! is_array($entries)) {
+            $entries = [];
+        }
+
+        if (! isset($entries[$blockKey]) || ! is_array($entries[$blockKey])) {
+            $entries[$blockKey] = [];
+        }
+
+        $entries[$blockKey][(string) $actionIndex] = $diagnostic;
+        $entries['last'] = $diagnostic;
+
+        data_set($statePayload, 'v3.bitrix24_sync', $entries);
+
+        return $statePayload;
     }
 
     /**
@@ -6122,6 +6351,10 @@ TEXT;
                 continue;
             }
 
+            if (! $this->v3EntrypointAllowsExpression($message, $entrypoint)) {
+                continue;
+            }
+
             $blockId = trim((string) ($entrypoint['block_id'] ?? ''));
             $resolvedBlockId = $this->v3RuntimeBlockId($runtime, $blockId);
 
@@ -6131,6 +6364,31 @@ TEXT;
         }
 
         return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $entrypoint
+     */
+    private function v3EntrypointAllowsExpression(Message $message, array $entrypoint): bool
+    {
+        $expression = trim((string) ($entrypoint['expression'] ?? ''));
+
+        if ($expression === '') {
+            return true;
+        }
+
+        try {
+            return app(ScenarioEdgeExpressionCondition::class)->evaluate($expression, $message);
+        } catch (Throwable $exception) {
+            Log::warning('V3 start expression condition failed.', [
+                'scenario_id' => $this->scenario->id,
+                'block_id' => $entrypoint['block_id'] ?? null,
+                'message_id' => $message->id,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return false;
+        }
     }
 
     /**
@@ -6694,7 +6952,7 @@ TEXT;
         $type = (string) ($button['type'] ?? self::V3_BUTTON_TYPE_TEXT);
 
         if ($channel->platform === Channel::PLATFORM_MAX) {
-            return $placement !== self::V3_BUTTON_PLACEMENT_REPLY_KEYBOARD;
+            return true;
         }
 
         if ($channel->platform === Channel::PLATFORM_TELEGRAM) {
@@ -8276,10 +8534,6 @@ TEXT;
     ): ?array {
         if ($requestPhone) {
             return $this->maxPhoneCaptureAttachments();
-        }
-
-        if ($buttonPlacement === self::V3_BUTTON_PLACEMENT_REPLY_KEYBOARD) {
-            return null;
         }
 
         if ($replyButtonRows === null || $replyButtonRows === []) {

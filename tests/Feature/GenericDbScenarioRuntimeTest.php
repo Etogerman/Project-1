@@ -4,6 +4,8 @@ namespace Tests\Feature;
 
 use App\Data\AI\AiProviderStructuredResult;
 use App\Data\Bitrix24\Bitrix24ContactSyncQueueResultData;
+use App\Data\Bitrix24\Bitrix24DealSyncQueueResultData;
+use App\Data\Bitrix24\Bitrix24HistoryExportQueueResultData;
 use App\Data\Bots\AutoReplyDeliveryResult;
 use App\Data\Bots\BotDialogTextSendResult;
 use App\Data\Bots\StoredInboundMessageResult;
@@ -38,6 +40,8 @@ use App\Models\Tag;
 use App\Services\AI\AiProviderRequestException;
 use App\Services\AI\GeminiApiService;
 use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
+use App\Services\Bitrix24\QueueBitrix24DealSyncAction;
+use App\Services\Bitrix24\QueueBitrix24HistoryExportAction;
 use App\Services\Bots\DispatchStoredInboundBotMessageAction;
 use App\Services\Bots\SendBotDialogTextAction;
 use App\Services\Bots\StoreOutboundScenarioMessageAction;
@@ -55,6 +59,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
 use Mockery;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\Feature\Concerns\BuildsIbizaMvpSchema;
 use Tests\TestCase;
 
@@ -1786,6 +1791,140 @@ class GenericDbScenarioRuntimeTest extends TestCase
 
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && $request['text'] === 'Попытка записана');
+    }
+
+    #[DataProvider('v3Bitrix24SyncOperationProvider')]
+    public function test_v3_bitrix24_sync_action_queues_operation_and_continues_block(
+        string $operation,
+        string $expectedQueueAction,
+    ): void {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9718],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $schema = $this->v3VariablesRuntimeSchema($channel->id);
+        data_set($schema, 'builder_v3_runtime.blocks.variables.actions', [
+            [
+                'type' => 'bitrix24_sync',
+                'operation' => $operation,
+            ],
+            [
+                'type' => 'variables',
+                'operations' => [[
+                    'operation' => 'increment',
+                    'field_key' => 'bitrix_after_sync',
+                    'amount' => 1,
+                ]],
+            ],
+        ]);
+        $scenario = $this->createPublishedScenario('v3_bitrix24_sync_'.$operation, $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $expectedContact = Mockery::on(fn ($value): bool => $value instanceof Contact && $value->is($contact));
+        $contactQueueAction = Mockery::mock(QueueBitrix24ContactSyncAction::class);
+        $dealQueueAction = Mockery::mock(QueueBitrix24DealSyncAction::class);
+        $historyQueueAction = Mockery::mock(QueueBitrix24HistoryExportAction::class);
+
+        if ($expectedQueueAction === 'contact') {
+            $contactQueueAction
+                ->shouldReceive('handle')
+                ->once()
+                ->with($expectedContact)
+                ->andReturn(new Bitrix24ContactSyncQueueResultData(
+                    queued: true,
+                    alreadyPending: false,
+                    ready: true,
+                    rootContactId: $contact->id,
+                ));
+        } else {
+            $contactQueueAction->shouldReceive('handle')->never();
+        }
+
+        if ($expectedQueueAction === 'deal') {
+            $dealQueueAction
+                ->shouldReceive('handle')
+                ->once()
+                ->with($expectedContact)
+                ->andReturn(new Bitrix24DealSyncQueueResultData(
+                    queued: true,
+                    alreadyPending: false,
+                    ready: true,
+                    rootContactId: $contact->id,
+                ));
+        } else {
+            $dealQueueAction->shouldReceive('handle')->never();
+        }
+
+        if ($expectedQueueAction === 'history') {
+            $historyQueueAction
+                ->shouldReceive('handle')
+                ->once()
+                ->with($expectedContact)
+                ->andReturn(new Bitrix24HistoryExportQueueResultData(
+                    queued: true,
+                    alreadyPending: false,
+                    ready: true,
+                    rootContactId: $contact->id,
+                ));
+        } else {
+            $historyQueueAction->shouldReceive('handle')->never();
+        }
+
+        app()->instance(QueueBitrix24ContactSyncAction::class, $contactQueueAction);
+        app()->instance(QueueBitrix24DealSyncAction::class, $dealQueueAction);
+        app()->instance(QueueBitrix24HistoryExportAction::class, $historyQueueAction);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $dialog->refresh();
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->assertSame(1, data_get($dialog->fields_payload, 'bitrix_after_sync'));
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('done', $run->current_step);
+        $this->assertSame('queued', data_get($run->state_payload, 'v3.bitrix24_sync.last.status'));
+        $this->assertSame($operation, data_get($run->state_payload, 'v3.bitrix24_sync.last.operation'));
+        $this->assertSame($contact->id, data_get($run->state_payload, 'v3.bitrix24_sync.last.root_contact_id'));
+        $this->assertTrue(data_get($run->state_payload, 'v3.bitrix24_sync.variables.0.queued'));
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['text'] === 'Попытка записана');
+    }
+
+    /**
+     * @return array<string, array{string, string}>
+     */
+    public static function v3Bitrix24SyncOperationProvider(): array
+    {
+        return [
+            'contact sync' => ['contact_sync', 'contact'],
+            'deal sync' => ['deal_sync', 'deal'],
+            'history export' => ['history_export', 'history'],
+            'contact sync with followups' => ['contact_sync_with_followups', 'contact'],
+        ];
     }
 
     public function test_v3_variables_action_can_store_start_parameter(): void
@@ -7195,7 +7334,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
             && $request['text'] === 'Спасибо, телефон получен');
     }
 
-    public function test_v3_reply_keyboard_buttons_are_hidden_for_max_but_manual_text_advances(): void
+    public function test_v3_reply_keyboard_buttons_are_sent_as_inline_keyboard_for_max(): void
     {
         Http::fake([
             'https://platform-api.max.ru/*' => Http::sequence()
@@ -7210,7 +7349,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
             dialogOverrides: ['external_chat_id' => 'max-chat-700'],
         );
         $scenario = $this->createPublishedScenario(
-            'v3_max_hidden_reply_keyboard',
+            'v3_max_reply_keyboard_as_inline',
             $this->v3CatalogRuntimeSchema($channel->id, placement: 'reply_keyboard'),
         );
 
@@ -7242,7 +7381,9 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame(['btn_catalog'], data_get($run->state_payload, 'v3.waiting_output_ids'));
         Http::assertSent(fn ($request): bool => str_starts_with($request->url(), 'https://platform-api.max.ru/messages')
             && $request['text'] === 'Выберите действие'
-            && ! array_key_exists('attachments', $request->data()));
+            && data_get($request->data(), 'attachments.0.type') === 'inline_keyboard'
+            && data_get($request->data(), 'attachments.0.payload.buttons.0.0.type') === 'message'
+            && data_get($request->data(), 'attachments.0.payload.buttons.0.0.text') === 'Получить каталог');
 
         $buttonText = Message::factory()->create([
             'contact_id' => $contact->id,
@@ -7852,6 +7993,152 @@ class GenericDbScenarioRuntimeTest extends TestCase
 
         $this->assertNotNull($runtime);
         $this->assertTrue($runtime->shouldStart($message));
+    }
+
+    public function test_published_builder_start_condition_expression_filters_entrypoint(): void
+    {
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $matchingDialog] = $this->createDialogContext($channel, dialogOverrides: [
+            'external_chat_id' => 'start-expression-match',
+            'fields_payload' => ['start_param' => '123321'],
+        ]);
+        [, , $otherDialog] = $this->createDialogContext($channel, identityOverrides: [
+            'external_user_id' => 'start-expression-other',
+        ], dialogOverrides: [
+            'external_chat_id' => 'start-expression-other',
+            'fields_payload' => ['start_param' => 'other'],
+        ]);
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 926 352 71 11',
+            'phone_normalized' => '+79263527111',
+        ]);
+        $scenario = $this->createPublishedScenario(
+            'builder_start_expression_filter',
+            $this->v3StartExpressionRuntimeSchema(
+                $channel->id,
+                '{{dialog.start_param}} == "123321" and {{contact.phone}} != ""',
+                AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE,
+            ),
+        );
+
+        $matchingMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $matchingDialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $matchingDialog->external_chat_id,
+            'text' => '/start gate',
+            'message_parameter' => 'gate',
+        ]);
+        $otherMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $otherDialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $otherDialog->external_chat_id,
+            'text' => '/start gate',
+            'message_parameter' => 'gate',
+        ]);
+
+        $runtime = app(ScenarioRegistry::class)->makeRuntime($scenario->code);
+
+        $this->assertNotNull($runtime);
+        $this->assertTrue($runtime->shouldStart($matchingMessage));
+        $this->assertFalse($runtime->shouldStart($otherMessage));
+    }
+
+    public function test_published_builder_start_condition_expression_can_read_dialog_phone(): void
+    {
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $matchingDialog] = $this->createDialogContext($channel, dialogOverrides: [
+            'external_chat_id' => 'start-expression-dialog-phone-match',
+            'confirmed_phone_raw' => '+7 926 352 71 11',
+            'confirmed_phone_normalized' => '+79263527111',
+        ]);
+        [, , $otherDialog] = $this->createDialogContext($channel, identityOverrides: [
+            'external_user_id' => 'start-expression-dialog-phone-other',
+        ], dialogOverrides: [
+            'external_chat_id' => 'start-expression-dialog-phone-other',
+            'confirmed_phone_raw' => null,
+            'confirmed_phone_normalized' => null,
+        ]);
+        $scenario = $this->createPublishedScenario(
+            'builder_start_expression_dialog_phone',
+            $this->v3StartExpressionRuntimeSchema($channel->id, '{{dialog.phone}} != ""'),
+        );
+
+        $matchingMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $matchingDialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $matchingDialog->external_chat_id,
+            'text' => '/start gate',
+            'message_parameter' => 'gate',
+        ]);
+        $otherMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $otherDialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $otherDialog->external_chat_id,
+            'text' => '/start gate',
+            'message_parameter' => 'gate',
+        ]);
+
+        $runtime = app(ScenarioRegistry::class)->makeRuntime($scenario->code);
+
+        $this->assertNotNull($runtime);
+        $this->assertTrue($runtime->shouldStart($matchingMessage));
+        $this->assertFalse($runtime->shouldStart($otherMessage));
+    }
+
+    public function test_published_builder_start_condition_broken_expression_is_skipped_without_crash(): void
+    {
+        Log::spy();
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario(
+            'builder_start_expression_broken',
+            $this->v3StartExpressionRuntimeSchema($channel->id, '{{dialog.start_param}} = "123321"'),
+        );
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => '/start gate',
+            'message_parameter' => 'gate',
+        ]);
+
+        $runtime = app(ScenarioRegistry::class)->makeRuntime($scenario->code);
+
+        $this->assertNotNull($runtime);
+        $this->assertFalse($runtime->shouldStart($message));
+        Log::shouldHaveReceived('warning')
+            ->with('V3 start expression condition failed.', Mockery::on(
+                fn (array $context): bool => ($context['scenario_id'] ?? null) === $scenario->id
+                    && ($context['block_id'] ?? null) === 'start'
+                    && ($context['message_id'] ?? null) === $message->id,
+            ))
+            ->once();
     }
 
     public function test_published_builder_start_condition_starts_its_target_runtime_block(): void
@@ -10018,6 +10305,51 @@ class GenericDbScenarioRuntimeTest extends TestCase
         ]);
 
         return $scenario->fresh('publishedVersion');
+    }
+
+    private function v3StartExpressionRuntimeSchema(
+        int $channelId,
+        string $expression,
+        string $contactPhoneCondition = '',
+    ): array {
+        return [
+            'version' => 3,
+            'builder_v3_runtime' => [
+                'schema_version' => 3,
+                'source_revision' => 'v3:test',
+                'compiled_at' => now()->toISOString(),
+                'entrypoints' => [
+                    [
+                        'block_id' => 'start',
+                        'channel_ids' => [$channelId],
+                        'match' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+                        'values' => ['gate'],
+                        'contact_phone_condition' => $contactPhoneCondition,
+                        'dialog_phone_condition' => '',
+                        'expression' => $expression,
+                        'priority' => 10,
+                    ],
+                ],
+                'blocks' => [
+                    'start' => [
+                        'id' => 'start',
+                        'db_id' => 1,
+                        'kind' => 'state',
+                        'title' => 'Старт',
+                        'message' => [
+                            'text' => 'Старт сработал',
+                            'text_format' => 'plain_text',
+                        ],
+                        'buttons' => ['placement' => 'auto', 'rows' => []],
+                        'actions' => [],
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'action_result_edges' => [],
+                    ],
+                ],
+                'edges' => [],
+            ],
+        ];
     }
 
     private function successfulBotSendResult(Dialog $dialog, string $text, string $externalMessageId): BotDialogTextSendResult

@@ -7,12 +7,15 @@ use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Services\Contacts\ResolveRootContactAction;
+use DateTimeInterface;
 use InvalidArgumentException;
 
 class ScenarioEdgeExpressionCondition
 {
     public const CONTACT_VARIABLES = [
+        'id',
         'phone',
+        'phones',
         'first_name',
         'first_name_source',
         'first_name_resolution_method',
@@ -21,8 +24,59 @@ class ScenarioEdgeExpressionCondition
         'city',
         'region',
         'gender',
+        'gender_source',
+        'birth_date',
         'age_years',
         'age_range',
+        'region_status',
+        'region_source',
+        'distance_to_moscow_km',
+        'distance_to_moscow_status',
+        'distance_to_moscow_calculated_at',
+        'data_collection_status',
+        'data_collection_current_field',
+        'data_collection_last_prompted_field',
+        'data_collection_started_at',
+        'data_collection_current_field_started_at',
+        'data_collection_completed_at',
+        'data_collection_attempts_count',
+        'is_auto_reply_enabled',
+        'assigned_user_id',
+        'bitrix24_contact_id',
+        'bitrix24_sync_status',
+        'bitrix24_last_synced_at',
+        'bitrix24_deal_id',
+        'bitrix24_deal_sync_status',
+        'bitrix24_deal_last_synced_at',
+        'bitrix24_history_sync_status',
+        'bitrix24_history_last_synced_at',
+        'created_at',
+        'updated_at',
+    ];
+
+    public const DIALOG_SYSTEM_VARIABLES = [
+        'id',
+        'contact_id',
+        'channel_id',
+        'stage',
+        'phone',
+        'bot_subscription_status',
+        'bot_subscription_changed_at',
+        'external_chat_id',
+        'bitrix24_live_chat_id',
+        'bitrix24_live_status',
+        'bitrix24_live_last_exported_at',
+        'bitrix24_live_last_imported_at',
+        'phone_confirmed_at',
+        'phone_confirmed_via',
+        'last_message_at',
+        'last_inbound_message_at',
+        'last_outbound_message_at',
+        'last_message_id',
+        'last_inbound_message_id',
+        'last_outbound_message_id',
+        'created_at',
+        'updated_at',
     ];
 
     public function __construct(
@@ -163,7 +217,7 @@ class ScenarioEdgeExpressionCondition
 
         $contact = $this->resolveRootContactAction->handle($message->contact);
 
-        if ($field === 'phone') {
+        if ($field === 'phone' || $field === 'phones') {
             return $contact->phoneNumbers()
                 ->get(['phone_normalized', 'phone_raw'])
                 ->flatMap(fn (ContactPhoneNumber $phone): array => [
@@ -181,9 +235,28 @@ class ScenarioEdgeExpressionCondition
         $dialog = $message->dialog instanceof Dialog
             ? $message->dialog
             : ($message->dialog_id !== null ? Dialog::query()->find($message->dialog_id) : null);
+
+        if (! $dialog instanceof Dialog) {
+            return null;
+        }
+
+        if (in_array($field, self::DIALOG_SYSTEM_VARIABLES, true)) {
+            return $this->dialogSystemValue($field, $dialog);
+        }
+
         $fieldsPayload = is_array($dialog?->fields_payload) ? $dialog->fields_payload : [];
 
         return $fieldsPayload[$field] ?? null;
+    }
+
+    private function dialogSystemValue(string $field, Dialog $dialog): mixed
+    {
+        return match ($field) {
+            'phone' => $dialog->confirmed_phone_raw ?: $dialog->confirmed_phone_normalized,
+            'last_inbound_message_at' => $dialog->last_inbound_at,
+            'last_outbound_message_at' => $dialog->last_outbound_at,
+            default => $dialog->{$field} ?? null,
+        };
     }
 
     private function normalizeValue(mixed $value): string
@@ -202,6 +275,10 @@ class ScenarioEdgeExpressionCondition
 
         if (is_string($value)) {
             return $value;
+        }
+
+        if ($value instanceof DateTimeInterface) {
+            return $value->format(DATE_ATOM);
         }
 
         throw new InvalidArgumentException('Expression variable value must be scalar.');

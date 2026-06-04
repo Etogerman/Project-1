@@ -2372,6 +2372,8 @@ class ScenarioBuilderV3StateTest extends TestCase
             'name' => 'V3 Save Start',
         ]);
         $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $startSettings = $this->startSettings('/start', [(int) $channel->id]);
+        $startSettings['modules'][0]['payload']['expression'] = ' {{dialog.start_param}} == "123321" ';
         $payload = $this->payloadFromState($state, [
             [
                 'id' => null,
@@ -2379,13 +2381,17 @@ class ScenarioBuilderV3StateTest extends TestCase
                 'type' => 'state',
                 'title' => 'Старт',
                 'position' => ['x' => 80, 'y' => 96],
-                'settings_payload' => $this->startSettings('/start', [(int) $channel->id]),
+                'settings_payload' => $startSettings,
             ],
         ]);
 
         $response = $this->actingAs($admin)
             ->putJson($this->stateUrl($scenario), $payload)
-            ->assertOk();
+            ->assertOk()
+            ->assertJsonPath(
+                'builder.blocks.0.settings_payload.modules.0.payload.expression',
+                '{{dialog.start_param}} == "123321"',
+            );
 
         $blockId = $response->json('id_map.blocks.tmp_start');
 
@@ -2404,6 +2410,35 @@ class ScenarioBuilderV3StateTest extends TestCase
             'id' => $blockId,
             'type' => ScenarioBuilderBlock::TYPE_START_CONDITION,
         ]);
+    }
+
+    public function test_put_state_rejects_invalid_start_condition_expression(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_invalid_start_expression',
+            'name' => 'V3 Invalid Start Expression',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $startSettings = $this->startSettings('/start', [(int) $channel->id]);
+        $startSettings['modules'][0]['payload']['expression'] = '{{dialog.start_param}} = "123321"';
+
+        $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, [
+                [
+                    'id' => null,
+                    'client_key' => 'tmp_start',
+                    'type' => 'state',
+                    'title' => 'Старт',
+                    'position' => ['x' => 80, 'y' => 96],
+                    'settings_payload' => $startSettings,
+                ],
+            ]))
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors([
+                'builder.blocks.0.settings_payload.modules.0.payload.expression',
+            ]);
     }
 
     public function test_put_state_uses_visible_start_command_instead_of_hidden_values(): void
@@ -2938,6 +2973,14 @@ class ScenarioBuilderV3StateTest extends TestCase
         $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
         $catalogSettings = $this->messageSettings('Вот каталог');
         $catalogSettings['kind'] = 'non_state';
+        $startSettings = $this->startMessageButtonsSettings(
+            '/start',
+            [(int) $channel->id],
+            'Выберите действие',
+            'Получить каталог',
+            'has_phone',
+        );
+        $startSettings['modules'][0]['payload']['expression'] = '{{dialog.start_param}} == "123321"';
         $savedState = $this->actingAs($admin)
             ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, [
                 [
@@ -2946,13 +2989,7 @@ class ScenarioBuilderV3StateTest extends TestCase
                     'type' => 'state',
                     'title' => 'Старт',
                     'position' => ['x' => 64, 'y' => 64],
-                    'settings_payload' => $this->startMessageButtonsSettings(
-                        '/start',
-                        [(int) $channel->id],
-                        'Выберите действие',
-                        'Получить каталог',
-                        'has_phone',
-                    ),
+                    'settings_payload' => $startSettings,
                 ],
                 [
                     'id' => null,
@@ -3004,6 +3041,7 @@ class ScenarioBuilderV3StateTest extends TestCase
         $this->assertSame(['/start'], $runtime['entrypoints'][0]['values'] ?? null);
         $this->assertSame('has_phone', $runtime['entrypoints'][0]['contact_phone_condition'] ?? null);
         $this->assertSame('', $runtime['entrypoints'][0]['dialog_phone_condition'] ?? null);
+        $this->assertSame('{{dialog.start_param}} == "123321"', $runtime['entrypoints'][0]['expression'] ?? null);
         $this->assertSame('Выберите действие', data_get($runtime, "blocks.$startBlockId.message.text"));
         $this->assertSame('state', data_get($runtime, "blocks.$startBlockId.kind"));
         $this->assertSame('non_state', data_get($runtime, "blocks.$catalogBlockId.kind"));
@@ -3873,6 +3911,75 @@ class ScenarioBuilderV3StateTest extends TestCase
         );
     }
 
+    public function test_publish_keeps_bitrix24_sync_action_without_outputs_in_runtime_snapshot(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['name' => 'Telegram Bitrix24']);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_bitrix24_sync_action',
+            'name' => 'V3 Bitrix24 Sync Action',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_start',
+                'type' => 'state',
+                'title' => 'Старт',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->startSettings('/start', [$channel->id]),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_bitrix',
+                'type' => 'state',
+                'title' => 'Bitrix24',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->bitrix24SyncActionSettings('history_export'),
+            ],
+        ];
+        $edgePayload = $this->edgePayload(null, 'Дальше');
+        $edgePayload['mode'] = 'automatic';
+        $edges = [[
+            'id' => null,
+            'client_key' => 'tmp_start_edge',
+            'source' => ['block_id' => null, 'client_key' => 'tmp_start', 'output_id' => null],
+            'target' => ['block_id' => null, 'client_key' => 'tmp_bitrix'],
+            'condition_payload' => $edgePayload,
+        ]];
+
+        $saved = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
+            ->assertOk()
+            ->assertJsonPath('builder.blocks.1.settings_payload.modules.0.payload.actions.0.type', 'bitrix24_sync')
+            ->assertJsonPath('builder.blocks.1.settings_payload.modules.0.payload.actions.0.operation', 'history_export')
+            ->assertJsonPath('builder.blocks.1.settings_payload.outputs', [])
+            ->json();
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $saved['scenario']['draft_version_id'],
+                'base_revision' => $saved['builder']['revision'],
+            ])
+            ->assertOk();
+
+        $scenario->refresh()->load('publishedVersion');
+        $bitrixBlockId = (string) $saved['id_map']['blocks']['tmp_bitrix'];
+
+        $this->assertSame(
+            'bitrix24_sync',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$bitrixBlockId.actions.0.type"),
+        );
+        $this->assertSame(
+            'history_export',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$bitrixBlockId.actions.0.operation"),
+        );
+        $this->assertSame(
+            [],
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$bitrixBlockId.action_result_edges"),
+        );
+    }
+
     public function test_publish_keeps_geo_city_ai_data_source_in_runtime_snapshot(): void
     {
         $admin = $this->adminUser();
@@ -4637,6 +4744,34 @@ class ScenarioBuilderV3StateTest extends TestCase
     /**
      * @return array<string, mixed>
      */
+    private function bitrix24SyncActionSettings(string $operation): array
+    {
+        return [
+            'schema_version' => 3,
+            'kind' => 'state',
+            'ui' => ['sheet_id' => 'main', 'width' => 320, 'collapsed' => false],
+            'modules' => [
+                [
+                    'id' => 'mod_action',
+                    'type' => 'action',
+                    'enabled' => true,
+                    'payload' => [
+                        'actions' => [
+                            [
+                                'type' => 'bitrix24_sync',
+                                'operation' => $operation,
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+            'outputs' => [],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
     private function variableMessageSettings(): array
     {
         $settings = $this->messageSettings('Как тебя зовут?');
@@ -4980,6 +5115,7 @@ class ScenarioBuilderV3StateTest extends TestCase
                         'match' => 'strict',
                         'variable' => '',
                         'exclude' => '',
+                        'expression' => '',
                         'priority' => 10,
                         'once' => false,
                         'channels' => ['mode' => 'selected', 'ids' => $channelIds],

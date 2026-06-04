@@ -370,6 +370,13 @@ class CompileScenarioBuilderV3RuntimeAction
                     ];
                 }
 
+                if ($type === 'bitrix24_sync') {
+                    return [
+                        'type' => 'bitrix24_sync',
+                        'operation' => (string) ($item['operation'] ?? 'contact_sync'),
+                    ];
+                }
+
                 return [
                     'type' => $type,
                     'source_type' => (string) ($item['source_type'] ?? 'ai_data'),
@@ -401,6 +408,12 @@ class CompileScenarioBuilderV3RuntimeAction
                 'simulate_start_parameter' => ($item['source_scope'] ?? '') === 'dialog'
                     && ($item['source_field_key'] ?? '') !== '',
                 'tag_effects' => (($item['assign_tag_ids'] ?? []) !== [] || ($item['remove_tag_ids'] ?? []) !== []),
+                'bitrix24_sync' => in_array($item['operation'] ?? '', [
+                    'contact_sync',
+                    'deal_sync',
+                    'history_export',
+                    'contact_sync_with_followups',
+                ], true),
                 default => (($item['target_field'] ?? '') !== ''
                     && (($item['source_type'] ?? '') === 'static_value'
                         ? trim((string) ($item['static_value'] ?? '')) !== ''
@@ -570,6 +583,9 @@ class CompileScenarioBuilderV3RuntimeAction
                     ),
                     'dialog_phone_condition' => $this->normalizeContactPhoneCondition(
                         data_get($start, 'payload.dialog_phone_condition', ''),
+                    ),
+                    'expression' => app(ScenarioEdgeExpressionCondition::class)->normalize(
+                        data_get($start, 'payload.expression', ''),
                     ),
                     'priority' => (int) data_get($start, 'payload.priority', 10),
                 ];
