@@ -6623,7 +6623,13 @@ function VariableHelpPopover({ title, ariaLabel, onClose, onInsert = null }) {
     );
 }
 
-function StartExpressionVariablePopover({ anchorRef, onClose, onInsert }) {
+function StartExpressionVariablePopover({
+    anchorRef,
+    onClose,
+    onInsert,
+    title = 'Переменные условий запуска',
+    ariaLabel = 'Переменные для условий запуска',
+}) {
     const [position, setPosition] = useState({ top: 96, left: 24 });
     const variableGroups = startExpressionVariableGroups();
 
@@ -6662,10 +6668,10 @@ function StartExpressionVariablePopover({ anchorRef, onClose, onInsert }) {
             className="ac-v3-builder__start-expression-popover"
             style={{ top: position.top, left: position.left }}
             role="dialog"
-            aria-label="Переменные для условий запуска"
+            aria-label={ariaLabel}
         >
             <div className="ac-v3-builder__start-expression-popover-head">
-                <strong>Переменные условий запуска</strong>
+                <strong>{title}</strong>
                 <button type="button" aria-label="Закрыть переменные" onClick={onClose}>×</button>
             </div>
             <p className="ac-v3-builder__field-hint">
@@ -8501,6 +8507,9 @@ function contactConditionField(fieldKey) {
 }
 
 function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateConditionPayload, onResetWaypoints, onCopyEdgeId, onRefreshDiagnostics, timezone, timezoneLabel, dialogFieldKeys }) {
+    const [isExpressionHelpOpen, setIsExpressionHelpOpen] = useState(false);
+    const expressionHelpButtonRef = useRef(null);
+    const expressionTextareaRef = useRef(null);
     const source = blocks.find((block) => block.client_key === edge.source?.client_key);
     const target = blocks.find((block) => block.client_key === edge.target?.client_key);
     const isAi = isAiEdge(edge);
@@ -8539,11 +8548,38 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
     const edgeTitlePlaceholder = edgeAutoLabel(edge) || DEFAULT_OUTPUT.label;
     const edgeTitle = edgeFullLabel(edge, isButton) || DEFAULT_OUTPUT.label;
 
+    useEffect(() => {
+        const migration = migrateStartPhoneConditions(payload);
+
+        if (! migration) {
+            return;
+        }
+
+        onUpdateConditionPayload((current) => ({
+            ...current,
+            ...migration,
+        }));
+    }, [
+        onUpdateConditionPayload,
+        payload.contact_phone_condition,
+        payload.dialog_phone_condition,
+        payload.expression,
+    ]);
+
     function updatePayload(patch) {
         onUpdateConditionPayload((current) => ({
             ...current,
             ...patch,
         }));
+    }
+
+    function insertEdgeExpressionToken(token) {
+        const nextExpression = insertTextAtSelection(expressionTextareaRef.current, payload.expression ?? '', token);
+
+        updatePayload({ expression: nextExpression });
+        window.requestAnimationFrame(() => {
+            expressionTextareaRef.current?.focus();
+        });
     }
 
     function updateEdgeLabel(value) {
@@ -8742,38 +8778,42 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                         </div>
                     </div>
                 ) : null}
-                <label className="ac-v3-builder__field-row">
-                    <span>Телефон контакта</span>
-                    <select
-                        value={payload.contact_phone_condition ?? ''}
-                        onChange={(event) => updatePayload({ contact_phone_condition: event.target.value })}
-                    >
-                        {PHONE_CONDITION_OPTIONS.map(([value, label]) => (
-                            <option key={value} value={value}>{label}</option>
-                        ))}
-                    </select>
-                </label>
-                <label className="ac-v3-builder__field-row">
-                    <span>Телефон мессенджера</span>
-                    <select
-                        value={payload.dialog_phone_condition ?? ''}
-                        onChange={(event) => updatePayload({ dialog_phone_condition: event.target.value })}
-                    >
-                        {PHONE_CONDITION_OPTIONS.map(([value, label]) => (
-                            <option key={value} value={value}>{label}</option>
-                        ))}
-                    </select>
-                </label>
-                <label>
-                    <span>Условие</span>
+                <div className="ac-v3-builder__field">
+                    <div className="ac-v3-builder__label-row">
+                        <span className="ac-v3-builder__field-label">Условие</span>
+                        <button
+                            ref={expressionHelpButtonRef}
+                            type="button"
+                            className="ac-v3-builder__inline-help-button ac-v3-builder__inline-help-button--icon"
+                            aria-label="Показать переменные для условий перехода"
+                            aria-expanded={isExpressionHelpOpen}
+                            onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                setIsExpressionHelpOpen((value) => ! value);
+                            }}
+                        >
+                            i
+                        </button>
+                    </div>
                     <textarea
-                        className="ac-v3-builder__textarea-auto"
-                        rows={3}
+                        ref={expressionTextareaRef}
+                        className="ac-v3-builder__textarea-auto ac-v3-builder__edge-expression-textarea"
+                        rows={1}
                         value={payload.expression ?? ''}
-                        placeholder={'{{contact.gender}} == "male" or {{contact.gender}} == "female"'}
+                        placeholder={'{{contact.phone}} != "" and {{dialog.phone}} != ""'}
                         onChange={(event) => updatePayload({ expression: event.target.value })}
                     />
-                </label>
+                </div>
+                {isExpressionHelpOpen ? (
+                    <StartExpressionVariablePopover
+                        anchorRef={expressionHelpButtonRef}
+                        title="Переменные условий перехода"
+                        ariaLabel="Переменные для условий перехода"
+                        onClose={() => setIsExpressionHelpOpen(false)}
+                        onInsert={insertEdgeExpressionToken}
+                    />
+                ) : null}
                 <label className="ac-v3-builder__check">
                     <input
                         type="checkbox"

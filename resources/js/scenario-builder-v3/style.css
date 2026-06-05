@@ -2073,6 +2073,12 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
     max-height: 180px;
 }
 
+.ac-v3-builder__inspector textarea.ac-v3-builder__edge-expression-textarea {
+    max-height: none;
+    overflow: auto;
+    resize: vertical;
+}
+
 .ac-v3-builder__inspector button {
     display: inline-flex;
     width: fit-content;
