@@ -112,9 +112,9 @@ class BotConstructorTest extends TestCase
             'credentials' => [
                 'token' => 'telegram-token',
             ],
-            'last_webhook_received_at' => null,
-            'last_reply_sent_at' => null,
-            'last_error_at' => null,
+            'connection_status' => Channel::CONNECTION_STATUS_NOT_CONNECTED,
+            'webhook_status' => Channel::WEBHOOK_STATUS_NOT_INSTALLED,
+            'connection_error_message' => Channel::CONNECTION_ERROR_NOT_CHECKED,
         ]);
 
         Livewire::actingAs($admin)
@@ -144,6 +144,7 @@ class BotConstructorTest extends TestCase
             'auth_status' => ChannelRuntimeState::AUTH_STATUS_AUTHORIZED,
             'authorization_state' => ChannelRuntimeState::AUTHORIZATION_STATE_READY,
             'sync_status' => ChannelRuntimeState::SYNC_STATUS_LIVE,
+            'last_gateway_heartbeat_at' => now(),
             'runtime_payload' => [
                 'gateway_capabilities' => [
                     'outgoing_replies' => true,
@@ -2412,8 +2413,9 @@ class BotConstructorTest extends TestCase
 
         $channel = $this->readyTelegramChannel();
         $channel->forceFill([
-            'last_webhook_received_at' => null,
-            'last_error_at' => null,
+            'connection_status' => Channel::CONNECTION_STATUS_NOT_CONNECTED,
+            'webhook_status' => Channel::WEBHOOK_STATUS_NOT_INSTALLED,
+            'connection_error_message' => Channel::CONNECTION_ERROR_NOT_CHECKED,
         ])->save();
         $startBlock = BotConstructorBlock::factory()->active()->create([
             'match_type' => BotConstructorBlock::MATCH_TYPE_EXACT_KEYWORD,
@@ -2441,8 +2443,9 @@ class BotConstructorTest extends TestCase
         ]);
 
         $channel->forceFill([
-            'last_webhook_received_at' => now(),
-            'last_error_at' => null,
+            'connection_status' => Channel::CONNECTION_STATUS_CONNECTED,
+            'webhook_status' => Channel::WEBHOOK_STATUS_INSTALLED,
+            'connection_error_message' => null,
         ])->save();
         $secondMessage = Message::factory()->create([
             'dialog_id' => $firstMessage->dialog_id,
@@ -3592,6 +3595,7 @@ class BotConstructorTest extends TestCase
             'auth_status' => ChannelRuntimeState::AUTH_STATUS_AUTHORIZED,
             'authorization_state' => ChannelRuntimeState::AUTHORIZATION_STATE_READY,
             'sync_status' => ChannelRuntimeState::SYNC_STATUS_LIVE,
+            'last_gateway_heartbeat_at' => now(),
             'runtime_payload' => [
                 'gateway_capabilities' => [
                     'outgoing_replies' => true,

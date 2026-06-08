@@ -23,7 +23,7 @@ class LoadDialogMessagesPageAction
     {
         $query = Message::query()
             ->where('dialog_id', $dialog->id)
-            ->with(['channel', 'dialog.channel', 'sentByUser']);
+            ->with(['channel', 'sentByUser']);
 
         $cursorSortAt = null;
         $cursorMessageId = null;
@@ -85,7 +85,7 @@ class LoadDialogMessagesPageAction
 
         return Message::query()
             ->where('dialog_id', $dialog->id)
-            ->with(['channel', 'dialog.channel', 'sentByUser'])
+            ->with(['channel', 'sentByUser'])
             ->where('id', '>', $messageId)
             ->orderBy('id')
             ->limit($limit)

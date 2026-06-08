@@ -62,6 +62,7 @@ class BuildDialogMessageSnapshotPayloadAction
     public function isOutboundClientMessage(Message $message): bool
     {
         return $message->direction === Message::DIRECTION_OUTBOUND
+            && filled($message->external_message_id)
             && $message->message_kind !== Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE;
     }
 

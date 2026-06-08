@@ -33,8 +33,7 @@ class PublishScenarioBuilderV3Action
         string $baseRevision,
         User $user,
         string $scheduledTransitionPolicy = self::SCHEDULED_TRANSITIONS_KEEP,
-    ): array
-    {
+    ): array {
         [$publishedVersion, $draftVersion, $cancelledScheduledTransitions] = DB::transaction(function () use (
             $scenario,
             $draftVersionId,
@@ -69,7 +68,7 @@ class PublishScenarioBuilderV3Action
             $currentRevision = $this->buildScenarioBuilderV3StateAction->revisionFor($version);
 
             if ($baseRevision !== $currentRevision) {
-                throw new HttpException(409, 'Scenario builder state was changed. Save or reload state before publishing.');
+                throw new HttpException(409, 'Схема конструктора изменилась после последнего сохранения. Сохраните изменения или обновите страницу перед публикацией.');
             }
 
             $runtime = $this->compileScenarioBuilderV3RuntimeAction->handle($version, $currentRevision);
@@ -145,6 +144,47 @@ class PublishScenarioBuilderV3Action
         return [
             'count' => $count,
             'items' => $items,
+        ];
+    }
+
+    /**
+     * @return array{count: int, items: list<array{block_id: int, title: string, source_rule_id: int|null, source_rule_name: string}>}
+     */
+    public function autoReplyImportSummary(Scenario $scenario, int $draftVersionId): array
+    {
+        $version = ScenarioVersion::query()
+            ->whereKey($draftVersionId)
+            ->where('scenario_id', $scenario->id)
+            ->where('status', ScenarioVersion::STATUS_DRAFT)
+            ->first();
+
+        if (! $version instanceof ScenarioVersion) {
+            return [
+                'count' => 0,
+                'items' => [],
+            ];
+        }
+
+        $blocks = $version->builderBlocks()
+            ->orderBy('id')
+            ->get()
+            ->filter(fn ($block): bool => data_get($block->settings_payload, 'ui.import_source.type') === 'auto_reply_rule_xlsx')
+            ->values();
+
+        return [
+            'count' => $blocks->count(),
+            'items' => $blocks
+                ->take(5)
+                ->map(fn ($block): array => [
+                    'block_id' => (int) $block->id,
+                    'title' => (string) $block->title,
+                    'source_rule_id' => data_get($block->settings_payload, 'ui.import_source.source_rule_id') !== null
+                        ? (int) data_get($block->settings_payload, 'ui.import_source.source_rule_id')
+                        : null,
+                    'source_rule_name' => (string) data_get($block->settings_payload, 'ui.import_source.source_rule_name', ''),
+                ])
+                ->values()
+                ->all(),
         ];
     }
 

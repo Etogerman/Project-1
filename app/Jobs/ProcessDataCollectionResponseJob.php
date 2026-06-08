@@ -2,10 +2,24 @@
 
 namespace App\Jobs;
 
-use App\Jobs\InferContactGenderFromFirstNameJob;
+use App\Data\AI\AiGenerationContext;
+use App\Data\Contacts\FirstNameResolutionWriteContext;
+use App\Models\AiTask;
 use App\Models\Channel;
 use App\Models\Contact;
+use App\Models\ContactFirstNameResolutionEvent;
+use App\Models\ContactIdentity;
 use App\Models\Message;
+use App\Services\AI\AiStructuredGenerationException;
+use App\Services\Analytics\FirstNameResolutionAnalyticsService;
+use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
+use App\Services\Bots\ChannelActivityLogger;
+use App\Services\Bots\MaxBotApiService;
+use App\Services\Bots\SendBotDialogTextAction;
+use App\Services\Bots\StoreDataCollectionOutboundMessageAction;
+use App\Services\Bots\TelegramBotApiService;
+use App\Services\Contacts\ApplyContactFirstNameAction;
+use App\Services\Contacts\SyncContactRussianRegionAction;
 use App\Services\DataCollection\DataCollectionFallbackTransitionResolver;
 use App\Services\DataCollection\DataCollectionPromptHelper;
 use App\Services\DataCollection\ExtractCityAction;
@@ -13,14 +27,6 @@ use App\Services\DataCollection\ExtractCountryAction;
 use App\Services\DataCollection\ExtractFirstNameAction;
 use App\Services\DataCollection\ExtractResidenceCityAction;
 use App\Services\DataCollection\ResolveRussianRegionCandidatesLookupAction;
-use App\Services\Bots\ChannelActivityLogger;
-use App\Services\Bots\MaxBotApiService;
-use App\Services\Bots\SendBotDialogTextAction;
-use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
-use App\Services\Contacts\ApplyContactFirstNameAction;
-use App\Services\Contacts\SyncContactRussianRegionAction;
-use App\Services\Bots\StoreDataCollectionOutboundMessageAction;
-use App\Services\Bots\TelegramBotApiService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -28,7 +34,7 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
-use InvalidArgumentException;
+use Illuminate\Support\Str;
 use Throwable;
 
 class ProcessDataCollectionResponseJob implements ShouldQueue
@@ -86,6 +92,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         SyncContactRussianRegionAction $syncContactRussianRegionAction,
         QueueBitrix24ContactSyncAction $queueBitrix24ContactSyncAction,
         ApplyContactFirstNameAction $applyContactFirstNameAction,
+        FirstNameResolutionAnalyticsService $firstNameResolutionAnalyticsService,
     ): void {
         if (! (bool) config('bots.data_collection.enabled', true)) {
             return;
@@ -162,6 +169,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
                 storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
                 channelActivityLogger: $channelActivityLogger,
             );
+
             return;
         }
 
@@ -191,6 +199,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
                 storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
                 channelActivityLogger: $channelActivityLogger,
             );
+
             return;
         }
 
@@ -206,6 +215,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
                 channelActivityLogger: $channelActivityLogger,
                 extractFirstNameAction: $extractFirstNameAction,
                 applyContactFirstNameAction: $applyContactFirstNameAction,
+                firstNameResolutionAnalyticsService: $firstNameResolutionAnalyticsService,
             ),
             Contact::DATA_COLLECTION_FIELD_RESIDENCE_CITY => $this->handleResidenceCityReply(
                 message: $message,
@@ -285,7 +295,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         $channelActivityLogger->info(
             $channel,
             'contact.data_collection_response_stale_skipped',
-            'Устаревший ответ анкеты пропущен, потому что текущий шаг контакта уже изменился.',
+            'Устаревший ответ сбора данных пропущен, потому что текущий шаг контакта уже изменился.',
             [
                 'platform' => $channel->platform,
                 'message_id' => $message->id,
@@ -309,13 +319,42 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         ChannelActivityLogger $channelActivityLogger,
         ExtractFirstNameAction $extractFirstNameAction,
         ApplyContactFirstNameAction $applyContactFirstNameAction,
+        FirstNameResolutionAnalyticsService $firstNameResolutionAnalyticsService,
     ): void {
+        $correlationId = (string) Str::uuid();
+        $aiContext = new AiGenerationContext(
+            taskKey: AiTask::KEY_NAME_RESOLUTION,
+            contactId: $contact->id,
+            dialogId: $message->dialog_id,
+            channelId: $channel->id,
+            promptKey: 'collector:first_name',
+            correlationId: $correlationId,
+        );
+
         try {
             $extraction = $extractFirstNameAction->handle(
                 $replyText,
                 $this->resolveFirstNameMessengerContext($message, $contact),
+                $aiContext,
             );
         } catch (Throwable $throwable) {
+            if ($throwable instanceof AiStructuredGenerationException) {
+                $firstNameResolutionAnalyticsService->recordResolutionAttempt(
+                    contact: $contact,
+                    source: ContactFirstNameResolutionEvent::SOURCE_AI,
+                    result: ContactFirstNameResolutionEvent::RESULT_ERROR,
+                    clientText: $replyText,
+                    dialogId: $message->dialog_id,
+                    channelId: $channel->id,
+                    messageId: $message->id,
+                    aiRequestId: $throwable->aiRequestId,
+                    correlationId: $correlationId,
+                    payload: [
+                        'collector_field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
+                    ],
+                );
+            }
+
             Log::warning('contact.first_name_extraction_exception', [
                 'contact_id' => $contact->id,
                 'channel_id' => $channel->id,
@@ -342,6 +381,34 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             return;
         }
 
+        $resolutionEvent = null;
+        $aiWasUsed = (bool) ($extraction['ai_used'] ?? false);
+        $aiRequestId = is_numeric($extraction['ai_request_id'] ?? null) ? (int) $extraction['ai_request_id'] : null;
+
+        if ($aiWasUsed) {
+            $accepted = ($extraction['decision'] ?? null) === ExtractFirstNameAction::DECISION_ACCEPT;
+            $firstNameFromAi = is_string($extraction['first_name'] ?? null) ? (string) $extraction['first_name'] : null;
+
+            $resolutionEvent = $firstNameResolutionAnalyticsService->recordResolutionAttempt(
+                contact: $contact,
+                source: ContactFirstNameResolutionEvent::SOURCE_AI,
+                result: $accepted
+                    ? ContactFirstNameResolutionEvent::RESULT_ACCEPTED
+                    : ContactFirstNameResolutionEvent::RESULT_REJECTED,
+                clientText: $replyText,
+                dialogId: $message->dialog_id,
+                channelId: $channel->id,
+                messageId: $message->id,
+                aiRequestId: $aiRequestId,
+                foundFirstName: $firstNameFromAi,
+                resolvedFirstName: $accepted ? $firstNameFromAi : null,
+                correlationId: $correlationId,
+                payload: [
+                    'collector_field' => Contact::DATA_COLLECTION_FIELD_FIRST_NAME,
+                ],
+            );
+        }
+
         if (($extraction['decision'] ?? null) !== ExtractFirstNameAction::DECISION_ACCEPT) {
             $this->handleRetry(
                 message: $message,
@@ -364,6 +431,15 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             $firstName,
             Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
             ApplyContactFirstNameAction::REASON_SCENARIO_CONFIRMED,
+            is_string($extraction['resolution_method'] ?? null) ? $extraction['resolution_method'] : null,
+            new FirstNameResolutionWriteContext(
+                correlationId: $correlationId,
+                dialogId: $message->dialog_id,
+                channelId: $channel->id,
+                messageId: $message->id,
+                resolutionAttemptEventId: $resolutionEvent?->id,
+                aiRequestId: $aiRequestId,
+            ),
         );
 
         $this->logFieldSaved($channel, $contact, $message, Contact::DATA_COLLECTION_FIELD_FIRST_NAME);
@@ -392,13 +468,13 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
 
         $dialogIdentity = $message->dialog?->currentContactIdentity;
 
-        if ($dialogIdentity instanceof \App\Models\ContactIdentity && filled($dialogIdentity->display_name)) {
+        if ($dialogIdentity instanceof ContactIdentity && filled($dialogIdentity->display_name)) {
             return trim((string) $dialogIdentity->display_name);
         }
 
         $messageIdentity = $message->contactIdentity;
 
-        if ($messageIdentity instanceof \App\Models\ContactIdentity && filled($messageIdentity->display_name)) {
+        if ($messageIdentity instanceof ContactIdentity && filled($messageIdentity->display_name)) {
             return trim((string) $messageIdentity->display_name);
         }
 
@@ -409,7 +485,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             ->value('current_contact_identity_id');
 
         if ($latestDialogIdentityId !== null) {
-            $displayName = \App\Models\ContactIdentity::query()
+            $displayName = ContactIdentity::query()
                 ->whereKey($latestDialogIdentityId)
                 ->value('display_name');
 
@@ -486,6 +562,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
 
         if ($countryConfidence === ExtractResidenceCityAction::COUNTRY_CONFIDENCE_HIGH && filled($country)) {
             $attributes['country'] = $country;
+            $attributes['region_source'] = Contact::REGION_SOURCE_AI;
         }
 
         if ($countryConfidence === ExtractResidenceCityAction::COUNTRY_CONFIDENCE_HIGH && filled($country)) {
@@ -643,6 +720,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
 
         $contact->forceFill([
             'country' => $country,
+            'region_source' => Contact::REGION_SOURCE_AI,
         ])->save();
         $syncContactRussianRegionAction->handle($contact, true);
         $this->dispatchDistanceToMoscowCalculation($contact);
@@ -1528,7 +1606,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             storeDataCollectionOutboundMessageAction: $storeDataCollectionOutboundMessageAction,
             channelActivityLogger: $channelActivityLogger,
             activityEvent: 'contact.data_collection_fallback_sent',
-            activityMessage: 'Отправлено безопасное сообщение после ошибки распознавания шага анкеты.',
+            activityMessage: 'Отправлено безопасное сообщение после ошибки распознавания шага сбора данных.',
         );
     }
 
@@ -1550,9 +1628,6 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         );
     }
 
-    /**
-     * @param  mixed  $default
-     */
     protected function fieldConfig(?string $field, string $key, mixed $default = null): mixed
     {
         return $this->promptHelper()->fieldConfig($field, $key, $default);
@@ -1665,7 +1740,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             $contact->forceFill(array_merge($payload, [
                 'region' => $candidateRegions[0],
                 'region_status' => Contact::REGION_STATUS_RESOLVED,
-                'region_source' => Contact::REGION_SOURCE_AI,
+                'region_source' => Contact::REGION_SOURCE_DICTIONARY,
                 'pending_region_candidates' => null,
             ]))->save();
 
@@ -1676,7 +1751,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
             $contact->forceFill(array_merge($payload, [
                 'region' => null,
                 'region_status' => Contact::REGION_STATUS_CLARIFICATION_PENDING,
-                'region_source' => null,
+                'region_source' => Contact::REGION_SOURCE_DICTIONARY,
                 'pending_region_candidates' => $candidateRegions,
             ]))->save();
 
@@ -1686,7 +1761,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         $contact->forceFill(array_merge($payload, [
             'region' => null,
             'region_status' => Contact::REGION_STATUS_AMBIGUOUS,
-            'region_source' => null,
+            'region_source' => Contact::REGION_SOURCE_DICTIONARY,
             'pending_region_candidates' => $candidateRegions,
         ]))->save();
 
@@ -1767,7 +1842,7 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
     /**
      * @return string|'skip'|null
      */
-    protected function resolveRussianRegionConfirmInput(Contact $contact, string $replyText): string|null
+    protected function resolveRussianRegionConfirmInput(Contact $contact, string $replyText): ?string
     {
         return $this->promptHelper()->resolveRussianRegionConfirmInput($contact, $replyText);
     }

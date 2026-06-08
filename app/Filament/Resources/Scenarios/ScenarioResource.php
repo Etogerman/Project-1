@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\Scenarios;
 
+use App\Filament\Pages\ScenarioConstructor;
 use App\Filament\Resources\Scenarios\Pages\ManageScenarios;
 use App\Models\AutoReplyRule;
 use App\Models\Scenario;
@@ -55,7 +56,7 @@ class ScenarioResource extends Resource
 
     protected static ?string $navigationLabel = 'Сценарии';
 
-    protected static string|UnitEnum|null $navigationGroup = 'Интеграции';
+    protected static string|UnitEnum|null $navigationGroup = 'Автоматизация';
 
     protected static ?int $navigationSort = 15;
 
@@ -66,8 +67,8 @@ class ScenarioResource extends Resource
         return parent::getEloquentQuery()
             ->where('code', '!=', Scenario::CONSTRUCTOR_WORKSPACE_CODE)
             ->with([
-                'draftVersion',
-                'publishedVersion',
+                'draftVersion' => fn ($query) => $query->withExists('builderBlocks'),
+                'publishedVersion' => fn ($query) => $query->withExists('builderBlocks'),
                 'versions' => fn ($query) => $query->orderByDesc('version_number'),
             ]);
     }
@@ -163,6 +164,12 @@ class ScenarioResource extends Resource
                     ->badge()
                     ->color(fn (Scenario $record): string => $record->draftVersion instanceof ScenarioVersion ? 'warning' : 'gray')
                     ->toggleable(),
+                TextColumn::make('scenario_format')
+                    ->label('Формат')
+                    ->state(fn (Scenario $record): string => static::formatScenarioKind($record))
+                    ->badge()
+                    ->color(fn (Scenario $record): string => static::isV3Scenario($record) ? 'primary' : 'gray')
+                    ->toggleable(),
                 TextColumn::make('versions_summary')
                     ->label('Версии')
                     ->state(fn (Scenario $record): string => static::formatVersionsSummary($record))
@@ -220,6 +227,15 @@ class ScenarioResource extends Resource
             ->emptyStateDescription('Создайте первый глобальный сценарий для будущего конструктора.')
             ->recordActionsColumnLabel('Кнопки')
             ->recordActions([
+                Action::make('openConstructor')
+                    ->icon(Heroicon::OutlinedAdjustmentsHorizontal)
+                    ->iconButton()
+                    ->tooltip('Открыть в Конструкторе')
+                    ->color('primary')
+                    ->url(fn (Scenario $record): string => ScenarioConstructor::getUrl(['scenario' => $record->id]))
+                    ->visible(fn (Scenario $record): bool => ! $record->is_archived
+                        && static::isV3Scenario($record)
+                        && (auth()->user()?->can('update', $record) ?? false)),
                 Action::make('publishDraft')
                     ->icon(Heroicon::OutlinedBolt)
                     ->iconButton()
@@ -228,6 +244,7 @@ class ScenarioResource extends Resource
                     ->requiresConfirmation()
                     ->visible(fn (Scenario $record): bool => ! $record->is_archived
                         && $record->draftVersion instanceof ScenarioVersion
+                        && ! static::isV3Scenario($record)
                         && (auth()->user()?->can('update', $record) ?? false))
                     ->action(function (Scenario $record): void {
                         abort_unless(auth()->user()?->can('update', $record) ?? false, 403);
@@ -257,6 +274,7 @@ class ScenarioResource extends Resource
                     ->visible(fn (Scenario $record): bool => ! $record->is_archived
                         && $record->draftVersion === null
                         && $record->publishedVersion instanceof ScenarioVersion
+                        && ! static::isV3Scenario($record)
                         && (auth()->user()?->can('update', $record) ?? false))
                     ->action(function (Scenario $record): void {
                         abort_unless(auth()->user()?->can('update', $record) ?? false, 403);
@@ -277,6 +295,7 @@ class ScenarioResource extends Resource
                     ->modalFooterActionsAlignment(Alignment::End)
                     ->extraModalWindowAttributes(['class' => 'ac-scenario-form-modal'])
                     ->visible(fn (Scenario $record): bool => ! $record->is_archived
+                        && ! static::isV3Scenario($record)
                         && (auth()->user()?->can('update', $record) ?? false))
                     ->using(fn (array $data, Scenario $record): Scenario => static::saveScenario($data, $record)),
                 Action::make('restoreScenario')
@@ -414,6 +433,36 @@ class ScenarioResource extends Resource
         }
 
         return 'v'.$version->version_number;
+    }
+
+    protected static function formatScenarioKind(Scenario $record): string
+    {
+        return static::isV3Scenario($record)
+            ? 'V3 / Конструктор'
+            : 'Legacy JSON';
+    }
+
+    protected static function isV3Scenario(Scenario $record): bool
+    {
+        foreach ([$record->draftVersion, $record->publishedVersion] as $version) {
+            if ($version instanceof ScenarioVersion && static::isV3ScenarioVersion($version)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    protected static function isV3ScenarioVersion(ScenarioVersion $version): bool
+    {
+        $schemaPayload = is_array($version->schema_payload) ? $version->schema_payload : [];
+        $hasBuilderBlocks = array_key_exists('builder_blocks_exists', $version->getAttributes())
+            ? (bool) $version->getAttribute('builder_blocks_exists')
+            : $version->builderBlocks()->exists();
+
+        return isset($schemaPayload['builder_v3'])
+            || isset($schemaPayload['builder_v3_runtime'])
+            || $hasBuilderBlocks;
     }
 
     protected static function formatVersionsSummary(Scenario $record): string
@@ -804,5 +853,4 @@ class ScenarioResource extends Resource
                 || ($trigger['type'] ?? null) !== self::START_TRIGGER_TYPE_PARAMETER,
         ));
     }
-
 }

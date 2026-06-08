@@ -24,10 +24,13 @@
         ])
 
         @if (filled($payload ?? null))
-            <div class="ac-diagnostics-payload ac-surface__divider">
-                <p class="ac-diagnostics-payload__label">{{ $payloadLabel ?? 'Raw payload' }}</p>
+            <details class="ac-diagnostics-payload ac-surface__divider">
+                <summary class="ac-diagnostics-payload__summary">
+                    <span class="ac-diagnostics-payload__label">{{ $payloadLabel ?? 'Raw payload' }}</span>
+                    <span class="ac-diagnostics-payload__hint">Технические данные webhook</span>
+                </summary>
                 <pre class="ac-diagnostics-payload__pre">{{ $payload }}</pre>
-            </div>
+            </details>
         @endif
     @endif
 </section>

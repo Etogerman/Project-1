@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\Contact;
 use App\Services\DataCollection\ExtractFirstNameAction;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
@@ -21,6 +22,7 @@ class ExtractFirstNameActionTest extends TestCase
         $this->assertSame([
             'decision' => 'accept',
             'first_name' => 'Николай',
+            'resolution_method' => Contact::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT,
         ], $result);
     }
 
@@ -37,6 +39,7 @@ class ExtractFirstNameActionTest extends TestCase
         $this->assertSame([
             'decision' => 'accept',
             'first_name' => 'Николай',
+            'resolution_method' => Contact::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT,
         ], $result);
     }
 
@@ -53,6 +56,7 @@ class ExtractFirstNameActionTest extends TestCase
         $this->assertSame([
             'decision' => 'accept',
             'first_name' => 'Коля',
+            'resolution_method' => Contact::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT,
         ], $result);
     }
 
@@ -74,6 +78,7 @@ class ExtractFirstNameActionTest extends TestCase
         $this->assertSame([
             'decision' => 'retry',
             'first_name' => null,
+            'resolution_method' => null,
         ], $result);
     }
 
@@ -93,6 +98,29 @@ class ExtractFirstNameActionTest extends TestCase
         $this->assertSame([
             'decision' => 'accept',
             'first_name' => 'Герман',
+            'resolution_method' => Contact::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT,
+        ], $result);
+    }
+
+    public function test_action_marks_gemini_accepted_name_as_ai_analysis(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+
+        Http::fake([
+            'https://generativelanguage.googleapis.com/*' => Http::response($this->geminiResponse([
+                'decision' => 'accept',
+                'first_name' => 'Герман',
+            ])),
+        ]);
+
+        $result = app(ExtractFirstNameAction::class)->handle('думаю пусть будет Герман');
+
+        Http::assertSentCount(1);
+
+        $this->assertSame([
+            'decision' => 'accept',
+            'first_name' => 'Герман',
+            'resolution_method' => Contact::FIRST_NAME_RESOLUTION_METHOD_AI_ANALYSIS,
         ], $result);
     }
 
@@ -109,6 +137,7 @@ class ExtractFirstNameActionTest extends TestCase
         $this->assertSame([
             'decision' => 'accept',
             'first_name' => 'Николай',
+            'resolution_method' => Contact::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT,
         ], $result);
     }
 
@@ -125,6 +154,7 @@ class ExtractFirstNameActionTest extends TestCase
         $this->assertSame([
             'decision' => 'accept',
             'first_name' => 'Николай',
+            'resolution_method' => Contact::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT,
         ], $result);
     }
 
@@ -141,6 +171,7 @@ class ExtractFirstNameActionTest extends TestCase
         $this->assertSame([
             'decision' => 'accept',
             'first_name' => 'Николай',
+            'resolution_method' => Contact::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT,
         ], $result);
     }
 
@@ -157,6 +188,7 @@ class ExtractFirstNameActionTest extends TestCase
         $this->assertSame([
             'decision' => 'accept',
             'first_name' => 'Николай',
+            'resolution_method' => Contact::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT,
         ], $result);
     }
 
@@ -173,6 +205,7 @@ class ExtractFirstNameActionTest extends TestCase
         $this->assertSame([
             'decision' => 'accept',
             'first_name' => 'Николай',
+            'resolution_method' => Contact::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT,
         ], $result);
     }
 
@@ -189,6 +222,7 @@ class ExtractFirstNameActionTest extends TestCase
         $this->assertSame([
             'decision' => 'accept',
             'first_name' => 'Николай',
+            'resolution_method' => Contact::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT,
         ], $result);
     }
 
@@ -210,6 +244,7 @@ class ExtractFirstNameActionTest extends TestCase
         $this->assertSame([
             'decision' => 'retry',
             'first_name' => null,
+            'resolution_method' => null,
         ], $result);
     }
 
@@ -229,6 +264,7 @@ class ExtractFirstNameActionTest extends TestCase
         $this->assertSame([
             'decision' => 'retry',
             'first_name' => null,
+            'resolution_method' => null,
         ], $result);
     }
 
@@ -250,6 +286,7 @@ class ExtractFirstNameActionTest extends TestCase
         $this->assertSame([
             'decision' => 'retry',
             'first_name' => null,
+            'resolution_method' => null,
         ], $result);
     }
 
@@ -269,6 +306,7 @@ class ExtractFirstNameActionTest extends TestCase
         $this->assertSame([
             'decision' => 'retry',
             'first_name' => null,
+            'resolution_method' => null,
         ], $result);
     }
 

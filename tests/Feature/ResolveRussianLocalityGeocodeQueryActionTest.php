@@ -23,7 +23,7 @@ class ResolveRussianLocalityGeocodeQueryActionTest extends TestCase
         ]);
 
         $contact = Contact::factory()->make([
-            'country' => 'Россия',
+            'country' => 'RU',
             'city' => 'СПБ',
             'region' => null,
             'region_status' => null,

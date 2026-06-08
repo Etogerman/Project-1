@@ -3,9 +3,8 @@
 namespace App\Services\DataCollection;
 
 use App\Services\AI\GeminiApiService;
-use Locale;
-use ResourceBundle;
 use Illuminate\Support\Str;
+use ResourceBundle;
 use RuntimeException;
 
 class ExtractCountryAction
@@ -171,10 +170,11 @@ TEXT;
         }
 
         $lookup = [];
+        $canonicalNames = $this->canonicalCountryNames();
 
         foreach (['ru', 'en'] as $locale) {
             $bundle = ResourceBundle::create($locale, 'ICUDATA-region');
-            $countries = $bundle instanceof ResourceBundle ? ($bundle['Countries'] ?? null) : null;
+            $countries = $bundle instanceof ResourceBundle ? $bundle->get('Countries') : null;
 
             if (! $countries instanceof ResourceBundle) {
                 continue;
@@ -191,16 +191,59 @@ TEXT;
                     continue;
                 }
 
-                $canonicalName = Locale::getDisplayRegion('und_'.$code, 'ru');
-
-                if (! is_string($canonicalName) || trim($canonicalName) === '') {
-                    $canonicalName = $name;
-                }
+                $canonicalName = $canonicalNames[$code] ?? $name;
 
                 $lookup[$normalizedName] = Str::limit(trim($canonicalName), 255, '');
             }
         }
 
+        foreach ($this->countryAliases() as $canonicalName => $aliases) {
+            foreach ($aliases as $alias) {
+                $normalizedName = $this->normalizeLookupKey($alias);
+
+                if ($normalizedName !== null) {
+                    $lookup[$normalizedName] = $canonicalName;
+                }
+            }
+        }
+
         return $lookup;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    protected function canonicalCountryNames(): array
+    {
+        $bundle = ResourceBundle::create('ru', 'ICUDATA-region');
+        $countries = $bundle instanceof ResourceBundle ? $bundle->get('Countries') : null;
+
+        if (! $countries instanceof ResourceBundle) {
+            return [];
+        }
+
+        $names = [];
+
+        foreach ($countries as $code => $name) {
+            if (is_string($code) && preg_match('/^[A-Z]{2}$/', $code) && is_string($name) && trim($name) !== '') {
+                $names[$code] = Str::limit(trim($name), 255, '');
+            }
+        }
+
+        return $names;
+    }
+
+    /**
+     * @return array<string, list<string>>
+     */
+    protected function countryAliases(): array
+    {
+        return [
+            'Венгрия' => ['Венгрия'],
+            'Казахстан' => ['Казахстан'],
+            'Кения' => ['Кения'],
+            'Мозамбик' => ['Мозамбик', 'Mozambique'],
+            'Россия' => ['Россия', 'Российская Федерация', 'РФ'],
+        ];
     }
 }

@@ -1,4 +1,13 @@
 <x-filament-panels::page>
+    @php
+        $dialogFieldLabels = $dialogFieldLabels ?? [];
+        $dialogFieldLabel = static function (string $fieldKey, string $fallback) use ($dialogFieldLabels): string {
+            $label = trim((string) ($dialogFieldLabels[$fieldKey] ?? ''));
+
+            return $label !== '' ? $label : $fallback;
+        };
+    @endphp
+
     <div data-role="dialog-page" class="ac-panel-stack ac-panel-stack--relaxed">
         <nav
             data-role="dialog-top-breadcrumbs"
@@ -111,7 +120,7 @@
                     data-current-tone="{{ $dialogStage['current_tone'] }}"
                     class="ac-dialog-stage-strip ac-dialog-summary__stage"
                 >
-                    <div class="ac-dialog-stage-strip__track" role="group" aria-label="Этап диалога">
+                    <div class="ac-dialog-stage-strip__track" role="group" aria-label="{{ $dialogFieldLabel('stage', 'Этап') }} диалога">
                         @foreach ($dialogStage['steps'] as $stageStep)
                             @php
                                 $stageState = $stageStep['is_current']
@@ -178,6 +187,17 @@
 
                             this.thread.scrollTop = this.thread.scrollHeight;
                         },
+                        hasActiveReplyComposer() {
+                            const textarea = this.$root.querySelector('[data-role=conversation-reply-textarea]');
+
+                            if (! textarea) {
+                                return false;
+                            }
+
+                            return document.activeElement === textarea
+                                || textarea.value.trim() !== ''
+                                || textarea.dataset.manualResized === '1';
+                        },
                         rememberPositionBeforePrepend() {
                             this.captureThread();
 
@@ -205,7 +225,7 @@
                             }
 
                             this.refreshIntervalId = window.setInterval(() => {
-                                if (document.visibilityState !== 'visible' || this.isRefreshing) {
+                                if (document.visibilityState !== 'visible' || this.isRefreshing || this.hasActiveReplyComposer()) {
                                     return;
                                 }
 
@@ -290,96 +310,106 @@
             </div>
 
             <aside data-role="dialog-side-panel" class="ac-dialog-side-column">
-                <section class="ac-surface ac-dialog-side-card" data-role="dialog-params-card">
-                    <p class="ac-dialog-summary__section-title">Параметры</p>
+                <section class="ac-surface ac-dialog-side-card" data-role="dialog-system-fields-section">
+                    <p class="ac-dialog-summary__section-title">Системные поля</p>
+                    @php
+                        $statusOptions = $dialogInboxStatus['options'];
+                        $currentStatusLabel = $statusOptions[$dialogInboxStatusSelection] ?? (array_values($statusOptions)[0] ?? '—');
+                        $nextStatusValue = collect($statusOptions)
+                            ->keys()
+                            ->first(fn ($statusValue) => $statusValue !== $dialogInboxStatusSelection);
+                        $nextStatusLabel = $nextStatusValue !== null ? ($statusOptions[$nextStatusValue] ?? null) : null;
+                    @endphp
                     <div class="ac-dialog-side-list">
-                        <div class="ac-meta">
-                            <label for="dialog-inbox-status" class="ac-meta__label">
-                                Статус диалога
-                            </label>
-                            <select
-                                id="dialog-inbox-status"
-                                data-role="dialog-inbox-status-select"
-                                wire:model="dialogInboxStatusSelection"
-                                wire:change="updateDialogInboxStatus"
-                                @disabled(! $dialogInboxStatus['is_editable'])
-                                class="ac-select"
+                        @foreach ($dialogSystemFields['rows'] as $systemField)
+                            <div
+                                class="ac-meta @if ($systemField['key'] === 'assigned_user_id' && $this->isDialogAssigneeEditing) ac-meta--assignee-editing @endif"
+                                data-role="dialog-system-field-row"
+                                data-field-key="{{ $systemField['key'] }}"
+                                @if (filled($systemField['tone'])) data-tone="{{ $systemField['tone'] }}" @endif
                             >
-                                @foreach ($dialogInboxStatus['options'] as $statusValue => $statusLabel)
-                                    <option value="{{ $statusValue }}">
-                                        {{ $statusLabel }}
-                                    </option>
-                                @endforeach
-                            </select>
-                        </div>
-                        <div class="ac-meta">
-                            <p class="ac-meta__label">
-                                Ответственный
-                            </p>
-                            <p class="ac-meta__value ac-meta__value--emphasis">
-                                {{ $contactSummary['assigned_user_label'] }}
-                            </p>
-                        </div>
-                    </div>
-                </section>
+                                <p class="ac-meta__label">
+                                    {{ $systemField['label'] }}
+                                </p>
+                                @if ($systemField['key'] === 'status')
+                                    <button
+                                        type="button"
+                                        class="ac-dialog-status-toggle"
+                                        data-role="dialog-inbox-status-toggle"
+                                        wire:click="setDialogInboxStatus(@js($nextStatusValue))"
+                                        wire:loading.attr="disabled"
+                                        wire:target="setDialogInboxStatus"
+                                        aria-label="{{ $dialogFieldLabel('status', 'Статус') }}"
+                                        title="{{ $nextStatusLabel ? 'Сменить на: '.$nextStatusLabel : $currentStatusLabel }}"
+                                        @disabled(! $dialogInboxStatus['is_editable'] || $nextStatusValue === null)
+                                    >
+                                        <span data-role="dialog-inbox-status-current">{{ $currentStatusLabel }}</span>
+                                    </button>
+                                @elseif ($systemField['key'] === 'assigned_user_id' && $dialogAssignee['can_manage'])
+                                    @if ($this->isDialogAssigneeEditing)
+                                        <div class="ac-dialog-assignee-editor" data-role="dialog-assignee-editor">
+                                            <select
+                                                id="dialog-assignee-select"
+                                                data-role="dialog-assignee-select"
+                                                wire:model="selectedDialogAssigneeId"
+                                                class="ac-select"
+                                            >
+                                                <option value="">Свободен</option>
+                                                @foreach ($dialogAssignee['available_assignees'] as $userId => $userName)
+                                                    <option value="{{ $userId }}">{{ $userName }}</option>
+                                                @endforeach
+                                            </select>
 
-                <section class="ac-surface ac-dialog-side-card" data-role="dialog-contact-card">
-                    <p class="ac-dialog-summary__section-title">Контакт</p>
-                    <div class="ac-dialog-side-list">
-                        <div class="ac-meta">
-                            <p class="ac-meta__label">
-                                Имя из мессенджера
-                            </p>
-                            <p data-role="dialog-messenger-name" class="ac-meta__value">
-                                {{ $dialogHeader['messenger_name_label'] }}
-                            </p>
-                        </div>
-                        <div class="ac-meta">
-                            <p class="ac-meta__label">
-                                Телефон мессенджера
-                            </p>
-                            <p class="ac-meta__value">
-                                {{ $dialogHeader['phone_label'] }}
-                            </p>
-                        </div>
-                        <div class="ac-meta">
-                            <p class="ac-meta__label">
-                                Телефоны контакта
-                            </p>
-                            <p class="ac-meta__value">
-                                {{ $contactSummary['phones_label'] }}
-                            </p>
-                        </div>
-                    </div>
-                </section>
-
-                <section class="ac-surface ac-dialog-side-card" data-role="dialog-channel-card">
-                    <p class="ac-dialog-summary__section-title">Канал</p>
-                    <div class="ac-dialog-side-list">
-                        <div class="ac-meta">
-                            <p class="ac-meta__label">
-                                Канал
-                            </p>
-                            <p data-role="dialog-channel-label" class="ac-meta__value">
-                                {{ $dialogHeader['channel_label'] }}
-                            </p>
-                        </div>
-                        <div class="ac-meta">
-                            <p class="ac-meta__label">
-                                Источник маршрута
-                            </p>
-                            <p class="ac-meta__value">
-                                {{ $dialogHeader['route_source_label'] }}
-                            </p>
-                        </div>
-                        <div class="ac-meta">
-                            <p class="ac-meta__label">
-                                ID чата
-                            </p>
-                            <p class="ac-meta__value">
-                                {{ $dialogHeader['external_chat_id_label'] }}
-                            </p>
-                        </div>
+                                            <button
+                                                data-role="dialog-save-assignee-button"
+                                                type="button"
+                                                wire:click="saveDialogAssignee"
+                                                wire:loading.attr="disabled"
+                                                wire:target="saveDialogAssignee"
+                                                class="ac-dialog-assignee-save"
+                                                aria-label="Сохранить ответственного"
+                                                title="Сохранить"
+                                            >
+                                                <span wire:loading.remove wire:target="saveDialogAssignee" aria-hidden="true">✓</span>
+                                                <span wire:loading wire:target="saveDialogAssignee" aria-hidden="true">…</span>
+                                            </button>
+                                        </div>
+                                    @else
+                                        <button
+                                            type="button"
+                                            class="ac-dialog-status-toggle ac-dialog-assignee-toggle"
+                                            data-role="dialog-assignee-toggle"
+                                            wire:click="openDialogAssigneeEditor"
+                                            wire:loading.attr="disabled"
+                                            wire:target="openDialogAssigneeEditor,saveDialogAssignee"
+                                            aria-label="Изменить ответственного за контакт"
+                                            title="Изменить ответственного за контакт"
+                                        >
+                                            <span data-role="dialog-assignee-current">{{ $systemField['value'] }}</span>
+                                        </button>
+                                    @endif
+                                @else
+                                    <p
+                                        @if (filled($systemField['value_role'])) data-role="{{ $systemField['value_role'] }}" @endif
+                                        class="ac-meta__value"
+                                        title="{{ $systemField['value'] }}"
+                                    >
+                                        @if (filled($systemField['url']))
+                                            <a class="ac-meta__link" href="{{ $systemField['url'] }}" title="{{ $systemField['value'] }}">
+                                                {{ $systemField['value'] }}
+                                            </a>
+                                        @else
+                                            {{ $systemField['value'] }}
+                                        @endif
+                                    </p>
+                                @endif
+                                @if (filled($systemField['detail']))
+                                    <p class="ac-meta__value ac-meta__value--muted" title="{{ $systemField['detail'] }}">
+                                        {{ $systemField['detail'] }}
+                                    </p>
+                                @endif
+                            </div>
+                        @endforeach
                     </div>
                 </section>
 
@@ -388,15 +418,6 @@
                         class="ac-surface ac-dialog-side-card"
                         data-role="dialog-fields-section"
                         data-dialog-id="{{ $record->id }}"
-                        x-data="{
-                            copyFieldKey(event) {
-                                const fieldKey = event.currentTarget?.dataset?.fieldKey ?? '';
-
-                                if (fieldKey && navigator.clipboard?.writeText) {
-                                    navigator.clipboard.writeText(fieldKey);
-                                }
-                            },
-                        }"
                     >
                         <p class="ac-dialog-summary__section-title">Поля диалога</p>
                         @if ($dialogFields['fields'] === [])
@@ -408,28 +429,88 @@
                                 @foreach ($dialogFields['fields'] as $field)
                                     <div
                                         class="ac-dialog-field-row"
+                                        wire:key="dialog-field-row-{{ md5($field['key']) }}"
                                         data-role="dialog-field-row"
                                         data-field-key="{{ $field['key'] }}"
                                         data-field-value-type="{{ $field['value_type'] }}"
+                                        x-data="{ value: @js($field['editable_value']), isEditing: false, isSaving: false }"
                                     >
                                         <div class="ac-dialog-field-row__content">
-                                            <p class="ac-meta__label" data-role="dialog-field-key">
-                                                {{ $field['key'] }}
-                                            </p>
-                                            <p class="ac-meta__value" data-role="dialog-field-value">
-                                                {{ $field['value'] }}
-                                            </p>
+                                            @if ($field['can_edit'])
+                                                <div class="ac-dialog-field-row__value-line">
+                                                    <p class="ac-meta__label" data-role="dialog-field-key">
+                                                        {{ $field['label'] }}
+                                                    </p>
+                                                    <p
+                                                        class="ac-meta__value"
+                                                        data-role="dialog-field-value"
+                                                        x-show="! isEditing"
+                                                    >
+                                                        {{ $field['value'] }}
+                                                    </p>
+                                                    <input
+                                                        x-cloak
+                                                        x-ref="input"
+                                                        x-show="isEditing"
+                                                        type="text"
+                                                        class="ac-dialog-field-row__input"
+                                                        data-role="dialog-field-edit-input"
+                                                        aria-label="Значение поля {{ $field['label'] }}"
+                                                        value="{{ $field['editable_value'] }}"
+                                                        x-model="value"
+                                                        x-bind:hidden="! isEditing"
+                                                        x-bind:disabled="isSaving"
+                                                        x-on:keydown.enter.prevent="
+                                                            isSaving = true;
+                                                            $wire.saveDialogFieldValue(@js($field['key']), value).then(() => isEditing = false).finally(() => isSaving = false);
+                                                        "
+                                                    >
+                                                    <button
+                                                        type="button"
+                                                        class="ac-dialog-field-row__edit"
+                                                        data-role="dialog-field-edit"
+                                                        title="Редактировать поле"
+                                                        aria-label="Редактировать поле {{ $field['label'] }}"
+                                                        x-on:click="
+                                                            isEditing = true;
+                                                            $nextTick(() => $refs.input?.focus());
+                                                        "
+                                                    >
+                                                        <x-filament::icon icon="heroicon-m-pencil-square" class="h-4 w-4" />
+                                                    </button>
+                                                </div>
+                                            @else
+                                                <div class="ac-dialog-field-row__value-line">
+                                                    <p class="ac-meta__label" data-role="dialog-field-key">
+                                                        {{ $field['label'] }}
+                                                    </p>
+                                                    <p class="ac-meta__value" data-role="dialog-field-value">
+                                                        {{ $field['value'] }}
+                                                    </p>
+                                                </div>
+                                            @endif
                                         </div>
-                                        <button
-                                            type="button"
-                                            class="ac-dialog-field-row__copy"
-                                            data-role="dialog-field-copy-key"
-                                            data-field-key="{{ $field['key'] }}"
-                                            title="Скопировать ключ поля"
-                                            x-on:click="copyFieldKey($event)"
+                                        <div
+                                            class="ac-dialog-field-row__actions"
+                                            x-cloak
+                                            x-show="isEditing"
                                         >
-                                            Копировать ключ
-                                        </button>
+                                            @if ($field['can_edit'])
+                                                <button
+                                                    type="button"
+                                                    class="ac-dialog-field-row__save"
+                                                    data-role="dialog-field-save"
+                                                    x-bind:disabled="isSaving"
+                                                    x-on:click="
+                                                        isSaving = true;
+                                                        $wire.saveDialogFieldValue(@js($field['key']), value).then(() => isEditing = false).finally(() => isSaving = false);
+                                                    "
+                                                >
+                                                    <span x-show="! isSaving">Сохранить</span>
+                                                    <span x-cloak x-show="isSaving">Сохраняю</span>
+                                                </button>
+                                            @endif
+                                        </div>
                                     </div>
                                 @endforeach
                             </div>

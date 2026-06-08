@@ -4,10 +4,10 @@
 >
     <div class="ac-surface__header ac-surface__header--centered">
         <div class="ac-surface__title-group">
-            <p class="ac-surface__eyebrow">Анкета</p>
+            <p class="ac-surface__eyebrow">Сбор данных</p>
             <h3 class="ac-surface__title">Состояние сбора данных</h3>
             <p class="ac-surface__subtitle">
-                Видно, на каком шаге остановилась анкета и какие данные уже успели подтвердить.
+                Видно, на каком шаге остановился сбор данных и какие данные уже успели подтвердить.
             </p>
         </div>
 
@@ -59,7 +59,7 @@
     @if ($canResume && $canResumeAction)
         <div class="ac-actions ac-actions--between ac-surface__divider">
             <p class="ac-note ac-actions__hint">
-                Возобновление продолжит анкету с ближайшего безопасного шага и отправит следующий вопрос клиенту.
+                Возобновление продолжит сбор данных с ближайшего безопасного шага и отправит следующий вопрос клиенту.
             </p>
 
             <button
@@ -70,7 +70,7 @@
                 wire:target="resumeMountedContactDataCollection"
                 class="ac-button ac-button--primary-soft"
             >
-                <span wire:loading.remove wire:target="resumeMountedContactDataCollection">Возобновить анкету</span>
+                <span wire:loading.remove wire:target="resumeMountedContactDataCollection">Возобновить сбор данных</span>
                 <span wire:loading wire:target="resumeMountedContactDataCollection">Запускаем...</span>
             </button>
         </div>

@@ -7,6 +7,7 @@ use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
+use App\Services\Bitrix24\BuildBitrix24ContactPayloadAction;
 use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
 use App\Services\Contacts\AddContactPhoneAction;
 use App\Services\Contacts\DeleteContactPhoneAction;
@@ -16,10 +17,12 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Schema;
+use Tests\Feature\Concerns\InteractsWithBitrix24RuntimeProfile;
 use Tests\TestCase;
 
 class Bitrix24ContactSyncTriggerTest extends TestCase
 {
+    use InteractsWithBitrix24RuntimeProfile;
     use RefreshDatabase;
 
     public function test_contacts_table_has_bitrix24_sync_fields_with_expected_defaults(): void
@@ -161,6 +164,24 @@ class Bitrix24ContactSyncTriggerTest extends TestCase
 
         $this->assertTrue($contact->bitrix24_sync_pending);
         $this->assertSame(Contact::BITRIX24_SYNC_STATUS_PENDING_REVIEW, $contact->bitrix24_sync_status);
+    }
+
+    public function test_bitrix24_contact_payload_does_not_include_first_name_resolution_method(): void
+    {
+        $this->makeProfileLinkedActiveBitrix24Connection();
+
+        $contact = $this->createSyncReadyContact([
+            'first_name' => 'Герман',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
+            'first_name_resolution_method' => Contact::FIRST_NAME_RESOLUTION_METHOD_AI_ANALYSIS,
+        ]);
+
+        $payload = app(BuildBitrix24ContactPayloadAction::class)->handle($contact);
+
+        $this->assertSame('Герман', $payload['NAME'] ?? null);
+        $this->assertArrayNotHasKey('first_name_resolution_method', $payload);
+        $this->assertStringNotContainsString('first_name_resolution_method', json_encode($payload, JSON_THROW_ON_ERROR));
+        $this->assertStringNotContainsString(Contact::FIRST_NAME_RESOLUTION_METHOD_AI_ANALYSIS, json_encode($payload, JSON_THROW_ON_ERROR));
     }
 
     public function test_update_contact_profile_action_queues_bitrix24_sync_for_ready_contact(): void

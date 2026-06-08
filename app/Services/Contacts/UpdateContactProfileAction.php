@@ -27,6 +27,7 @@ class UpdateContactProfileAction
 
         $lastName = $this->normalizeNullableString($attributes['last_name'] ?? null);
         $gender = $this->normalizeGender($attributes['gender'] ?? null);
+        $genderSource = $this->resolveManualGenderSource($contact, $gender);
         $country = $this->normalizeNullableString($attributes['country'] ?? null);
         $city = $this->normalizeNullableString($attributes['city'] ?? null);
         $region = $this->normalizeRegion($attributes['region'] ?? null);
@@ -42,6 +43,7 @@ class UpdateContactProfileAction
         $payload = [
             'last_name' => $lastName,
             'gender' => $gender,
+            'gender_source' => $genderSource,
             'birth_date' => $birthDate,
             'age_years' => $ageYears,
             'age_range' => $ageRange,
@@ -53,7 +55,7 @@ class UpdateContactProfileAction
             $contact->forceFill(array_merge($payload, [
                 'region' => null,
                 'region_status' => Contact::REGION_STATUS_OUT_OF_SCOPE,
-                'region_source' => null,
+                'region_source' => Contact::REGION_SOURCE_MANUAL,
                 'pending_region_candidates' => null,
             ]))->save();
 
@@ -169,6 +171,21 @@ class UpdateContactProfileAction
         }
 
         return array_key_exists($trimmed, Contact::genderOptions()) ? $trimmed : null;
+    }
+
+    private function resolveManualGenderSource(Contact $contact, ?string $gender): ?string
+    {
+        if ($gender === null || $gender === 'unknown') {
+            return null;
+        }
+
+        if ($gender !== $contact->gender) {
+            return Contact::GENDER_SOURCE_OPERATOR;
+        }
+
+        return in_array($contact->gender_source, Contact::allowedGenderSources(), true)
+            ? $contact->gender_source
+            : null;
     }
 
     private function normalizeRegion(mixed $value): ?string

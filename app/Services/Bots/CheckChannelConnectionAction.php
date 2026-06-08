@@ -67,7 +67,7 @@ class CheckChannelConnectionAction
             : null;
 
         if (
-            $checkedAt->lt(now()->subMinutes(2))
+            $checkedAt->lt(now()->subMinutes(Channel::CONNECTION_CHECK_FRESH_FOR_MINUTES))
             && $connectionStatus === Channel::CONNECTION_STATUS_CONNECTED
             && $webhookStatus === Channel::WEBHOOK_STATUS_INSTALLED
         ) {

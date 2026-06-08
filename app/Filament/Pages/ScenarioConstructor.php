@@ -53,7 +53,7 @@ class ScenarioConstructor extends Page
 
     protected static ?string $navigationLabel = 'Конструктор';
 
-    protected static string|UnitEnum|null $navigationGroup = 'Интеграции';
+    protected static string|UnitEnum|null $navigationGroup = 'Автоматизация';
 
     protected static ?int $navigationSort = 16;
 
@@ -146,7 +146,18 @@ class ScenarioConstructor extends Page
     }
 
     /**
-     * @return array<string, string|int|null>
+     * @return array{
+     *     scenarioId: int|null,
+     *     stateUrl: string|null,
+     *     saveUrl: string|null,
+     *     publishUrl: string|null,
+     *     sheetExportUrl: string|null,
+     *     sheetImportPreviewUrl: string|null,
+     *     sheetImportApplyUrl: string|null,
+     *     autoReplyImportPreviewUrl: string|null,
+     *     autoReplyImportTagStoreUrl: string|null,
+     *     csrfToken: string
+     * }
      */
     public function scenarioBuilderV3Config(): array
     {
@@ -160,6 +171,21 @@ class ScenarioConstructor extends Page
                 : null,
             'publishUrl' => $this->scenarioId !== null
                 ? route('admin.scenario-constructor.v3.publish', ['scenario' => $this->scenarioId])
+                : null,
+            'sheetExportUrl' => $this->scenarioId !== null
+                ? route('admin.scenario-constructor.v3.sheet.export', ['scenario' => $this->scenarioId])
+                : null,
+            'sheetImportPreviewUrl' => $this->scenarioId !== null
+                ? route('admin.scenario-constructor.v3.sheet.import.preview', ['scenario' => $this->scenarioId])
+                : null,
+            'sheetImportApplyUrl' => $this->scenarioId !== null
+                ? route('admin.scenario-constructor.v3.sheet.import.apply', ['scenario' => $this->scenarioId])
+                : null,
+            'autoReplyImportPreviewUrl' => $this->scenarioId !== null
+                ? route('admin.scenario-constructor.v3.auto-reply.import.preview', ['scenario' => $this->scenarioId])
+                : null,
+            'autoReplyImportTagStoreUrl' => $this->scenarioId !== null
+                ? route('admin.scenario-constructor.v3.auto-reply.import.tags.store', ['scenario' => $this->scenarioId])
                 : null,
             'csrfToken' => csrf_token(),
         ];

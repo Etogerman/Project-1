@@ -4,16 +4,20 @@ namespace Tests\Feature;
 
 use App\Filament\Resources\Channels\ChannelResource;
 use App\Filament\Resources\Channels\Pages\ManageChannels;
+use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Channel;
 use App\Models\ChannelActivityLog;
 use App\Models\ChannelRuntimeState;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
+use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\Scenario;
+use App\Models\ScenarioBuilderBlock;
 use App\Models\ScenarioChannelBinding;
 use App\Models\ScenarioVersion;
 use App\Models\User;
+use App\Services\Bots\CheckChannelConnectionAction;
 use App\Services\Scenarios\CreateScenarioAction;
 use App\Services\Scenarios\PublishScenarioVersionAction;
 use App\Services\Scenarios\WarmupScenario;
@@ -129,7 +133,8 @@ class FilamentChannelsResourceTest extends TestCase
             ->assertTableActionHidden('registerWebhook', $channel)
             ->assertTableActionHidden('checkConnection', $channel)
             ->assertTableActionHidden('syncBotMetadata', $channel)
-            ->assertTableActionHidden('manageScenarios', $channel);
+            ->assertTableActionHidden('manageScenarios', $channel)
+            ->assertTableActionHidden('delete', $channel);
     }
 
     public function test_employee_with_channel_edit_can_see_channel_mutation_actions(): void
@@ -157,7 +162,38 @@ class FilamentChannelsResourceTest extends TestCase
             ->assertTableActionVisible('registerWebhook', $channel)
             ->assertTableActionVisible('checkConnection', $channel)
             ->assertTableActionVisible('syncBotMetadata', $channel)
-            ->assertTableActionVisible('manageScenarios', $channel);
+            ->assertTableActionVisible('manageScenarios', $channel)
+            ->assertTableActionHidden('delete', $channel);
+    }
+
+    public function test_channel_delete_is_blocked_even_for_channel_editor(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'is_active' => true,
+        ]);
+
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'channels.view', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'channels.edit', true);
+
+        $this->assertFalse(Gate::forUser($employee->fresh())->allows('delete', $channel));
+
+        Livewire::actingAs($employee)
+            ->test(ManageChannels::class)
+            ->assertTableActionHidden('delete', $channel);
+
+        $this->actingAs($employee->fresh());
+
+        $authorizer = new ReflectionMethod(ChannelResource::class, 'authorizeChannelDelete');
+        $authorizer->setAccessible(true);
+
+        $this->assertHttpForbidden(fn () => $authorizer->invoke(null, $channel));
     }
 
     public function test_channel_update_guard_rejects_employee_without_channel_edit_permission(): void
@@ -561,6 +597,7 @@ class FilamentChannelsResourceTest extends TestCase
             'auth_status' => ChannelRuntimeState::AUTH_STATUS_AUTHORIZED,
             'authorization_state' => ChannelRuntimeState::AUTHORIZATION_STATE_READY,
             'sync_status' => ChannelRuntimeState::SYNC_STATUS_LIVE,
+            'last_gateway_heartbeat_at' => now(),
         ]);
 
         $summaryBuilder = new ReflectionMethod(ChannelResource::class, 'buildChannelTableSummary');
@@ -601,6 +638,54 @@ class FilamentChannelsResourceTest extends TestCase
             ->assertMountedActionModalSee('Не поддерживается')
             ->assertMountedActionModalSee('Webhook')
             ->assertMountedActionModalSee('Проверка подключения для этого типа канала пока не поддерживается');
+    }
+
+    public function test_stale_successful_connection_is_displayed_as_warning_in_table_and_modal(): void
+    {
+        config()->set('app.url', 'https://connector.example');
+
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Stale Telegram Bot',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'telegram-token'],
+            'bot_token_present' => true,
+            'is_active' => true,
+        ]);
+        $webhookUrl = sprintf('https://connector.example/webhooks/telegram/%d', $channel->id);
+
+        $channel->forceFill([
+            'connection_status' => Channel::CONNECTION_STATUS_CONNECTED,
+            'webhook_status' => Channel::WEBHOOK_STATUS_INSTALLED,
+            'connection_checked_at' => now()->subMinutes(3),
+            'connection_error_message' => null,
+            'expected_webhook_url' => $webhookUrl,
+            'provider_webhook_url' => $webhookUrl,
+        ])->saveQuietly();
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->assertTableColumnStateSet('health_status', 'Проверка устарела', $channel)
+            ->assertTableColumnStateSet('webhook_secret_status', 'Проверка устарела', $channel)
+            ->assertTableColumnStateSet('connection_error_message', Channel::CONNECTION_ERROR_STALE, $channel)
+            ->mountTableAction('view', $channel)
+            ->assertMountedActionModalSee('Проверка устарела')
+            ->assertMountedActionModalSee(Channel::CONNECTION_ERROR_STALE);
+
+        $connectionState = app(CheckChannelConnectionAction::class)
+            ->resolveEffectiveState($channel->fresh());
+        $statusColorResolver = new ReflectionMethod(ChannelResource::class, 'resolveConnectionStatusColor');
+        $statusColorResolver->setAccessible(true);
+        $webhookColorResolver = new ReflectionMethod(ChannelResource::class, 'resolveLiveWebhookStatusColor');
+        $webhookColorResolver->setAccessible(true);
+
+        $this->assertSame(Channel::CONNECTION_STATUS_CONNECTED, $connectionState['connection_status']);
+        $this->assertSame('warning', $statusColorResolver->invoke(null, $channel, $connectionState));
+        $this->assertSame('warning', $webhookColorResolver->invoke(null, $channel, $connectionState));
     }
 
     public function test_account_channel_hides_bot_only_edit_and_manage_scenarios_actions(): void
@@ -645,16 +730,115 @@ class FilamentChannelsResourceTest extends TestCase
             ->assertTableColumnStateSet('last_error_message', 'Актуальная account runtime ошибка', $channel->fresh('runtimeState'));
     }
 
-    public function test_delete_and_bulk_delete_are_forbidden_by_policy(): void
+    public function test_channel_delete_policy_blocks_hard_delete_and_bulk_delete(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
             'is_admin' => true,
         ]);
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
         $channel = Channel::factory()->create();
 
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'channels.edit', false);
+
         $this->assertFalse(Gate::forUser($admin)->allows('delete', $channel));
+        $this->assertFalse(Gate::forUser($employee)->allows('delete', $channel));
         $this->assertFalse(Gate::forUser($admin)->allows('deleteAny', Channel::class));
+
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'channels.edit', true);
+
+        $this->assertFalse(Gate::forUser($employee->fresh())->allows('delete', $channel));
+        $this->assertFalse(Gate::forUser($employee->fresh())->allows('deleteAny', Channel::class));
+    }
+
+    public function test_admin_cannot_delete_unused_channel_from_resource_table(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Unused Telegram Bot',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->assertTableActionHidden('delete', $channel);
+
+        $this->assertDatabaseHas('channels', [
+            'id' => $channel->id,
+        ]);
+    }
+
+    public function test_used_channel_delete_action_is_hidden_and_keeps_channel(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'channel_id' => $channel->id,
+        ]);
+
+        Dialog::factory()->create([
+            'current_contact_identity_id' => $identity->id,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->assertTableActionHidden('delete', $channel);
+
+        $this->assertDatabaseHas('channels', [
+            'id' => $channel->id,
+        ]);
+    }
+
+    public function test_admin_cannot_delete_channel_with_history_after_dialogs_are_removed(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+        ]);
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => null,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->assertTableActionHidden('delete', $channel);
+
+        $this->assertDatabaseHas('channels', [
+            'id' => $channel->id,
+        ]);
+        $this->assertDatabaseHas('contact_identities', [
+            'id' => $identity->id,
+        ]);
+        $this->assertDatabaseHas('messages', [
+            'id' => $message->id,
+        ]);
     }
 
     public function test_channel_defaults_to_rules_only_when_not_explicitly_set(): void
@@ -718,7 +902,7 @@ class FilamentChannelsResourceTest extends TestCase
             ->mountTableAction('manageScenarios', $channel)
             ->assertMountedActionModalSee('Сценарии канала')
             ->assertMountedActionModalSee('Активные сценарии')
-            ->assertMountedActionModalSee('Прогрев')
+            ->assertDontSee('Прогрев')
             ->assertMountedActionModalSee('Выявление потребностей')
             ->assertTableActionDataSet([
                 'scenario_codes' => [],
@@ -740,11 +924,11 @@ class FilamentChannelsResourceTest extends TestCase
             ->mountTableAction('manageScenarios', $channel)
             ->assertMountedActionModalSee('Сценарии канала')
             ->assertMountedActionModalSee('Активные сценарии')
-            ->assertMountedActionModalSee('Прогрев')
+            ->assertDontSee('Прогрев')
             ->assertMountedActionModalSee('Выявление потребностей');
     }
 
-    public function test_admin_can_enable_warmup_scenario_for_telegram_channel(): void
+    public function test_admin_cannot_enable_disabled_warmup_scenario_for_telegram_channel(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -759,12 +943,11 @@ class FilamentChannelsResourceTest extends TestCase
             ->callTableAction('manageScenarios', $channel, [
                 'scenario_codes' => ['warmup'],
             ])
-            ->assertHasNoTableActionErrors();
+            ->assertHasTableActionErrors();
 
-        $this->assertDatabaseHas('scenario_channel_bindings', [
+        $this->assertDatabaseMissing('scenario_channel_bindings', [
             'channel_id' => $channel->id,
             'scenario_code' => 'warmup',
-            'is_active' => true,
         ]);
     }
 
@@ -780,28 +963,28 @@ class FilamentChannelsResourceTest extends TestCase
 
         ScenarioChannelBinding::query()->create([
             'channel_id' => $channel->id,
-            'scenario_code' => 'warmup',
+            'scenario_code' => 'needs_discovery',
             'is_active' => false,
         ]);
 
         Livewire::actingAs($admin)
             ->test(ManageChannels::class)
             ->callTableAction('manageScenarios', $channel, [
-                'scenario_codes' => ['warmup'],
+                'scenario_codes' => ['needs_discovery'],
             ])
             ->assertHasNoTableActionErrors()
             ->callTableAction('manageScenarios', $channel, [
-                'scenario_codes' => ['warmup'],
+                'scenario_codes' => ['needs_discovery'],
             ])
             ->assertHasNoTableActionErrors();
 
         $this->assertSame(1, ScenarioChannelBinding::query()
             ->where('channel_id', $channel->id)
-            ->where('scenario_code', 'warmup')
+            ->where('scenario_code', 'needs_discovery')
             ->count());
         $this->assertDatabaseHas('scenario_channel_bindings', [
             'channel_id' => $channel->id,
-            'scenario_code' => 'warmup',
+            'scenario_code' => 'needs_discovery',
             'is_active' => true,
         ]);
     }
@@ -818,7 +1001,7 @@ class FilamentChannelsResourceTest extends TestCase
 
         ScenarioChannelBinding::query()->create([
             'channel_id' => $channel->id,
-            'scenario_code' => 'warmup',
+            'scenario_code' => 'needs_discovery',
             'is_active' => true,
         ]);
 
@@ -831,11 +1014,11 @@ class FilamentChannelsResourceTest extends TestCase
 
         $this->assertSame(1, ScenarioChannelBinding::query()
             ->where('channel_id', $channel->id)
-            ->where('scenario_code', 'warmup')
+            ->where('scenario_code', 'needs_discovery')
             ->count());
         $this->assertDatabaseHas('scenario_channel_bindings', [
             'channel_id' => $channel->id,
-            'scenario_code' => 'warmup',
+            'scenario_code' => 'needs_discovery',
             'is_active' => false,
         ]);
     }
@@ -911,7 +1094,79 @@ class FilamentChannelsResourceTest extends TestCase
         ]);
     }
 
-    public function test_admin_can_enable_warmup_scenario_for_max_channel(): void
+    public function test_channel_delete_blockers_ignore_inactive_scenario_bindings_and_archived_v3_blocks(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $scenario = Scenario::query()->create([
+            'code' => 'delete_blockers_cleanup',
+            'name' => 'Delete Blockers Cleanup',
+            'is_active' => true,
+        ]);
+        $archivedVersion = ScenarioVersion::query()->create([
+            'scenario_id' => $scenario->id,
+            'version_number' => 1,
+            'status' => ScenarioVersion::STATUS_ARCHIVED,
+            'schema_payload' => [],
+        ]);
+        $archivedBlock = ScenarioBuilderBlock::query()->create([
+            'scenario_version_id' => $archivedVersion->id,
+            'type' => ScenarioBuilderBlock::TYPE_START_CONDITION,
+            'title' => 'Старый старт',
+            'settings_payload' => [],
+        ]);
+
+        $archivedBlock->channels()->sync([$channel->id]);
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => 'warmup',
+            'is_active' => false,
+        ]);
+
+        $this->assertSame([], $this->channelDeleteBlockers($channel));
+    }
+
+    public function test_channel_delete_auto_cleans_inactive_bitrix24_routes_without_dialogs(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+        $profileId = DB::table('bitrix24_profiles')->insertGetId([
+            'portal_domain' => 'stagecrm.example',
+            'profile_key' => 'staging',
+            'profile_type' => 'full_live',
+            'display_name' => 'Staging',
+            'callback_base_url' => 'https://example.test/callbacks/bitrix24',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        $route = Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profileId,
+            'channel_id' => $channel->id,
+            'portal_domain' => 'stagecrm.example',
+            'profile_key' => 'staging',
+            'channel_type' => Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT,
+            'connector_code' => 'abc_telegram',
+            'source_id' => 'ABC_TELEGRAM',
+            'status' => Bitrix24OpenLineRoute::STATUS_INACTIVE,
+        ]);
+
+        $this->assertSame([], $this->channelDeleteBlockers($channel));
+        $this->assertStringContainsString(
+            'Неактивные Bitrix24-маршруты без диалогов будут очищены автоматически: 1',
+            $this->channelDeleteModalDescription($channel),
+        );
+
+        $this->deleteAutoCleanableBitrix24Routes($channel);
+
+        $this->assertDatabaseMissing('bitrix24_open_line_routes', [
+            'id' => $route->id,
+        ]);
+    }
+
+    public function test_admin_can_enable_needs_discovery_scenario_for_max_channel(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -924,13 +1179,13 @@ class FilamentChannelsResourceTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ManageChannels::class)
             ->callTableAction('manageScenarios', $channel, [
-                'scenario_codes' => ['warmup'],
+                'scenario_codes' => ['needs_discovery'],
             ])
             ->assertHasNoTableActionErrors();
 
         $this->assertDatabaseHas('scenario_channel_bindings', [
             'channel_id' => $channel->id,
-            'scenario_code' => 'warmup',
+            'scenario_code' => 'needs_discovery',
             'is_active' => true,
         ]);
     }
@@ -1475,6 +1730,33 @@ class FilamentChannelsResourceTest extends TestCase
             ->where('role', $role)
             ->where('permission_key', $permissionKey)
             ->update(['granted' => $granted]);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function channelDeleteBlockers(Channel $channel): array
+    {
+        $method = new ReflectionMethod(ChannelResource::class, 'channelDeleteBlockers');
+        $method->setAccessible(true);
+
+        return $method->invoke(null, $channel);
+    }
+
+    private function channelDeleteModalDescription(Channel $channel): string
+    {
+        $method = new ReflectionMethod(ChannelResource::class, 'channelDeleteModalDescription');
+        $method->setAccessible(true);
+
+        return (string) $method->invoke(null, $channel);
+    }
+
+    private function deleteAutoCleanableBitrix24Routes(Channel $channel): void
+    {
+        $method = new ReflectionMethod(ChannelResource::class, 'deleteAutoCleanableBitrix24Routes');
+        $method->setAccessible(true);
+
+        $method->invoke(null, $channel);
     }
 
     private function assertHttpForbidden(callable $callback): void

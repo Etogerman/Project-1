@@ -14,6 +14,12 @@ class ResolveDialogInboxStatusAction
 
     public function handle(Dialog $dialog): DialogInboxStatusData
     {
+        $statusFromProjectedAttributes = $this->resolveFromProjectedAttributes($dialog);
+
+        if ($statusFromProjectedAttributes instanceof DialogInboxStatusData) {
+            return $statusFromProjectedAttributes;
+        }
+
         $latestInboundUserMessage = $this->resolveLatestDialogMessage($dialog, Message::KIND_INBOUND_USER);
         $latestOutboundManualReplyMessage = $this->resolveLatestDialogMessage($dialog, Message::KIND_OUTBOUND_MANUAL_REPLY);
 
@@ -54,6 +60,50 @@ class ResolveDialogInboxStatusAction
                     ->where('message_kind', $messageKind)
             )
             ->first();
+    }
+
+    private function resolveFromProjectedAttributes(Dialog $dialog): ?DialogInboxStatusData
+    {
+        $attributes = $dialog->getAttributes();
+        $requiredAttributes = [
+            'latest_inbound_user_message_id',
+            'latest_inbound_user_message_sort_at',
+            'latest_outbound_manual_reply_message_id',
+            'latest_outbound_manual_reply_message_sort_at',
+        ];
+
+        foreach ($requiredAttributes as $attribute) {
+            if (! array_key_exists($attribute, $attributes)) {
+                return null;
+            }
+        }
+
+        $latestInboundUserMessageId = $attributes['latest_inbound_user_message_id'];
+        $latestInboundUserMessageSortAt = $attributes['latest_inbound_user_message_sort_at'];
+        $latestOutboundManualReplyMessageId = $attributes['latest_outbound_manual_reply_message_id'];
+        $latestOutboundManualReplyMessageSortAt = $attributes['latest_outbound_manual_reply_message_sort_at'];
+
+        if (! filled($latestInboundUserMessageId)) {
+            return $this->make(DialogInboxStatusData::CODE_NO_NEW, 'Нет новых', 'success');
+        }
+
+        if (
+            filled($latestOutboundManualReplyMessageId)
+            && ! $this->messageChronology->isAfter(
+                $latestInboundUserMessageSortAt,
+                $latestInboundUserMessageId,
+                $latestOutboundManualReplyMessageSortAt,
+                $latestOutboundManualReplyMessageId,
+            )
+        ) {
+            return $this->make(DialogInboxStatusData::CODE_NO_NEW, 'Нет новых', 'success');
+        }
+
+        if ((int) ($dialog->manual_reply_dismissed_source_message_id ?? 0) === (int) $latestInboundUserMessageId) {
+            return $this->make(DialogInboxStatusData::CODE_NOT_REQUIRED, 'Не требует ответа', 'gray');
+        }
+
+        return $this->make(DialogInboxStatusData::CODE_REQUIRES_REPLY, 'Требует ответа', 'warning');
     }
 
     private function make(string $code, string $label, string $tone): DialogInboxStatusData

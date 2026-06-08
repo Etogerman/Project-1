@@ -2,15 +2,16 @@
 
 namespace App\Jobs;
 
+use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\ScenarioChannelBinding;
 use App\Models\ScenarioRun;
-use App\Services\Scenarios\PrioritizedScenarioRuntime;
 use App\Services\Dialogs\CanSendThroughDialogAction;
+use App\Services\Scenarios\PrioritizedScenarioRuntime;
 use App\Services\Scenarios\ScenarioRegistry;
-use Illuminate\Database\QueryException;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
@@ -65,8 +66,7 @@ class ProcessScenarioStartJob implements ShouldQueue
     public function handle(
         ScenarioRegistry $scenarioRegistry,
         ?CanSendThroughDialogAction $canSendThroughDialogAction = null,
-    ): void
-    {
+    ): void {
         $canSendThroughDialogAction ??= app(CanSendThroughDialogAction::class);
 
         $message = Message::query()
@@ -84,11 +84,7 @@ class ProcessScenarioStartJob implements ShouldQueue
             return;
         }
 
-        if ($message->contact?->isInDataCollection()) {
-            return;
-        }
-
-        if (! $message->dialog instanceof \App\Models\Dialog || ! $canSendThroughDialogAction->handle($message->dialog)) {
+        if (! $message->dialog instanceof Dialog || ! $canSendThroughDialogAction->handle($message->dialog)) {
             return;
         }
 
@@ -99,6 +95,10 @@ class ProcessScenarioStartJob implements ShouldQueue
             ->first();
 
         if (! $binding instanceof ScenarioChannelBinding) {
+            return;
+        }
+
+        if (! $scenarioRegistry->enabledForNewStarts($binding->scenario_code)) {
             return;
         }
 
@@ -171,7 +171,10 @@ class ProcessScenarioStartJob implements ShouldQueue
             ->first();
     }
 
-    protected function cancelActiveRuns(int $dialogId, string $newScenarioCode, int $messageId): void
+    /**
+     * @return list<int>
+     */
+    protected function cancelActiveRuns(int $dialogId, string $newScenarioCode, int $messageId): array
     {
         $activeRuns = ScenarioRun::query()
             ->active()
@@ -179,9 +182,12 @@ class ProcessScenarioStartJob implements ShouldQueue
             ->lockForUpdate()
             ->get();
 
+        $cancelledRunIds = [];
+
         foreach ($activeRuns as $activeRun) {
             /** @var ScenarioRun $activeRun */
             $oldScenarioCode = (string) $activeRun->scenario_code;
+            $cancelledRunIds[] = (int) $activeRun->id;
 
             $activeRun->forceFill([
                 'status' => ScenarioRun::STATUS_CANCELLED,
@@ -198,6 +204,8 @@ class ProcessScenarioStartJob implements ShouldQueue
                 'old_run_id' => $activeRun->id,
             ]);
         }
+
+        return $cancelledRunIds;
     }
 
     protected function wasUniqueConstraintViolation(QueryException $exception): bool

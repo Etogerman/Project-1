@@ -35,6 +35,12 @@ class PublishScenarioVersionAction
             ]);
         }
 
+        if ((string) $scenario->code !== Scenario::CONSTRUCTOR_WORKSPACE_CODE && $this->isBuilderV3Version($version)) {
+            throw ValidationException::withMessages([
+                'version' => 'V3-сценарий публикуется через Конструктор.',
+            ]);
+        }
+
         $normalizedSchemaPayload = $this->validateScenarioSchemaPayloadAction->handle(
             is_array($version->schema_payload) ? $version->schema_payload : [],
         );
@@ -59,5 +65,14 @@ class PublishScenarioVersionAction
         app(ScenarioRegistry::class)->forgetCachedDefinitions();
 
         return $publishedVersion;
+    }
+
+    private function isBuilderV3Version(ScenarioVersion $version): bool
+    {
+        $schemaPayload = is_array($version->schema_payload) ? $version->schema_payload : [];
+
+        return isset($schemaPayload['builder_v3'])
+            || isset($schemaPayload['builder_v3_runtime'])
+            || $version->builderBlocks()->exists();
     }
 }

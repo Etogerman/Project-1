@@ -1,6 +1,26 @@
-<section @if (filled($dataRole ?? null)) data-role="{{ $dataRole }}" @endif class="ac-contact-form-section">
-    <div class="ac-contact-form-section__header">
+@php
+    $sectionRows = $rows ?? [];
+    $filledRowsCount = collect($sectionRows)
+        ->filter(fn (array $row): bool => trim((string) ($row['value'] ?? '')) !== '—')
+        ->count();
+    $isFullyEmptySection = count($sectionRows) > 0 && $filledRowsCount === 0;
+    $emptySummary = $title === 'Локация' ? 'не указана · добавить' : 'не указано · добавить';
+@endphp
+
+<details
+    @if (filled($dataRole ?? null)) data-role="{{ $dataRole }}" @endif
+    @class([
+        'ac-contact-form-section',
+        'ac-contact-form-section--empty-collapsed' => $isFullyEmptySection,
+    ])
+    @if (! $isFullyEmptySection) open @endif
+>
+    <summary class="ac-contact-form-section__header">
         <h3 class="ac-contact-form-section__title">{{ $title }}</h3>
+
+        @if ($isFullyEmptySection)
+            <span class="ac-contact-form-section__empty-summary">{{ $emptySummary }}</span>
+        @endif
 
         @if (filled($sectionAction['method'] ?? null))
             <button
@@ -18,18 +38,68 @@
                 </span>
             </button>
         @endif
-    </div>
+    </summary>
 
     <div class="ac-contact-form-grid">
-        @foreach ($rows as $row)
-            <article class="ac-contact-form-row">
+        @foreach ($sectionRows as $row)
+            @php
+                $isEmptyValue = trim((string) ($row['value'] ?? '')) === '—';
+            @endphp
+
+            <article @class([
+                'ac-contact-form-row',
+                'ac-contact-form-row--empty' => $isEmptyValue,
+                'ac-contact-form-row--actionable' => filled($row['action']['method'] ?? null),
+                'ac-contact-form-row--wide' => $row['wide'] ?? false,
+            ])>
                 <p class="ac-contact-form-row__label">{{ $row['label'] }}</p>
 
                 <div class="ac-contact-form-row__value-shell">
-                    <p @class([
-                        'ac-contact-form-row__value',
-                        'ac-contact-form-row__value--with-action' => filled($row['action']['method'] ?? null),
-                    ])>{{ $row['value'] }}</p>
+                    @if (filled($row['edit']['model'] ?? null))
+                        @if (($row['edit']['type'] ?? null) === 'select')
+                            <select
+                                wire:model.live="{{ $row['edit']['model'] }}"
+                                @class([
+                                    'ac-contact-form-row__value',
+                                    'ac-inline-profile-field',
+                                    'ac-inline-profile-field--select',
+                                    'ac-contact-form-row__value--empty' => $isEmptyValue,
+                                ])
+                                aria-label="{{ $row['label'] }}"
+                            >
+                                <option value="">Не указано</option>
+                                @foreach (($row['edit']['options'] ?? []) as $optionValue => $optionLabel)
+                                    <option value="{{ $optionValue }}">{{ $optionLabel }}</option>
+                                @endforeach
+                            </select>
+                        @else
+                            <input
+                                type="{{ $row['edit']['type'] ?? 'text' }}"
+                                wire:model.live.debounce.300ms="{{ $row['edit']['model'] }}"
+                                @if (($row['edit']['type'] ?? null) === 'number')
+                                    min="0"
+                                    max="150"
+                                @endif
+                                @class([
+                                    'ac-contact-form-row__value',
+                                    'ac-inline-profile-field',
+                                    'ac-contact-form-row__value--empty' => $isEmptyValue,
+                                ])
+                                placeholder="—"
+                                aria-label="{{ $row['label'] }}"
+                            />
+                        @endif
+
+                        @error($row['edit']['model'])
+                            <p class="ac-contact-form-row__error">{{ $message }}</p>
+                        @enderror
+                    @else
+                        <p @class([
+                            'ac-contact-form-row__value',
+                            'ac-contact-form-row__value--empty' => $isEmptyValue,
+                            'ac-contact-form-row__value--with-action' => filled($row['action']['method'] ?? null),
+                        ])>{{ $row['value'] }}</p>
+                    @endif
 
                     @if (filled($row['action']['method'] ?? null))
                         <button
@@ -105,4 +175,4 @@
             </article>
         @endforeach
     </div>
-</section>
+</details>

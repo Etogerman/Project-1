@@ -7,12 +7,12 @@ use App\Models\ContactDuplicateReview;
 use App\Models\ContactPhoneNumber;
 use App\Models\Tag;
 use App\Models\User;
+use App\Services\Contacts\ApplyContactFirstNameAction;
 use App\Services\Contacts\AssignContactTagAction;
 use App\Services\Contacts\ClaimContactAction;
 use App\Services\Contacts\DeleteContactAction;
 use App\Services\Contacts\DeleteContactPhoneAction;
 use App\Services\Contacts\DismissCrossChannelIdentityAmbiguityReviewAction;
-use App\Services\Contacts\ApplyContactFirstNameAction;
 use App\Services\Contacts\ReleaseContactAssignmentAction;
 use App\Services\Contacts\RemoveContactTagAction;
 use App\Services\Contacts\ResolveContactDeletePreviewAction;
@@ -64,6 +64,8 @@ trait InteractsWithContactWorkspace
     public string $editingCity = '';
 
     public string $editingRegion = '';
+
+    public bool $inlineProfileDirty = false;
 
     public bool $showDeletePhoneDialog = false;
 
@@ -365,15 +367,7 @@ trait InteractsWithContactWorkspace
             return;
         }
 
-        $this->editingFirstName = (string) ($record->first_name ?? '');
-        $this->editingLastName = (string) ($record->last_name ?? '');
-        $this->editingGender = (string) ($record->gender ?? '');
-        $this->editingAgeYears = $record->age_years !== null ? (string) $record->age_years : '';
-        $this->editingAgeRange = (string) ($record->age_range ?? '');
-        $this->editingBirthDate = $record->birth_date?->toDateString() ?? '';
-        $this->editingCountry = (string) ($record->country ?? '');
-        $this->editingCity = (string) ($record->city ?? '');
-        $this->editingRegion = (string) ($record->region ?? '');
+        $this->fillProfileEditingState($record);
         $this->showEditProfileDialog = true;
     }
 
@@ -383,6 +377,74 @@ trait InteractsWithContactWorkspace
     }
 
     public function saveMountedContactProfile(): void
+    {
+        $this->persistMountedContactProfile(closeDialog: true);
+    }
+
+    public function resetInlineContactProfile(): void
+    {
+        $record = $this->resolveWorkspaceContactOrNotify('Не удалось отменить изменения');
+
+        if (! $record instanceof Contact) {
+            return;
+        }
+
+        $this->fillProfileEditingState($record);
+        $this->inlineProfileDirty = false;
+        $this->resetProfileErrorBag();
+    }
+
+    public function saveInlineContactProfile(): void
+    {
+        $this->persistMountedContactProfile(closeDialog: false);
+    }
+
+    public function updatedEditingFirstName(): void
+    {
+        $this->inlineProfileDirty = true;
+    }
+
+    public function updatedEditingLastName(): void
+    {
+        $this->inlineProfileDirty = true;
+    }
+
+    public function updatedEditingGender(): void
+    {
+        $this->inlineProfileDirty = true;
+    }
+
+    public function updatedEditingAgeYears(): void
+    {
+        $this->inlineProfileDirty = true;
+    }
+
+    public function updatedEditingAgeRange(): void
+    {
+        $this->inlineProfileDirty = true;
+    }
+
+    public function updatedEditingBirthDate(): void
+    {
+        $this->inlineProfileDirty = true;
+    }
+
+    public function updatedEditingCountry(): void
+    {
+        $this->inlineProfileDirty = true;
+    }
+
+    public function updatedEditingCity(): void
+    {
+        $this->inlineProfileDirty = true;
+    }
+
+    public function updatedEditingRegion(): void
+    {
+        $this->inlineProfileDirty = true;
+    }
+
+    protected function persistMountedContactProfile(bool $closeDialog): void
     {
         if ($this->abortIfContactProfileForbidden('Не удалось обновить профиль')) {
             return;
@@ -426,6 +488,7 @@ trait InteractsWithContactWorkspace
                     $firstName,
                     Contact::FIRST_NAME_SOURCE_MANUAL,
                     ApplyContactFirstNameAction::REASON_MANUAL_EDIT,
+                    Contact::FIRST_NAME_RESOLUTION_METHOD_OPERATOR_MANUAL,
                 );
                 $contact = $applyResult->changed ? $contact->fresh() : $contact;
             }
@@ -441,8 +504,20 @@ trait InteractsWithContactWorkspace
                 'region' => $validated['editingRegion'] ?? null,
             ]);
 
-            $this->resetProfileEditingState();
             $this->replaceWorkspaceContactWithEffectiveContact($contact);
+
+            if ($closeDialog) {
+                $this->resetProfileEditingState();
+            } else {
+                $freshContact = $this->resolveWorkspaceContact();
+
+                if ($freshContact instanceof Contact) {
+                    $this->fillProfileEditingState($freshContact);
+                }
+
+                $this->inlineProfileDirty = false;
+                $this->resetProfileErrorBag();
+            }
 
             Notification::make()
                 ->success()
@@ -555,7 +630,7 @@ trait InteractsWithContactWorkspace
             ['label' => 'Диалогов', 'value' => $preview->dialogsCount],
             ['label' => 'Сообщений', 'value' => $preview->messagesCount],
             ['label' => 'Телефонов', 'value' => $preview->phonesCount],
-            ['label' => 'Идентификаторов', 'value' => $preview->identitiesCount],
+            ['label' => 'Профилей каналов', 'value' => $preview->identitiesCount],
         ];
         $this->showDeleteContactDialog = true;
     }
@@ -764,11 +839,11 @@ trait InteractsWithContactWorkspace
 
     public function resumeMountedContactDataCollection(): void
     {
-        if ($this->abortIfContactMutationForbidden('Не удалось возобновить анкету')) {
+        if ($this->abortIfContactMutationForbidden('Не удалось возобновить сбор данных')) {
             return;
         }
 
-        $record = $this->resolveWorkspaceContactOrNotify('Не удалось возобновить анкету');
+        $record = $this->resolveWorkspaceContactOrNotify('Не удалось возобновить сбор данных');
 
         if (! $record instanceof Contact) {
             return;
@@ -780,8 +855,8 @@ trait InteractsWithContactWorkspace
             if ($nextField === null) {
                 Notification::make()
                     ->warning()
-                    ->title('Анкета уже заполнена')
-                    ->body('Для этого контакта нет незаполненных шагов анкеты.')
+                    ->title('Сбор данных уже завершён')
+                    ->body('Для этого контакта нет незаполненных шагов сбора данных.')
                     ->send();
 
                 return;
@@ -791,13 +866,13 @@ trait InteractsWithContactWorkspace
 
             Notification::make()
                 ->success()
-                ->title('Анкета возобновлена')
-                ->body(sprintf('Анкета возобновлена с шага: %s.', $this->formatDataCollectionField($nextField)))
+                ->title('Сбор данных возобновлён')
+                ->body(sprintf('Сбор данных возобновлён с шага: %s.', $this->formatDataCollectionField($nextField)))
                 ->send();
         } catch (Throwable $throwable) {
             Notification::make()
                 ->danger()
-                ->title('Не удалось возобновить анкету')
+                ->title('Не удалось возобновить сбор данных')
                 ->body($throwable->getMessage())
                 ->send();
         }
@@ -934,15 +1009,42 @@ trait InteractsWithContactWorkspace
     protected function resetProfileEditingState(): void
     {
         $this->showEditProfileDialog = false;
-        $this->editingFirstName = '';
-        $this->editingLastName = '';
-        $this->editingGender = '';
-        $this->editingAgeYears = '';
-        $this->editingAgeRange = '';
-        $this->editingBirthDate = '';
-        $this->editingCountry = '';
-        $this->editingCity = '';
-        $this->editingRegion = '';
+        $this->inlineProfileDirty = false;
+
+        $record = $this->resolveWorkspaceContact();
+
+        if ($record instanceof Contact) {
+            $this->fillProfileEditingState($record);
+        } else {
+            $this->editingFirstName = '';
+            $this->editingLastName = '';
+            $this->editingGender = '';
+            $this->editingAgeYears = '';
+            $this->editingAgeRange = '';
+            $this->editingBirthDate = '';
+            $this->editingCountry = '';
+            $this->editingCity = '';
+            $this->editingRegion = '';
+        }
+
+        $this->resetProfileErrorBag();
+    }
+
+    protected function fillProfileEditingState(Contact $record): void
+    {
+        $this->editingFirstName = (string) ($record->first_name ?? '');
+        $this->editingLastName = (string) ($record->last_name ?? '');
+        $this->editingGender = (string) ($record->gender ?? '');
+        $this->editingAgeYears = $record->age_years !== null ? (string) $record->age_years : '';
+        $this->editingAgeRange = (string) ($record->age_range ?? '');
+        $this->editingBirthDate = $record->birth_date?->toDateString() ?? '';
+        $this->editingCountry = (string) ($record->country ?? '');
+        $this->editingCity = (string) ($record->city ?? '');
+        $this->editingRegion = (string) ($record->region ?? '');
+    }
+
+    protected function resetProfileErrorBag(): void
+    {
         $this->resetErrorBag([
             'editingFirstName',
             'editingLastName',

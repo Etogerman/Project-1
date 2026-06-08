@@ -42,12 +42,18 @@ class SyncContactRussianRegionAction
         $candidateRegions = is_array($resolved['candidate_regions'] ?? null)
             ? array_values(array_filter($resolved['candidate_regions'], fn (mixed $value): bool => is_string($value) && trim($value) !== ''))
             : [];
+        $source = in_array($resolved['source'] ?? null, [
+            Contact::REGION_SOURCE_AI,
+            Contact::REGION_SOURCE_DICTIONARY,
+        ], true)
+            ? $resolved['source']
+            : null;
 
         if ($status === Contact::REGION_STATUS_RESOLVED && filled($region)) {
             $contact->forceFill([
                 'region' => $region,
                 'region_status' => Contact::REGION_STATUS_RESOLVED,
-                'region_source' => Contact::REGION_SOURCE_AI,
+                'region_source' => $source,
                 'pending_region_candidates' => null,
             ])->save();
 
@@ -58,7 +64,7 @@ class SyncContactRussianRegionAction
             $contact->forceFill([
                 'region' => null,
                 'region_status' => Contact::REGION_STATUS_CLARIFICATION_PENDING,
-                'region_source' => null,
+                'region_source' => $source,
                 'pending_region_candidates' => $candidateRegions,
             ])->save();
 
@@ -69,7 +75,7 @@ class SyncContactRussianRegionAction
             $contact->forceFill([
                 'region' => null,
                 'region_status' => Contact::REGION_STATUS_AMBIGUOUS,
-                'region_source' => null,
+                'region_source' => $source,
                 'pending_region_candidates' => $candidateRegions,
             ])->save();
 
@@ -83,7 +89,7 @@ class SyncContactRussianRegionAction
         $contact->forceFill([
             'region' => null,
             'region_status' => $status,
-            'region_source' => null,
+            'region_source' => $status === Contact::REGION_STATUS_OUT_OF_SCOPE ? $contact->region_source : null,
             'pending_region_candidates' => null,
         ])->save();
 

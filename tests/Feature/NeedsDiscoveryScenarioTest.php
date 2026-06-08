@@ -10,6 +10,7 @@ use App\Models\Message;
 use App\Models\ScenarioChannelBinding;
 use App\Models\ScenarioRun;
 use App\Services\Scenarios\NeedsDiscoveryScenario;
+use App\Services\Scenarios\ScenarioRegistry;
 use App\Services\Scenarios\WarmupScenario;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -59,6 +60,8 @@ class NeedsDiscoveryScenarioTest extends TestCase
 
     public function test_needs_discovery_does_not_start_while_warmup_has_priority(): void
     {
+        $this->enableWarmupForNewStarts();
+
         Http::fake([
             'https://api.telegram.org/*' => Http::response([
                 'ok' => true,
@@ -103,6 +106,8 @@ class NeedsDiscoveryScenarioTest extends TestCase
 
     public function test_needs_discovery_starts_after_terminal_warmup_run(): void
     {
+        $this->enableWarmupForNewStarts();
+
         Http::fake([
             'https://api.telegram.org/*' => Http::response([
                 'ok' => true,
@@ -159,6 +164,52 @@ class NeedsDiscoveryScenarioTest extends TestCase
         $this->assertSame(NeedsDiscoveryScenario::STEP_PRIMARY_GOAL, $run->current_step);
         $this->assertSame($outboundMessage->id, data_get($run->state_payload, 'question_message_ids.primary_goal'));
         $this->assertSame(config('bots.scenarios.needs_discovery.primary_goal.question'), $outboundMessage->text);
+    }
+
+    public function test_needs_discovery_ignores_disabled_warmup_binding(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 9151,
+                ],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => WarmupScenario::code(),
+            'is_active' => true,
+        ]);
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => NeedsDiscoveryScenario::code(),
+            'is_active' => true,
+        ]);
+
+        $this->createRoute($channel, externalUserId: '200', externalChatId: '300');
+
+        $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $this->telegramPayload(
+            userId: 200,
+            chatId: 300,
+            messageId: 12,
+            text: 'следующий шаг',
+        ))->assertOk();
+
+        $this->assertDatabaseMissing('scenario_runs', [
+            'scenario_code' => WarmupScenario::code(),
+        ]);
+
+        $this->assertDatabaseHas('scenario_runs', [
+            'scenario_code' => NeedsDiscoveryScenario::code(),
+            'status' => ScenarioRun::STATUS_ACTIVE,
+            'current_step' => NeedsDiscoveryScenario::STEP_PRIMARY_GOAL,
+        ]);
     }
 
     public function test_telegram_happy_path_completes_needs_discovery_with_answers(): void
@@ -525,6 +576,12 @@ class NeedsDiscoveryScenarioTest extends TestCase
                 'webhook_secret' => 'telegram-secret',
             ],
         ]);
+    }
+
+    private function enableWarmupForNewStarts(): void
+    {
+        config()->set('scenarios.warmup.enabled_for_new_starts', true);
+        app(ScenarioRegistry::class)->forgetCachedDefinitions();
     }
 
     private function fakeTelegramApiSequence(int $firstMessageId): void

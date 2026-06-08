@@ -30,6 +30,7 @@ class TelegramBotApiService
         string $text,
         ?array $replyMarkup = null,
         string $textFormat = Message::TEXT_FORMAT_PLAIN_TEXT,
+        bool $disableNotification = false,
     ): AutoReplyDeliveryResult {
         if (! filled($externalChatId)) {
             throw new InvalidArgumentException("Telegram message for channel [{$channel->id}] does not have chat id.");
@@ -39,6 +40,10 @@ class TelegramBotApiService
             'chat_id' => $externalChatId,
             'text' => $text,
         ];
+
+        if ($disableNotification) {
+            $payload['disable_notification'] = true;
+        }
 
         if ($textFormat === Message::TEXT_FORMAT_HTML) {
             $payload['parse_mode'] = 'HTML';
@@ -69,16 +74,41 @@ class TelegramBotApiService
         );
     }
 
+    public function deleteMessage(Channel $channel, ?string $externalChatId, string $messageId): void
+    {
+        if (! filled($externalChatId)) {
+            throw new InvalidArgumentException("Telegram message for channel [{$channel->id}] does not have chat id.");
+        }
+
+        Http::asJson()
+            ->post(
+                sprintf('https://api.telegram.org/bot%s/deleteMessage', $this->token($channel)),
+                [
+                    'chat_id' => $externalChatId,
+                    'message_id' => $messageId,
+                ],
+            )
+            ->throw();
+    }
+
     public function registerWebhook(Channel $channel, string $url, string $secret): void
     {
+        $payload = [
+            'url' => $url,
+            'secret_token' => $secret,
+            'allowed_updates' => (array) config('bots.telegram.allowed_updates', ['message']),
+        ];
+
+        $webhookIpAddress = trim((string) config('bots.telegram.webhook_ip_address', ''));
+
+        if ($webhookIpAddress !== '') {
+            $payload['ip_address'] = $webhookIpAddress;
+        }
+
         Http::asJson()
             ->post(
                 sprintf('https://api.telegram.org/bot%s/setWebhook', $this->token($channel)),
-                [
-                    'url' => $url,
-                    'secret_token' => $secret,
-                    'allowed_updates' => (array) config('bots.telegram.allowed_updates', ['message']),
-                ],
+                $payload,
             )
             ->throw();
     }
@@ -116,6 +146,28 @@ class TelegramBotApiService
         Http::asJson()
             ->post(
                 sprintf('https://api.telegram.org/bot%s/answerCallbackQuery', $this->token($channel)),
+                $payload,
+            )
+            ->throw();
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $replyMarkup
+     */
+    public function editMessageReplyMarkup(Channel $channel, string $chatId, string $messageId, ?array $replyMarkup = null): void
+    {
+        $payload = [
+            'chat_id' => $chatId,
+            'message_id' => $messageId,
+        ];
+
+        if ($replyMarkup !== null) {
+            $payload['reply_markup'] = $replyMarkup;
+        }
+
+        Http::asJson()
+            ->post(
+                sprintf('https://api.telegram.org/bot%s/editMessageReplyMarkup', $this->token($channel)),
                 $payload,
             )
             ->throw();

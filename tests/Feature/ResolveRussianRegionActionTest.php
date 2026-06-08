@@ -37,6 +37,35 @@ class ResolveRussianRegionActionTest extends TestCase
             'status' => Contact::REGION_STATUS_RESOLVED,
             'region' => 'Московская область',
             'candidate_regions' => [],
+            'source' => 'dictionary',
+        ], $result);
+    }
+
+    public function test_action_accepts_ru_country_code_for_russian_city(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+        config()->set('bots.data_collection.russian_region.allowed_regions', [
+            'Мурманская область',
+        ]);
+        config()->set('russian_region_cities.cities', [
+            'мурманск' => [
+                'city' => 'Мурманск',
+                'aliases' => [],
+                'regions' => ['Мурманская область'],
+            ],
+        ]);
+
+        Http::fake();
+
+        $result = app(ResolveRussianRegionAction::class)->handle('RU', 'Мурманск');
+
+        Http::assertNothingSent();
+
+        $this->assertSame([
+            'status' => Contact::REGION_STATUS_RESOLVED,
+            'region' => 'Мурманская область',
+            'candidate_regions' => [],
+            'source' => 'dictionary',
         ], $result);
     }
 
@@ -66,6 +95,7 @@ class ResolveRussianRegionActionTest extends TestCase
             'status' => Contact::REGION_STATUS_CLARIFICATION_PENDING,
             'region' => null,
             'candidate_regions' => ['Волгоградская область', 'Воронежская область', 'Приморский край'],
+            'source' => 'dictionary',
         ], $result);
     }
 
@@ -109,6 +139,7 @@ class ResolveRussianRegionActionTest extends TestCase
                 'Приморский край',
                 'Тульская область',
             ],
+            'source' => 'dictionary',
         ], $result);
     }
 
@@ -135,6 +166,7 @@ class ResolveRussianRegionActionTest extends TestCase
             'status' => Contact::REGION_STATUS_UNKNOWN,
             'region' => null,
             'candidate_regions' => [],
+            'source' => null,
         ], $result);
     }
 
@@ -160,6 +192,7 @@ class ResolveRussianRegionActionTest extends TestCase
             'status' => Contact::REGION_STATUS_RESOLVED,
             'region' => 'Республика Татарстан',
             'candidate_regions' => [],
+            'source' => 'ai',
         ], $result);
     }
 
@@ -182,6 +215,7 @@ class ResolveRussianRegionActionTest extends TestCase
             'status' => Contact::REGION_STATUS_OUT_OF_SCOPE,
             'region' => null,
             'candidate_regions' => [],
+            'source' => null,
         ], $result);
     }
 
@@ -199,6 +233,7 @@ class ResolveRussianRegionActionTest extends TestCase
             'status' => Contact::REGION_STATUS_UNKNOWN,
             'region' => null,
             'candidate_regions' => [],
+            'source' => null,
         ], $result);
     }
 

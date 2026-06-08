@@ -302,6 +302,76 @@ class DialogMetadataSyncTest extends TestCase
         $this->assertSame('Новый ответ', $dialog->last_outbound_message_preview);
     }
 
+    public function test_outbound_without_external_message_id_does_not_replace_last_outbound_snapshot(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'operator-user',
+        ]);
+        $previousOutbound = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'external_chat_id' => '500',
+            'external_message_id' => '900',
+            'text' => 'Предыдущее сообщение',
+            'received_at' => Carbon::parse('2026-03-31 12:20:00'),
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => '500',
+            'last_message_id' => $previousOutbound->id,
+            'last_outbound_message_id' => $previousOutbound->id,
+            'last_message_preview' => 'Предыдущее сообщение',
+            'last_outbound_message_preview' => 'Предыдущее сообщение',
+            'last_message_at' => Carbon::parse('2026-03-31 12:20:00'),
+            'last_outbound_at' => Carbon::parse('2026-03-31 12:20:00'),
+        ]);
+        $messageWithoutExternalId = Message::factory()->create([
+            'dialog_id' => null,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'external_chat_id' => '500',
+            'external_message_id' => null,
+            'text' => 'Сообщение без внешнего ID',
+            'received_at' => Carbon::parse('2026-03-31 12:25:00'),
+            'created_at' => Carbon::parse('2026-03-31 12:25:00'),
+            'sent_by_type' => null,
+        ]);
+
+        DB::transaction(function () use ($messageWithoutExternalId, $contact, $channel, $identity): void {
+            app(SyncMessageDialogMetadataAction::class)->handle(
+                $messageWithoutExternalId,
+                $contact,
+                $channel,
+                $identity,
+                '500',
+                Message::SENT_BY_TYPE_OPERATOR,
+            );
+        });
+
+        $dialog->refresh();
+
+        $this->assertSame($messageWithoutExternalId->id, $dialog->last_message_id);
+        $this->assertSame('Сообщение без внешнего ID', $dialog->last_message_preview);
+        $this->assertSame('2026-03-31 12:25:00', $dialog->last_outbound_at?->format('Y-m-d H:i:s'));
+        $this->assertSame($previousOutbound->id, $dialog->last_outbound_message_id);
+        $this->assertSame('Предыдущее сообщение', $dialog->last_outbound_message_preview);
+    }
+
     public function test_older_message_sync_does_not_replace_last_message_snapshots(): void
     {
         $channel = Channel::factory()->create([

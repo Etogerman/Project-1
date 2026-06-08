@@ -85,6 +85,7 @@ class ApplyDialogRoutePredicateAction
                                 ->orWhereNull('webhook_status')
                                 ->orWhere('webhook_status', '!=', Channel::WEBHOOK_STATUS_INSTALLED)
                                 ->orWhereNull('connection_checked_at')
+                                ->orWhere('connection_checked_at', '<', now()->subMinutes(Channel::CONNECTION_CHECK_FRESH_FOR_MINUTES))
                                 ->orWhere(function (Builder $query): void {
                                     $this->applyChangedTelegramExpectedWebhookUrl($query);
                                 });
@@ -129,6 +130,7 @@ class ApplyDialogRoutePredicateAction
             ->where('connection_status', Channel::CONNECTION_STATUS_CONNECTED)
             ->where('webhook_status', Channel::WEBHOOK_STATUS_INSTALLED)
             ->whereNotNull('connection_checked_at')
+            ->where('connection_checked_at', '>=', now()->subMinutes(Channel::CONNECTION_CHECK_FRESH_FOR_MINUTES))
             ->where(function (Builder $query): void {
                 $this->applyCurrentTelegramExpectedWebhookUrl($query);
             });

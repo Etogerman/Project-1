@@ -15,7 +15,7 @@ class SyncContactDistanceToMoscowActionTest extends TestCase
     public function test_action_marks_moscow_as_zero_distance(): void
     {
         $contact = Contact::factory()->create([
-            'country' => 'Россия',
+            'country' => 'RU',
             'city' => 'Москва',
             'distance_to_moscow_km' => null,
             'distance_to_moscow_status' => null,

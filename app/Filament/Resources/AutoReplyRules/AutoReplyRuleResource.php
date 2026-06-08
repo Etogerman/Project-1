@@ -59,7 +59,7 @@ class AutoReplyRuleResource extends Resource
 
     protected static ?string $navigationLabel = 'Правила автоответа';
 
-    protected static string|UnitEnum|null $navigationGroup = 'Интеграции';
+    protected static string|UnitEnum|null $navigationGroup = 'Автоматизация';
 
     protected static ?int $navigationSort = 20;
 

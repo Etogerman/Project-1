@@ -3,7 +3,6 @@
 namespace App\Services\Dialogs;
 
 use App\Models\Channel;
-use App\Models\ChannelRuntimeState;
 use App\Models\Dialog;
 
 class DialogRoutePredicate
@@ -88,17 +87,7 @@ class DialogRoutePredicate
             return false;
         }
 
-        $channel->loadMissing('runtimeState');
-        $runtimeState = $channel->runtimeState;
-
-        if (! $runtimeState instanceof ChannelRuntimeState) {
-            return false;
-        }
-
-        return $runtimeState->auth_status === ChannelRuntimeState::AUTH_STATUS_AUTHORIZED
-            && $runtimeState->authorization_state === ChannelRuntimeState::AUTHORIZATION_STATE_READY
-            && $runtimeState->sync_status === ChannelRuntimeState::SYNC_STATUS_LIVE
-            && data_get($runtimeState->runtime_payload, 'gateway_capabilities.outgoing_replies') === true;
+        return $channel->hasReadyTelegramAccountGatewayOutgoingReplies();
     }
 
     public function isReady(Dialog $dialog): bool

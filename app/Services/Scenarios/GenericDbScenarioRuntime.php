@@ -2,15 +2,24 @@
 
 namespace App\Services\Scenarios;
 
+use App\Data\AI\AiGenerationContext;
+use App\Data\Bitrix24\Bitrix24ContactSyncQueueResultData;
+use App\Data\Bitrix24\Bitrix24DealSyncQueueResultData;
+use App\Data\Bitrix24\Bitrix24HistoryExportQueueResultData;
+use App\Data\Contacts\FirstNameResolutionWriteContext;
 use App\Data\Scenarios\ScenarioInboundResult;
 use App\Jobs\InferContactGenderFromFirstNameJob;
+use App\Jobs\ProcessScenarioV3AiAnalysisJob;
 use App\Jobs\ProcessScenarioV3OutboundMessageJob;
 use App\Jobs\ProcessScenarioV3ScheduledTransitionJob;
+use App\Models\AiTask;
 use App\Models\AutoReplyRule;
 use App\Models\Channel;
 use App\Models\Contact;
+use App\Models\ContactFirstNameResolutionEvent;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
+use App\Models\DataDictionaryEntry;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\Scenario;
@@ -21,19 +30,32 @@ use App\Models\ScenarioRun;
 use App\Models\ScenarioV3OutboundMessage;
 use App\Models\ScenarioV3ScheduledTransition;
 use App\Models\ScenarioVersion;
+use App\Models\Tag;
+use App\Services\AI\AiStructuredGenerationException;
+use App\Services\AI\AiStructuredGenerationService;
+use App\Services\Analytics\FirstNameResolutionAnalyticsService;
 use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
+use App\Services\Bitrix24\QueueBitrix24DealSyncAction;
+use App\Services\Bitrix24\QueueBitrix24HistoryExportAction;
 use App\Services\Bots\SendBotDialogTextAction;
 use App\Services\Bots\StoreOutboundScenarioMessageAction;
+use App\Services\Bots\TelegramBotApiService;
 use App\Services\Contacts\AddContactPhoneAction;
 use App\Services\Contacts\ApplyContactFirstNameAction;
 use App\Services\Contacts\NormalizePhoneNumberAction;
 use App\Services\Contacts\ResolveRootContactAction;
+use App\Services\Contacts\SyncContactDistanceToMoscowAction;
 use App\Services\DataCollection\ExtractFirstNameAction;
+use App\Services\Dialogs\DeleteLastOutboundDialogMessageAction;
+use App\Services\Geo\ApplyGeoResolutionToContactAction;
+use App\Services\Geo\ResolveAndApplyGeoCityAction;
+use App\Services\Geo\ResolveGeoCityAction;
 use App\Services\Messages\PrepareMessageContentAction;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use RuntimeException;
 use Throwable;
@@ -60,6 +82,8 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
     private const V3_BUTTON_PLACEMENT_INLINE_MESSAGE = 'inline_message';
 
+    private const V3_AI_MESSAGE_BUNDLE_LIMIT = 10;
+
     private const V3_TELEGRAM_BUTTON_CALLBACK_PREFIX = 'v3b:';
 
     private const V3_TELEGRAM_BUTTON_CALLBACK_MAX_BYTES = 64;
@@ -67,6 +91,8 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
     private const PENDING_PROMPT_DELIVERY_STATE_KEY = 'run.pending_prompt_delivery';
 
     private const PENDING_PROMPT_REMOVE_TELEGRAM_KEYBOARD_STATE_KEY = 'run.pending_prompt_remove_telegram_keyboard';
+
+    private const V3_PENDING_REMOVE_TELEGRAM_KEYBOARD_STATE_KEY = 'v3.pending_remove_telegram_keyboard';
 
     private const V3_DIALOG_FIELDS_MAX_BYTES = 65536;
 
@@ -82,11 +108,99 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
     private const V3_OUTBOUND_RETRY_BACKOFF_SECONDS = [10, 30, 60, 180];
 
+    private const V3_BITRIX24_SYNC_OPERATIONS = [
+        'contact_sync',
+        'deal_sync',
+        'history_export',
+        'contact_sync_with_followups',
+    ];
+
+    private const TELEGRAM_REPLY_KEYBOARD_CLEANUP_TEXT = "\u{2060}";
+
+    private const V3_DISTANCE_TO_MOSCOW_OUTPUT_RESOLVED = 'distance_resolved';
+
+    private const V3_DISTANCE_TO_MOSCOW_OUTPUT_PENDING = 'distance_pending';
+
+    private const V3_DISTANCE_TO_MOSCOW_OUTPUT_UNKNOWN = 'distance_unknown';
+
+    private const V3_DISTANCE_TO_MOSCOW_OUTPUT_OUT_OF_SCOPE = 'distance_out_of_scope';
+
+    private const V3_DISTANCE_TO_MOSCOW_OUTPUT_FAILED = 'distance_failed';
+
+    private const V3_GEO_CITY_OUTPUT_FOUND = 'geo_found';
+
+    private const V3_GEO_CITY_OUTPUT_MANUAL_REQUIRED = 'geo_manual_required';
+
+    private const V3_GEO_CITY_OUTPUT_AMBIGUOUS = 'geo_ambiguous';
+
+    private const V3_GEO_CITY_OUTPUT_NOT_FOUND = 'geo_not_found';
+
+    private const V3_GEO_CITY_OUTPUT_BELOW_THRESHOLD = 'geo_below_threshold';
+
+    private const V3_GEO_CITY_OUTPUT_INACTIVE = 'geo_inactive';
+
+    private const V3_GEO_CITY_OUTPUT_FAILED = 'geo_failed';
+
+    private const V3_GEO_CITY_LEGACY_OUTPUTS_BY_STATUS = [
+        ResolveGeoCityAction::STATUS_MANUAL_REQUIRED => self::V3_GEO_CITY_OUTPUT_MANUAL_REQUIRED,
+        ResolveGeoCityAction::STATUS_AMBIGUOUS => self::V3_GEO_CITY_OUTPUT_AMBIGUOUS,
+        ResolveGeoCityAction::STATUS_BELOW_THRESHOLD => self::V3_GEO_CITY_OUTPUT_BELOW_THRESHOLD,
+        ResolveGeoCityAction::STATUS_INACTIVE => self::V3_GEO_CITY_OUTPUT_INACTIVE,
+        ResolveGeoCityAction::STATUS_FAILED => self::V3_GEO_CITY_OUTPUT_FAILED,
+    ];
+
+    private const V3_GEO_CITY_MANUAL_REQUIRED_STATUSES = [
+        ResolveGeoCityAction::STATUS_MANUAL_REQUIRED,
+        ResolveGeoCityAction::STATUS_AMBIGUOUS,
+        ResolveGeoCityAction::STATUS_BELOW_THRESHOLD,
+        ResolveGeoCityAction::STATUS_INACTIVE,
+    ];
+
     private const V3_CONTACT_CAPTURE_FIELDS = [
         'phone',
         'first_name',
         'last_name',
         'country',
+        'region',
+        'city',
+        'gender',
+        'age_years',
+        'age_range',
+    ];
+
+    private const V3_CONTACT_CAPTURE_DATA_TYPES = [
+        'phone' => 'phone',
+        'first_name' => 'any_text',
+        'last_name' => 'any_text',
+        'country' => 'any_text',
+        'region' => 'any_text',
+        'city' => 'any_text',
+        'gender' => 'any_text',
+        'age_years' => 'number',
+        'age_range' => 'any_text',
+    ];
+
+    private const V3_CONTACT_TRANSITION_WRITE_FIELDS = [
+        'first_name',
+        'last_name',
+        'country',
+        'region',
+        'city',
+        'gender',
+        'gender_source',
+        'age_years',
+        'age_range',
+        'first_name_source',
+        'first_name_resolution_method',
+    ];
+
+    private const V3_CONTACT_FIELD_CONDITION_FIELDS = [
+        'phone',
+        'first_name',
+        'first_name_source',
+        'last_name',
+        'country',
+        'region',
         'city',
         'gender',
         'age_years',
@@ -100,6 +214,8 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
     private ?int $matchedV3StartMessageId = null;
 
     private ?string $matchedV3RuntimeBlockId = null;
+
+    private int $v3SimulateStartDepth = 0;
 
     private int $v3ScenarioMessageDeferralDepth = 0;
 
@@ -118,12 +234,22 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         private readonly ApplyScenarioTagEffectsAction $applyScenarioTagEffectsAction,
         private readonly StoreOutboundScenarioMessageAction $storeOutboundScenarioMessageAction,
         private readonly SendBotDialogTextAction $sendBotDialogTextAction,
+        private readonly TelegramBotApiService $telegramBotApiService,
+        private readonly DeleteLastOutboundDialogMessageAction $deleteLastOutboundDialogMessageAction,
         private readonly PrepareMessageContentAction $prepareMessageContentAction,
+        private readonly AiStructuredGenerationService $aiStructuredGenerationService,
+        private readonly FirstNameResolutionAnalyticsService $firstNameResolutionAnalyticsService,
         private readonly ExtractFirstNameAction $extractFirstNameAction,
         private readonly ApplyContactFirstNameAction $applyContactFirstNameAction,
         private readonly AddContactPhoneAction $addContactPhoneAction,
         private readonly ResolveRootContactAction $resolveRootContactAction,
         private readonly QueueBitrix24ContactSyncAction $queueBitrix24ContactSyncAction,
+        private readonly QueueBitrix24DealSyncAction $queueBitrix24DealSyncAction,
+        private readonly QueueBitrix24HistoryExportAction $queueBitrix24HistoryExportAction,
+        private readonly SyncContactDistanceToMoscowAction $syncContactDistanceToMoscowAction,
+        private readonly ResolveAndApplyGeoCityAction $resolveAndApplyGeoCityAction,
+        private readonly ResolveGeoCityAction $resolveGeoCityAction,
+        private readonly ApplyGeoResolutionToContactAction $applyGeoResolutionToContactAction,
     ) {}
 
     public function code(): string
@@ -234,12 +360,113 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         }
     }
 
+    public function handleDelayedV3AiAnalysis(
+        int $scenarioRunId,
+        int $dialogId,
+        int $inboundMessageId,
+        string $blockId,
+        string $token,
+    ): void {
+        $this->withDeferredV3ScenarioMessages(function () use ($scenarioRunId, $dialogId, $inboundMessageId, $blockId, $token): void {
+            DB::transaction(function () use ($scenarioRunId, $dialogId, $inboundMessageId, $blockId, $token): void {
+                $dialog = Dialog::query()
+                    ->whereKey($dialogId)
+                    ->lockForUpdate()
+                    ->first();
+                $run = ScenarioRun::query()
+                    ->whereKey($scenarioRunId)
+                    ->lockForUpdate()
+                    ->first();
+                $message = Message::query()
+                    ->with(['channel', 'contact', 'contactIdentity', 'dialog'])
+                    ->find($inboundMessageId);
+
+                if (
+                    ! $dialog instanceof Dialog
+                    || ! $run instanceof ScenarioRun
+                    || ! $run->isActive()
+                    || ! $message instanceof Message
+                    || (int) $run->dialog_id !== $dialogId
+                ) {
+                    return;
+                }
+
+                $runtime = $this->v3RuntimeOrNull();
+
+                if ($runtime === null) {
+                    return;
+                }
+
+                $statePayload = $this->v3StatePayload($run->state_payload);
+                $currentBlockId = $this->v3RuntimeBlockId(
+                    $runtime,
+                    trim((string) data_get($statePayload, 'v3.current_block_id', '')),
+                    $statePayload,
+                );
+
+                if (
+                    $currentBlockId !== $blockId
+                    || (string) data_get($statePayload, "v3.ai_analysis_pending.$blockId.token", '') !== $token
+                ) {
+                    return;
+                }
+
+                $pendingOutputId = (string) data_get($statePayload, "v3.ai_analysis_pending.$blockId.output_id", '');
+                $pendingDelaySeconds = max(0, (int) data_get($statePayload, "v3.ai_analysis_pending.$blockId.delay_seconds", 0));
+
+                if (
+                    $pendingOutputId !== ''
+                    && ! $this->v3DelayedAiAnalysisWasAlreadyScheduled($statePayload, $blockId, (int) $message->id, $pendingOutputId)
+                ) {
+                    $pendingScheduledFor = CarbonImmutable::now();
+
+                    try {
+                        $pendingScheduledForRaw = data_get($statePayload, "v3.ai_analysis_pending.$blockId.scheduled_for");
+                        $pendingScheduledFor = is_string($pendingScheduledForRaw) && $pendingScheduledForRaw !== ''
+                            ? CarbonImmutable::parse($pendingScheduledForRaw)
+                            : $pendingScheduledFor;
+                    } catch (Throwable) {
+                        $pendingScheduledFor = CarbonImmutable::now();
+                    }
+
+                    $statePayload = $this->rememberV3DelayedAiAnalysisSchedule(
+                        $statePayload,
+                        $blockId,
+                        (int) $message->id,
+                        $pendingOutputId,
+                        $pendingDelaySeconds,
+                        $pendingScheduledFor,
+                    );
+                }
+
+                $progress = $this->advanceV3FromBlock(
+                    $message,
+                    $runtime,
+                    $blockId,
+                    $this->clearV3AiAnalysisPending($statePayload, $blockId),
+                    run: $run,
+                    suppressMessage: true,
+                    allowDelayedAiOutputs: false,
+                );
+
+                $run->forceFill([
+                    'status' => $progress['status'],
+                    'current_step' => $progress['current_step'],
+                    'state_payload' => $progress['state_payload'],
+                    'exit_outcome' => $progress['exit_outcome'],
+                    'finished_at' => $progress['status'] === ScenarioRun::STATUS_ACTIVE ? null : now(),
+                ])->save();
+            });
+        });
+    }
+
     public function shouldStart(Message $message): bool
     {
         $this->matchedBuilderStartMessageId = null;
         $this->matchedBuilderRuntimeBlockId = null;
         $this->matchedV3StartMessageId = null;
         $this->matchedV3RuntimeBlockId = null;
+        $this->v3SimulateStartDepth = 0;
 
         if (
             ! in_array($message->channel?->platform, [Channel::PLATFORM_TELEGRAM, Channel::PLATFORM_MAX], true)
@@ -507,6 +734,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             return is_array($block) && (
                 $this->v3TargetForContactShare($block, $channel) !== null
                 || $this->v3BlockAcceptsContactShareWaitReply($block)
+                || $this->v3AutomaticEdges($block) !== []
             );
         }
 
@@ -561,7 +789,8 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             return false;
         }
 
-        return $this->v3TargetForButtonCallback($callbackData, $block, $channel) !== null;
+        return $this->v3TargetForButtonCallback($callbackData, $block, $channel) !== null
+            || $this->v3WaitReplyTargetForButtonCallback($callbackData, $block, $channel) !== null;
     }
 
     public function handleInbound(ScenarioRun $run, Message $message): ScenarioInboundResult
@@ -981,13 +1210,16 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 $firstName,
                 Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
                 ApplyContactFirstNameAction::REASON_SCENARIO_CONFIRMED,
+                is_string($extraction['resolution_method'] ?? null) ? $extraction['resolution_method'] : null,
             );
 
             if (! $result->changed) {
                 return;
             }
 
-            $this->queueBitrix24ContactSyncAction->handle($contact);
+            if ($result->bitrix24RelevantChanged) {
+                $this->queueBitrix24ContactSyncAction->handle($contact);
+            }
 
             if (
                 $result->newSource === Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED
@@ -1135,9 +1367,17 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         }
 
         $block = $this->v3RuntimeBlock($runtime, $currentBlockId) ?? [];
+
+        if (is_array($block) && $this->v3BlockHasAiAnalysis($block)) {
+            return $this->handleV3AiAnalysisInbound($run, $message, $runtime, $currentBlockId);
+        }
+
         $transition = $this->v3TransitionForMessage($message, is_array($block) ? $block : [], $message->dialog);
 
-        if ($transition !== null) {
+        if (
+            $transition !== null
+            || $this->v3AutomaticEdges(is_array($block) ? $block : []) !== []
+        ) {
             return $this->handleV3TransitionInbound($run, $message, $runtime);
         }
 
@@ -1148,6 +1388,92 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             statePayload: $this->markV3Waiting($statePayload, $currentBlockId, $block, $message->channel),
             exitOutcome: null,
         );
+    }
+
+    /**
+     * @param  array<string, mixed>  $runtime
+     */
+    private function handleV3AiAnalysisInbound(
+        ScenarioRun $run,
+        Message $message,
+        array $runtime,
+        string $currentBlockId,
+    ): ScenarioInboundResult {
+        if ($message->dialog_id === null) {
+            return new ScenarioInboundResult(
+                consumed: false,
+                status: $run->status,
+                currentStep: $run->current_step,
+                statePayload: $this->v3StatePayload($run->state_payload),
+                exitOutcome: $run->exit_outcome,
+            );
+        }
+
+        return $this->withDeferredV3ScenarioMessages(function () use ($run, $message, $runtime, $currentBlockId): ScenarioInboundResult {
+            return DB::transaction(function () use ($run, $message, $runtime, $currentBlockId): ScenarioInboundResult {
+                $lockedRun = ScenarioRun::query()
+                    ->whereKey($run->id)
+                    ->lockForUpdate()
+                    ->first();
+
+                if (
+                    ! $lockedRun instanceof ScenarioRun
+                    || ! $lockedRun->isActive()
+                    || (int) $lockedRun->dialog_id !== (int) $message->dialog_id
+                ) {
+                    return new ScenarioInboundResult(
+                        consumed: false,
+                        status: $run->status,
+                        currentStep: $run->current_step,
+                        statePayload: $this->v3StatePayload($run->state_payload),
+                        exitOutcome: $run->exit_outcome,
+                    );
+                }
+
+                $statePayload = $this->v3StatePayload($lockedRun->state_payload);
+                $resolvedBlockId = $this->v3RuntimeBlockId(
+                    $runtime,
+                    trim((string) data_get($statePayload, 'v3.current_block_id', $currentBlockId)),
+                    $statePayload,
+                );
+
+                if ($resolvedBlockId !== $currentBlockId) {
+                    return new ScenarioInboundResult(
+                        consumed: true,
+                        status: ScenarioRun::STATUS_ACTIVE,
+                        currentStep: $currentBlockId,
+                        statePayload: $statePayload,
+                        exitOutcome: null,
+                    );
+                }
+
+                $progress = $this->advanceV3FromBlock(
+                    $message,
+                    $runtime,
+                    $currentBlockId,
+                    $statePayload,
+                    run: $lockedRun,
+                    suppressMessage: true,
+                );
+
+                $lockedRun->forceFill([
+                    'status' => $progress['status'],
+                    'current_step' => $progress['current_step'],
+                    'state_payload' => $progress['state_payload'],
+                    'exit_outcome' => $progress['exit_outcome'],
+                    'finished_at' => $progress['status'] === ScenarioRun::STATUS_ACTIVE ? null : now(),
+                ])->save();
+
+                return new ScenarioInboundResult(
+                    consumed: true,
+                    status: $progress['status'],
+                    currentStep: $progress['current_step'],
+                    statePayload: $progress['state_payload'],
+                    exitOutcome: $progress['exit_outcome'],
+                    persisted: true,
+                );
+            });
+        });
     }
 
     /**
@@ -1230,9 +1556,43 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 }
 
                 $block = $this->v3RuntimeBlock($runtime, $currentBlockId) ?? [];
-                $transition = $this->v3TransitionForMessage($message, is_array($block) ? $block : [], $dialog);
+                $transitions = $this->v3TransitionCandidatesForMessage($message, is_array($block) ? $block : [], $dialog);
 
-                if ($transition === null) {
+                if ($transitions === []) {
+                    if ($this->v3AutomaticEdges(is_array($block) ? $block : []) !== []) {
+                        if ($this->v3ShouldRemoveTelegramReplyKeyboardAfterInbound($message, is_array($block) ? $block : [])) {
+                            $statePayload = $this->markV3PendingTelegramKeyboardRemoval($statePayload);
+                        }
+
+                        $automaticProgress = $this->advanceV3AutomaticEdges(
+                            $message,
+                            $runtime,
+                            is_array($block) ? $block : [],
+                            $statePayload,
+                            count(is_array($runtime['blocks'] ?? null) ? $runtime['blocks'] : []) + 1,
+                            $lockedRun,
+                        );
+
+                        if ($automaticProgress !== null) {
+                            $lockedRun->forceFill([
+                                'status' => $automaticProgress['status'],
+                                'current_step' => $automaticProgress['current_step'],
+                                'state_payload' => $automaticProgress['state_payload'],
+                                'exit_outcome' => $automaticProgress['exit_outcome'],
+                                'finished_at' => $automaticProgress['status'] === ScenarioRun::STATUS_ACTIVE ? null : now(),
+                            ])->save();
+
+                            return new ScenarioInboundResult(
+                                consumed: true,
+                                status: $automaticProgress['status'],
+                                currentStep: $automaticProgress['current_step'],
+                                statePayload: $automaticProgress['state_payload'],
+                                exitOutcome: $automaticProgress['exit_outcome'],
+                                persisted: true,
+                            );
+                        }
+                    }
+
                     return new ScenarioInboundResult(
                         consumed: true,
                         status: ScenarioRun::STATUS_ACTIVE,
@@ -1242,10 +1602,17 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                     );
                 }
 
-                $transitionEdge = $transition['edge'];
-                $capturedValue = $transition['captured_value'];
+                $transition = null;
 
-                if (! $this->applyV3TransitionSideEffectsToDialog($dialog, $message, $transitionEdge, $capturedValue)) {
+                foreach ($transitions as $candidate) {
+                    if ($this->applyV3TransitionSideEffectsToDialog($dialog, $message, $candidate['edge'], $candidate['captured_value'])) {
+                        $transition = $candidate;
+
+                        break;
+                    }
+                }
+
+                if ($transition === null) {
                     return new ScenarioInboundResult(
                         consumed: true,
                         status: ScenarioRun::STATUS_ACTIVE,
@@ -1255,6 +1622,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                     );
                 }
 
+                $transitionEdge = $transition['edge'];
                 $targetBlockId = filled($transitionEdge['target_block_id'] ?? null) ? (string) $transitionEdge['target_block_id'] : null;
 
                 if ($targetBlockId === null) {
@@ -1265,6 +1633,10 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                         statePayload: $this->markV3Waiting($statePayload, $currentBlockId, $block, $message->channel),
                         exitOutcome: null,
                     );
+                }
+
+                if ($this->v3ShouldRemoveTelegramReplyKeyboardAfterInbound($message, $block)) {
+                    $statePayload = $this->markV3PendingTelegramKeyboardRemoval($statePayload);
                 }
 
                 $progress = $this->advanceV3FromBlock($message, $runtime, $targetBlockId, $statePayload, run: $lockedRun);
@@ -1295,28 +1667,38 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
      */
     private function v3TransitionForMessage(Message $message, array $block, ?Dialog $dialog): ?array
     {
+        return $this->v3TransitionCandidatesForMessage($message, $block, $dialog)[0] ?? null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     * @return list<array{edge: array<string, mixed>, captured_value: array{valid: bool, value: string|null, phone_raw?: string|null, phone_normalized?: string|null}}>
+     */
+    private function v3TransitionCandidatesForMessage(Message $message, array $block, ?Dialog $dialog): array
+    {
         $edges = collect($this->v3TransitionEdgesForMessage($message, $block))
             ->sort(fn (array $left, array $right): int => $this->compareV3TransitionEdges($left, $right))
             ->values();
+        $candidates = [];
 
         foreach ($edges as $edge) {
             if ($this->v3TransitionLimitReached($dialog, $edge)) {
                 continue;
             }
 
-            $capturedValue = $this->v3CapturedValueForEdge($message, $edge);
+            $capturedValue = $this->v3CapturedValueForEdge($message, $edge, $block);
 
             if ($capturedValue['valid'] !== true) {
                 continue;
             }
 
-            return [
+            $candidates[] = [
                 'edge' => $edge,
                 'captured_value' => $capturedValue,
             ];
         }
 
-        return null;
+        return $candidates;
     }
 
     /**
@@ -1345,8 +1727,9 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 && $this->v3EdgeAllowsFieldCondition($message, $edge)
                 && (
                     ($edge['mode'] ?? null) !== 'wait_reply'
-                    || $this->messageMatchesV3WaitReplyEdge($message, $edge)
-                ))
+                    || $this->messageMatchesV3WaitReplyEdge($message, $edge, $block)
+                )
+                && $this->v3EdgeAllowsExpression($message, $edge))
             ->values()
             ->all();
     }
@@ -1370,7 +1753,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
     /**
      * @param  array<string, mixed>  $edge
      */
-    private function messageMatchesV3WaitReplyEdge(Message $message, array $edge): bool
+    private function messageMatchesV3WaitReplyEdge(Message $message, array $edge, ?array $block = null): bool
     {
         $match = is_array($edge['match'] ?? null) ? $edge['match'] : [];
         $type = (string) ($match['type'] ?? 'any_inbound');
@@ -1379,7 +1762,8 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             return true;
         }
 
-        $messageText = $this->normalizeV3ButtonText((string) $message->text);
+        $callbackAnswerText = $this->v3SelectedButtonTextForCallbackMessage($message, $block);
+        $messageText = $this->normalizeV3ButtonText((string) ($callbackAnswerText ?? $message->text));
         $messageParameter = $this->normalizeV3ButtonText((string) $message->message_parameter);
         $variants = collect($match['variants'] ?? [])
             ->map(fn (mixed $variant): string => $this->normalizeV3ButtonText((string) $variant))
@@ -1390,7 +1774,11 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             return false;
         }
 
-        if ($this->messageIsV3Callback($message) && $type !== self::V3_MATCH_EXACT_CALLBACK) {
+        if (
+            $this->messageIsV3Callback($message)
+            && $type !== self::V3_MATCH_EXACT_CALLBACK
+            && $callbackAnswerText === null
+        ) {
             return false;
         }
 
@@ -1479,7 +1867,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             return $fieldsPayload[$fieldKey] ?? null;
         }
 
-        if (! $message->contact instanceof Contact || ! in_array($fieldKey, self::V3_CONTACT_CAPTURE_FIELDS, true)) {
+        if (! $message->contact instanceof Contact || ! in_array($fieldKey, self::V3_CONTACT_FIELD_CONDITION_FIELDS, true)) {
             return null;
         }
 
@@ -1524,6 +1912,32 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         }
 
         return $this->normalizeV3ButtonText((string) $actualValue) === $expected;
+    }
+
+    /**
+     * @param  array<string, mixed>  $edge
+     */
+    private function v3EdgeAllowsExpression(Message $message, array $edge): bool
+    {
+        $expression = trim((string) ($edge['expression'] ?? ''));
+
+        if ($expression === '') {
+            return true;
+        }
+
+        try {
+            return app(ScenarioEdgeExpressionCondition::class)->evaluate($expression, $message);
+        } catch (Throwable $exception) {
+            Log::warning('V3 edge expression condition failed.', [
+                'scenario_id' => $this->scenario->id,
+                'edge_id' => $edge['id'] ?? null,
+                'edge_key' => $edge['edge_key'] ?? null,
+                'message_id' => $message->id,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return false;
+        }
     }
 
     /**
@@ -1576,7 +1990,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
      * @param  array<string, mixed>  $edge
      * @return array{valid: bool, value: string|null, phone_raw?: string|null, phone_normalized?: string|null}
      */
-    private function v3CapturedValueForEdge(Message $message, array $edge): array
+    private function v3CapturedValueForEdge(Message $message, array $edge, ?array $block = null): array
     {
         $capture = is_array($edge['input_capture'] ?? null) ? $edge['input_capture'] : [];
 
@@ -1586,8 +2000,10 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
         $dataType = (string) ($capture['data_type'] ?? 'any_text');
         $sharedPhone = $this->v3SharedPhoneData($message);
-        $value = trim((string) (($sharedPhone['normalized'] ?? null) ?? $message->text));
-        $rawValue = trim((string) (($sharedPhone['raw'] ?? null) ?? $message->text));
+        $callbackAnswerText = $this->v3SelectedButtonTextForCallbackMessage($message, $block);
+        $answerText = $callbackAnswerText ?? $message->text;
+        $value = trim((string) (($sharedPhone['normalized'] ?? null) ?? $answerText));
+        $rawValue = trim((string) (($sharedPhone['raw'] ?? null) ?? $answerText));
 
         if ($value === '') {
             return ['valid' => false, 'value' => null];
@@ -1678,6 +2094,33 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
      */
     private function applyV3TransitionSideEffectsToDialog(Dialog $dialog, Message $message, array $edge, ?array $capturedValue): bool
     {
+        try {
+            return DB::transaction(fn (): bool => $this->applyV3TransitionSideEffectsToDialogInTransaction(
+                $dialog,
+                $message,
+                $edge,
+                $capturedValue,
+            ));
+        } catch (Throwable $throwable) {
+            Log::warning('scenario.v3_transition_side_effects_failed', [
+                'scenario_code' => $this->code(),
+                'dialog_id' => $message->dialog_id,
+                'message_id' => $message->id,
+                'edge_key' => $edge['edge_key'] ?? null,
+                'exception_class' => $throwable::class,
+                'error' => $throwable->getMessage(),
+            ]);
+
+            return false;
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $edge
+     * @param  array{valid?: bool, value?: string|null, phone_raw?: string|null, phone_normalized?: string|null}|null  $capturedValue
+     */
+    private function applyV3TransitionSideEffectsToDialogInTransaction(Dialog $dialog, Message $message, array $edge, ?array $capturedValue): bool
+    {
         $fieldsPayload = is_array($dialog->fields_payload) ? $dialog->fields_payload : [];
         $limit = max(0, (int) ($edge['transition_limit'] ?? 0));
         $counterKey = $this->v3TransitionCountKey($edge);
@@ -1698,7 +2141,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 if (! $this->applyV3TransitionCaptureToContact($message, $capture, $capturedValue ?? [])) {
                     return false;
                 }
-            } elseif (! preg_match('/^[A-Za-z][A-Za-z0-9_]{0,63}$/', $fieldKey)) {
+            } elseif (! $this->validV3DialogVariableKey($fieldKey)) {
                 return false;
             } elseif ($captureValue === null || mb_strlen($captureValue) > self::V3_DIALOG_FIELD_VALUE_MAX_LENGTH) {
                 return false;
@@ -1717,6 +2160,8 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             }
         }
 
+        $this->applyV3TransitionActions($message, $edge, $fieldsPayload);
+
         data_set($fieldsPayload, '_v3.transition_counts.'.$counterKey, $currentCount + 1);
 
         $encoded = json_encode($fieldsPayload);
@@ -1728,12 +2173,139 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 'edge_key' => $edge['edge_key'] ?? null,
             ]);
 
-            return false;
+            throw new RuntimeException('v3_dialog_fields_payload_limit_exceeded');
         }
 
         $dialog->forceFill(['fields_payload' => $fieldsPayload])->save();
 
         return true;
+    }
+
+    /**
+     * @param  array<string, mixed>  $edge
+     * @param  array<string, mixed>  $fieldsPayload
+     */
+    private function applyV3TransitionActions(Message $message, array $edge, array &$fieldsPayload): void
+    {
+        $actions = is_array($edge['transition_actions'] ?? null) ? $edge['transition_actions'] : [];
+
+        foreach ($actions as $index => $action) {
+            if (! is_array($action) || ! $this->applyV3TransitionAction($message, $action, $fieldsPayload)) {
+                Log::info('scenario.v3_transition_action_failed', [
+                    'scenario_code' => $this->code(),
+                    'dialog_id' => $message->dialog_id,
+                    'message_id' => $message->id,
+                    'edge_key' => $edge['edge_key'] ?? null,
+                    'action_index' => $index,
+                    'action_type' => is_array($action) ? ($action['type'] ?? null) : null,
+                    'target_scope' => is_array($action) ? ($action['target_scope'] ?? null) : null,
+                    'target_field' => is_array($action) ? ($action['target_field'] ?? null) : null,
+                    'status' => 'validation_failed',
+                ]);
+
+                throw new RuntimeException('v3_transition_action_failed');
+            }
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $action
+     * @param  array<string, mixed>  $fieldsPayload
+     */
+    private function applyV3TransitionAction(Message $message, array $action, array &$fieldsPayload): bool
+    {
+        if (($action['type'] ?? null) !== 'write_field' || ($action['value_source'] ?? 'static') !== 'static') {
+            return false;
+        }
+
+        $targetScope = (string) ($action['target_scope'] ?? 'contact');
+        $targetField = trim((string) ($action['target_field'] ?? ''));
+        $value = trim((string) ($action['value'] ?? ''));
+
+        if ($targetField === '' || $value === '') {
+            return false;
+        }
+
+        if ($targetScope === 'dialog') {
+            return $this->applyV3TransitionDialogFieldToPayload($fieldsPayload, $targetField, $value);
+        }
+
+        if ($targetScope === 'contact') {
+            return $this->applyV3TransitionContactField($message, $targetField, $value);
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  array<string, mixed>  $fieldsPayload
+     */
+    private function applyV3TransitionDialogFieldToPayload(array &$fieldsPayload, string $fieldKey, string $value): bool
+    {
+        if (! $this->validV3DialogVariableKey($fieldKey) || mb_strlen($value) > self::V3_DIALOG_FIELD_VALUE_MAX_LENGTH) {
+            return false;
+        }
+
+        $userFieldCount = $this->v3DialogUserFieldCount($fieldsPayload);
+
+        if (! array_key_exists($fieldKey, $fieldsPayload) && $userFieldCount >= self::V3_DIALOG_USER_FIELDS_MAX) {
+            return false;
+        }
+
+        $fieldsPayload[$fieldKey] = $value;
+
+        return true;
+    }
+
+    private function applyV3TransitionContactField(Message $message, string $fieldKey, string $value): bool
+    {
+        if (! $message->contact instanceof Contact || ! in_array($fieldKey, self::V3_CONTACT_TRANSITION_WRITE_FIELDS, true)) {
+            return false;
+        }
+
+        $contact = $this->resolveRootContactAction->handle($message->contact);
+        $lockedContact = Contact::query()
+            ->whereKey($contact->id)
+            ->lockForUpdate()
+            ->first();
+
+        if (! $lockedContact instanceof Contact) {
+            return false;
+        }
+
+        return match ($fieldKey) {
+            'first_name' => $this->applyV3ContactFirstNameCapture(
+                $lockedContact,
+                $value,
+                Contact::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT,
+                new FirstNameResolutionWriteContext(
+                    dialogId: $message->dialog_id,
+                    channelId: $message->channel_id,
+                    scenarioId: $this->scenario->id,
+                    messageId: $message->id,
+                ),
+            ),
+            'last_name', 'country', 'region', 'city' => $this->applyV3ContactStringCapture($lockedContact, $fieldKey, $value),
+            'gender' => $this->applyV3ContactEnumCapture($lockedContact, $fieldKey, $value, Contact::genderOptions()),
+            'gender_source' => $this->applyV3ContactEnumCapture($lockedContact, $fieldKey, $value, Contact::genderSourceOptions()),
+            'age_range' => $this->applyV3ContactEnumCapture($lockedContact, $fieldKey, $value, Contact::ageRangeOptions()),
+            'age_years' => $this->applyV3ContactAgeYearsCapture($lockedContact, $value),
+            'first_name_source' => $this->applyV3ContactEnumCapture($lockedContact, $fieldKey, $value, $this->firstNameSourceOptionsForV3()),
+            'first_name_resolution_method' => $this->applyV3ContactEnumCapture($lockedContact, $fieldKey, $value, Contact::firstNameResolutionMethodOptions()),
+            default => false,
+        };
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function firstNameSourceOptionsForV3(): array
+    {
+        return collect(Contact::allowedFirstNameSources())
+            ->mapWithKeys(fn (string $source): array => [
+                $source => Contact::formatFirstNameSourceBadgeLabel($source) ?? $source,
+            ])
+            ->all();
     }
 
     /**
@@ -1765,8 +2337,22 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
         return match ($fieldKey) {
             'phone' => $this->applyV3ContactPhoneCapture($message, $lockedContact, $capturedValue),
-            'first_name' => $this->applyV3ContactFirstNameCapture($lockedContact, $value),
-            'last_name', 'country', 'city' => $this->applyV3ContactStringCapture($lockedContact, $fieldKey, $value),
+            'first_name' => $this->applyV3ContactFirstNameCapture(
+                $lockedContact,
+                $value,
+                is_string($capture['first_name_resolution_method'] ?? null)
+                    ? $capture['first_name_resolution_method']
+                    : Contact::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT,
+                ($capture['first_name_resolution_write_context'] ?? null) instanceof FirstNameResolutionWriteContext
+                    ? $capture['first_name_resolution_write_context']
+                    : new FirstNameResolutionWriteContext(
+                        dialogId: $message->dialog_id,
+                        channelId: $message->channel_id,
+                        scenarioId: $this->scenario->id,
+                        messageId: $message->id,
+                    ),
+            ),
+            'last_name', 'country', 'region', 'city' => $this->applyV3ContactStringCapture($lockedContact, $fieldKey, $value),
             'gender' => $this->applyV3ContactEnumCapture($lockedContact, $fieldKey, $value, Contact::genderOptions()),
             'age_range' => $this->applyV3ContactEnumCapture($lockedContact, $fieldKey, $value, Contact::ageRangeOptions()),
             'age_years' => $this->applyV3ContactAgeYearsCapture($lockedContact, $value),
@@ -1804,16 +2390,22 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         return true;
     }
 
-    private function applyV3ContactFirstNameCapture(Contact $contact, string $value): bool
-    {
+    private function applyV3ContactFirstNameCapture(
+        Contact $contact,
+        string $value,
+        ?string $resolutionMethod = Contact::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT,
+        ?FirstNameResolutionWriteContext $writeContext = null,
+    ): bool {
         $result = $this->applyContactFirstNameAction->handle(
             $contact,
             $value,
             Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
             ApplyContactFirstNameAction::REASON_SCENARIO_CONFIRMED,
+            $resolutionMethod,
+            $writeContext,
         );
 
-        if ($result->changed) {
+        if ($result->bitrix24RelevantChanged) {
             $this->queueBitrix24ContactSyncAction->handle($contact);
         }
 
@@ -1908,6 +2500,8 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         ?int $remainingTransitions = null,
         ?ScenarioRun $run = null,
         bool $preservePreviousStateForTerminalNonState = false,
+        bool $suppressMessage = false,
+        bool $allowDelayedAiOutputs = true,
     ): array {
         $remainingTransitions ??= count(is_array($runtime['blocks'] ?? null) ? $runtime['blocks'] : []) + 1;
 
@@ -1935,17 +2529,99 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         $waitingButtonRows = $this->v3WaitingButtonRows($block, $message->channel);
         $buttonPlacement = $this->v3ButtonPlacement($block);
 
-        if ($messagePayload !== null) {
+        $actionResult = $this->applyV3ActionModule($message, $runtime, $block, $statePayload, $run);
+
+        if ($actionResult === null) {
+            $activeBlockId = $isNonStateBlock && $previousBlockId !== null ? $previousBlockId : $blockId;
+
+            return $this->activeProgress($activeBlockId, $statePayload);
+        }
+
+        $statePayload = $actionResult['state_payload'];
+
+        if (filled($actionResult['reroute_block_id'] ?? null)) {
+            $rerouteMessage = ($actionResult['reroute_message'] ?? null) instanceof Message
+                ? $actionResult['reroute_message']
+                : $message;
+
+            $this->v3SimulateStartDepth++;
+
+            try {
+                return $this->advanceV3FromBlock(
+                    $rerouteMessage,
+                    $runtime,
+                    (string) $actionResult['reroute_block_id'],
+                    $statePayload,
+                    $remainingTransitions - 1,
+                    $run,
+                );
+            } finally {
+                $this->v3SimulateStartDepth = max(0, $this->v3SimulateStartDepth - 1);
+            }
+        }
+
+        if (($actionResult['stop_current_execution'] ?? false) === true) {
+            $activeBlockId = $isNonStateBlock && $previousBlockId !== null ? $previousBlockId : $blockId;
+
+            return $this->activeProgress($activeBlockId, $statePayload);
+        }
+
+        if ($actionResult['output_id'] !== null) {
+            $actionProgress = $this->advanceV3ActionResultEdge(
+                $message,
+                $runtime,
+                $block,
+                $statePayload,
+                $actionResult['output_id'],
+                $remainingTransitions,
+                $run,
+            );
+
+            if ($actionProgress !== null) {
+                return $actionProgress;
+            }
+        }
+
+        if ($messagePayload !== null && ! $suppressMessage) {
             $replyButtonRows = $visibleButtonRows !== [] ? $visibleButtonRows : null;
+            $removeTelegramKeyboard = false;
+            $removeTelegramKeyboardBeforeMessage = false;
+            $clearPendingTelegramKeyboardRemoval = false;
+
+            if (
+                $this->v3PendingTelegramKeyboardRemoval($statePayload)
+                && $message->channel?->platform === Channel::PLATFORM_TELEGRAM
+            ) {
+                $replyMarkupKind = $this->v3TelegramReplyMarkupKind(false, $replyButtonRows, $buttonPlacement);
+
+                if ($replyMarkupKind === 'none') {
+                    $removeTelegramKeyboard = true;
+                    $clearPendingTelegramKeyboardRemoval = true;
+                } elseif ($replyMarkupKind === 'inline_message') {
+                    // Telegram cannot remove a reply keyboard and show inline buttons in the same message.
+                    // Send a technical cleanup message first, then delete it and send the real inline message.
+                    $removeTelegramKeyboardBeforeMessage = true;
+                    $clearPendingTelegramKeyboardRemoval = true;
+                } elseif ($replyMarkupKind === 'reply_keyboard') {
+                    $clearPendingTelegramKeyboardRemoval = true;
+                }
+            }
 
             if (! $this->dispatchScenarioMessage(
                 $message,
-                (string) ($messagePayload['text'] ?? ''),
+                $this->v3TextWithVariables(
+                    $message,
+                    $this->v3MessageTextForPayload($message, $messagePayload),
+                    $statePayload,
+                    $blockId,
+                ),
                 (string) ($messagePayload['text_format'] ?? Message::TEXT_FORMAT_PLAIN_TEXT),
+                removeTelegramKeyboard: $removeTelegramKeyboard,
                 replyButtonRows: $replyButtonRows,
                 buttonPlacement: $buttonPlacement,
                 v3CallbackBlockId: $blockId,
                 scenarioRun: $run,
+                removeTelegramKeyboardBeforeMessage: $removeTelegramKeyboardBeforeMessage,
             )) {
                 $activeBlockId = $isNonStateBlock && $previousBlockId !== null ? $previousBlockId : $blockId;
 
@@ -1954,6 +2630,24 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                     $this->markPendingPromptDelivery($statePayload),
                 );
             }
+
+            if ($clearPendingTelegramKeyboardRemoval) {
+                $statePayload = $this->clearV3PendingTelegramKeyboardRemoval($statePayload);
+            }
+        }
+
+        $aiProgress = $this->advanceV3AiAnalysis(
+            $message,
+            $runtime,
+            $block,
+            $statePayload,
+            $remainingTransitions,
+            $run,
+            $allowDelayedAiOutputs,
+        );
+
+        if ($aiProgress !== null) {
+            return $aiProgress;
         }
 
         if ($isNonStateBlock) {
@@ -1993,6 +2687,10 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             );
         }
 
+        if ($this->v3BlockHasActionModule($block) && $this->v3WaitReplyEdges($block) === [] && $this->v3AutomaticEdges($block) === []) {
+            return $this->completedV3Progress($statePayload);
+        }
+
         return $this->activeProgress(
             $blockId,
             $this->markV3Waiting($statePayload, $blockId, $block, $message->channel),
@@ -2026,6 +2724,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 ! $this->v3EdgeAllowsContactPhone($message, $edge)
                 || ! $this->v3EdgeAllowsDialogPhone($message, $edge)
                 || ! $this->v3EdgeAllowsFieldCondition($message, $edge)
+                || ! $this->v3EdgeAllowsExpression($message, $edge)
             ) {
                 continue;
             }
@@ -2070,6 +2769,3093 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         }
 
         return $progress;
+    }
+
+    /**
+     * @param  array<string, mixed>  $runtime
+     * @param  array<string, mixed>  $block
+     * @param  array<string, mixed>  $statePayload
+     * @return array{
+     *     status: string,
+     *     current_step: ?string,
+     *     state_payload: array<string, mixed>,
+     *     exit_outcome: ?string,
+     * }|null
+     */
+    private function advanceV3AiAnalysis(
+        Message $message,
+        array $runtime,
+        array $block,
+        array &$statePayload,
+        int $remainingTransitions,
+        ?ScenarioRun $run,
+        bool $allowDelayedOutputs = true,
+    ): ?array {
+        $analysis = is_array($block['ai_analysis'] ?? null) ? $block['ai_analysis'] : null;
+
+        if ($analysis === null) {
+            return null;
+        }
+
+        $blockId = filled($block['id'] ?? null) ? (string) $block['id'] : 'unknown';
+        $result = $this->v3AiAnalysisResult($message, $analysis, $statePayload, $blockId);
+        $outputId = (string) ($result['output_id'] ?? '');
+        $delaySeconds = max(0, min(300, (int) ($result['delay_seconds'] ?? 0)));
+
+        data_set($statePayload, 'v3.ai_analysis.'.$blockId, [
+            'output_id' => $outputId,
+            'label' => (string) ($result['label'] ?? ''),
+            'data' => is_array($result['data'] ?? null) ? $result['data'] : [],
+            'delay_seconds' => $delaySeconds,
+            'message_id' => (int) $message->id,
+            'ai_request_id' => is_numeric($result['ai_request_id'] ?? null) ? (int) $result['ai_request_id'] : null,
+            'first_name_resolution_event_id' => is_numeric($result['first_name_resolution_event_id'] ?? null) ? (int) $result['first_name_resolution_event_id'] : null,
+            'first_name_resolution_correlation_id' => is_string($result['first_name_resolution_correlation_id'] ?? null)
+                ? $result['first_name_resolution_correlation_id']
+                : null,
+            'error' => (bool) ($result['error'] ?? false),
+            'error_reason' => filled($result['error_reason'] ?? null) ? (string) $result['error_reason'] : null,
+        ]);
+
+        $edges = $this->v3AiAnalysisEdges($analysis, $outputId);
+
+        if ($edges === []) {
+            return null;
+        }
+
+        foreach ($edges as $edge) {
+            $targetBlockId = filled($edge['target_block_id'] ?? null) ? (string) $edge['target_block_id'] : null;
+
+            if ($targetBlockId === null) {
+                continue;
+            }
+
+            if (
+                ! $this->v3EdgeAllowsContactPhone($message, $edge)
+                || ! $this->v3EdgeAllowsDialogPhone($message, $edge)
+                || ! $this->v3EdgeAllowsFieldCondition($message, $edge)
+                || ! $this->v3EdgeAllowsExpression($message, $edge)
+            ) {
+                continue;
+            }
+
+            if ($allowDelayedOutputs && $delaySeconds > 0) {
+                $delayedStatePayload = $this->scheduleV3DelayedAiAnalysis(
+                    $message,
+                    $run,
+                    $blockId,
+                    $outputId,
+                    $delaySeconds,
+                    $statePayload,
+                );
+
+                if ($delayedStatePayload !== null) {
+                    return $this->activeProgress(
+                        $blockId,
+                        $this->markV3Waiting($delayedStatePayload, $blockId, $block, $message->channel),
+                    );
+                }
+            }
+
+            $dialog = $message->dialog_id !== null
+                ? Dialog::query()->find($message->dialog_id)
+                : null;
+
+            if (
+                $dialog instanceof Dialog
+                && ! $this->applyV3TransitionSideEffectsToDialog($dialog, $message, $edge, null)
+            ) {
+                continue;
+            }
+
+            $statePayload = $this->clearV3AiAnalysisPending($statePayload, $blockId);
+
+            return $this->advanceV3FromBlock(
+                $message,
+                $runtime,
+                $targetBlockId,
+                $statePayload,
+                $remainingTransitions - 1,
+                $run,
+            );
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $analysis
+     * @return list<array<string, mixed>>
+     */
+    private function v3AiAnalysisEdges(array $analysis, string $outputId): array
+    {
+        $outputs = is_array($analysis['outputs'] ?? null) ? $analysis['outputs'] : [];
+
+        return collect($outputs)
+            ->filter(fn (mixed $output): bool => is_array($output)
+                && ($output['id'] ?? null) === $outputId
+                && is_array($output['edge'] ?? null))
+            ->map(fn (array $output): array => $output['edge'])
+            ->sort(fn (array $left, array $right): int => $this->compareV3TransitionEdges($left, $right))
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  array<string, mixed>  $runtime
+     * @param  array<string, mixed>  $block
+     * @param  array<string, mixed>  $statePayload
+     * @return array{state_payload: array<string, mixed>, output_id: ?string, stop_current_execution?: bool, reroute_block_id?: string, reroute_message?: Message}|null
+     */
+    private function applyV3ActionModule(Message $message, array $runtime, array $block, array $statePayload, ?ScenarioRun $run): ?array
+    {
+        $actions = is_array($block['actions'] ?? null) ? $block['actions'] : [];
+
+        if ($actions === []) {
+            return ['state_payload' => $statePayload, 'output_id' => null];
+        }
+
+        foreach ($actions as $actionIndex => $action) {
+            if (! is_array($action)) {
+                continue;
+            }
+
+            if (($action['type'] ?? null) === 'check_data') {
+                return $this->applyV3CheckDataAction(
+                    $message,
+                    $action,
+                    $statePayload,
+                    filled($block['id'] ?? null) ? (string) $block['id'] : null,
+                );
+            }
+
+            if (($action['type'] ?? null) === 'edit_message') {
+                $statePayload = $this->applyV3EditMessageAction($message, $action, $statePayload, $run);
+
+                continue;
+            }
+
+            if (($action['type'] ?? null) === 'calculate_distance_to_moscow') {
+                return $this->applyV3CalculateDistanceToMoscowAction(
+                    $message,
+                    $statePayload,
+                    filled($block['id'] ?? null) ? (string) $block['id'] : null,
+                );
+            }
+
+            if (($action['type'] ?? null) === 'resolve_geo_city') {
+                return $this->applyV3ResolveGeoCityAction(
+                    $message,
+                    $action,
+                    $block,
+                    $statePayload,
+                    filled($block['id'] ?? null) ? (string) $block['id'] : null,
+                );
+            }
+
+            if (($action['type'] ?? null) === 'variables') {
+                $result = $this->applyV3VariablesAction(
+                    $message,
+                    $action,
+                    $statePayload,
+                    filled($block['id'] ?? null) ? (string) $block['id'] : null,
+                    $run,
+                );
+
+                $statePayload = $result['state_payload'] ?? $statePayload;
+
+                if (($result['stop_current_execution'] ?? false) === true || ($result['output_id'] ?? null) !== null) {
+                    return $result;
+                }
+
+                continue;
+            }
+
+            if (($action['type'] ?? null) === 'simulate_start_parameter') {
+                $result = $this->applyV3SimulateStartParameterAction(
+                    $message,
+                    $runtime,
+                    $action,
+                    $block,
+                    $statePayload,
+                    $run,
+                );
+
+                if (filled($result['reroute_block_id'] ?? null)) {
+                    return $result;
+                }
+
+                $statePayload = $result['state_payload'] ?? $statePayload;
+
+                continue;
+            }
+
+            if (($action['type'] ?? null) === 'tag_effects') {
+                $result = $this->applyV3TagEffectsAction(
+                    $message,
+                    $action,
+                    $statePayload,
+                    filled($block['id'] ?? null) ? (string) $block['id'] : null,
+                    $run,
+                );
+                $statePayload = $result['state_payload'] ?? $statePayload;
+
+                if (($result['stop_current_execution'] ?? false) === true || ($result['output_id'] ?? null) !== null) {
+                    return $result;
+                }
+
+                continue;
+            }
+
+            if (($action['type'] ?? null) === 'bitrix24_sync') {
+                $result = $this->applyV3Bitrix24SyncAction(
+                    $message,
+                    $action,
+                    $statePayload,
+                    filled($block['id'] ?? null) ? (string) $block['id'] : null,
+                    $run,
+                    (int) $actionIndex,
+                );
+                $statePayload = $result['state_payload'] ?? $statePayload;
+
+                continue;
+            }
+
+            if (($action['type'] ?? null) !== 'write_contact_field') {
+                Log::warning('scenario.v3_unsupported_action_skipped', [
+                    'scenario_code' => $this->code(),
+                    'scenario_run_id' => $run?->id,
+                    'block_id' => filled($block['id'] ?? null) ? (string) $block['id'] : null,
+                    'action_type' => is_scalar($action['type'] ?? null) ? (string) $action['type'] : null,
+                ]);
+
+                return [
+                    'state_payload' => $statePayload,
+                    'output_id' => 'failed',
+                ];
+            }
+
+            if (! $this->applyV3WriteContactFieldAction($message, $action, $statePayload)) {
+                return null;
+            }
+        }
+
+        return ['state_payload' => $statePayload, 'output_id' => null];
+    }
+
+    /**
+     * @param  array<string, mixed>  $action
+     * @param  array<string, mixed>  $statePayload
+     * @return array{state_payload: array<string, mixed>, output_id: null}
+     */
+    private function applyV3Bitrix24SyncAction(
+        Message $message,
+        array $action,
+        array $statePayload,
+        ?string $blockId,
+        ?ScenarioRun $run,
+        int $actionIndex,
+    ): array {
+        $operation = $this->normalizeV3Bitrix24SyncOperation($action['operation'] ?? null);
+
+        if (! $message->contact instanceof Contact) {
+            $diagnostic = $this->v3Bitrix24SyncDiagnostic(
+                operation: $operation,
+                status: 'missing_contact',
+                blockId: $blockId,
+                actionIndex: $actionIndex,
+                message: $message,
+                run: $run,
+                queued: false,
+                alreadyPending: false,
+                ready: false,
+                rootContactId: null,
+                reason: 'missing_contact',
+            );
+
+            Log::warning('scenario.v3_bitrix24_sync_missing_contact', [
+                'scenario_code' => $this->code(),
+                'scenario_run_id' => $run?->id,
+                'block_id' => $blockId,
+                'action_index' => $actionIndex,
+                'message_id' => $message->id,
+                'operation' => $operation,
+            ]);
+
+            return [
+                'state_payload' => $this->storeV3Bitrix24SyncDiagnostic($statePayload, $blockId, $actionIndex, $diagnostic),
+                'output_id' => null,
+            ];
+        }
+
+        try {
+            $queueResult = match ($operation) {
+                'deal_sync' => $this->queueBitrix24DealSyncAction->handle($message->contact),
+                'history_export' => $this->queueBitrix24HistoryExportAction->handle($message->contact),
+                default => $this->queueBitrix24ContactSyncAction->handle($message->contact),
+            };
+
+            $diagnostic = $this->v3Bitrix24SyncDiagnostic(
+                operation: $operation,
+                status: $this->v3Bitrix24SyncStatus($queueResult),
+                blockId: $blockId,
+                actionIndex: $actionIndex,
+                message: $message,
+                run: $run,
+                queued: $queueResult->queued,
+                alreadyPending: $queueResult->alreadyPending,
+                ready: $queueResult->ready,
+                rootContactId: $queueResult->rootContactId,
+            );
+
+            Log::info('scenario.v3_bitrix24_sync_done', [
+                'scenario_code' => $this->code(),
+                'scenario_run_id' => $run?->id,
+                'block_id' => $blockId,
+                'action_index' => $actionIndex,
+                'message_id' => $message->id,
+                'operation' => $operation,
+                'status' => $diagnostic['status'],
+                'root_contact_id' => $queueResult->rootContactId,
+            ]);
+
+            return [
+                'state_payload' => $this->storeV3Bitrix24SyncDiagnostic($statePayload, $blockId, $actionIndex, $diagnostic),
+                'output_id' => null,
+            ];
+        } catch (Throwable $exception) {
+            $diagnostic = $this->v3Bitrix24SyncDiagnostic(
+                operation: $operation,
+                status: 'failed',
+                blockId: $blockId,
+                actionIndex: $actionIndex,
+                message: $message,
+                run: $run,
+                queued: false,
+                alreadyPending: false,
+                ready: false,
+                rootContactId: null,
+                reason: 'queue_exception',
+            );
+
+            Log::warning('scenario.v3_bitrix24_sync_failed', [
+                'scenario_code' => $this->code(),
+                'scenario_run_id' => $run?->id,
+                'block_id' => $blockId,
+                'action_index' => $actionIndex,
+                'message_id' => $message->id,
+                'operation' => $operation,
+                'error_class' => $exception::class,
+            ]);
+
+            return [
+                'state_payload' => $this->storeV3Bitrix24SyncDiagnostic($statePayload, $blockId, $actionIndex, $diagnostic),
+                'output_id' => null,
+            ];
+        }
+    }
+
+    private function normalizeV3Bitrix24SyncOperation(mixed $operation): string
+    {
+        $value = is_scalar($operation) ? trim((string) $operation) : '';
+
+        return in_array($value, self::V3_BITRIX24_SYNC_OPERATIONS, true)
+            ? $value
+            : 'contact_sync';
+    }
+
+    private function v3Bitrix24SyncStatus(
+        Bitrix24ContactSyncQueueResultData|Bitrix24DealSyncQueueResultData|Bitrix24HistoryExportQueueResultData $queueResult,
+    ): string {
+        if ($queueResult->queued) {
+            return 'queued';
+        }
+
+        if ($queueResult->alreadyPending && $queueResult->ready) {
+            return 'already_pending';
+        }
+
+        if (! $queueResult->ready) {
+            return 'not_ready';
+        }
+
+        return 'failed';
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function v3Bitrix24SyncDiagnostic(
+        string $operation,
+        string $status,
+        ?string $blockId,
+        int $actionIndex,
+        Message $message,
+        ?ScenarioRun $run,
+        bool $queued,
+        bool $alreadyPending,
+        bool $ready,
+        ?int $rootContactId,
+        ?string $reason = null,
+    ): array {
+        return array_filter([
+            'operation' => $operation,
+            'status' => $status,
+            'queued' => $queued,
+            'already_pending' => $alreadyPending,
+            'ready' => $ready,
+            'root_contact_id' => $rootContactId,
+            'block_id' => $blockId,
+            'action_index' => $actionIndex,
+            'message_id' => $message->id,
+            'scenario_run_id' => $run?->id,
+            'reason' => $reason,
+            'executed_at' => now()->toISOString(),
+        ], fn (mixed $value): bool => $value !== null);
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @param  array<string, mixed>  $diagnostic
+     * @return array<string, mixed>
+     */
+    private function storeV3Bitrix24SyncDiagnostic(
+        array $statePayload,
+        ?string $blockId,
+        int $actionIndex,
+        array $diagnostic,
+    ): array {
+        $blockKey = filled($blockId) ? (string) $blockId : 'unknown_block';
+        $entries = data_get($statePayload, 'v3.bitrix24_sync', []);
+
+        if (! is_array($entries)) {
+            $entries = [];
+        }
+
+        if (! isset($entries[$blockKey]) || ! is_array($entries[$blockKey])) {
+            $entries[$blockKey] = [];
+        }
+
+        $entries[$blockKey][(string) $actionIndex] = $diagnostic;
+        $entries['last'] = $diagnostic;
+
+        data_set($statePayload, 'v3.bitrix24_sync', $entries);
+
+        return $statePayload;
+    }
+
+    /**
+     * @param  array<string, mixed>  $action
+     * @param  array<string, mixed>  $statePayload
+     * @return array{state_payload: array<string, mixed>, output_id: ?string, stop_current_execution?: bool}
+     */
+    private function applyV3TagEffectsAction(
+        Message $message,
+        array $action,
+        array $statePayload,
+        ?string $blockId,
+        ?ScenarioRun $run,
+    ): array {
+        $assignTagIds = $this->v3TagEffectIds($action['assign_tag_ids'] ?? []);
+        $removeTagIds = $this->v3TagEffectIds($action['remove_tag_ids'] ?? []);
+        $allTagIds = array_values(array_unique([...$assignTagIds, ...$removeTagIds]));
+
+        if ($allTagIds === []) {
+            return ['state_payload' => $statePayload, 'output_id' => null];
+        }
+
+        if (! $message->contact instanceof Contact) {
+            Log::warning('scenario.v3_tag_effects_failed', [
+                'scenario_code' => $this->code(),
+                'scenario_run_id' => $run?->id,
+                'block_id' => $blockId,
+                'message_id' => $message->id,
+                'reason' => 'missing_contact',
+            ]);
+
+            return [
+                'state_payload' => $statePayload,
+                'output_id' => null,
+                'stop_current_execution' => true,
+            ];
+        }
+
+        $tagsById = Tag::query()
+            ->active()
+            ->whereKey($allTagIds)
+            ->get(['id', 'slug'])
+            ->keyBy(fn (Tag $tag): int => (int) $tag->id);
+
+        if ($tagsById->count() !== count($allTagIds)) {
+            Log::warning('scenario.v3_tag_effects_failed', [
+                'scenario_code' => $this->code(),
+                'scenario_run_id' => $run?->id,
+                'block_id' => $blockId,
+                'message_id' => $message->id,
+                'reason' => 'unknown_tag',
+                'tag_ids' => $allTagIds,
+            ]);
+
+            return [
+                'state_payload' => $statePayload,
+                'output_id' => null,
+                'stop_current_execution' => true,
+            ];
+        }
+
+        $tagActions = [];
+
+        foreach ($assignTagIds as $tagId) {
+            $tag = $tagsById->get($tagId);
+
+            if ($tag instanceof Tag) {
+                $tagActions[] = ['type' => 'set_tag', 'value' => (string) $tag->slug];
+            }
+        }
+
+        foreach ($removeTagIds as $tagId) {
+            $tag = $tagsById->get($tagId);
+
+            if ($tag instanceof Tag) {
+                $tagActions[] = ['type' => 'remove_tag', 'value' => (string) $tag->slug];
+            }
+        }
+
+        try {
+            $this->applyScenarioTagEffectsAction->handle($message->contact, $tagActions);
+        } catch (Throwable $exception) {
+            Log::warning('scenario.v3_tag_effects_failed', [
+                'scenario_code' => $this->code(),
+                'scenario_run_id' => $run?->id,
+                'block_id' => $blockId,
+                'message_id' => $message->id,
+                'reason' => 'runtime_error',
+                'error' => $exception->getMessage(),
+            ]);
+
+            return [
+                'state_payload' => $statePayload,
+                'output_id' => null,
+                'stop_current_execution' => true,
+            ];
+        }
+
+        Log::info('scenario.v3_tag_effects_done', [
+            'scenario_code' => $this->code(),
+            'scenario_run_id' => $run?->id,
+            'block_id' => $blockId,
+            'message_id' => $message->id,
+            'assign_tag_ids' => $assignTagIds,
+            'remove_tag_ids' => $removeTagIds,
+        ]);
+
+        return ['state_payload' => $statePayload, 'output_id' => null];
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function v3TagEffectIds(mixed $ids): array
+    {
+        if (! is_array($ids)) {
+            return [];
+        }
+
+        return collect($ids)
+            ->map(fn (mixed $id): int => (int) $id)
+            ->filter(fn (int $id): bool => $id > 0)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  array<string, mixed>  $runtime
+     * @param  array<string, mixed>  $action
+     * @param  array<string, mixed>  $block
+     * @param  array<string, mixed>  $statePayload
+     * @return array{state_payload: array<string, mixed>, output_id: ?string, reroute_block_id?: string, reroute_message?: Message}
+     */
+    private function applyV3SimulateStartParameterAction(
+        Message $message,
+        array $runtime,
+        array $action,
+        array $block,
+        array $statePayload,
+        ?ScenarioRun $run,
+    ): array {
+        $blockId = filled($block['id'] ?? null) ? (string) $block['id'] : null;
+        $sourceScope = (string) ($action['source_scope'] ?? 'dialog');
+        $sourceFieldKey = trim((string) ($action['source_field_key'] ?? ''));
+
+        if ($sourceScope !== 'dialog' || ! $this->validV3DialogVariableKey($sourceFieldKey)) {
+            $this->logV3SimulateStartParameter($message, $run, $blockId, 'invalid_action', [
+                'source_scope' => $sourceScope,
+                'source_field_key' => $sourceFieldKey,
+            ]);
+
+            return ['state_payload' => $statePayload, 'output_id' => null];
+        }
+
+        if ($this->v3SimulateStartDepth > 0) {
+            $this->logV3SimulateStartParameter($message, $run, $blockId, 'loop_guard', [
+                'source_field_key' => $sourceFieldKey,
+            ]);
+
+            return ['state_payload' => $statePayload, 'output_id' => null];
+        }
+
+        $parameter = $this->v3DialogFieldStringValue($message, $sourceFieldKey);
+
+        if ($parameter === '') {
+            $this->logV3SimulateStartParameter($message, $run, $blockId, 'empty_parameter', [
+                'source_field_key' => $sourceFieldKey,
+            ]);
+
+            return ['state_payload' => $statePayload, 'output_id' => null];
+        }
+
+        if (mb_strlen($parameter) > 255) {
+            $this->logV3SimulateStartParameter($message, $run, $blockId, 'parameter_too_long', [
+                'source_field_key' => $sourceFieldKey,
+                'parameter_length' => mb_strlen($parameter),
+            ]);
+
+            return ['state_payload' => $statePayload, 'output_id' => null];
+        }
+
+        $startMessage = $this->v3VirtualStartParameterMessage($message, $parameter);
+        $targetBlockId = $this->matchingV3EntrypointBlockId($startMessage, $runtime);
+
+        if ($targetBlockId === null) {
+            $this->logV3SimulateStartParameter($message, $run, $blockId, 'start_block_not_found', [
+                'source_field_key' => $sourceFieldKey,
+                'parameter' => $parameter,
+            ]);
+
+            return ['state_payload' => $statePayload, 'output_id' => null];
+        }
+
+        if ($blockId !== null && $targetBlockId === $blockId) {
+            $this->logV3SimulateStartParameter($message, $run, $blockId, 'same_block_noop', [
+                'source_field_key' => $sourceFieldKey,
+                'parameter' => $parameter,
+                'target_block_id' => $targetBlockId,
+            ]);
+
+            return ['state_payload' => $statePayload, 'output_id' => null];
+        }
+
+        $this->logV3SimulateStartParameter($message, $run, $blockId, 'start_block_matched', [
+            'source_field_key' => $sourceFieldKey,
+            'parameter' => $parameter,
+            'target_block_id' => $targetBlockId,
+        ]);
+        $this->logV3SimulateStartParameter($message, $run, $blockId, 'rerouted', [
+            'source_field_key' => $sourceFieldKey,
+            'parameter' => $parameter,
+            'target_block_id' => $targetBlockId,
+        ]);
+
+        return [
+            'state_payload' => $statePayload,
+            'output_id' => null,
+            'reroute_block_id' => $targetBlockId,
+            'reroute_message' => $startMessage,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $action
+     * @param  array<string, mixed>  $statePayload
+     * @return array<string, mixed>
+     */
+    private function applyV3EditMessageAction(Message $message, array $action, array $statePayload, ?ScenarioRun $run): array
+    {
+        if (
+            ($action['operation'] ?? null) === 'remove_buttons'
+            && ($action['target'] ?? null) === 'last_current_run_outbound_with_inline_buttons'
+        ) {
+            if ($message->channel?->platform !== Channel::PLATFORM_TELEGRAM) {
+                return $statePayload;
+            }
+
+            if ($run instanceof ScenarioRun) {
+                $this->removeV3TelegramInlineButtonsFromLastCurrentRunMessage($message, $run);
+            }
+
+            return $statePayload;
+        }
+
+        if (
+            ($action['operation'] ?? null) === 'delete_message'
+            && ($action['target'] ?? null) === 'last_current_run_outbound'
+        ) {
+            if ($message->channel?->platform === Channel::PLATFORM_TELEGRAM) {
+                $statePayload = $this->markV3PendingTelegramKeyboardRemoval($statePayload);
+            }
+
+            if ($run instanceof ScenarioRun) {
+                $this->deleteV3LastCurrentRunMessage($message, $run);
+            }
+
+            return $statePayload;
+        }
+
+        return $statePayload;
+    }
+
+    private function deleteV3LastCurrentRunMessage(Message $message, ScenarioRun $run): void
+    {
+        $dialog = $message->dialog;
+
+        if (! $dialog instanceof Dialog && filled($message->dialog_id)) {
+            $dialog = Dialog::query()->find($message->dialog_id);
+        }
+
+        if (! $dialog instanceof Dialog) {
+            Log::info('scenario.v3_edit_message_delete_message_skipped', [
+                'scenario_code' => $this->code(),
+                'scenario_run_id' => $run->id,
+                'dialog_id' => $message->dialog_id,
+                'status' => DeleteLastOutboundDialogMessageAction::STATUS_MISSING_LAST_MESSAGE,
+            ]);
+
+            return;
+        }
+
+        $result = $this->deleteLastOutboundDialogMessageAction->handle($dialog);
+
+        $context = [
+            'scenario_code' => $this->code(),
+            'scenario_run_id' => $run->id,
+            'dialog_id' => $dialog->id,
+            'message_id' => $result->messageId,
+            'external_message_id' => $result->externalMessageId,
+            'status' => $result->status,
+        ];
+
+        if ($result->error !== null) {
+            $context['error_message'] = $result->error;
+        }
+
+        if ($result->status === DeleteLastOutboundDialogMessageAction::STATUS_PROVIDER_FAILED) {
+            Log::warning('scenario.v3_edit_message_delete_message_failed', $context);
+
+            return;
+        }
+
+        Log::info('scenario.v3_edit_message_delete_message_result', $context);
+    }
+
+    private function removeV3TelegramInlineButtonsFromLastCurrentRunMessage(Message $message, ScenarioRun $run): void
+    {
+        $channel = $message->channel;
+
+        if (! $channel instanceof Channel || $channel->platform !== Channel::PLATFORM_TELEGRAM) {
+            return;
+        }
+
+        $sentMessage = $this->lastV3SentMessageWithTelegramInlineButtons($message, $run, $channel);
+        $outbound = null;
+
+        if (! $sentMessage instanceof Message) {
+            $outbound = ScenarioV3OutboundMessage::query()
+                ->with(['outboundMessage'])
+                ->where('scenario_run_id', $run->id)
+                ->where('dialog_id', $message->dialog_id)
+                ->where('channel_id', $channel->id)
+                ->where('published_version_id', $this->publishedVersion->id)
+                ->where('scenario_code', $this->code())
+                ->where('status', ScenarioV3OutboundMessage::STATUS_SENT)
+                ->whereNotNull('outbound_message_id')
+                ->orderByDesc('id')
+                ->get()
+                ->first(fn (ScenarioV3OutboundMessage $outbound): bool => $outbound->outboundMessage instanceof Message
+                    && $this->v3OutboundMessageHasTelegramInlineButtons($outbound->outboundMessage));
+
+            $sentMessage = $outbound instanceof ScenarioV3OutboundMessage && $outbound->outboundMessage instanceof Message
+                ? $outbound->outboundMessage
+                : null;
+        }
+
+        if (! $sentMessage instanceof Message) {
+            return;
+        }
+
+        $chatId = filled($sentMessage->external_chat_id)
+            ? (string) $sentMessage->external_chat_id
+            : (string) $message->dialog?->external_chat_id;
+        $externalMessageId = filled($sentMessage->external_message_id)
+            ? (string) $sentMessage->external_message_id
+            : (string) data_get($sentMessage->raw_payload, 'result.message_id', '');
+
+        if ($chatId === '' || $externalMessageId === '') {
+            return;
+        }
+
+        try {
+            $this->telegramBotApiService->editMessageReplyMarkup(
+                $channel,
+                $chatId,
+                $externalMessageId,
+                ['inline_keyboard' => []],
+            );
+        } catch (Throwable $throwable) {
+            Log::warning('scenario.v3_edit_message_remove_buttons_failed', [
+                'scenario_code' => $this->code(),
+                'scenario_run_id' => $run->id,
+                'dialog_id' => $message->dialog_id,
+                'outbound_message_id' => $outbound?->id,
+                'message_id' => $sentMessage->id,
+                'exception' => get_class($throwable),
+                'error_message' => $outbound instanceof ScenarioV3OutboundMessage
+                    ? $this->safeV3OutboundMessageErrorMessage($throwable->getMessage(), $outbound)
+                    : $this->safeV3TelegramApiErrorMessage($throwable->getMessage(), $channel),
+            ]);
+        }
+    }
+
+    private function lastV3SentMessageWithTelegramInlineButtons(Message $message, ScenarioRun $run, Channel $channel): ?Message
+    {
+        return Message::query()
+            ->where('dialog_id', $message->dialog_id)
+            ->where('channel_id', $channel->id)
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->where('message_kind', Message::KIND_OUTBOUND_SCENARIO_MESSAGE)
+            ->whereNotNull('external_message_id')
+            ->orderByDesc('id')
+            ->limit(100)
+            ->get()
+            ->first(fn (Message $sentMessage): bool => (int) data_get($sentMessage->raw_payload, 'v3.scenario_run_id') === (int) $run->id
+                && (string) data_get($sentMessage->raw_payload, 'v3.scenario_code') === $this->code()
+                && (int) data_get($sentMessage->raw_payload, 'v3.published_version_id') === (int) $this->publishedVersion->id
+                && $this->v3OutboundMessageHasTelegramInlineButtons($sentMessage));
+    }
+
+    private function safeV3TelegramApiErrorMessage(string $message, Channel $channel): ?string
+    {
+        if (! filled($message)) {
+            return null;
+        }
+
+        $safeMessage = trim($message);
+
+        foreach ([$channel->getToken(), $channel->getWebhookSecret()] as $secret) {
+            if (filled($secret)) {
+                $safeMessage = str_replace((string) $secret, '[secret]', $safeMessage);
+            }
+        }
+
+        $safeMessage = preg_replace('/bot[0-9A-Za-z:_-]+(?=\/)/u', 'bot[secret]', $safeMessage) ?? $safeMessage;
+        $safeMessage = preg_replace('/([?&](?:token|access_token|auth|secret)=)[^&\s]+/iu', '$1[secret]', $safeMessage) ?? $safeMessage;
+
+        return mb_substr($safeMessage, 0, 1000);
+    }
+
+    private function v3OutboundMessageHasTelegramInlineButtons(Message $message): bool
+    {
+        $rawPayload = is_array($message->raw_payload) ? $message->raw_payload : [];
+        $inlineKeyboard = data_get($rawPayload, 'result.reply_markup.inline_keyboard');
+
+        if (is_array($inlineKeyboard) && $inlineKeyboard !== []) {
+            return true;
+        }
+
+        $buttonRows = data_get($rawPayload, 'v3.buttons.rows');
+
+        if (! is_array($buttonRows) || $buttonRows === []) {
+            return false;
+        }
+
+        $placement = (string) data_get($rawPayload, 'v3.buttons.placement', self::V3_BUTTON_PLACEMENT_AUTO);
+
+        if ($placement === self::V3_BUTTON_PLACEMENT_INLINE_MESSAGE) {
+            return true;
+        }
+
+        if ($placement !== self::V3_BUTTON_PLACEMENT_AUTO) {
+            return false;
+        }
+
+        return collect($buttonRows)
+            ->flatten(1)
+            ->contains(fn (mixed $button): bool => is_array($button)
+                && ($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) === self::V3_BUTTON_TYPE_LINK
+                && filled($button['url'] ?? null));
+    }
+
+    /**
+     * @param  array<string, mixed>  $action
+     * @param  array<string, mixed>  $statePayload
+     * @return array{state_payload: array<string, mixed>, output_id: ?string}|null
+     */
+    private function applyV3CheckDataAction(Message $message, array $action, array $statePayload, ?string $blockId): ?array
+    {
+        if (($action['source_type'] ?? null) !== 'inbound_message') {
+            return null;
+        }
+
+        $dictionaryKey = trim((string) ($action['dictionary_key'] ?? ''));
+        $targetVariableKey = trim((string) ($action['target_variable_key'] ?? ''));
+
+        if ($dictionaryKey === '' || $targetVariableKey === '') {
+            return null;
+        }
+
+        $rootContact = $message->contact instanceof Contact
+            ? $this->resolveRootContactAction->handle($message->contact)
+            : null;
+        $lookup = app(LookupScenarioDataDictionaryAction::class)->handle(
+            $dictionaryKey,
+            (string) ($message->text ?? ''),
+            $rootContact instanceof Contact ? $rootContact->gender : null,
+        );
+        $correlationId = (string) Str::uuid();
+        $resolutionEvent = $rootContact instanceof Contact
+            ? $this->firstNameResolutionAnalyticsService->recordResolutionAttempt(
+                contact: $rootContact,
+                source: ContactFirstNameResolutionEvent::SOURCE_DICTIONARY,
+                result: $this->v3DictionaryLookupAnalyticsResult((string) ($lookup['status'] ?? '')),
+                clientText: (string) ($message->text ?? ''),
+                dialogId: $message->dialog_id,
+                channelId: $message->channel_id,
+                scenarioId: $this->scenario->id,
+                scenarioBlockId: $blockId,
+                messageId: $message->id,
+                matchedDictionaryEntryId: is_numeric($lookup['matched_entry_id'] ?? null) ? (int) $lookup['matched_entry_id'] : null,
+                foundFirstName: (string) ($message->text ?? ''),
+                resolvedFirstName: is_string($lookup['value'] ?? null) ? $lookup['value'] : null,
+                correlationId: $correlationId,
+                payload: ['status' => $lookup['status'] ?? null],
+            )
+            : null;
+
+        if ($lookup['matched'] === true && trim((string) $lookup['value']) !== '') {
+            data_set($statePayload, "v3.variables.$targetVariableKey", trim((string) $lookup['value']));
+            data_set(
+                $statePayload,
+                "v3.variable_meta.$targetVariableKey.first_name_resolution_method",
+                Contact::FIRST_NAME_RESOLUTION_METHOD_DICTIONARY_LOOKUP,
+            );
+            data_set($statePayload, "v3.variable_meta.$targetVariableKey.first_name_resolution_correlation_id", $correlationId);
+            data_set($statePayload, "v3.variable_meta.$targetVariableKey.first_name_resolution_event_id", $resolutionEvent?->id);
+
+            return ['state_payload' => $statePayload, 'output_id' => 'data_found'];
+        }
+
+        if (in_array($lookup['status'] ?? null, [
+            LookupScenarioDataDictionaryAction::STATUS_AMBIGUOUS,
+            LookupScenarioDataDictionaryAction::STATUS_MANUAL_REQUIRED,
+        ], true)) {
+            return ['state_payload' => $statePayload, 'output_id' => 'data_manual_required'];
+        }
+
+        return ['state_payload' => $statePayload, 'output_id' => 'data_not_found'];
+    }
+
+    private function v3DictionaryLookupAnalyticsResult(string $status): string
+    {
+        return match ($status) {
+            LookupScenarioDataDictionaryAction::STATUS_MATCHED => ContactFirstNameResolutionEvent::RESULT_MATCHED,
+            LookupScenarioDataDictionaryAction::STATUS_AMBIGUOUS => ContactFirstNameResolutionEvent::RESULT_AMBIGUOUS,
+            LookupScenarioDataDictionaryAction::STATUS_MANUAL_REQUIRED => ContactFirstNameResolutionEvent::RESULT_MANUAL_REQUIRED,
+            default => ContactFirstNameResolutionEvent::RESULT_NOT_FOUND,
+        };
+    }
+
+    /**
+     * @param  array<string, mixed>  $runtime
+     * @param  array<string, mixed>  $block
+     * @param  array<string, mixed>  $statePayload
+     * @return array{
+     *     status: string,
+     *     current_step: ?string,
+     *     state_payload: array<string, mixed>,
+     *     exit_outcome: ?string,
+     * }|null
+     */
+    private function advanceV3ActionResultEdge(
+        Message $message,
+        array $runtime,
+        array $block,
+        array $statePayload,
+        string $outputId,
+        int $remainingTransitions,
+        ?ScenarioRun $run,
+    ): ?array {
+        $blockEdges = is_array($block['action_result_edges'] ?? null) ? $block['action_result_edges'] : [];
+        $runtimeEdges = collect(is_array($runtime['edges'] ?? null) ? $runtime['edges'] : [])
+            ->filter(fn (mixed $edge): bool => is_array($edge)
+                && (string) ($edge['source_block_id'] ?? '') === (string) ($block['id'] ?? '')
+                && ($edge['from_output_id'] ?? null) === $outputId)
+            ->values()
+            ->all();
+
+        $edges = collect([...$blockEdges, ...$runtimeEdges])
+            ->filter(fn (mixed $edge): bool => is_array($edge)
+                && ($edge['from_output_id'] ?? null) === $outputId
+                && filled($edge['target_block_id'] ?? null))
+            ->sort(fn (array $left, array $right): int => $this->compareV3TransitionEdges($left, $right))
+            ->values();
+
+        foreach ($edges as $edge) {
+            if (
+                ! $this->v3EdgeAllowsContactPhone($message, $edge)
+                || ! $this->v3EdgeAllowsDialogPhone($message, $edge)
+                || ! $this->v3EdgeAllowsFieldCondition($message, $edge)
+                || ! $this->v3EdgeAllowsExpression($message, $edge)
+            ) {
+                continue;
+            }
+
+            $dialog = $message->dialog_id !== null
+                ? Dialog::query()->find($message->dialog_id)
+                : null;
+
+            if (
+                $dialog instanceof Dialog
+                && ! $this->applyV3TransitionSideEffectsToDialog($dialog, $message, $edge, null)
+            ) {
+                continue;
+            }
+
+            return $this->advanceV3FromBlock(
+                $message,
+                $runtime,
+                (string) $edge['target_block_id'],
+                $statePayload,
+                $remainingTransitions - 1,
+                $run,
+            );
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $action
+     * @param  array<string, mixed>  $statePayload
+     */
+    private function applyV3WriteContactFieldAction(Message $message, array $action, array $statePayload): bool
+    {
+        $sourceType = (string) ($action['source_type'] ?? 'ai_data');
+        $targetScope = (string) ($action['target_scope'] ?? 'contact');
+
+        if (! in_array($sourceType, ['ai_data', 'static_value'], true) || ! in_array($targetScope, ['contact', 'dialog'], true)) {
+            return false;
+        }
+
+        $targetField = trim((string) ($action['target_field'] ?? ''));
+        $sourceBlockId = trim((string) ($action['source_block_id'] ?? ''));
+        $sourceFieldKey = trim((string) ($action['source_field_key'] ?? ''));
+
+        if ($targetField === '') {
+            return false;
+        }
+
+        $value = $sourceType === 'static_value'
+            ? ($action['static_value'] ?? null)
+            : ($sourceFieldKey !== '' ? $this->v3ActionAiDataValue($statePayload, $sourceBlockId, $sourceFieldKey) : null);
+
+        if ($value === null || trim((string) $value) === '') {
+            Log::info('scenario.v3_action_source_value_missing', [
+                'scenario_code' => $this->code(),
+                'dialog_id' => $message->dialog_id,
+                'message_id' => $message->id,
+                'source_block_id' => $sourceBlockId !== '' ? $sourceBlockId : null,
+                'source_field_key' => $sourceFieldKey,
+                'target_field' => $targetField,
+            ]);
+
+            return false;
+        }
+
+        $stringValue = trim((string) $value);
+        $firstNameResolutionMethod = $targetField === 'first_name'
+            ? ($sourceType === 'static_value'
+                ? Contact::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT
+                : $this->v3ActionFirstNameResolutionMethod($statePayload, $sourceBlockId, $sourceFieldKey))
+            : null;
+
+        if ($targetScope === 'dialog') {
+            return $this->applyV3WriteDialogFieldAction($message, $targetField, $stringValue);
+        }
+
+        if (! in_array($targetField, self::V3_CONTACT_CAPTURE_FIELDS, true)) {
+            return false;
+        }
+
+        $dataType = self::V3_CONTACT_CAPTURE_DATA_TYPES[$targetField] ?? 'any_text';
+
+        return $this->applyV3TransitionCaptureToContact($message, [
+            'field_key' => $targetField,
+            'data_type' => $dataType,
+            'first_name_resolution_method' => $firstNameResolutionMethod,
+            'first_name_resolution_write_context' => $targetField === 'first_name'
+                ? $this->v3ActionFirstNameResolutionWriteContext($message, $statePayload, $sourceBlockId, $sourceFieldKey)
+                : null,
+        ], [
+            'valid' => true,
+            'value' => $stringValue,
+            'phone_raw' => $dataType === 'phone' ? $stringValue : null,
+            'phone_normalized' => $dataType === 'phone'
+                ? app(NormalizePhoneNumberAction::class)->handle($stringValue)
+                : null,
+        ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @return array{state_payload: array<string, mixed>, output_id: string}
+     */
+    private function applyV3CalculateDistanceToMoscowAction(Message $message, array $statePayload, ?string $blockId): array
+    {
+        $outputId = self::V3_DISTANCE_TO_MOSCOW_OUTPUT_FAILED;
+        $status = Contact::DISTANCE_TO_MOSCOW_STATUS_FAILED;
+        $distanceKm = null;
+        $calculatedAt = null;
+        $contactId = null;
+
+        try {
+            $rootContact = $message->contact instanceof Contact
+                ? $this->resolveRootContactAction->handle($message->contact)
+                : null;
+
+            if (! $rootContact instanceof Contact) {
+                Log::info('scenario.v3_distance_to_moscow_missing_contact', [
+                    'scenario_code' => $this->code(),
+                    'dialog_id' => $message->dialog_id,
+                    'message_id' => $message->id,
+                    'block_id' => $blockId,
+                ]);
+            } else {
+                $contactId = $rootContact->id;
+                $updated = $this->syncContactDistanceToMoscowAction->handle($rootContact)->fresh();
+
+                if ($updated instanceof Contact) {
+                    $status = (string) ($updated->distance_to_moscow_status ?: Contact::DISTANCE_TO_MOSCOW_STATUS_FAILED);
+                    $distanceKm = $updated->distance_to_moscow_km;
+                    $calculatedAt = $updated->distance_to_moscow_calculated_at?->toISOString();
+                }
+            }
+        } catch (Throwable $throwable) {
+            Log::warning('scenario.v3_distance_to_moscow_action_failed', [
+                'scenario_code' => $this->code(),
+                'dialog_id' => $message->dialog_id,
+                'message_id' => $message->id,
+                'block_id' => $blockId,
+                'exception_class' => $throwable::class,
+                'error' => $throwable->getMessage(),
+            ]);
+        }
+
+        $outputId = $this->v3DistanceToMoscowOutputId($status);
+
+        data_set($statePayload, 'v3.distance_to_moscow.'.($blockId ?: 'unknown'), [
+            'contact_id' => $contactId,
+            'status' => $status,
+            'distance_km' => $distanceKm,
+            'calculated_at' => $calculatedAt,
+            'output_id' => $outputId,
+        ]);
+
+        return [
+            'state_payload' => $statePayload,
+            'output_id' => $outputId,
+        ];
+    }
+
+    private function v3DistanceToMoscowOutputId(string $status): string
+    {
+        return match ($status) {
+            Contact::DISTANCE_TO_MOSCOW_STATUS_RESOLVED => self::V3_DISTANCE_TO_MOSCOW_OUTPUT_RESOLVED,
+            Contact::DISTANCE_TO_MOSCOW_STATUS_PENDING => self::V3_DISTANCE_TO_MOSCOW_OUTPUT_PENDING,
+            Contact::DISTANCE_TO_MOSCOW_STATUS_OUT_OF_SCOPE => self::V3_DISTANCE_TO_MOSCOW_OUTPUT_OUT_OF_SCOPE,
+            Contact::DISTANCE_TO_MOSCOW_STATUS_UNKNOWN => self::V3_DISTANCE_TO_MOSCOW_OUTPUT_UNKNOWN,
+            default => self::V3_DISTANCE_TO_MOSCOW_OUTPUT_FAILED,
+        };
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @return array{state_payload: array<string, mixed>, output_id: string}
+     */
+    private function applyV3ResolveGeoCityAction(Message $message, array $action, array $block, array $statePayload, ?string $blockId): array
+    {
+        $attemptKey = $blockId ?: 'unknown';
+        $attemptPath = "v3.geo_resolution_attempts.$attemptKey";
+        $attempts = max(0, (int) data_get($statePayload, $attemptPath, 0));
+
+        $rootContact = $message->contact instanceof Contact
+            ? $this->resolveRootContactAction->handle($message->contact)
+            : null;
+
+        if (! $rootContact instanceof Contact) {
+            Log::warning('scenario.v3_geo_city_missing_contact', [
+                'scenario_code' => $this->code(),
+                'dialog_id' => $message->dialog_id,
+                'message_id' => $message->id,
+                'block_id' => $blockId,
+            ]);
+
+            data_set($statePayload, $attemptPath, $attempts + 1);
+            $this->v3ClearGeoCityPending($statePayload, $blockId);
+
+            return [
+                'state_payload' => $statePayload,
+                'output_id' => $this->v3GeoCityOutputId(ResolveGeoCityAction::STATUS_FAILED, $block),
+            ];
+        }
+
+        $dialog = $message->dialog instanceof Dialog
+            ? $message->dialog
+            : ($message->dialog_id !== null ? Dialog::query()->find($message->dialog_id) : null);
+
+        if (($action['source'] ?? 'current_inbound_message') === 'ai_data') {
+            return $this->applyV3ResolveGeoCityFromAiDataAction(
+                message: $message,
+                action: $action,
+                block: $block,
+                statePayload: $statePayload,
+                blockId: $blockId,
+                rootContact: $rootContact,
+                dialog: $dialog,
+                attemptPath: $attemptPath,
+                attempts: $attempts,
+            );
+        }
+
+        $isCurrentInboundMessage = $message->direction === Message::DIRECTION_INBOUND
+            && $message->sent_by_type === Message::SENT_BY_TYPE_CONTACT;
+        $text = trim((string) ($message->text ?? ''));
+
+        if (! $isCurrentInboundMessage || $text === '') {
+            $reason = ! $isCurrentInboundMessage ? 'missing_current_inbound_message' : 'empty_text';
+            $result = [
+                'status' => ResolveGeoCityAction::STATUS_NOT_FOUND,
+                'source_text' => $text !== '' ? $text : null,
+                'payload' => ['reason' => $reason],
+            ];
+
+            $this->applyGeoResolutionToContactAction->createEvent($rootContact, $result, $dialog, $message);
+
+            data_set($statePayload, $attemptPath, $attempts + 1);
+            $this->v3ClearGeoCityPending($statePayload, $blockId);
+
+            return [
+                'state_payload' => $statePayload,
+                'output_id' => self::V3_GEO_CITY_OUTPUT_NOT_FOUND,
+            ];
+        }
+
+        $result = $this->resolveGeoCityAction->handle($text);
+        $status = (string) ($result['status'] ?? ResolveGeoCityAction::STATUS_FAILED);
+        $outputId = $this->v3GeoCityOutputId($status, $block);
+        $result = $this->withV3GeoCityRuntimePayload($result, 'current_inbound_message', $outputId);
+
+        if ($outputId === self::V3_GEO_CITY_OUTPUT_FOUND) {
+            $this->applyGeoResolutionToContactAction->handle($rootContact, $result, $dialog, $message);
+        } else {
+            $this->applyGeoResolutionToContactAction->createEvent($rootContact, $result, $dialog, $message);
+        }
+
+        $statePayload = $this->v3GeoCityStateAfterOutput(
+            statePayload: $statePayload,
+            attemptPath: $attemptPath,
+            attempts: $attempts,
+            blockId: $blockId,
+            outputId: $outputId,
+            result: $result,
+        );
+
+        return [
+            'state_payload' => $statePayload,
+            'output_id' => $outputId,
+        ];
+    }
+
+    private function v3GeoCityOutputId(string $status, array $block): string
+    {
+        if ($status === ResolveGeoCityAction::STATUS_MATCHED_CITY) {
+            return self::V3_GEO_CITY_OUTPUT_FOUND;
+        }
+
+        $legacyOutputId = self::V3_GEO_CITY_LEGACY_OUTPUTS_BY_STATUS[$status] ?? null;
+
+        if ($legacyOutputId !== null && $this->v3BlockHasActionResultEdge($block, $legacyOutputId)) {
+            return $legacyOutputId;
+        }
+
+        if (in_array($status, self::V3_GEO_CITY_MANUAL_REQUIRED_STATUSES, true)) {
+            return self::V3_GEO_CITY_OUTPUT_MANUAL_REQUIRED;
+        }
+
+        return self::V3_GEO_CITY_OUTPUT_NOT_FOUND;
+    }
+
+    /**
+     * @param  array<string, mixed>  $action
+     * @param  array<string, mixed>  $block
+     * @param  array<string, mixed>  $statePayload
+     * @return array{state_payload: array<string, mixed>, output_id: string}
+     */
+    private function applyV3ResolveGeoCityFromAiDataAction(
+        Message $message,
+        array $action,
+        array $block,
+        array $statePayload,
+        ?string $blockId,
+        Contact $rootContact,
+        ?Dialog $dialog,
+        string $attemptPath,
+        int $attempts,
+    ): array {
+        $sourceBlockId = trim((string) ($action['source_block_id'] ?? ''));
+        $analysis = $this->v3GeoCityAiAnalysis($statePayload, $sourceBlockId);
+        $sourceBlockClientKey = trim((string) ($action['source_block_client_key'] ?? ''));
+        $cityFieldKey = trim((string) ($action['city_field_key'] ?? 'geo_city'));
+        $regionFieldKey = trim((string) ($action['region_field_key'] ?? 'geo_region'));
+        $countryFieldKey = trim((string) ($action['country_field_key'] ?? 'geo_country'));
+
+        if ($analysis === null) {
+            $this->applyGeoResolutionToContactAction->createEvent(
+                $rootContact,
+                $this->v3GeoCityAiDataEarlyResult(
+                    reason: 'missing_ai_data',
+                    action: $action,
+                    analysis: null,
+                    city: null,
+                    region: null,
+                    country: null,
+                ),
+                $dialog,
+                $message,
+            );
+            data_set($statePayload, $attemptPath, $attempts + 1);
+            $this->v3ClearGeoCityPending($statePayload, $blockId);
+
+            return [
+                'state_payload' => $statePayload,
+                'output_id' => self::V3_GEO_CITY_OUTPUT_NOT_FOUND,
+            ];
+        }
+
+        $aiOutputId = trim((string) data_get($analysis, 'output_id', ''));
+
+        $city = $this->v3GeoCityAiDataValue($analysis, $cityFieldKey);
+        $region = $regionFieldKey !== '' ? $this->v3GeoCityAiDataValue($analysis, $regionFieldKey) : null;
+        $country = $countryFieldKey !== '' ? $this->v3GeoCityAiDataValue($analysis, $countryFieldKey) : null;
+
+        if ($aiOutputId === 'city_not_found') {
+            $this->applyGeoResolutionToContactAction->createEvent(
+                $rootContact,
+                $this->v3GeoCityAiDataEarlyResult(
+                    reason: 'ai_city_not_found',
+                    action: $action,
+                    analysis: $analysis,
+                    city: $city,
+                    region: $region,
+                    country: $country,
+                ),
+                $dialog,
+                $message,
+            );
+            data_set($statePayload, $attemptPath, $attempts + 1);
+            $this->v3ClearGeoCityPending($statePayload, $blockId);
+
+            return [
+                'state_payload' => $statePayload,
+                'output_id' => self::V3_GEO_CITY_OUTPUT_NOT_FOUND,
+            ];
+        }
+
+        if ($city === null) {
+            $this->applyGeoResolutionToContactAction->createEvent(
+                $rootContact,
+                $this->v3GeoCityAiDataEarlyResult(
+                    reason: 'missing_ai_city',
+                    action: $action,
+                    analysis: $analysis,
+                    city: $city,
+                    region: $region,
+                    country: $country,
+                ),
+                $dialog,
+                $message,
+            );
+            data_set($statePayload, $attemptPath, $attempts + 1);
+            $this->v3ClearGeoCityPending($statePayload, $blockId);
+
+            return [
+                'state_payload' => $statePayload,
+                'output_id' => self::V3_GEO_CITY_OUTPUT_NOT_FOUND,
+            ];
+        }
+
+        $resolverInput = $this->v3GeoCityResolverInputFromAiData($city, $region, $country);
+        $geoResult = $this->resolveGeoCityAction->handle($resolverInput);
+        $status = (string) ($geoResult['status'] ?? ResolveGeoCityAction::STATUS_FAILED);
+        $resolverReason = data_get($geoResult, 'payload.reason');
+
+        if ($status === ResolveGeoCityAction::STATUS_MANUAL_REQUIRED && $resolverReason === 'city_required') {
+            $geoResult['status'] = ResolveGeoCityAction::STATUS_NOT_FOUND;
+            data_set($geoResult, 'payload.reason', 'city_not_found');
+            data_set($geoResult, 'payload.resolver_reason', 'city_required');
+            $status = ResolveGeoCityAction::STATUS_NOT_FOUND;
+        }
+
+        $outputId = $this->v3GeoCityOutputId($status, $block);
+        $geoResult = $this->withV3GeoCityAiDataPayload(
+            result: $geoResult,
+            action: $action,
+            analysis: $analysis,
+            city: $city,
+            region: $region,
+            country: $country,
+            resolverInput: $resolverInput,
+            outputId: $outputId,
+        );
+
+        if ($outputId === self::V3_GEO_CITY_OUTPUT_FOUND) {
+            $this->applyGeoResolutionToContactAction->handle($rootContact, $geoResult, $dialog, $message);
+        } else {
+            $this->applyGeoResolutionToContactAction->createEvent($rootContact, $geoResult, $dialog, $message);
+        }
+
+        $statePayload = $this->v3GeoCityStateAfterOutput(
+            statePayload: $statePayload,
+            attemptPath: $attemptPath,
+            attempts: $attempts,
+            blockId: $blockId,
+            outputId: $outputId,
+            result: $geoResult,
+        );
+
+        Log::info('scenario.v3_geo_city_ai_data_resolved', [
+            'scenario_code' => $this->code(),
+            'dialog_id' => $message->dialog_id,
+            'message_id' => $message->id,
+            'block_id' => $blockId,
+            'source_block_id' => $sourceBlockId,
+            'source_block_client_key' => $sourceBlockClientKey,
+            'resolver_status' => $status,
+            'output_id' => $outputId,
+        ]);
+
+        return [
+            'state_payload' => $statePayload,
+            'output_id' => $outputId,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $result
+     * @return array<string, mixed>
+     */
+    private function withV3GeoCityRuntimePayload(array $result, string $source, string $outputId): array
+    {
+        $payload = is_array($result['payload'] ?? null) ? $result['payload'] : [];
+        $status = (string) ($result['status'] ?? ResolveGeoCityAction::STATUS_FAILED);
+
+        $result['payload'] = array_merge($payload, [
+            'source' => $source,
+            'resolver_status' => $status,
+            'resolver_ran' => true,
+            'final_output' => $outputId,
+        ]);
+
+        return $result;
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @param  array<string, mixed>  $result
+     * @return array<string, mixed>
+     */
+    private function v3GeoCityStateAfterOutput(
+        array $statePayload,
+        string $attemptPath,
+        int $attempts,
+        ?string $blockId,
+        string $outputId,
+        array $result,
+    ): array {
+        if ($outputId === self::V3_GEO_CITY_OUTPUT_FOUND) {
+            data_forget($statePayload, $attemptPath);
+            $this->v3ClearGeoCityPending($statePayload, $blockId);
+
+            return $statePayload;
+        }
+
+        if ($outputId === self::V3_GEO_CITY_OUTPUT_MANUAL_REQUIRED) {
+            data_set($statePayload, $attemptPath, $attempts + 1);
+            $this->v3SetGeoCityPending($statePayload, $blockId, $result);
+
+            return $statePayload;
+        }
+
+        data_set($statePayload, $attemptPath, $attempts + 1);
+        $this->v3ClearGeoCityPending($statePayload, $blockId);
+
+        return $statePayload;
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     */
+    private function v3ClearGeoCityPending(array &$statePayload, ?string $blockId): void
+    {
+        data_forget($statePayload, 'v3.geo_resolution_pending.'.($blockId ?: 'unknown'));
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @param  array<string, mixed>  $result
+     */
+    private function v3SetGeoCityPending(array &$statePayload, ?string $blockId, array $result): void
+    {
+        $payload = is_array($result['payload'] ?? null) ? $result['payload'] : [];
+        $candidates = is_array($payload['candidates'] ?? null) ? $payload['candidates'] : [];
+
+        if ($candidates === [] && filled($result['city'] ?? null)) {
+            $candidates = [[
+                'city_id' => $result['city_id'] ?? null,
+                'city' => $result['city'] ?? null,
+                'region_id' => $result['region_id'] ?? null,
+                'region' => $result['region'] ?? null,
+                'country_id' => $result['country_id'] ?? null,
+                'country' => $result['country'] ?? null,
+                'matched_alias' => $result['matched_alias'] ?? null,
+                'confidence' => $result['confidence'] ?? null,
+            ]];
+        }
+
+        data_set($statePayload, 'v3.geo_resolution_pending.'.($blockId ?: 'unknown'), [
+            'reason' => $payload['reason'] ?? null,
+            'source' => $payload['source'] ?? 'current_inbound_message',
+            'source_text' => $result['source_text'] ?? null,
+            'country' => $result['country'] ?? null,
+            'region' => $result['region'] ?? null,
+            'city' => $result['city'] ?? null,
+            'candidates' => array_slice(array_values($candidates), 0, 5),
+        ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @return array<string, mixed>|null
+     */
+    private function v3GeoCityAiAnalysis(array $statePayload, string $sourceBlockId): ?array
+    {
+        if ($sourceBlockId === '') {
+            return null;
+        }
+
+        $analysis = data_get($statePayload, "v3.ai_analysis.$sourceBlockId");
+
+        return is_array($analysis) ? $analysis : null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $analysis
+     */
+    private function v3GeoCityAiDataValue(array $analysis, string $fieldKey): ?string
+    {
+        if ($fieldKey === '') {
+            return null;
+        }
+
+        $value = data_get($analysis, "data.$fieldKey");
+
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $trimmed = trim((string) $value);
+
+        return $trimmed === '' ? null : mb_substr($trimmed, 0, 255);
+    }
+
+    private function v3GeoCityResolverInputFromAiData(string $city, ?string $region, ?string $country): string
+    {
+        return collect([$city, $region, $country])
+            ->filter(fn (?string $value): bool => is_string($value) && trim($value) !== '')
+            ->implode(' ');
+    }
+
+    /**
+     * @param  array<string, mixed>  $action
+     * @param  array<string, mixed>|null  $analysis
+     * @return array<string, mixed>
+     */
+    private function v3GeoCityAiDataEarlyResult(
+        string $reason,
+        array $action,
+        ?array $analysis,
+        ?string $city,
+        ?string $region,
+        ?string $country,
+    ): array {
+        return [
+            'status' => ResolveGeoCityAction::STATUS_NOT_FOUND,
+            'source_text' => null,
+            'payload' => [
+                'source' => 'ai_data',
+                'reason' => $reason,
+                'source_block_id' => (string) ($action['source_block_id'] ?? ''),
+                'source_block_client_key' => (string) ($action['source_block_client_key'] ?? ''),
+                'city_field_key' => (string) ($action['city_field_key'] ?? ''),
+                'region_field_key' => (string) ($action['region_field_key'] ?? ''),
+                'country_field_key' => (string) ($action['country_field_key'] ?? ''),
+                'ai_output_id' => is_array($analysis) ? data_get($analysis, 'output_id') : null,
+                'ai_output_label' => is_array($analysis) ? data_get($analysis, 'label') : null,
+                'ai_request_id' => is_array($analysis) ? data_get($analysis, 'ai_request_id') : null,
+                'ai_city' => $city,
+                'ai_region' => $region,
+                'ai_country' => $country,
+                'resolver_input' => null,
+                'resolver_status' => ResolveGeoCityAction::STATUS_NOT_FOUND,
+                'resolver_ran' => false,
+                'final_output' => self::V3_GEO_CITY_OUTPUT_NOT_FOUND,
+            ],
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $result
+     * @param  array<string, mixed>  $action
+     * @param  array<string, mixed>  $analysis
+     * @return array<string, mixed>
+     */
+    private function withV3GeoCityAiDataPayload(
+        array $result,
+        array $action,
+        array $analysis,
+        string $city,
+        ?string $region,
+        ?string $country,
+        string $resolverInput,
+        string $outputId,
+    ): array {
+        $payload = is_array($result['payload'] ?? null) ? $result['payload'] : [];
+        $status = (string) ($result['status'] ?? ResolveGeoCityAction::STATUS_FAILED);
+        $reason = $payload['reason'] ?? null;
+
+        if ($outputId === self::V3_GEO_CITY_OUTPUT_MANUAL_REQUIRED && $status !== ResolveGeoCityAction::STATUS_NOT_FOUND) {
+            $payload['resolver_reason'] = $reason;
+            $payload['reason'] = 'ai_unconfirmed';
+        }
+
+        $result['source_text'] = $resolverInput;
+        $result['payload'] = array_merge($payload, [
+            'source' => 'ai_data',
+            'source_block_id' => (string) ($action['source_block_id'] ?? ''),
+            'source_block_client_key' => (string) ($action['source_block_client_key'] ?? ''),
+            'city_field_key' => (string) ($action['city_field_key'] ?? ''),
+            'region_field_key' => (string) ($action['region_field_key'] ?? ''),
+            'country_field_key' => (string) ($action['country_field_key'] ?? ''),
+            'ai_output_id' => data_get($analysis, 'output_id'),
+            'ai_output_label' => data_get($analysis, 'label'),
+            'ai_request_id' => data_get($analysis, 'ai_request_id'),
+            'ai_city' => $city,
+            'ai_region' => $region,
+            'ai_country' => $country,
+            'resolver_input' => $resolverInput,
+            'resolver_status' => $status,
+            'resolver_ran' => true,
+            'final_output' => $outputId,
+        ]);
+
+        return $result;
+    }
+
+    private function v3BlockHasActionResultEdge(array $block, string $outputId): bool
+    {
+        $edges = is_array($block['action_result_edges'] ?? null) ? $block['action_result_edges'] : [];
+
+        return collect($edges)->contains(fn (mixed $edge): bool => is_array($edge)
+            && ($edge['from_output_id'] ?? null) === $outputId);
+    }
+
+    private function applyV3WriteDialogFieldAction(Message $message, string $fieldKey, string $value): bool
+    {
+        if (! $this->validV3DialogVariableKey($fieldKey) || mb_strlen($value) > self::V3_DIALOG_FIELD_VALUE_MAX_LENGTH) {
+            return false;
+        }
+
+        $dialog = Dialog::query()
+            ->whereKey($message->dialog_id)
+            ->lockForUpdate()
+            ->first();
+
+        if (! $dialog instanceof Dialog) {
+            return false;
+        }
+
+        $fields = is_array($dialog->fields_payload) ? $dialog->fields_payload : [];
+        $userFieldCount = $this->v3DialogUserFieldCount($fields);
+
+        if (! array_key_exists($fieldKey, $fields) && $userFieldCount >= self::V3_DIALOG_USER_FIELDS_MAX) {
+            return false;
+        }
+
+        data_set($fields, $fieldKey, $value);
+
+        $encoded = json_encode($fields);
+
+        if ($encoded === false || strlen($encoded) > self::V3_DIALOG_FIELDS_MAX_BYTES) {
+            return false;
+        }
+
+        $dialog->forceFill(['fields_payload' => $fields])->save();
+
+        return true;
+    }
+
+    /**
+     * @param  array<string, mixed>  $action
+     * @param  array<string, mixed>  $statePayload
+     * @return array{state_payload: array<string, mixed>, output_id: ?string, stop_current_execution?: bool}
+     */
+    private function applyV3VariablesAction(
+        Message $message,
+        array $action,
+        array $statePayload,
+        ?string $blockId,
+        ?ScenarioRun $run,
+    ): array {
+        $operations = is_array($action['operations'] ?? null) ? $action['operations'] : [];
+        $failure = null;
+
+        try {
+            $saved = DB::transaction(function () use ($message, $operations, &$failure): bool {
+                $dialog = Dialog::query()
+                    ->whereKey($message->dialog_id)
+                    ->lockForUpdate()
+                    ->first();
+
+                if (! $dialog instanceof Dialog) {
+                    $failure = ['reason' => 'dialog_not_found'];
+
+                    return false;
+                }
+
+                $fields = is_array($dialog->fields_payload) ? $dialog->fields_payload : [];
+
+                foreach ($operations as $index => $operation) {
+                    if (! is_array($operation)) {
+                        $failure = ['reason' => 'invalid_operation', 'operation_index' => $index];
+
+                        return false;
+                    }
+
+                    $failure = $this->applyV3DialogVariableOperation($message, $fields, $operation, $index);
+
+                    if ($failure !== null) {
+                        return false;
+                    }
+                }
+
+                if ($this->v3DialogUserFieldCount($fields) > self::V3_DIALOG_USER_FIELDS_MAX) {
+                    $failure = ['reason' => 'too_many_fields'];
+
+                    return false;
+                }
+
+                $encoded = json_encode($fields);
+
+                if ($encoded === false || strlen($encoded) > self::V3_DIALOG_FIELDS_MAX_BYTES) {
+                    $failure = ['reason' => 'payload_too_large'];
+
+                    return false;
+                }
+
+                $dialog->forceFill(['fields_payload' => $fields])->save();
+
+                return true;
+            });
+        } catch (Throwable $throwable) {
+            Log::warning('scenario.v3_variables_action_failed', [
+                'scenario_code' => $this->code(),
+                'dialog_id' => $message->dialog_id,
+                'message_id' => $message->id,
+                'scenario_run_id' => $run?->id,
+                'block_id' => $blockId,
+                'reason' => 'exception',
+                'exception_class' => $throwable::class,
+                'error' => $throwable->getMessage(),
+            ]);
+
+            return [
+                'state_payload' => $statePayload,
+                'output_id' => null,
+                'stop_current_execution' => true,
+            ];
+        }
+
+        if (! $saved) {
+            Log::info('scenario.v3_variables_action_failed', [
+                'scenario_code' => $this->code(),
+                'dialog_id' => $message->dialog_id,
+                'message_id' => $message->id,
+                'scenario_run_id' => $run?->id,
+                'block_id' => $blockId,
+                'reason' => is_array($failure) ? ($failure['reason'] ?? 'unknown') : 'unknown',
+                'operation_index' => is_array($failure) ? ($failure['operation_index'] ?? null) : null,
+                'field_key' => is_array($failure) ? ($failure['field_key'] ?? null) : null,
+            ]);
+
+            return [
+                'state_payload' => $statePayload,
+                'output_id' => null,
+                'stop_current_execution' => true,
+            ];
+        }
+
+        Log::info('scenario.v3_variables_action_done', [
+            'scenario_code' => $this->code(),
+            'dialog_id' => $message->dialog_id,
+            'message_id' => $message->id,
+            'scenario_run_id' => $run?->id,
+            'block_id' => $blockId,
+            'operations_count' => count($operations),
+        ]);
+
+        return ['state_payload' => $statePayload, 'output_id' => null];
+    }
+
+    /**
+     * @param  array<string, mixed>  $fields
+     * @param  array<string, mixed>  $operation
+     * @return array<string, mixed>|null
+     */
+    private function applyV3DialogVariableOperation(Message $message, array &$fields, array $operation, int $index): ?array
+    {
+        $type = (string) ($operation['operation'] ?? '');
+        $fieldKey = trim((string) ($operation['field_key'] ?? ''));
+
+        if (! $this->validV3DialogVariableKey($fieldKey)) {
+            return [
+                'reason' => 'invalid_field_key',
+                'operation_index' => $index,
+                'field_key' => $fieldKey,
+            ];
+        }
+
+        if ($type === 'clear') {
+            unset($fields[$fieldKey]);
+
+            return null;
+        }
+
+        if ($type === 'increment') {
+            $current = $fields[$fieldKey] ?? null;
+
+            if ($current === null || $current === '') {
+                $current = 0;
+            }
+
+            if (! is_int($current) && ! is_float($current) && ! (is_string($current) && is_numeric(trim($current)))) {
+                return [
+                    'reason' => 'not_numeric',
+                    'operation_index' => $index,
+                    'field_key' => $fieldKey,
+                ];
+            }
+
+            $amount = (int) ($operation['amount'] ?? 1);
+
+            if ($amount < 1 || $amount > 100) {
+                return [
+                    'reason' => 'invalid_amount',
+                    'operation_index' => $index,
+                    'field_key' => $fieldKey,
+                ];
+            }
+
+            $next = ((float) $current) + $amount;
+            $fields[$fieldKey] = floor($next) === $next ? (int) $next : $next;
+
+            return null;
+        }
+
+        if ($type === 'set') {
+            $value = $this->v3DialogVariableSetValue($message, $operation);
+
+            if (! is_scalar($value) && $value !== null) {
+                return [
+                    'reason' => 'invalid_value',
+                    'operation_index' => $index,
+                    'field_key' => $fieldKey,
+                ];
+            }
+
+            if (is_string($value) && mb_strlen($value) > self::V3_DIALOG_FIELD_VALUE_MAX_LENGTH) {
+                return [
+                    'reason' => 'value_too_long',
+                    'operation_index' => $index,
+                    'field_key' => $fieldKey,
+                ];
+            }
+
+            $fields[$fieldKey] = $value;
+
+            return null;
+        }
+
+        return [
+            'reason' => 'unknown_operation',
+            'operation_index' => $index,
+            'field_key' => $fieldKey,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $operation
+     */
+    private function v3DialogVariableSetValue(Message $message, array $operation): mixed
+    {
+        $source = (string) ($operation['value_source'] ?? 'static_value');
+
+        return match ($source) {
+            'current_message' => trim((string) $message->text),
+            'start_param' => $this->v3StartParameterFromMessage($message),
+            default => $operation['value'] ?? '',
+        };
+    }
+
+    private function v3StartParameterFromMessage(Message $message): string
+    {
+        $messageParameter = trim((string) $message->message_parameter);
+
+        if ($messageParameter !== '') {
+            return $messageParameter;
+        }
+
+        $text = trim((string) $message->text);
+
+        if ($text === '') {
+            return '';
+        }
+
+        if (preg_match('/^\/start(?:@[A-Za-z0-9_]+)?(?:\s+(.+))?$/u', $text, $matches) !== 1) {
+            return '';
+        }
+
+        return trim((string) ($matches[1] ?? ''));
+    }
+
+    private function v3DialogFieldStringValue(Message $message, string $fieldKey): string
+    {
+        if (! $this->validV3DialogVariableKey($fieldKey)) {
+            return '';
+        }
+
+        $dialog = $message->dialog_id !== null
+            ? Dialog::query()->find($message->dialog_id)
+            : ($message->relationLoaded('dialog') ? $message->dialog : null);
+
+        if (! $dialog instanceof Dialog) {
+            return '';
+        }
+
+        $fields = is_array($dialog->fields_payload) ? $dialog->fields_payload : [];
+        $value = $fields[$fieldKey] ?? null;
+
+        return trim((string) ($value ?? ''));
+    }
+
+    private function v3VirtualStartParameterMessage(Message $message, string $parameter): Message
+    {
+        $startMessage = clone $message;
+        $startMessage->forceFill([
+            'text' => '/start '.$parameter,
+            'message_parameter' => $parameter,
+        ]);
+
+        return $startMessage;
+    }
+
+    /**
+     * @param  array<string, mixed>  $context
+     */
+    private function logV3SimulateStartParameter(
+        Message $message,
+        ?ScenarioRun $run,
+        ?string $blockId,
+        string $status,
+        array $context = [],
+    ): void {
+        Log::info('scenario.v3_simulate_start_parameter', [
+            'scenario_code' => $this->code(),
+            'scenario_run_id' => $run?->id,
+            'dialog_id' => $message->dialog_id,
+            'message_id' => $message->id,
+            'block_id' => $blockId,
+            'status' => $status,
+            ...$context,
+        ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $fields
+     */
+    private function v3DialogUserFieldCount(array $fields): int
+    {
+        return collect($fields)
+            ->keys()
+            ->filter(fn (mixed $key): bool => is_string($key) && ! str_starts_with($key, '_'))
+            ->unique()
+            ->count();
+    }
+
+    private function validV3DialogVariableKey(string $key): bool
+    {
+        if ($key === '' || mb_strlen($key) > 64) {
+            return false;
+        }
+
+        if (in_array($key, ['__proto__', 'constructor', 'prototype'], true)) {
+            return false;
+        }
+
+        return preg_match('/^(?!_)[\p{L}][\p{L}\p{N}_]{0,63}$/u', $key) === 1;
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     */
+    private function v3ActionAiDataValue(array $statePayload, string $sourceBlockId, string $sourceFieldKey): mixed
+    {
+        if ($sourceBlockId !== '') {
+            $blockValue = data_get($statePayload, "v3.ai_analysis.$sourceBlockId.data.$sourceFieldKey");
+
+            if ($blockValue !== null && trim((string) $blockValue) !== '') {
+                return $blockValue;
+            }
+        }
+
+        $variableValue = data_get($statePayload, "v3.variables.$sourceFieldKey");
+
+        if ($variableValue !== null && trim((string) $variableValue) !== '') {
+            return $variableValue;
+        }
+
+        $analyses = data_get($statePayload, 'v3.ai_analysis', []);
+
+        if (! is_array($analyses)) {
+            return null;
+        }
+
+        $candidates = collect($analyses)
+            ->filter(fn (mixed $analysis): bool => is_array($analysis)
+                && is_array($analysis['data'] ?? null)
+                && array_key_exists($sourceFieldKey, $analysis['data']))
+            ->sortByDesc(fn (array $analysis): int => (int) ($analysis['message_id'] ?? 0))
+            ->values();
+
+        $latest = $candidates->first();
+
+        return is_array($latest) ? data_get($latest, "data.$sourceFieldKey") : null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     */
+    private function v3ActionFirstNameResolutionMethod(array $statePayload, string $sourceBlockId, string $sourceFieldKey): ?string
+    {
+        if ($sourceFieldKey === '') {
+            return null;
+        }
+
+        if (
+            $sourceBlockId !== ''
+            && trim((string) data_get($statePayload, "v3.ai_analysis.$sourceBlockId.data.$sourceFieldKey", '')) !== ''
+        ) {
+            return Contact::FIRST_NAME_RESOLUTION_METHOD_AI_ANALYSIS;
+        }
+
+        $variableMethod = $this->normalizeV3FirstNameResolutionMethod(
+            data_get($statePayload, "v3.variable_meta.$sourceFieldKey.first_name_resolution_method"),
+        );
+
+        if ($variableMethod !== null) {
+            return $variableMethod;
+        }
+
+        $analyses = data_get($statePayload, 'v3.ai_analysis', []);
+
+        if (! is_array($analyses)) {
+            return null;
+        }
+
+        $hasAiData = collect($analyses)
+            ->contains(fn (mixed $analysis): bool => is_array($analysis)
+                && is_array($analysis['data'] ?? null)
+                && trim((string) data_get($analysis, "data.$sourceFieldKey", '')) !== '');
+
+        return $hasAiData ? Contact::FIRST_NAME_RESOLUTION_METHOD_AI_ANALYSIS : null;
+    }
+
+    private function v3ActionFirstNameResolutionWriteContext(
+        Message $message,
+        array $statePayload,
+        string $sourceBlockId,
+        string $sourceFieldKey,
+    ): FirstNameResolutionWriteContext {
+        $correlationId = null;
+        $resolutionEventId = null;
+        $aiRequestId = null;
+
+        if ($sourceBlockId !== '') {
+            $correlationId = data_get($statePayload, "v3.ai_analysis.$sourceBlockId.first_name_resolution_correlation_id");
+            $resolutionEventId = data_get($statePayload, "v3.ai_analysis.$sourceBlockId.first_name_resolution_event_id");
+            $aiRequestId = data_get($statePayload, "v3.ai_analysis.$sourceBlockId.ai_request_id");
+        }
+
+        if ($sourceFieldKey !== '' && $correlationId === null) {
+            $correlationId = data_get($statePayload, "v3.variable_meta.$sourceFieldKey.first_name_resolution_correlation_id");
+            $resolutionEventId = data_get($statePayload, "v3.variable_meta.$sourceFieldKey.first_name_resolution_event_id");
+        }
+
+        return new FirstNameResolutionWriteContext(
+            correlationId: is_string($correlationId) && $correlationId !== '' ? $correlationId : null,
+            dialogId: $message->dialog_id,
+            channelId: $message->channel_id,
+            scenarioId: $this->scenario->id,
+            scenarioBlockId: $sourceBlockId !== '' ? $sourceBlockId : null,
+            messageId: $message->id,
+            resolutionAttemptEventId: is_numeric($resolutionEventId) ? (int) $resolutionEventId : null,
+            aiRequestId: is_numeric($aiRequestId) ? (int) $aiRequestId : null,
+        );
+    }
+
+    private function normalizeV3FirstNameResolutionMethod(mixed $method): ?string
+    {
+        if (! is_string($method) || trim($method) === '') {
+            return null;
+        }
+
+        $method = trim($method);
+
+        return in_array($method, Contact::allowedFirstNameResolutionMethods(), true) ? $method : null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     */
+    private function v3BlockHasAiAnalysis(array $block): bool
+    {
+        return is_array($block['ai_analysis'] ?? null);
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     */
+    private function v3BlockHasActionModule(array $block): bool
+    {
+        $actions = $block['actions'] ?? null;
+
+        return is_array($actions) && $actions !== [];
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @return array<string, mixed>|null
+     */
+    private function scheduleV3DelayedAiAnalysis(
+        Message $message,
+        ?ScenarioRun $run,
+        string $blockId,
+        string $outputId,
+        int $delaySeconds,
+        array $statePayload,
+    ): ?array {
+        if (! $run instanceof ScenarioRun || $message->dialog_id === null || $delaySeconds < 1) {
+            return null;
+        }
+
+        if ($this->v3DelayedAiAnalysisWasAlreadyScheduled($statePayload, $blockId, (int) $message->id, $outputId)) {
+            Log::info('scenario.v3_ai_analysis_delayed_duplicate_skipped', [
+                'scenario_code' => $this->code(),
+                'scenario_run_id' => $run->id,
+                'dialog_id' => $message->dialog_id,
+                'message_id' => $message->id,
+                'block_id' => $blockId,
+                'output_id' => $outputId,
+            ]);
+
+            return $statePayload;
+        }
+
+        $token = (string) Str::uuid();
+        $scheduledFor = CarbonImmutable::now()->addSeconds($delaySeconds);
+
+        $statePayload = $this->rememberV3DelayedAiAnalysisSchedule(
+            $statePayload,
+            $blockId,
+            (int) $message->id,
+            $outputId,
+            $delaySeconds,
+            $scheduledFor,
+        );
+
+        data_set($statePayload, "v3.ai_analysis_pending.$blockId", [
+            'token' => $token,
+            'output_id' => $outputId,
+            'message_id' => (int) $message->id,
+            'delay_seconds' => $delaySeconds,
+            'scheduled_for' => $scheduledFor->toJSON(),
+        ]);
+
+        ProcessScenarioV3AiAnalysisJob::dispatch(
+            (int) $run->id,
+            (int) $message->dialog_id,
+            (int) $message->id,
+            $this->code(),
+            (int) $this->publishedVersion->id,
+            $blockId,
+            $token,
+        )
+            ->delay($scheduledFor)
+            ->afterCommit();
+
+        return $statePayload;
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     */
+    private function v3DelayedAiAnalysisWasAlreadyScheduled(
+        array $statePayload,
+        string $blockId,
+        int $messageId,
+        string $outputId,
+    ): bool {
+        $history = data_get($statePayload, "v3.ai_analysis_delayed_history.$blockId", []);
+
+        if (! is_array($history)) {
+            return false;
+        }
+
+        foreach ($history as $entry) {
+            if (
+                is_array($entry)
+                && (int) ($entry['message_id'] ?? 0) === $messageId
+                && (string) ($entry['output_id'] ?? '') === $outputId
+            ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @return array<string, mixed>
+     */
+    private function rememberV3DelayedAiAnalysisSchedule(
+        array $statePayload,
+        string $blockId,
+        int $messageId,
+        string $outputId,
+        int $delaySeconds,
+        CarbonImmutable $scheduledFor,
+    ): array {
+        $history = data_get($statePayload, "v3.ai_analysis_delayed_history.$blockId", []);
+        $history = is_array($history) ? array_values($history) : [];
+
+        $history[] = [
+            'message_id' => $messageId,
+            'output_id' => $outputId,
+            'delay_seconds' => $delaySeconds,
+            'scheduled_for' => $scheduledFor->toJSON(),
+        ];
+
+        data_set($statePayload, "v3.ai_analysis_delayed_history.$blockId", array_slice($history, -20));
+
+        return $statePayload;
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @return array<string, mixed>
+     */
+    private function clearV3AiAnalysisPending(array $statePayload, string $blockId): array
+    {
+        data_forget($statePayload, "v3.ai_analysis_pending.$blockId");
+
+        return $statePayload;
+    }
+
+    /**
+     * @param  array<string, mixed>  $analysis
+     * @return array{output_id: string, label: string, delay_seconds: int, data: array<string, mixed>, ai_request_id?: ?int, first_name_resolution_event_id?: ?int, first_name_resolution_correlation_id?: ?string, error?: bool, error_reason?: ?string}
+     */
+    private function v3AiAnalysisResult(Message $message, array $analysis, array $statePayload, string $blockId): array
+    {
+        $outputs = $this->v3AiAnalysisOutputs($analysis);
+        $extractFields = $this->v3AiAnalysisExtractFields($analysis);
+
+        if ($outputs === []) {
+            return [
+                'output_id' => '',
+                'label' => '',
+                'delay_seconds' => 0,
+                'data' => [],
+                'error' => true,
+                'error_reason' => 'missing_outputs',
+            ];
+        }
+
+        $tracksNameResolution = $this->v3AiAnalysisTracksNameResolution($message, $extractFields);
+        $aiResult = null;
+        $aiRequestId = null;
+
+        try {
+            $systemPrompt = $this->v3AiAnalysisSystemPrompt($message, $analysis, $outputs, $extractFields, $statePayload, $blockId);
+            $userPrompt = $this->v3AiAnalysisUserPrompt($message, $analysis, $statePayload, $blockId);
+            $aiContext = $this->v3AiAnalysisContext($message, $blockId);
+
+            if ($aiContext instanceof AiGenerationContext) {
+                $aiResult = $this->aiStructuredGenerationService->generateStructuredWithAnalytics(
+                    $systemPrompt,
+                    $userPrompt,
+                    $this->v3AiAnalysisSchema($outputs, $extractFields),
+                    $aiContext,
+                );
+                $aiRequestId = $aiResult->aiRequestId;
+                $response = $aiResult->data;
+            } else {
+                Log::warning('scenario.v3_ai_analysis_missing_contact', [
+                    'scenario_code' => $this->code(),
+                    'dialog_id' => $message->dialog_id,
+                    'message_id' => $message->id,
+                    'block_id' => $blockId,
+                ]);
+
+                $response = $this->aiStructuredGenerationService->generateStructured(
+                    $systemPrompt,
+                    $userPrompt,
+                    $this->v3AiAnalysisSchema($outputs, $extractFields),
+                );
+            }
+        } catch (Throwable $throwable) {
+            Log::warning('scenario.v3_ai_analysis_failed', [
+                'scenario_code' => $this->code(),
+                'dialog_id' => $message->dialog_id,
+                'message_id' => $message->id,
+                'exception' => get_class($throwable),
+                'error_message' => 'Не удалось выполнить ИИ-анализ V3-сценария.',
+            ]);
+
+            if ($throwable instanceof AiStructuredGenerationException) {
+                $aiRequestId = $throwable->aiRequestId;
+            }
+
+            if ($tracksNameResolution && $throwable instanceof AiStructuredGenerationException) {
+                $this->recordV3AiNameResolutionError($message, $blockId, $aiRequestId);
+            }
+
+            return [
+                'output_id' => '',
+                'label' => '',
+                'delay_seconds' => 0,
+                'data' => [],
+                'ai_request_id' => $aiRequestId,
+                'error' => true,
+                'error_reason' => 'ai_failed',
+            ];
+        }
+
+        $outputId = trim((string) ($response['output_id'] ?? ''));
+        $output = collect($outputs)
+            ->first(fn (array $candidate): bool => ($candidate['choice_id'] ?? null) === $outputId
+                || ($candidate['id'] ?? null) === $outputId);
+
+        if (! is_array($output)) {
+            Log::warning('scenario.v3_ai_analysis_unknown_output', [
+                'scenario_code' => $this->code(),
+                'dialog_id' => $message->dialog_id,
+                'message_id' => $message->id,
+                'output_id' => $outputId,
+            ]);
+
+            return [
+                'output_id' => '',
+                'label' => '',
+                'delay_seconds' => 0,
+                'data' => [],
+                'ai_request_id' => $aiRequestId,
+                'error' => true,
+                'error_reason' => 'unknown_output',
+            ];
+        }
+
+        $data = $this->v3AiAnalysisData($response['data'] ?? [], $extractFields);
+        $resolutionEvent = null;
+
+        if ($tracksNameResolution && $aiResult !== null) {
+            $resolutionEvent = $this->recordV3AiNameResolutionResult(
+                message: $message,
+                blockId: $blockId,
+                outputId: (string) $output['id'],
+                data: $data,
+                aiRequestId: $aiRequestId,
+            );
+        }
+
+        return [
+            'output_id' => (string) $output['id'],
+            'label' => (string) $output['label'],
+            'delay_seconds' => max(0, min(300, (int) ($output['delay_seconds'] ?? 0))),
+            'data' => $data,
+            'ai_request_id' => $aiRequestId,
+            'first_name_resolution_event_id' => $resolutionEvent?->id,
+            'first_name_resolution_correlation_id' => $resolutionEvent?->correlation_id,
+            'error' => false,
+            'error_reason' => null,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $analysis
+     * @return list<array{id: string, choice_id: string, label: string, delay_seconds: int}>
+     */
+    private function v3AiAnalysisOutputs(array $analysis): array
+    {
+        $outputs = is_array($analysis['outputs'] ?? null) ? $analysis['outputs'] : [];
+
+        return collect($outputs)
+            ->filter(fn (mixed $output): bool => is_array($output)
+                && filled($output['id'] ?? null)
+                && filled($output['label'] ?? null))
+            ->values()
+            ->map(fn (array $output, int $index): array => [
+                'id' => (string) $output['id'],
+                'choice_id' => filled($output['choice_id'] ?? null)
+                    ? (string) $output['choice_id']
+                    : (string) ($index + 1),
+                'label' => (string) $output['label'],
+                'delay_seconds' => max(0, min(300, (int) ($output['delay_seconds'] ?? 0))),
+            ])
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  array<string, mixed>  $analysis
+     * @return list<array{key: string, label: string, type: string}>
+     */
+    private function v3AiAnalysisExtractFields(array $analysis): array
+    {
+        $fields = is_array($analysis['extract_fields'] ?? null) ? $analysis['extract_fields'] : [];
+
+        return collect($fields)
+            ->filter(fn (mixed $field): bool => is_array($field)
+                && filled($field['key'] ?? null)
+                && filled($field['label'] ?? null))
+            ->map(fn (array $field): array => [
+                'key' => (string) $field['key'],
+                'label' => (string) $field['label'],
+                'type' => ($field['type'] ?? null) === 'number' ? 'number' : 'text',
+            ])
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  list<array{key: string, label: string, type: string}>  $extractFields
+     * @return array<string, mixed>
+     */
+    private function v3AiAnalysisData(mixed $data, array $extractFields): array
+    {
+        if (! is_array($data) || $extractFields === []) {
+            return [];
+        }
+
+        $result = [];
+
+        foreach ($extractFields as $field) {
+            $key = (string) $field['key'];
+
+            if (! array_key_exists($key, $data)) {
+                continue;
+            }
+
+            $value = $data[$key];
+
+            if (($field['type'] ?? 'text') === 'number') {
+                if (is_numeric($value)) {
+                    $result[$key] = (float) $value;
+                }
+
+                continue;
+            }
+
+            $text = trim((string) $value);
+
+            if ($text !== '') {
+                if ($key === 'first_name') {
+                    $text = $this->normalizeV3AiFirstNameData($text);
+                }
+
+                $result[$key] = mb_substr($text, 0, 1000);
+            }
+        }
+
+        return $result;
+    }
+
+    private function normalizeV3AiFirstNameData(string $value): string
+    {
+        $lookup = app(LookupScenarioDataDictionaryAction::class)->handle(
+            DataDictionaryEntry::DICTIONARY_NAMES,
+            $value,
+        );
+
+        return $lookup['matched'] === true && filled($lookup['value'])
+            ? trim((string) $lookup['value'])
+            : $value;
+    }
+
+    /**
+     * @param  list<array{key: string, label: string, type: string}>  $extractFields
+     */
+    private function v3AiAnalysisTracksNameResolution(Message $message, array $extractFields): bool
+    {
+        return $message->contact instanceof Contact
+            && collect($extractFields)->contains(fn (array $field): bool => $field['key'] === 'first_name');
+    }
+
+    private function v3AiAnalysisContext(Message $message, string $blockId): ?AiGenerationContext
+    {
+        $contact = $message->contact instanceof Contact
+            ? $this->resolveRootContactAction->handle($message->contact)
+            : null;
+        $contactId = is_numeric($contact?->id ?? $message->contact_id)
+            ? (int) ($contact?->id ?? $message->contact_id)
+            : 0;
+
+        if ($contactId <= 0) {
+            return null;
+        }
+
+        return new AiGenerationContext(
+            taskKey: AiTask::KEY_SCENARIO_V3_AI_ANALYSIS,
+            contactId: $contactId,
+            dialogId: $message->dialog_id,
+            channelId: $message->channel_id,
+            scenarioId: $this->scenario->id,
+            scenarioBlockId: $blockId,
+            promptKey: 'scenario_v3_ai_analysis:'.$blockId,
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    private function recordV3AiNameResolutionResult(
+        Message $message,
+        string $blockId,
+        string $outputId,
+        array $data,
+        ?int $aiRequestId,
+    ): ?ContactFirstNameResolutionEvent {
+        if (! $message->contact instanceof Contact) {
+            return null;
+        }
+
+        $contact = $this->resolveRootContactAction->handle($message->contact);
+        $firstName = trim((string) ($data['first_name'] ?? ''));
+        $correlationId = (string) Str::uuid();
+
+        return $this->firstNameResolutionAnalyticsService->recordResolutionAttempt(
+            contact: $contact,
+            source: ContactFirstNameResolutionEvent::SOURCE_AI,
+            result: $firstName !== ''
+                ? ContactFirstNameResolutionEvent::RESULT_ACCEPTED
+                : ContactFirstNameResolutionEvent::RESULT_REJECTED,
+            clientText: (string) ($message->text ?? ''),
+            dialogId: $message->dialog_id,
+            channelId: $message->channel_id,
+            scenarioId: $this->scenario->id,
+            scenarioBlockId: $blockId,
+            messageId: $message->id,
+            aiRequestId: $aiRequestId,
+            foundFirstName: $firstName !== '' ? $firstName : null,
+            resolvedFirstName: $firstName !== '' ? $firstName : null,
+            correlationId: $correlationId,
+            payload: ['output_id' => $outputId],
+        );
+    }
+
+    private function recordV3AiNameResolutionError(Message $message, string $blockId, ?int $aiRequestId): void
+    {
+        if (! $message->contact instanceof Contact) {
+            return;
+        }
+
+        $this->firstNameResolutionAnalyticsService->recordResolutionAttempt(
+            contact: $this->resolveRootContactAction->handle($message->contact),
+            source: ContactFirstNameResolutionEvent::SOURCE_AI,
+            result: ContactFirstNameResolutionEvent::RESULT_ERROR,
+            clientText: (string) ($message->text ?? ''),
+            dialogId: $message->dialog_id,
+            channelId: $message->channel_id,
+            scenarioId: $this->scenario->id,
+            scenarioBlockId: $blockId,
+            messageId: $message->id,
+            aiRequestId: $aiRequestId,
+            correlationId: (string) Str::uuid(),
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $analysis
+     * @param  list<array{id: string, choice_id: string, label: string, delay_seconds: int}>  $outputs
+     * @param  list<array{key: string, label: string, type: string}>  $extractFields
+     */
+    private function v3AiAnalysisSystemPrompt(
+        Message $message,
+        array $analysis,
+        array $outputs,
+        array $extractFields,
+        array $statePayload,
+        string $blockId,
+    ): string {
+        $variants = collect($outputs)
+            ->map(fn (array $output): string => sprintf('- ID %s: %s', $output['choice_id'], $output['label']))
+            ->implode("\n");
+        $fields = collect($extractFields)
+            ->map(fn (array $field): string => sprintf(
+                '- %s: %s, тип %s',
+                $field['key'],
+                $field['label'],
+                $field['type'] === 'number' ? 'число' : 'текст',
+            ))
+            ->implode("\n");
+        $prompt = $this->v3AiAnalysisPromptWithVariables($message, $analysis, $statePayload, $blockId);
+        $fieldsSection = $fields !== ''
+            ? "\nДанные, которые нужно извлечь в объект data:\n{$fields}\nЕсли значение не найдено или не подходит, верни пустую строку для текстового поля или не заполняй поле."
+            : '';
+        $firstNameRule = collect($extractFields)->contains(fn (array $field): bool => $field['key'] === 'first_name')
+            ? "\nДля data.first_name возвращай полное имя в нормальной форме. Русские уменьшительные имена раскрывай только при однозначном соответствии; если соответствие неоднозначно, верни пустую строку."
+            : '';
+
+        return <<<TEXT
+Ты анализируешь данные клиента внутри сценария.
+Нужно выбрать ровно один вариант результата и вернуть только JSON по заданной схеме.
+Верни только JSON по заданной схеме, без пояснений, комментариев и лишнего текста.
+
+Промт оператора:
+{$prompt}
+
+Варианты результата. В поле output_id верни только ID выбранного варианта:
+{$variants}
+{$fieldsSection}{$firstNameRule}
+TEXT;
+    }
+
+    /**
+     * @param  array<string, mixed>  $analysis
+     */
+    private function v3AiAnalysisUserPrompt(Message $message, array $analysis, array $statePayload, string $blockId): string
+    {
+        if ($this->v3AiAnalysisPromptUsesInputVariables($analysis)) {
+            return 'Данные для анализа уже подставлены в промт оператора.';
+        }
+
+        return "Данные для анализа:\n".$this->v3AiAnalysisText($message, $analysis, $statePayload, $blockId);
+    }
+
+    /**
+     * @param  array<string, mixed>  $analysis
+     * @param  array<string, mixed>  $statePayload
+     */
+    private function v3AiAnalysisPromptWithVariables(
+        Message $message,
+        array $analysis,
+        array $statePayload,
+        string $blockId,
+    ): string {
+        $prompt = trim((string) ($analysis['prompt'] ?? ''));
+
+        if ($prompt === '') {
+            return '';
+        }
+
+        return (string) preg_replace_callback(
+            '/\{\{\s*([\p{L}\p{N}_.]+)\s*(?:\|\s*([^}]*?))?\s*\}\}/u',
+            function (array $matches) use ($message, $statePayload, $blockId): string {
+                $path = trim((string) ($matches[1] ?? ''));
+                $fallback = array_key_exists(2, $matches) ? trim((string) $matches[2]) : '';
+                $value = $this->v3TemplateVariableValue($message, $statePayload, $blockId, $path);
+
+                if ($value === null || trim($value) === '') {
+                    return $fallback;
+                }
+
+                return $value;
+            },
+            $prompt,
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $analysis
+     */
+    private function v3AiAnalysisPromptUsesInputVariables(array $analysis): bool
+    {
+        $prompt = (string) ($analysis['prompt'] ?? '');
+
+        return preg_match('/\{\{\s*input\./u', $prompt) === 1;
+    }
+
+    /**
+     * @param  array<string, mixed>  $analysis
+     * @param  array<string, mixed>  $statePayload
+     */
+    private function v3AiAnalysisPromptVariableValue(
+        Message $message,
+        array $analysis,
+        array $statePayload,
+        string $blockId,
+        string $path,
+    ): ?string {
+        return $this->v3TemplateVariableValue($message, $statePayload, $blockId, $path);
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     */
+    private function v3TextWithVariables(Message $message, string $text, array $statePayload, string $blockId): string
+    {
+        if ($text === '' || ! str_contains($text, '{{')) {
+            return $text;
+        }
+
+        return (string) preg_replace_callback(
+            '/\{\{\s*([A-Za-z0-9_.]+)\s*(?:\|\s*([^}]*?))?\s*\}\}/u',
+            function (array $matches) use ($message, $statePayload, $blockId): string {
+                $path = trim((string) ($matches[1] ?? ''));
+                $fallback = array_key_exists(2, $matches) ? trim((string) $matches[2]) : '';
+                $value = $this->v3TemplateVariableValue($message, $statePayload, $blockId, $path);
+
+                if ($value === null || trim($value) === '') {
+                    return $fallback;
+                }
+
+                return $value;
+            },
+            $text,
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $messagePayload
+     */
+    private function v3MessageTextForPayload(Message $message, array $messagePayload): string
+    {
+        if (($messagePayload['text_mode'] ?? 'static') !== 'by_dialog_variable') {
+            return (string) ($messagePayload['text'] ?? '');
+        }
+
+        $fieldKey = trim((string) ($messagePayload['variable_key'] ?? ''));
+
+        if (! $this->validV3DialogVariableKey($fieldKey)) {
+            return (string) ($messagePayload['fallback_text'] ?? '');
+        }
+
+        $dialog = $message->dialog_id !== null
+            ? Dialog::query()->find($message->dialog_id)
+            : ($message->dialog instanceof Dialog ? $message->dialog : null);
+        $fields = is_array($dialog?->fields_payload) ? $dialog->fields_payload : [];
+        $rawValue = $fields[$fieldKey] ?? null;
+        $value = $rawValue === null ? '' : trim((string) $rawValue);
+        $variants = is_array($messagePayload['variable_text_variants'] ?? null)
+            ? $messagePayload['variable_text_variants']
+            : [];
+
+        foreach ($variants as $variant) {
+            if (! is_array($variant)) {
+                continue;
+            }
+
+            if ($this->v3MessageVariableVariantMatches($value, $variant)) {
+                return (string) ($variant['text'] ?? '');
+            }
+        }
+
+        return (string) ($messagePayload['fallback_text'] ?? '');
+    }
+
+    /**
+     * @param  array<string, mixed>  $variant
+     */
+    private function v3MessageVariableVariantMatches(string $actualValue, array $variant): bool
+    {
+        $operator = (string) ($variant['operator'] ?? 'eq');
+        $expectedValue = trim((string) ($variant['value'] ?? ''));
+
+        if ($operator === 'eq' || $operator === '') {
+            return $expectedValue === $actualValue;
+        }
+
+        if (! in_array($operator, ['gt', 'gte', 'lt', 'lte'], true)) {
+            return false;
+        }
+
+        if (! is_numeric($actualValue) || ! is_numeric($expectedValue)) {
+            return false;
+        }
+
+        $actual = (float) $actualValue;
+        $expected = (float) $expectedValue;
+
+        return match ($operator) {
+            'gt' => $actual > $expected,
+            'gte' => $actual >= $expected,
+            'lt' => $actual < $expected,
+            'lte' => $actual <= $expected,
+            default => false,
+        };
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     */
+    private function v3TemplateVariableValue(
+        Message $message,
+        array $statePayload,
+        string $blockId,
+        string $path,
+    ): ?string {
+        if ($path === 'input.client_messages') {
+            return $this->v3InboundMessageBundleAfterPreviousBotMessage(
+                $this->v3AiAnalysisBundleAnchorMessage($message, $statePayload, $blockId),
+            );
+        }
+
+        if ($path === 'input.current_message') {
+            return trim((string) $message->text);
+        }
+
+        if ($path === 'input.start_param') {
+            return $this->v3StartParameterFromMessage($message);
+        }
+
+        if (str_starts_with($path, 'contact.')) {
+            return $this->v3AiAnalysisContactPromptVariable($message, mb_substr($path, 8));
+        }
+
+        if (str_starts_with($path, 'dialog.')) {
+            return $this->v3AiAnalysisDialogPromptVariable($message, mb_substr($path, 7));
+        }
+
+        if (str_starts_with($path, 'variables.')) {
+            return $this->v3AiAnalysisStatePromptVariable($statePayload, mb_substr($path, 10));
+        }
+
+        if (str_starts_with($path, 'variable.')) {
+            return $this->v3AiAnalysisStatePromptVariable($statePayload, mb_substr($path, 9));
+        }
+
+        return null;
+    }
+
+    private function v3AiAnalysisContactPromptVariable(Message $message, string $field): ?string
+    {
+        $allowedFields = [
+            'phone',
+            'first_name',
+            'first_name_source',
+            'last_name',
+            'country',
+            'region',
+            'city',
+            'gender',
+            'age_years',
+            'age_range',
+        ];
+
+        if (! in_array($field, $allowedFields, true)) {
+            return null;
+        }
+
+        $contact = $message->contact_id !== null
+            ? Contact::query()->find($message->contact_id)
+            : ($message->contact instanceof Contact ? $message->contact : null);
+
+        if (! $contact instanceof Contact) {
+            return null;
+        }
+
+        if ($field === 'phone') {
+            $phone = $contact->phoneNumbers()
+                ->whereNotNull('phone_normalized')
+                ->value('phone_normalized');
+
+            return $phone === null ? null : trim((string) $phone);
+        }
+
+        $value = $contact->getAttribute($field);
+
+        return $value === null ? null : trim((string) $value);
+    }
+
+    private function v3AiAnalysisDialogPromptVariable(Message $message, string $field): ?string
+    {
+        if (! $this->validV3DialogVariableKey($field)) {
+            return null;
+        }
+
+        $dialog = $message->dialog_id !== null
+            ? Dialog::query()->find($message->dialog_id)
+            : ($message->dialog instanceof Dialog ? $message->dialog : null);
+
+        if (! $dialog instanceof Dialog) {
+            return null;
+        }
+
+        $fields = is_array($dialog->fields_payload) ? $dialog->fields_payload : [];
+        $value = $fields[$field] ?? null;
+
+        return $value === null ? null : trim((string) $value);
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     */
+    private function v3AiAnalysisStatePromptVariable(array $statePayload, string $field): ?string
+    {
+        if (! preg_match('/^[A-Za-z][A-Za-z0-9_]{0,63}$/', $field)) {
+            return null;
+        }
+
+        $value = data_get($statePayload, "v3.variables.$field");
+
+        return $value === null ? null : trim((string) $value);
+    }
+
+    /**
+     * @param  list<array{id: string, choice_id: string, label: string, delay_seconds: int}>  $outputs
+     * @param  list<array{key: string, label: string, type: string}>  $extractFields
+     * @return array<string, mixed>
+     */
+    private function v3AiAnalysisSchema(array $outputs, array $extractFields): array
+    {
+        $dataProperties = collect($extractFields)
+            ->mapWithKeys(fn (array $field): array => [
+                $field['key'] => [
+                    'type' => $field['type'] === 'number' ? 'number' : 'string',
+                ],
+            ])
+            ->all();
+
+        return [
+            'type' => 'object',
+            'additionalProperties' => false,
+            'properties' => [
+                'output_id' => [
+                    'type' => 'string',
+                    'enum' => collect($outputs)
+                        ->pluck('choice_id')
+                        ->values()
+                        ->all(),
+                ],
+                'data' => [
+                    'type' => 'object',
+                    'additionalProperties' => false,
+                    'properties' => $dataProperties,
+                ],
+            ],
+            'required' => ['output_id', 'data'],
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $analysis
+     */
+    private function v3AiAnalysisText(Message $message, array $analysis, array $statePayload, string $blockId): string
+    {
+        $source = (string) ($analysis['source'] ?? 'current_inbound_message');
+
+        return match ($source) {
+            'current_inbound_message' => trim((string) $message->text),
+            'inbound_messages_after_previous_bot_message' => $this->v3InboundMessageBundleAfterPreviousBotMessage(
+                $this->v3AiAnalysisBundleAnchorMessage($message, $statePayload, $blockId),
+            ),
+            default => trim((string) $message->text),
+        };
+    }
+
+    private function v3AiAnalysisBundleAnchorMessage(Message $message, array $statePayload, string $blockId): Message
+    {
+        $pendingMessageId = (int) data_get($statePayload, "v3.ai_analysis_pending.$blockId.message_id", 0);
+
+        if ($pendingMessageId < 1 || $message->dialog_id === null) {
+            return $message;
+        }
+
+        $pendingMessage = Message::query()
+            ->whereKey($pendingMessageId)
+            ->where('dialog_id', $message->dialog_id)
+            ->first();
+
+        return $pendingMessage instanceof Message ? $pendingMessage : $message;
+    }
+
+    private function v3InboundMessageBundleAfterPreviousBotMessage(Message $message): string
+    {
+        if ($message->dialog_id === null) {
+            return trim((string) $message->text);
+        }
+
+        $previousBotMessageId = Message::query()
+            ->where('dialog_id', $message->dialog_id)
+            ->where('id', '<', (int) $message->id)
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->orderByDesc('id')
+            ->value('id');
+
+        $messages = Message::query()
+            ->where('dialog_id', $message->dialog_id)
+            ->when(
+                $previousBotMessageId !== null,
+                fn ($query) => $query->where('id', '>', (int) $previousBotMessageId),
+            )
+            ->whereIn('message_kind', [
+                Message::KIND_INBOUND_USER,
+                Message::KIND_INBOUND_CONTACT_SHARE,
+            ])
+            ->orderByDesc('id')
+            ->limit(self::V3_AI_MESSAGE_BUNDLE_LIMIT)
+            ->get(['id', 'text', 'source_text', 'message_kind'])
+            ->sortBy('id')
+            ->values();
+
+        $lines = $messages
+            ->map(function (Message $bundleMessage): string {
+                $text = trim((string) ($bundleMessage->text ?: $bundleMessage->source_text));
+
+                if ($text !== '') {
+                    return $text;
+                }
+
+                return $bundleMessage->message_kind === Message::KIND_INBOUND_CONTACT_SHARE
+                    ? '[Клиент поделился контактом]'
+                    : '';
+            })
+            ->filter(fn (string $text): bool => $text !== '')
+            ->values()
+            ->all();
+
+        return $lines !== []
+            ? implode("\n", $lines)
+            : trim((string) $message->text);
     }
 
     /**
@@ -2565,6 +6351,10 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 continue;
             }
 
+            if (! $this->v3EntrypointAllowsExpression($message, $entrypoint)) {
+                continue;
+            }
+
             $blockId = trim((string) ($entrypoint['block_id'] ?? ''));
             $resolvedBlockId = $this->v3RuntimeBlockId($runtime, $blockId);
 
@@ -2574,6 +6364,31 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         }
 
         return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $entrypoint
+     */
+    private function v3EntrypointAllowsExpression(Message $message, array $entrypoint): bool
+    {
+        $expression = trim((string) ($entrypoint['expression'] ?? ''));
+
+        if ($expression === '') {
+            return true;
+        }
+
+        try {
+            return app(ScenarioEdgeExpressionCondition::class)->evaluate($expression, $message);
+        } catch (Throwable $exception) {
+            Log::warning('V3 start expression condition failed.', [
+                'scenario_id' => $this->scenario->id,
+                'block_id' => $entrypoint['block_id'] ?? null,
+                'message_id' => $message->id,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return false;
+        }
     }
 
     /**
@@ -2737,6 +6552,78 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
      */
     private function v3TargetForButtonCallback(string $callbackData, array $block, ?Channel $channel): ?string
     {
+        $button = $this->v3ButtonForCallback($callbackData, $block, $channel);
+
+        if ($button === null) {
+            return null;
+        }
+
+        return filled($button['target_block_id'] ?? null) ? (string) $button['target_block_id'] : null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     */
+    private function v3WaitReplyTargetForButtonCallback(string $callbackData, array $block, ?Channel $channel): ?string
+    {
+        $button = $this->v3ButtonForCallback($callbackData, $block, $channel);
+
+        if ($button === null) {
+            return null;
+        }
+
+        $answerText = trim((string) ($button['text'] ?? ''));
+
+        foreach ($this->v3WaitReplyEdges($block) as $edge) {
+            if ($this->v3WaitReplyEdgeMatchesAnswer($edge, $answerText, $callbackData)) {
+                return (string) $edge['target_block_id'];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $edge
+     */
+    private function v3WaitReplyEdgeMatchesAnswer(array $edge, string $answerText, string $callbackData): bool
+    {
+        $match = is_array($edge['match'] ?? null) ? $edge['match'] : [];
+        $type = (string) ($match['type'] ?? 'any_inbound');
+
+        if ($type === 'any_inbound') {
+            return true;
+        }
+
+        $answerText = $this->normalizeV3ButtonText($answerText);
+        $callbackData = $this->normalizeV3ButtonText($callbackData);
+        $variants = collect($match['variants'] ?? [])
+            ->map(fn (mixed $variant): string => $this->normalizeV3ButtonText((string) $variant))
+            ->filter(fn (string $variant): bool => $variant !== '')
+            ->values();
+
+        if ($variants->isEmpty()) {
+            return false;
+        }
+
+        return match ($type) {
+            'contains_text' => $answerText !== ''
+                && $variants->contains(fn (string $variant): bool => str_contains($answerText, $variant)),
+            AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER => $answerText !== ''
+                && $variants->contains($answerText),
+            self::V3_MATCH_EXACT_CALLBACK => $callbackData !== ''
+                && $variants->contains($callbackData),
+            AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER => false,
+            default => $answerText !== '' && $variants->contains($answerText),
+        };
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     * @return array<string, mixed>|null
+     */
+    private function v3ButtonForCallback(string $callbackData, array $block, ?Channel $channel): ?array
+    {
         $callback = $this->v3ButtonCallbackFromData($callbackData);
 
         if ($callback === null || ! $this->v3ButtonCallbackMatchesBlock($callback, $block)) {
@@ -2749,16 +6636,38 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                     continue;
                 }
 
-                if (
-                    filled($button['target_block_id'] ?? null)
-                    && (string) ($button['output_id'] ?? '') === $callback['output_id']
-                ) {
-                    return filled($button['target_block_id'] ?? null) ? (string) $button['target_block_id'] : null;
+                if ((string) ($button['output_id'] ?? '') === $callback['output_id']) {
+                    return $button;
                 }
             }
         }
 
         return null;
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $block
+     */
+    private function v3SelectedButtonTextForCallbackMessage(Message $message, ?array $block): ?string
+    {
+        if (! is_array($block) || ! $this->messageIsV3Callback($message)) {
+            return null;
+        }
+
+        $callbackData = trim((string) data_get($message->raw_payload, 'callback_query.data', ''));
+
+        if ($callbackData === '') {
+            $callbackData = trim((string) $message->text);
+        }
+
+        if ($callbackData === '') {
+            return null;
+        }
+
+        $button = $this->v3ButtonForCallback($callbackData, $block, $message->channel);
+        $text = trim((string) ($button['text'] ?? ''));
+
+        return $text !== '' ? $text : null;
     }
 
     /**
@@ -3043,7 +6952,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         $type = (string) ($button['type'] ?? self::V3_BUTTON_TYPE_TEXT);
 
         if ($channel->platform === Channel::PLATFORM_MAX) {
-            return $placement !== self::V3_BUTTON_PLACEMENT_REPLY_KEYBOARD;
+            return true;
         }
 
         if ($channel->platform === Channel::PLATFORM_TELEGRAM) {
@@ -3256,6 +7165,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
     {
         data_set($statePayload, 'v3.status', 'running');
         data_set($statePayload, 'v3.current_block_id', $blockId);
+        data_set($statePayload, 'v3.last_known_block_id', $blockId);
         data_set($statePayload, 'v3.waiting_output_ids', []);
 
         return $statePayload;
@@ -3270,6 +7180,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
     {
         data_set($statePayload, 'v3.status', 'waiting_input');
         data_set($statePayload, 'v3.current_block_id', $blockId);
+        data_set($statePayload, 'v3.last_known_block_id', $blockId);
         data_set($statePayload, 'v3.waiting_output_ids', collect($this->v3WaitingButtonRows($block, $channel))
             ->flatten(1)
             ->pluck('output_id')
@@ -3366,6 +7277,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         string $buttonPlacement,
         ?string $v3CallbackBlockId,
         ?ScenarioRun $scenarioRun,
+        bool $removeTelegramKeyboardBeforeMessage = false,
     ): int {
         if (! $scenarioRun instanceof ScenarioRun) {
             throw new RuntimeException("Scenario [{$this->code()}] V3 deferred message requires a scenario run.");
@@ -3389,6 +7301,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             'delivery_payload' => [
                 'request_phone' => $requestPhone,
                 'remove_telegram_keyboard' => $removeTelegramKeyboard,
+                'remove_telegram_keyboard_before_message' => $removeTelegramKeyboardBeforeMessage,
                 'reply_button_rows' => $replyButtonRows,
                 'button_placement' => $buttonPlacement,
                 'v3_callback_block_id' => $v3CallbackBlockId,
@@ -3435,6 +7348,8 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 is_array($payload['reply_button_rows'] ?? null) ? $payload['reply_button_rows'] : null,
                 is_string($payload['button_placement'] ?? null) ? (string) $payload['button_placement'] : self::V3_BUTTON_PLACEMENT_AUTO,
                 is_string($payload['v3_callback_block_id'] ?? null) ? (string) $payload['v3_callback_block_id'] : null,
+                $outboundMessage->scenarioRun()->first(),
+                (bool) ($payload['remove_telegram_keyboard_before_message'] ?? false),
             );
 
             $sentMessage = $delivery['sent_message'];
@@ -3826,6 +7741,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         string $buttonPlacement = self::V3_BUTTON_PLACEMENT_AUTO,
         ?string $v3CallbackBlockId = null,
         ?ScenarioRun $scenarioRun = null,
+        bool $removeTelegramKeyboardBeforeMessage = false,
     ): bool {
         if ($this->v3ScenarioMessageDeferralDepth > 0) {
             $this->deferredV3ScenarioOutboundMessageIds[] = $this->createDeferredV3OutboundMessage(
@@ -3838,6 +7754,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 $buttonPlacement,
                 $v3CallbackBlockId,
                 $scenarioRun,
+                $removeTelegramKeyboardBeforeMessage,
             );
 
             return true;
@@ -3852,6 +7769,8 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             $replyButtonRows,
             $buttonPlacement,
             $v3CallbackBlockId,
+            $scenarioRun,
+            $removeTelegramKeyboardBeforeMessage,
         );
 
         if ($delivery['error'] instanceof Throwable) {
@@ -3915,6 +7834,8 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         ?array $replyButtonRows = null,
         string $buttonPlacement = self::V3_BUTTON_PLACEMENT_AUTO,
         ?string $v3CallbackBlockId = null,
+        ?ScenarioRun $scenarioRun = null,
+        bool $removeTelegramKeyboardBeforeMessage = false,
     ): array {
         $channel = $message->channel;
 
@@ -3923,6 +7844,10 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         }
 
         $content = $this->prepareMessageContentAction->handle($text, $textFormat);
+
+        if ($removeTelegramKeyboardBeforeMessage) {
+            $this->removeTelegramReplyKeyboardBeforeScenarioMessage($message, $channel);
+        }
 
         $sendResult = $this->sendBotDialogTextAction->handleMessage(
             $message,
@@ -3950,7 +7875,12 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 systemCode: $this->systemCode(),
                 routeDialog: $sendResult->dialog,
                 content: $content,
-                rawPayloadMetadata: $this->v3OutboundRawPayloadMetadata($replyButtonRows, $buttonPlacement),
+                rawPayloadMetadata: $this->v3OutboundRawPayloadMetadata(
+                    $replyButtonRows,
+                    $buttonPlacement,
+                    $scenarioRun,
+                    $v3CallbackBlockId,
+                ),
             );
 
             $channel->markReplySent();
@@ -3969,14 +7899,85 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         ];
     }
 
+    private function removeTelegramReplyKeyboardBeforeScenarioMessage(Message $message, Channel $channel): void
+    {
+        if ($channel->platform !== Channel::PLATFORM_TELEGRAM) {
+            return;
+        }
+
+        $message->loadMissing(['dialog', 'contactIdentity']);
+
+        $chatId = $message->dialog instanceof Dialog && filled($message->dialog->external_chat_id)
+            ? (string) $message->dialog->external_chat_id
+            : (string) $message->external_chat_id;
+
+        if (! filled($chatId)) {
+            return;
+        }
+
+        try {
+            $cleanupDelivery = $this->telegramBotApiService->sendTextMessage(
+                $channel,
+                $chatId,
+                $message->contactIdentity?->external_user_id,
+                self::TELEGRAM_REPLY_KEYBOARD_CLEANUP_TEXT,
+                ['remove_keyboard' => true],
+                Message::TEXT_FORMAT_PLAIN_TEXT,
+                disableNotification: true,
+            );
+        } catch (Throwable $throwable) {
+            Log::warning('scenario.v3.telegram_reply_keyboard_cleanup_failed', [
+                'scenario_code' => $this->code(),
+                'channel_id' => $channel->id,
+                'dialog_id' => $message->dialog_id,
+                'exception' => get_class($throwable),
+            ]);
+
+            return;
+        }
+
+        if (! filled($cleanupDelivery->externalMessageId)) {
+            return;
+        }
+
+        try {
+            $this->telegramBotApiService->deleteMessage($channel, $chatId, (string) $cleanupDelivery->externalMessageId);
+        } catch (Throwable $throwable) {
+            Log::warning('scenario.v3.telegram_reply_keyboard_cleanup_delete_failed', [
+                'scenario_code' => $this->code(),
+                'channel_id' => $channel->id,
+                'dialog_id' => $message->dialog_id,
+                'exception' => get_class($throwable),
+            ]);
+        }
+    }
+
     /**
      * @param  list<list<array<string, mixed>>>|null  $replyButtonRows
      * @return array<string, mixed>
      */
-    private function v3OutboundRawPayloadMetadata(?array $replyButtonRows, string $buttonPlacement): array
-    {
+    private function v3OutboundRawPayloadMetadata(
+        ?array $replyButtonRows,
+        string $buttonPlacement,
+        ?ScenarioRun $scenarioRun = null,
+        ?string $blockId = null,
+    ): array {
+        $metadata = [];
+
+        if ($scenarioRun instanceof ScenarioRun) {
+            $metadata['v3'] = [
+                'scenario_run_id' => (int) $scenarioRun->id,
+                'scenario_code' => $this->code(),
+                'published_version_id' => (int) $this->publishedVersion->id,
+            ];
+
+            if (filled($blockId)) {
+                $metadata['v3']['block_id'] = (string) $blockId;
+            }
+        }
+
         if ($replyButtonRows === null || $replyButtonRows === []) {
-            return [];
+            return $metadata;
         }
 
         $rows = collect($replyButtonRows)
@@ -3996,17 +7997,15 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             ->all();
 
         if ($rows === []) {
-            return [];
+            return $metadata;
         }
 
-        return [
-            'v3' => [
-                'buttons' => [
-                    'placement' => $buttonPlacement,
-                    'rows' => $rows,
-                ],
-            ],
-        ];
+        data_set($metadata, 'v3.buttons', [
+            'placement' => $buttonPlacement,
+            'rows' => $rows,
+        ]);
+
+        return $metadata;
     }
 
     /**
@@ -4093,6 +8092,29 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
     /**
      * @param  array<string, mixed>  $statePayload
+     * @return array{
+     *     status: string,
+     *     current_step: null,
+     *     state_payload: array<string, mixed>,
+     *     exit_outcome: 'completed',
+     * }
+     */
+    private function completedV3Progress(array $statePayload): array
+    {
+        data_set($statePayload, 'v3.status', 'completed');
+        data_set($statePayload, 'v3.current_block_id', null);
+        data_set($statePayload, 'v3.waiting_output_ids', []);
+
+        return [
+            'status' => ScenarioRun::STATUS_COMPLETED,
+            'current_step' => null,
+            'state_payload' => $statePayload,
+            'exit_outcome' => 'completed',
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
      * @return array<string, mixed>
      */
     private function markPendingPromptDelivery(array $statePayload, bool $removeTelegramKeyboard = false): array
@@ -4129,6 +8151,58 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
     private function pendingPromptRemoveTelegramKeyboard(array $statePayload): bool
     {
         return (bool) data_get($statePayload, self::PENDING_PROMPT_REMOVE_TELEGRAM_KEYBOARD_STATE_KEY, false);
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     */
+    private function v3PendingTelegramKeyboardRemoval(array $statePayload): bool
+    {
+        return (bool) data_get($statePayload, self::V3_PENDING_REMOVE_TELEGRAM_KEYBOARD_STATE_KEY, false);
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     */
+    private function v3ShouldRemoveTelegramReplyKeyboardAfterInbound(Message $message, array $block): bool
+    {
+        if ($message->channel?->platform !== Channel::PLATFORM_TELEGRAM) {
+            return false;
+        }
+
+        if ($message->message_kind === Message::KIND_INBOUND_CONTACT_SHARE) {
+            return true;
+        }
+
+        $buttonRows = $this->v3WaitingButtonRows($block, $message->channel);
+
+        if ($buttonRows === []) {
+            return false;
+        }
+
+        return $this->v3TelegramReplyMarkupKind(false, $buttonRows, $this->v3ButtonPlacement($block)) === 'reply_keyboard';
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @return array<string, mixed>
+     */
+    private function markV3PendingTelegramKeyboardRemoval(array $statePayload): array
+    {
+        data_set($statePayload, self::V3_PENDING_REMOVE_TELEGRAM_KEYBOARD_STATE_KEY, true);
+
+        return $statePayload;
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @return array<string, mixed>
+     */
+    private function clearV3PendingTelegramKeyboardRemoval(array $statePayload): array
+    {
+        data_forget($statePayload, self::V3_PENDING_REMOVE_TELEGRAM_KEYBOARD_STATE_KEY);
+
+        return $statePayload;
     }
 
     /**
@@ -4295,6 +8369,44 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
     }
 
     /**
+     * @param  list<list<array<string, mixed>>>|null  $replyButtonRows
+     */
+    private function v3TelegramReplyMarkupKind(
+        bool $requestPhone,
+        ?array $replyButtonRows,
+        string $buttonPlacement = self::V3_BUTTON_PLACEMENT_AUTO,
+    ): string {
+        if ($requestPhone) {
+            return 'reply_keyboard';
+        }
+
+        if ($replyButtonRows === null || $replyButtonRows === []) {
+            return 'none';
+        }
+
+        $hasLinkButton = collect($replyButtonRows)
+            ->flatten(1)
+            ->contains(fn (mixed $button): bool => is_array($button)
+                && ($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) === self::V3_BUTTON_TYPE_LINK
+                && filled($button['url'] ?? null));
+
+        if (
+            $buttonPlacement === self::V3_BUTTON_PLACEMENT_INLINE_MESSAGE
+            || ($buttonPlacement === self::V3_BUTTON_PLACEMENT_AUTO && $hasLinkButton)
+        ) {
+            return 'inline_message';
+        }
+
+        $hasReplyKeyboardButton = collect($replyButtonRows)
+            ->flatten(1)
+            ->contains(fn (mixed $button): bool => is_array($button)
+                && filled($button['text'] ?? null)
+                && ($button['type'] ?? self::V3_BUTTON_TYPE_TEXT) !== self::V3_BUTTON_TYPE_LINK);
+
+        return $hasReplyKeyboardButton ? 'reply_keyboard' : 'none';
+    }
+
+    /**
      * @return array<string, mixed>|null
      */
     private function telegramReplyMarkup(
@@ -4422,10 +8534,6 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
     ): ?array {
         if ($requestPhone) {
             return $this->maxPhoneCaptureAttachments();
-        }
-
-        if ($buttonPlacement === self::V3_BUTTON_PLACEMENT_REPLY_KEYBOARD) {
-            return null;
         }
 
         if ($replyButtonRows === null || $replyButtonRows === []) {

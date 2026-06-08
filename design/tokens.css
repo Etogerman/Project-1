@@ -1,0 +1,230 @@
+/* =====================================================================
+   AB Connector — Design Tokens
+   Источник правды для всех цветов, типографики, радиусов, теней.
+   ===================================================================== */
+
+:root {
+  /* ---------- Цвет: нейтральная шкала (slate-zinc) ---------- */
+  --ac-bg:            #F7F8FA;   /* фон страницы */
+  --ac-surface:       #FFFFFF;   /* карточки, панели, модалки */
+  --ac-surface-2:     #F1F3F6;   /* hover, secondary fill, sub-sections */
+  --ac-surface-3:     #E8EBEF;   /* активное состояние, taps */
+
+  --ac-border:        #E4E7EC;   /* стандартная разделительная линия */
+  --ac-border-strong: #CFD3DA;   /* hover, focus, indeterminate */
+  --ac-border-input:  #D6D9DF;   /* по умолчанию для инпутов и кнопок */
+
+  --ac-text:          #0F172A;   /* основной текст */
+  --ac-text-2:        #475569;   /* вторичный текст, лейблы полей */
+  --ac-text-3:        #94A3B8;   /* плейсхолдеры, мета-инфа, «—» */
+  --ac-text-inverse:  #FFFFFF;   /* на акцентных фонах */
+
+  /* ---------- Акцент (индиго) ---------- */
+  --ac-accent:        #4F46E5;
+  --ac-accent-hover:  #4338CA;
+  --ac-accent-active: #3730A3;
+  --ac-accent-soft:   #EEF0FF;   /* badge-фон, выделение строки */
+  --ac-accent-ring:   rgba(79, 70, 229, 0.22); /* focus-ring */
+
+  /* ---------- Семантика ---------- */
+  --ac-success:        #15803D;
+  --ac-success-soft:   #E7F5EC;
+  --ac-success-ring:   rgba(21, 128, 61, 0.18);
+
+  --ac-warning:        #B45309;
+  --ac-warning-soft:   #FEF3E2;
+  --ac-warning-ring:   rgba(180, 83, 9, 0.18);
+
+  --ac-danger:         #B42318;
+  --ac-danger-hover:   #912018;
+  --ac-danger-soft:    #FEEAE7;
+  --ac-danger-ring:    rgba(180, 35, 24, 0.22);
+
+  --ac-info:           #1D4ED8;
+  --ac-info-soft:      #E6EEFD;
+  --ac-info-ring:      rgba(29, 78, 216, 0.18);
+
+  /* ---------- Каналы связи ---------- */
+  --ac-channel-tg:     #229ED9;  /* Telegram */
+  --ac-channel-tg-soft:#E5F3FB;
+  --ac-channel-max:    #7B4DFF;  /* MAX */
+  --ac-channel-max-soft:#EFE8FF;
+  --ac-channel-tgacc:  #5B7C99;  /* Telegram account gateway */
+  --ac-channel-tgacc-soft:#ECF1F6;
+  --ac-channel-b24:    #2FC6F6;  /* Bitrix24 — только для интеграционного бейджа */
+  --ac-channel-b24-soft:#E4F7FE;
+
+  /* ---------- Цвета тегов (5 + резерв) ----------
+     Используются и для chip-фона, и для рамки точки-индикатора. */
+  --ac-tag-gray:    #64748B;   --ac-tag-gray-soft:   #EEF1F4;
+  --ac-tag-blue:    #2563EB;   --ac-tag-blue-soft:   #E6EEFD;
+  --ac-tag-green:   #16A34A;   --ac-tag-green-soft:  #E6F4EA;
+  --ac-tag-yellow:  #CA8A04;   --ac-tag-yellow-soft: #FBF1D9;
+  --ac-tag-red:     #DC2626;   --ac-tag-red-soft:    #FCE9E7;
+  --ac-tag-purple:  #7C3AED;   --ac-tag-purple-soft: #F0E8FE; /* резерв */
+
+  /* ---------- Типографика ----------
+     Системный стек, без Google Fonts. */
+  --ac-font: -apple-system, BlinkMacSystemFont, "Segoe UI", "SF Pro Text",
+             "Inter", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --ac-font-mono: ui-monospace, "SF Mono", "Menlo", "Consolas", monospace;
+
+  /* Шкала размеров (плотная CRM, не «воздушный» дизайн) */
+  --ac-fs-10:   10px;   /* микро-чипы, бейджи uppercase */
+  --ac-fs-11:   11px;   /* лейблы секций uppercase, метаданные */
+  --ac-fs-12:   12px;   /* мета-инфа, табличные хвосты */
+  --ac-fs-13:   13px;   /* базовый текст, кнопки, лейблы полей */
+  --ac-fs-14:   14px;   /* значения полей, основной текст списка */
+  --ac-fs-15:   15px;   /* заголовки секций */
+  --ac-fs-18:   18px;   /* заголовки карточек, имена в строках */
+  --ac-fs-22:   22px;   /* h1 страницы */
+
+  --ac-lh-tight:   1.2;
+  --ac-lh-normal:  1.45;
+  --ac-lh-relaxed: 1.6;
+
+  /* Веса */
+  --ac-fw-regular: 400;
+  --ac-fw-medium:  500;
+  --ac-fw-semi:    600;
+  --ac-fw-bold:    700;
+
+  /* ---------- Радиусы ---------- */
+  --ac-radius-1: 4px;    /* чекбоксы, мини-чипы */
+  --ac-radius-2: 6px;    /* инпуты, кнопки small */
+  --ac-radius-3: 8px;    /* кнопки, карточки внутри секций */
+  --ac-radius-4: 10px;   /* секции, модалки, popover */
+  --ac-radius-pill: 999px;
+
+  /* ---------- Отступы ----------
+     База 4. Использовать в этой шкале. */
+  --ac-sp-1: 4px;
+  --ac-sp-2: 8px;
+  --ac-sp-3: 12px;
+  --ac-sp-4: 16px;
+  --ac-sp-5: 20px;
+  --ac-sp-6: 24px;
+  --ac-sp-8: 32px;
+  --ac-sp-10: 40px;
+  --ac-sp-12: 48px;
+
+  /* Плотность строк в таблицах/карточках */
+  --ac-row-h:        32px;   /* стандартная строка поля в карточке */
+  --ac-row-h-compact:28px;   /* плотная таблица */
+  --ac-row-h-table:  40px;   /* строка списка контактов/диалогов */
+
+  /* ---------- Тени ----------
+     CRM — минимум теней. Только для всплывающих слоёв. */
+  --ac-shadow-none: 0 0 0 0 transparent;
+  --ac-shadow-1:    0 1px 2px rgba(15, 23, 42, 0.05);
+  --ac-shadow-2:    0 4px 12px rgba(15, 23, 42, 0.08);
+  --ac-shadow-pop:  0 8px 24px rgba(15, 23, 42, 0.10),
+                    0 0 0 1px rgba(15, 23, 42, 0.06);
+  --ac-shadow-modal:0 24px 60px rgba(15, 23, 42, 0.18),
+                    0 0 0 1px rgba(15, 23, 42, 0.06);
+
+  /* ---------- Анимации ---------- */
+  --ac-ease:       cubic-bezier(.4, 0, .2, 1);
+  --ac-dur-fast:   100ms;
+  --ac-dur-base:   140ms;
+  --ac-dur-slow:   220ms;
+
+  /* ---------- Размеры лэйаута ---------- */
+  --ac-sidebar-w:         240px;
+  --ac-sidebar-collapsed: 56px;
+  --ac-topbar-h:          48px;
+  --ac-page-pad-x:        24px;
+  --ac-page-pad-y:        20px;
+  --ac-content-max:       1280px;
+
+  /* ---------- Z-слои ---------- */
+  --ac-z-sidebar:  20;
+  --ac-z-topbar:   30;
+  --ac-z-popover:  40;
+  --ac-z-modal:    100;
+  --ac-z-toast:    200;
+}
+
+/* =====================================================================
+   Тёмная тема — равноправна
+   ===================================================================== */
+[data-theme="dark"] {
+  --ac-bg:            #0B0D12;
+  --ac-surface:       #14171F;
+  --ac-surface-2:     #1B1F29;
+  --ac-surface-3:     #232834;
+
+  --ac-border:        #262B36;
+  --ac-border-strong: #353B49;
+  --ac-border-input:  #313747;
+
+  --ac-text:          #E5E7EB;
+  --ac-text-2:        #9CA3AF;
+  --ac-text-3:        #6B7280;
+  --ac-text-inverse:  #0F172A;
+
+  --ac-accent:        #818CF8;
+  --ac-accent-hover:  #A5B4FC;
+  --ac-accent-active: #C7D2FE;
+  --ac-accent-soft:   rgba(129, 140, 248, 0.14);
+  --ac-accent-ring:   rgba(129, 140, 248, 0.32);
+
+  --ac-success:        #4ADE80;
+  --ac-success-soft:   rgba(74, 222, 128, 0.12);
+  --ac-warning:        #FBBF24;
+  --ac-warning-soft:   rgba(251, 191, 36, 0.12);
+  --ac-danger:         #F87171;
+  --ac-danger-hover:   #FCA5A5;
+  --ac-danger-soft:    rgba(248, 113, 113, 0.14);
+  --ac-info:           #60A5FA;
+  --ac-info-soft:      rgba(96, 165, 250, 0.12);
+
+  --ac-channel-tg-soft:   rgba(34, 158, 217, 0.16);
+  --ac-channel-max-soft:  rgba(123, 77, 255, 0.18);
+  --ac-channel-tgacc-soft:rgba(91, 124, 153, 0.18);
+  --ac-channel-b24-soft:  rgba(47, 198, 246, 0.14);
+
+  --ac-tag-gray-soft:   rgba(148, 163, 184, 0.14);
+  --ac-tag-blue-soft:   rgba(96, 165, 250, 0.14);
+  --ac-tag-green-soft:  rgba(74, 222, 128, 0.14);
+  --ac-tag-yellow-soft: rgba(251, 191, 36, 0.14);
+  --ac-tag-red-soft:    rgba(248, 113, 113, 0.14);
+  --ac-tag-purple-soft: rgba(167, 139, 250, 0.14);
+
+  --ac-shadow-1:    0 1px 2px rgba(0, 0, 0, 0.40);
+  --ac-shadow-2:    0 4px 12px rgba(0, 0, 0, 0.45);
+  --ac-shadow-pop:  0 8px 24px rgba(0, 0, 0, 0.55),
+                    0 0 0 1px rgba(255, 255, 255, 0.06);
+  --ac-shadow-modal:0 24px 60px rgba(0, 0, 0, 0.65),
+                    0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+/* =====================================================================
+   Минимальный reset
+   ===================================================================== */
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--ac-bg);
+  color: var(--ac-text);
+  font-family: var(--ac-font);
+  font-size: var(--ac-fs-13);
+  line-height: var(--ac-lh-normal);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+button { font-family: inherit; }
+input, select, textarea { font: inherit; color: inherit; }
+
+::selection {
+  background: var(--ac-accent-soft);
+  color: var(--ac-accent-active);
+}
+[data-theme="dark"] ::selection {
+  background: var(--ac-accent-soft);
+  color: var(--ac-accent);
+}

@@ -51,7 +51,7 @@ class UpdateContactProfileActionTest extends TestCase
         $this->assertSame('Москва', $updated->city);
         $this->assertSame('Московская область', $updated->region);
         $this->assertSame(Contact::REGION_STATUS_RESOLVED, $updated->region_status);
-        $this->assertSame(Contact::REGION_SOURCE_AI, $updated->region_source);
+        $this->assertSame(Contact::REGION_SOURCE_DICTIONARY, $updated->region_source);
         Queue::assertPushed(CalculateDistanceToMoscowJob::class, function (CalculateDistanceToMoscowJob $job) use ($contact): bool {
             return $job->contactId === $contact->id;
         });
@@ -90,6 +90,95 @@ class UpdateContactProfileActionTest extends TestCase
         Queue::assertPushed(CalculateDistanceToMoscowJob::class, function (CalculateDistanceToMoscowJob $job) use ($root): bool {
             return $job->contactId === $root->id;
         });
+    }
+
+    public function test_action_sets_operator_gender_source_when_gender_is_manually_changed(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $contact = Contact::factory()->create([
+            'gender' => null,
+            'gender_source' => null,
+        ]);
+
+        $updated = app(UpdateContactProfileAction::class)->handle($contact, [
+            'last_name' => null,
+            'gender' => 'male',
+            'birth_date' => null,
+            'age_years' => null,
+            'age_range' => null,
+            'country' => null,
+            'city' => null,
+            'region' => null,
+        ]);
+
+        $this->assertSame('male', $updated->gender);
+        $this->assertSame(Contact::GENDER_SOURCE_OPERATOR, $updated->gender_source);
+    }
+
+    public function test_action_preserves_gender_source_when_gender_is_not_changed(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $contact = Contact::factory()->create([
+            'gender' => 'female',
+            'gender_source' => Contact::GENDER_SOURCE_CLIENT,
+        ]);
+
+        $updated = app(UpdateContactProfileAction::class)->handle($contact, [
+            'last_name' => 'Новая фамилия',
+            'gender' => 'female',
+            'birth_date' => null,
+            'age_years' => null,
+            'age_range' => null,
+            'country' => null,
+            'city' => null,
+            'region' => null,
+        ]);
+
+        $this->assertSame('female', $updated->gender);
+        $this->assertSame(Contact::GENDER_SOURCE_CLIENT, $updated->gender_source);
+    }
+
+    public function test_action_clears_gender_source_when_gender_is_cleared_or_unknown(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $contact = Contact::factory()->create([
+            'gender' => 'male',
+            'gender_source' => Contact::GENDER_SOURCE_OPERATOR,
+        ]);
+
+        $updated = app(UpdateContactProfileAction::class)->handle($contact, [
+            'last_name' => null,
+            'gender' => 'unknown',
+            'birth_date' => null,
+            'age_years' => null,
+            'age_range' => null,
+            'country' => null,
+            'city' => null,
+            'region' => null,
+        ]);
+
+        $this->assertSame('unknown', $updated->gender);
+        $this->assertNull($updated->gender_source);
+
+        $updated = app(UpdateContactProfileAction::class)->handle($updated, [
+            'last_name' => null,
+            'gender' => null,
+            'birth_date' => null,
+            'age_years' => null,
+            'age_range' => null,
+            'country' => null,
+            'city' => null,
+            'region' => null,
+        ]);
+
+        $this->assertNull($updated->gender);
+        $this->assertNull($updated->gender_source);
     }
 
     public function test_action_advances_active_collector_after_first_name_was_updated_via_apply_action(): void

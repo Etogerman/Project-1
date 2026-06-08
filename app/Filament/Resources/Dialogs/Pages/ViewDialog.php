@@ -11,12 +11,16 @@ use App\Models\ChannelPeerSyncState;
 use App\Models\Contact;
 use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
+use App\Models\FieldDictionaryField;
 use App\Models\Message;
+use App\Models\ScenarioRun;
+use App\Models\ScenarioVersion;
 use App\Models\User;
 use App\Services\Bots\ContactIdentityAvatarStorage;
 use App\Services\Bots\SendManualDialogReplyAction;
 use App\Services\Contacts\ResolveContactDisplayNameAction;
 use App\Services\Contacts\ResolveRootContactAction;
+use App\Services\Contacts\SetContactAssigneeAction;
 use App\Services\Dialogs\BuildConversationFeedViewDataAction;
 use App\Services\Dialogs\LoadDialogMessagesPageAction;
 use App\Services\Dialogs\ResolveDialogInboxStatusAction;
@@ -30,6 +34,7 @@ use Filament\Support\Enums\Width;
 use Illuminate\Contracts\Support\Htmlable;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
@@ -42,7 +47,17 @@ class ViewDialog extends ViewRecord
 
     public const CONVERSATION_DISPLAY_MODE_HTML = 'html';
 
+    public const INITIAL_CONVERSATION_MESSAGE_LIMIT = 25;
+
+    public const OLDER_CONVERSATION_MESSAGE_LIMIT = 50;
+
+    public const LIVE_REFRESH_MESSAGE_LIMIT = 50;
+
     public const LIVE_REFRESH_INTERVAL_MS = 5000;
+
+    private const DIALOG_FIELD_VALUE_MAX_LENGTH = 2000;
+
+    private const DIALOG_FIELDS_MAX_BYTES = 65536;
 
     protected static string $resource = DialogResource::class;
 
@@ -65,6 +80,10 @@ class ViewDialog extends ViewRecord
 
     public string $dialogStageSelection = '';
 
+    public bool $isDialogAssigneeEditing = false;
+
+    public string $selectedDialogAssigneeId = '';
+
     public string $conversationDisplayMode = self::CONVERSATION_DISPLAY_MODE_FORMATTED;
 
     /**
@@ -75,6 +94,16 @@ class ViewDialog extends ViewRecord
     public ?int $latestKnownMessageId = null;
 
     public ?string $dialogsBackUrl = null;
+
+    /**
+     * @var array<string, string>|null
+     */
+    protected ?array $dialogFieldLabels = null;
+
+    /**
+     * @var array<string, array<string, string>>
+     */
+    protected array $dialogOptionLabels = [];
 
     public function mount(int|string $record): void
     {
@@ -133,7 +162,7 @@ class ViewDialog extends ViewRecord
         $page = app(LoadDialogMessagesPageAction::class)->handle(
             $this->getRecord(),
             $this->nextOlderCursor,
-            50,
+            self::OLDER_CONVERSATION_MESSAGE_LIMIT,
         );
 
         $olderMessages = app(BuildConversationFeedViewDataAction::class)->handle($page->messages);
@@ -202,6 +231,102 @@ class ViewDialog extends ViewRecord
             Notification::make()
                 ->danger()
                 ->title('Не удалось изменить статус')
+                ->body($throwable->getMessage())
+                ->send();
+        }
+    }
+
+    public function setDialogInboxStatus(string $status): void
+    {
+        if ($this->dialogInboxStatusSelection === $status) {
+            return;
+        }
+
+        $this->dialogInboxStatusSelection = $status;
+        $this->updateDialogInboxStatus();
+    }
+
+    public function openDialogAssigneeEditor(): void
+    {
+        if (! $this->canCurrentUserManageDialogContactOwnership()) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось открыть выбор ответственного')
+                ->body('Недостаточно прав для изменения ответственного.')
+                ->send();
+
+            return;
+        }
+
+        $contact = $this->resolveReplyOwnerContact();
+
+        if (! $contact instanceof Contact) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось открыть выбор ответственного')
+                ->body('У диалога нет связанного контакта.')
+                ->send();
+
+            return;
+        }
+
+        $this->selectedDialogAssigneeId = filled($contact->assigned_user_id)
+            ? (string) $contact->assigned_user_id
+            : '';
+        $this->isDialogAssigneeEditing = true;
+    }
+
+    public function closeDialogAssigneeEditor(): void
+    {
+        $this->isDialogAssigneeEditing = false;
+        $this->selectedDialogAssigneeId = '';
+    }
+
+    public function saveDialogAssignee(): void
+    {
+        if (! $this->canCurrentUserManageDialogContactOwnership()) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось сохранить ответственного')
+                ->body('Недостаточно прав для изменения ответственного.')
+                ->send();
+
+            return;
+        }
+
+        $contact = $this->resolveReplyOwnerContact();
+
+        if (! $contact instanceof Contact) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось сохранить ответственного')
+                ->body('У диалога нет связанного контакта.')
+                ->send();
+
+            return;
+        }
+
+        try {
+            $employee = $this->resolveCurrentEmployee();
+            $assigneeId = $this->selectedDialogAssigneeId !== ''
+                ? (int) $this->selectedDialogAssigneeId
+                : null;
+
+            app(SetContactAssigneeAction::class)->handle($contact, $employee, $assigneeId);
+
+            $this->isDialogAssigneeEditing = false;
+            $this->selectedDialogAssigneeId = '';
+            $this->refreshDialogRecord();
+
+            Notification::make()
+                ->success()
+                ->title('Ответственный обновлён')
+                ->body('Изменения сохранены.')
+                ->send();
+        } catch (Throwable $throwable) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось сохранить ответственного')
                 ->body($throwable->getMessage())
                 ->send();
         }
@@ -308,6 +433,72 @@ class ViewDialog extends ViewRecord
         }
     }
 
+    public function saveDialogFieldValue(string $fieldKey, mixed $value): void
+    {
+        $fieldKey = trim($fieldKey);
+        $valueText = is_scalar($value) || $value === null
+            ? (string) $value
+            : '';
+
+        try {
+            if (mb_strlen($valueText) > self::DIALOG_FIELD_VALUE_MAX_LENGTH) {
+                throw ValidationException::withMessages([
+                    'dialog_field_value' => 'Значение поля диалога не должно быть длиннее 2000 символов.',
+                ]);
+            }
+
+            DB::transaction(function () use ($fieldKey, $valueText): void {
+                $dialog = Dialog::query()
+                    ->whereKey($this->getRecord()->getKey())
+                    ->lockForUpdate()
+                    ->firstOrFail();
+
+                $fieldsPayload = is_array($dialog->fields_payload) ? $dialog->fields_payload : [];
+
+                if (! $this->canEditDialogFieldValue($fieldKey, $fieldsPayload)) {
+                    throw ValidationException::withMessages([
+                        'dialog_field_key' => 'Это поле диалога нельзя изменить из карточки.',
+                    ]);
+                }
+
+                $fieldsPayload[$fieldKey] = $this->normalizeEditedDialogFieldValue(
+                    $valueText,
+                    $fieldsPayload[$fieldKey] ?? null,
+                );
+
+                $encoded = json_encode($fieldsPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+                if ($encoded === false || strlen($encoded) > self::DIALOG_FIELDS_MAX_BYTES) {
+                    throw ValidationException::withMessages([
+                        'dialog_field_value' => 'Поля диалога стали слишком большими для сохранения.',
+                    ]);
+                }
+
+                $dialog->forceFill(['fields_payload' => $fieldsPayload])->save();
+            });
+
+            $this->refreshDialogRecord();
+
+            Notification::make()
+                ->success()
+                ->title('Поле обновлено')
+                ->body('Значение поля диалога сохранено.')
+                ->send();
+        } catch (ValidationException $exception) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось сохранить поле')
+                ->body((string) collect($exception->errors())->flatten()->first())
+                ->send();
+        } catch (Throwable $throwable) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось сохранить поле')
+                ->body($throwable->getMessage())
+                ->send();
+        }
+    }
+
     /**
      * @return array<string, mixed>
      */
@@ -318,11 +509,14 @@ class ViewDialog extends ViewRecord
             'peerSyncState' => $this->getPeerSyncStateViewData(),
             'contactSummary' => $this->getContactSummaryViewData(),
             'dialogFields' => $this->getDialogFieldsViewData(),
+            'dialogSystemFields' => $this->getDialogSystemFieldsViewData(),
+            'dialogFieldLabels' => $this->getDialogFieldLabels(),
             'dialogBreadcrumbs' => $this->getDialogBreadcrumbsViewData(),
             'kanbanBackUrl' => $this->resolveDialogsBackUrl(),
             'contactUrl' => $this->getContactViewUrl(),
             'dialogInboxStatus' => $this->getDialogInboxStatusViewData(),
             'dialogStage' => $this->getDialogStageViewData(),
+            'dialogAssignee' => $this->getDialogAssigneeViewData(),
             'conversationDisplayModeOptions' => $this->getConversationDisplayModeOptions(),
             'liveRefreshPollIntervalMs' => static::LIVE_REFRESH_INTERVAL_MS,
             'replyComposer' => $this->getReplyComposerViewData(),
@@ -331,7 +525,11 @@ class ViewDialog extends ViewRecord
 
     protected function initializeConversationHistory(): void
     {
-        $page = app(LoadDialogMessagesPageAction::class)->handle($this->getRecord(), null, 50);
+        $page = app(LoadDialogMessagesPageAction::class)->handle(
+            $this->getRecord(),
+            null,
+            self::INITIAL_CONVERSATION_MESSAGE_LIMIT,
+        );
 
         $this->conversationMessages = app(BuildConversationFeedViewDataAction::class)->handle($page->messages);
         $this->hasMoreOlderMessages = $page->hasMoreOlderMessages;
@@ -437,17 +635,17 @@ class ViewDialog extends ViewRecord
         $currentIndex = array_search($currentStage, $workingStages, true);
 
         return [
-            'current_label' => Dialog::stageLabel($currentStage),
+            'current_label' => $this->dialogOptionLabel('stage', $currentStage, Dialog::stageLabel($currentStage)),
             'current_tone' => Dialog::stageTone($currentStage),
             'is_editable' => $isEditable,
             'blocked_reason' => $this->getDialogStageBlockedReason(),
             'stage_model' => 'dialogStageSelection',
             'update_method' => 'updateDialogStage',
-            'options' => Dialog::manualTransitionOptions($currentStage),
+            'options' => $this->applyDialogDictionaryOptionLabels('stage', Dialog::manualTransitionOptions($currentStage)),
             'steps' => collect($workingStages)
                 ->map(fn (string $stage, int $index): array => [
                     'value' => $stage,
-                    'label' => Dialog::stageLabel($stage),
+                    'label' => $this->dialogOptionLabel('stage', $stage, Dialog::stageLabel($stage)),
                     'tone' => Dialog::stageTone($stage),
                     'is_current' => $stage === $currentStage,
                     'is_clickable' => $isEditable && in_array($stage, $allowedTargets, true),
@@ -455,6 +653,21 @@ class ViewDialog extends ViewRecord
                 ])
                 ->values()
                 ->all(),
+        ];
+    }
+
+    /**
+     * @return array{
+     *     can_manage:bool,
+     *     available_assignees:array<string, string>
+     * }
+     */
+    protected function getDialogAssigneeViewData(): array
+    {
+        return [
+            'can_manage' => $this->canCurrentUserManageDialogContactOwnership()
+                && $this->getRecord()->contact instanceof Contact,
+            'available_assignees' => $this->getAssignableUserOptions(),
         ];
     }
 
@@ -582,7 +795,7 @@ class ViewDialog extends ViewRecord
     /**
      * @return array{
      *     is_visible: bool,
-     *     fields: list<array{key: string, value: string, value_type: string, is_truncated: bool}>
+     *     fields: list<array{key: string, label: string, value: string, editable_value: string, value_type: string, is_truncated: bool, can_edit: bool}>
      * }
      */
     protected function getDialogFieldsViewData(): array
@@ -599,14 +812,17 @@ class ViewDialog extends ViewRecord
         $fields = collect($fieldsPayload)
             ->filter(fn (mixed $value, mixed $key): bool => is_string($key)
                 && ! str_starts_with($key, '_'))
-            ->map(function (mixed $value, string $key): array {
+            ->map(function (mixed $value, string $key) use ($fieldsPayload): array {
                 $formattedValue = $this->formatDialogFieldValue($value);
 
                 return [
                     'key' => $key,
+                    'label' => $this->dialogFieldLabel($key, $key),
                     'value' => $formattedValue['value'],
+                    'editable_value' => $this->formatDialogFieldEditableValue($value),
                     'value_type' => $formattedValue['type'],
                     'is_truncated' => $formattedValue['is_truncated'],
+                    'can_edit' => $this->canEditDialogFieldValue($key, $fieldsPayload),
                 ];
             })
             ->sortBy('key', SORT_NATURAL)
@@ -617,6 +833,392 @@ class ViewDialog extends ViewRecord
             'is_visible' => true,
             'fields' => $fields,
         ];
+    }
+
+    /**
+     * @return array{
+     *     rows: list<array{
+     *         key: string,
+     *         label: string,
+     *         value: string,
+     *         detail: ?string,
+     *         url: ?string,
+     *         value_role: ?string,
+     *         tone: ?string
+     *     }>
+     * }
+     */
+    protected function getDialogSystemFieldsViewData(): array
+    {
+        $dialog = $this->getRecord();
+        $contactSummary = $this->getContactSummaryViewData();
+        $inboxStatus = $this->getDialogInboxStatusViewData();
+        $currentBlock = $this->getCurrentDialogBlockViewData($dialog);
+
+        return [
+            'rows' => [
+                $this->dialogSystemFieldRow('id', 'ID', (string) $dialog->id),
+                $this->dialogSystemFieldRow(
+                    'contact_id',
+                    'Контакт',
+                    $contactSummary['contact_label'],
+                    null,
+                    'dialog-contact-label',
+                    null,
+                    $this->getContactViewUrl(),
+                ),
+                $this->dialogSystemFieldRow('channel_id', 'Канал', $this->formatChannelLabel($dialog->channel, 'Неизвестный канал'), null, 'dialog-channel-label'),
+                $this->dialogSystemFieldRow('status', 'Статус', $inboxStatus['current_label']),
+                $this->dialogSystemFieldRow('assigned_user_id', 'Ответственный', $contactSummary['assigned_user_label']),
+                $this->dialogSystemFieldRow(
+                    'current_block_id',
+                    'Текущий блок',
+                    $currentBlock['value'],
+                    $currentBlock['detail'],
+                    'dialog-current-block',
+                    $currentBlock['tone'],
+                ),
+                $this->dialogSystemFieldRow('created_at', 'Создан', $this->formatDialogTimestamp($dialog->created_at)),
+                $this->dialogSystemFieldRow('updated_at', 'Обновлён', $this->formatDialogTimestamp($dialog->updated_at)),
+                $this->dialogSystemFieldRow(
+                    'last_message_at',
+                    'Последнее сообщение',
+                    $this->formatDialogSnapshotLine(
+                        $this->formatDialogTimestamp($dialog->last_message_at),
+                        $this->formatDialogMessagePreview($dialog, 'last_message_id', $dialog->last_message_preview),
+                    ),
+                ),
+                $this->dialogSystemFieldRow(
+                    'last_inbound_message_at',
+                    'Последнее входящее',
+                    $this->formatDialogSnapshotLine(
+                        $this->formatDialogTimestamp($dialog->last_inbound_at),
+                        $this->formatDialogMessagePreview($dialog, 'last_inbound_message_id', $dialog->last_inbound_message_preview),
+                    ),
+                    null,
+                    null,
+                    null,
+                    null,
+                    'Последнее входящее',
+                ),
+                $this->dialogSystemFieldRow(
+                    'last_outbound_message_at',
+                    'Последнее исходящее',
+                    $this->formatDialogSnapshotLine(
+                        $this->formatDialogTimestamp($dialog->last_outbound_at),
+                        $this->formatDialogMessagePreview($dialog, 'last_outbound_message_id', $dialog->last_outbound_message_preview),
+                    ),
+                    null,
+                    null,
+                    null,
+                    null,
+                    'Последнее исходящее',
+                ),
+                $this->dialogSystemFieldRow('phone', 'Телефон', $this->formatDialogPhoneLabel($dialog)),
+            ],
+        ];
+    }
+
+    /**
+     * @return array{
+     *     key: string,
+     *     label: string,
+     *     value: string,
+     *     detail: ?string,
+     *     url: ?string,
+     *     value_role: ?string,
+     *     tone: ?string
+     * }
+     */
+    protected function dialogSystemFieldRow(
+        string $fieldKey,
+        string $fallbackLabel,
+        string $value,
+        ?string $detail = null,
+        ?string $valueRole = null,
+        ?string $tone = null,
+        ?string $url = null,
+        ?string $displayLabel = null,
+    ): array {
+        return [
+            'key' => $fieldKey,
+            'label' => filled($displayLabel) ? $displayLabel : $this->dialogFieldLabel($fieldKey, $fallbackLabel),
+            'value' => trim($value) !== '' ? $value : '—',
+            'detail' => filled($detail) ? $detail : null,
+            'url' => filled($url) ? $url : null,
+            'value_role' => $valueRole,
+            'tone' => $tone,
+        ];
+    }
+
+    /**
+     * @return array{value: string, detail: ?string, tone: ?string}
+     */
+    protected function getCurrentDialogBlockViewData(Dialog $dialog): array
+    {
+        $activeRuns = ScenarioRun::query()
+            ->where('dialog_id', $dialog->id)
+            ->where('status', ScenarioRun::STATUS_ACTIVE)
+            ->orderByDesc('id')
+            ->get(['id', 'scenario_code', 'current_step', 'state_payload', 'status']);
+
+        /** @var ScenarioRun|null $run */
+        $run = $activeRuns->first();
+
+        if (! $run instanceof ScenarioRun) {
+            $run = ScenarioRun::query()
+                ->where('dialog_id', $dialog->id)
+                ->orderByDesc('id')
+                ->first(['id', 'scenario_code', 'current_step', 'state_payload', 'status']);
+        }
+
+        if (! $run instanceof ScenarioRun) {
+            return [
+                'value' => 'Сценарий не запускался',
+                'detail' => null,
+                'tone' => 'muted',
+            ];
+        }
+
+        $statePayload = is_array($run->state_payload) ? $run->state_payload : [];
+        $currentBlockId = $this->resolveCurrentDialogBlockId($dialog, $run, $activeRuns->contains('id', $run->id));
+
+        $detailParts = [
+            'run #'.$run->id,
+            $run->status,
+        ];
+
+        if ($activeRuns->count() > 1) {
+            $detailParts[] = 'найдено несколько активных запусков';
+        }
+
+        if ($currentBlockId === '') {
+            return [
+                'value' => 'Блок не определён · '.implode(' · ', $detailParts),
+                'detail' => null,
+                'tone' => 'muted',
+            ];
+        }
+
+        $publishedVersionId = (int) data_get($statePayload, 'v3.published_version_id', 0);
+
+        if ($publishedVersionId < 1) {
+            return [
+                'value' => $currentBlockId.' · сценарий без V3-схемы · '.implode(' · ', $detailParts),
+                'detail' => null,
+                'tone' => 'muted',
+            ];
+        }
+
+        $detailParts[] = 'v'.$publishedVersionId;
+        $blockViewData = $this->resolvePublishedV3BlockViewData($publishedVersionId, $currentBlockId);
+        $blockTitle = $blockViewData['title'];
+        $displayNumber = $blockViewData['display_number'] ?? $currentBlockId;
+
+        return [
+            'value' => '#'.$displayNumber.' · '.($blockTitle ?? 'блок не найден').' · '.implode(' · ', $detailParts),
+            'detail' => null,
+            'tone' => $blockTitle !== null ? null : 'warning',
+        ];
+    }
+
+    protected function resolveCurrentDialogBlockId(Dialog $dialog, ScenarioRun $run, bool $isActiveRun): string
+    {
+        $statePayload = is_array($run->state_payload) ? $run->state_payload : [];
+        $currentBlockId = trim((string) data_get($statePayload, 'v3.current_block_id', ''));
+
+        if ($currentBlockId !== '') {
+            return $currentBlockId;
+        }
+
+        $currentStep = filled($run->current_step) ? trim((string) $run->current_step) : '';
+
+        if ($currentStep !== '') {
+            return $currentStep;
+        }
+
+        if (! $isActiveRun) {
+            $lastKnownBlockId = trim((string) data_get($statePayload, 'v3.last_known_block_id', ''));
+
+            if ($lastKnownBlockId !== '') {
+                return $lastKnownBlockId;
+            }
+
+            return $this->resolveLastKnownScenarioMessageBlockId($dialog, $run) ?? '';
+        }
+
+        return '';
+    }
+
+    protected function resolveLastKnownScenarioMessageBlockId(Dialog $dialog, ScenarioRun $run): ?string
+    {
+        return Message::query()
+            ->where('dialog_id', $dialog->id)
+            ->whereNotNull('raw_payload')
+            ->orderByDesc('id')
+            ->limit(100)
+            ->get(['id', 'raw_payload'])
+            ->map(function (Message $message) use ($run): ?string {
+                $rawPayload = is_array($message->raw_payload) ? $message->raw_payload : [];
+
+                if ((int) data_get($rawPayload, 'v3.scenario_run_id', 0) !== (int) $run->id) {
+                    return null;
+                }
+
+                $blockId = trim((string) data_get($rawPayload, 'v3.block_id', ''));
+
+                return $blockId !== '' ? $blockId : null;
+            })
+            ->filter()
+            ->first();
+    }
+
+    /**
+     * @return array{title: ?string, display_number: ?string}
+     */
+    protected function resolvePublishedV3BlockViewData(int $publishedVersionId, string $currentBlockId): array
+    {
+        $version = ScenarioVersion::query()->find($publishedVersionId, ['id', 'schema_payload']);
+
+        if (! $version instanceof ScenarioVersion) {
+            return [
+                'title' => null,
+                'display_number' => null,
+            ];
+        }
+
+        $schemaPayload = is_array($version->schema_payload) ? $version->schema_payload : [];
+        $blocks = data_get($schemaPayload, 'builder_v3_runtime.blocks', []);
+
+        if (! is_array($blocks)) {
+            return [
+                'title' => null,
+                'display_number' => null,
+            ];
+        }
+
+        $block = $blocks[$currentBlockId] ?? null;
+
+        if (! is_array($block)) {
+            $block = collect($blocks)->first(function (mixed $candidate) use ($currentBlockId): bool {
+                if (! is_array($candidate)) {
+                    return false;
+                }
+
+                return trim((string) ($candidate['id'] ?? '')) === $currentBlockId
+                    || trim((string) ($candidate['card_id'] ?? '')) === $currentBlockId;
+            });
+        }
+
+        if (! is_array($block)) {
+            return [
+                'title' => null,
+                'display_number' => null,
+            ];
+        }
+
+        $title = trim((string) ($block['title'] ?? ''));
+        $displayNumber = trim((string) ($block['display_number'] ?? ''));
+
+        if ($displayNumber === '') {
+            $displayNumber = trim((string) ($block['card_id'] ?? ''));
+        }
+
+        if ($displayNumber === '') {
+            $displayNumber = trim((string) ($block['id'] ?? ''));
+        }
+
+        return [
+            'title' => $title !== '' ? $title : null,
+            'display_number' => $displayNumber !== '' ? $displayNumber : null,
+        ];
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    protected function getDialogFieldLabels(): array
+    {
+        return $this->dialogFieldLabels ??= FieldDictionaryField::labelsFor(FieldDictionaryField::ENTITY_DIALOG);
+    }
+
+    protected function dialogFieldLabel(string $fieldKey, string $fallback): string
+    {
+        return FieldDictionaryField::labelFrom($this->getDialogFieldLabels(), $fieldKey, $fallback);
+    }
+
+    protected function dialogOptionLabel(string $fieldKey, mixed $value, string $fallback): string
+    {
+        $this->dialogOptionLabels[$fieldKey] ??= FieldDictionaryField::optionLabelsFor(FieldDictionaryField::ENTITY_DIALOG, $fieldKey);
+
+        return FieldDictionaryField::optionLabelFrom($this->dialogOptionLabels[$fieldKey], $value, $fallback);
+    }
+
+    /**
+     * @param  array<string, string>  $fallbackOptions
+     * @return array<string, string>
+     */
+    protected function applyDialogDictionaryOptionLabels(string $fieldKey, array $fallbackOptions): array
+    {
+        $this->dialogOptionLabels[$fieldKey] ??= FieldDictionaryField::optionLabelsFor(FieldDictionaryField::ENTITY_DIALOG, $fieldKey);
+
+        return collect($fallbackOptions)
+            ->mapWithKeys(fn (string $label, string $value): array => [
+                $value => FieldDictionaryField::optionLabelFrom($this->dialogOptionLabels[$fieldKey], $value, $label),
+            ])
+            ->all();
+    }
+
+    /**
+     * @param  array<string, mixed>  $fieldsPayload
+     */
+    protected function canEditDialogFieldValue(string $fieldKey, array $fieldsPayload): bool
+    {
+        return $fieldKey !== ''
+            && ! str_starts_with($fieldKey, '_')
+            && array_key_exists($fieldKey, $fieldsPayload);
+    }
+
+    protected function normalizeEditedDialogFieldValue(string $value, mixed $previousValue): mixed
+    {
+        $trimmed = trim($value);
+
+        if (is_int($previousValue) && preg_match('/^-?\d+$/', $trimmed) === 1) {
+            return (int) $trimmed;
+        }
+
+        if (is_float($previousValue) && is_numeric($trimmed)) {
+            return (float) $trimmed;
+        }
+
+        if (is_bool($previousValue)) {
+            return match (mb_strtolower($trimmed)) {
+                '1', 'true', 'yes', 'да' => true,
+                '0', 'false', 'no', 'нет' => false,
+                default => $value,
+            };
+        }
+
+        return $value;
+    }
+
+    protected function formatDialogFieldEditableValue(mixed $value): string
+    {
+        if ($value === null) {
+            return '';
+        }
+
+        if (is_bool($value)) {
+            return $value ? 'true' : 'false';
+        }
+
+        if (is_scalar($value)) {
+            return (string) $value;
+        }
+
+        $encoded = json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        return $encoded !== false ? $encoded : '';
     }
 
     /**
@@ -667,6 +1269,53 @@ class ViewDialog extends ViewRecord
         ];
     }
 
+    protected function formatDialogTimestamp(mixed $value): string
+    {
+        return $value instanceof Carbon
+            ? $value->format('d.m.Y H:i')
+            : '—';
+    }
+
+    protected function formatDialogPreview(mixed $value): ?string
+    {
+        $preview = trim((string) $value);
+
+        if ($preview === '') {
+            return null;
+        }
+
+        return mb_strlen($preview) > 140
+            ? mb_substr($preview, 0, 140).'…'
+            : $preview;
+    }
+
+    protected function formatDialogMessagePreview(Dialog $dialog, string $messageIdColumn, mixed $fallbackPreview): ?string
+    {
+        $messageId = $dialog->getAttribute($messageIdColumn);
+
+        if (filled($messageId)) {
+            $message = Message::query()->find((int) $messageId);
+
+            if ($message instanceof Message) {
+                $feed = app(BuildConversationFeedViewDataAction::class)->handle(new Collection([$message]));
+                $displayText = trim((string) data_get($feed, '0.display_text', ''));
+
+                if ($displayText !== '') {
+                    return $this->formatDialogPreview($displayText);
+                }
+            }
+        }
+
+        return $this->formatDialogPreview($fallbackPreview);
+    }
+
+    protected function formatDialogSnapshotLine(string $timestamp, ?string $preview): string
+    {
+        return filled($preview)
+            ? $timestamp.' · '.$preview
+            : $timestamp;
+    }
+
     protected function appendOutboundMessageToConversation(Message $message): void
     {
         $message->loadMissing(['channel', 'dialog.channel', 'sentByUser']);
@@ -700,7 +1349,11 @@ class ViewDialog extends ViewRecord
     protected function appendLatestConversationMessages(): int
     {
         if ($this->conversationMessages === []) {
-            $page = app(LoadDialogMessagesPageAction::class)->handle($this->getRecord(), null, 50);
+            $page = app(LoadDialogMessagesPageAction::class)->handle(
+                $this->getRecord(),
+                null,
+                self::INITIAL_CONVERSATION_MESSAGE_LIMIT,
+            );
 
             if ($page->messages->isEmpty()) {
                 $this->hasMoreOlderMessages = false;
@@ -721,7 +1374,7 @@ class ViewDialog extends ViewRecord
         $messages = app(LoadDialogMessagesPageAction::class)->loadMessagesAddedAfterId(
             $this->getRecord(),
             $this->latestKnownMessageId,
-            50,
+            self::LIVE_REFRESH_MESSAGE_LIMIT,
         );
 
         return $this->appendConversationMessages($messages);
@@ -764,7 +1417,6 @@ class ViewDialog extends ViewRecord
         ];
         $this->conversationMessages = $this->sortConversationMessages($this->conversationMessages);
         $this->latestKnownMessageId = max($this->latestKnownMessageId ?? 0, $this->resolveLatestKnownMessageId($newMessages) ?? 0) ?: null;
-        $this->syncNextOlderCursorToVisibleConversationStart();
 
         return count($newMessageViewData);
     }
@@ -998,6 +1650,14 @@ class ViewDialog extends ViewRecord
         return $this->canCurrentUserManageDialogReplies();
     }
 
+    protected function canCurrentUserManageDialogContactOwnership(): bool
+    {
+        $employee = auth()->user();
+
+        return $employee instanceof User
+            && $employee->canManageContactOwnership();
+    }
+
     protected function getDialogReplyBlockedReason(): ?string
     {
         return $this->getDialogRouteBlockedReason();
@@ -1060,9 +1720,26 @@ class ViewDialog extends ViewRecord
             return 'Свободен';
         }
 
-        return filled($contact->assignedUser?->name)
-            ? (string) $contact->assignedUser->name
+        return $contact->assignedUser instanceof User
+            ? $contact->assignedUser->getFilamentName()
             : 'Свободен';
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    protected function getAssignableUserOptions(): array
+    {
+        return User::query()
+            ->where('is_active', true)
+            ->orderBy('name')
+            ->orderBy('id')
+            ->get()
+            ->filter(fn (User $user): bool => $user->canBeAssignedToContacts())
+            ->mapWithKeys(fn (User $user): array => [
+                (string) $user->id => $user->getFilamentName(),
+            ])
+            ->all();
     }
 
     protected function formatChannelLabel(?Channel $channel, string $fallback = '—'): string

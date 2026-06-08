@@ -25,8 +25,9 @@ class BuildConversationFeedViewDataAction
         return $messages
             ->map(function (Message $message): array {
                 $messageAt = $this->resolveMessageSortAt($message);
-                $mediaBadges = $this->resolveConversationMediaBadges($message);
-                $mediaStateBadges = $this->resolveConversationMediaStateBadges($message);
+                $mediaItems = $this->resolveConversationMediaItems($message);
+                $mediaBadges = $this->resolveConversationMediaBadges($message, $mediaItems);
+                $mediaStateBadges = $this->resolveConversationMediaStateBadges($message, $mediaItems);
                 $isSystemMessage = $this->isConversationSystemMessage($message);
 
                 return [
@@ -47,7 +48,7 @@ class BuildConversationFeedViewDataAction
                     'sender_tone' => $this->resolveConversationSenderTone($message),
                     'text_format' => Message::normalizeTextFormat($message->text_format),
                     'is_html' => $message->usesHtmlFormat(),
-                    'display_text' => $this->resolveConversationDisplayText($message),
+                    'display_text' => $this->resolveConversationDisplayText($message, $mediaItems),
                     'formatted_html' => $this->resolveConversationFormattedHtml($message),
                     'html_source_text' => $this->resolveConversationHtmlSourceText($message),
                     'has_media' => $mediaBadges !== [],
@@ -108,7 +109,7 @@ class BuildConversationFeedViewDataAction
                 ? 'Оператор: '.$message->sentByUser->name
                 : 'Оператор',
             Message::SENT_BY_TYPE_AUTO_REPLY => 'Автоответчик',
-            Message::SENT_BY_TYPE_COLLECTOR => 'Анкета',
+            Message::SENT_BY_TYPE_COLLECTOR => 'Сбор данных',
             Message::SENT_BY_TYPE_SYSTEM => 'Система',
             default => $this->resolveLegacyConversationSenderLabel($message),
         };
@@ -121,7 +122,7 @@ class BuildConversationFeedViewDataAction
             Message::KIND_OUTBOUND_AUTO_REPLY => 'Автоответчик',
             Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION,
             Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
-            Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION => 'Анкета',
+            Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION => 'Сбор данных',
             default => 'Система',
         };
     }
@@ -185,7 +186,10 @@ class BuildConversationFeedViewDataAction
             && $message->sent_by_system_code === Message::SENT_BY_SYSTEM_CODE_BITRIX24_OPENLINES;
     }
 
-    protected function resolveConversationDisplayText(Message $message): string
+    /**
+     * @param  list<array<string, mixed>>  $mediaItems
+     */
+    protected function resolveConversationDisplayText(Message $message, array $mediaItems): string
     {
         $telegramStartPayloadDisplayText = $this->resolveTelegramStartPayloadDisplayText($message);
 
@@ -209,7 +213,13 @@ class BuildConversationFeedViewDataAction
             return $systemEventDisplayText;
         }
 
-        $mediaOnlyDisplayText = $this->resolveMediaOnlyConversationDisplayText($message);
+        $contactShareDisplayText = $this->resolveContactShareDisplayText($message);
+
+        if ($contactShareDisplayText !== null) {
+            return $contactShareDisplayText;
+        }
+
+        $mediaOnlyDisplayText = $this->resolveMediaOnlyConversationDisplayText($message, $mediaItems);
 
         if ($mediaOnlyDisplayText !== null) {
             return $mediaOnlyDisplayText;
@@ -220,24 +230,132 @@ class BuildConversationFeedViewDataAction
             Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION => 'Спасибо, номер получили.',
             Message::KIND_OUTBOUND_AUTO_REPLY => 'Автоответ',
             Message::KIND_OUTBOUND_MANUAL_REPLY => 'Ответ оператора',
-            Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION => 'Вопрос анкеты',
+            Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION => 'Вопрос сбора данных',
             Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION => 'Спасибо, данные сохранили.',
             default => 'Системное сообщение',
         };
     }
 
-    protected function messageContainsMediaMetadata(Message $message): bool
+    protected function resolveContactShareDisplayText(Message $message): ?string
     {
-        return $this->resolveConversationMediaItems($message) !== [];
+        if ($message->message_kind !== Message::KIND_INBOUND_CONTACT_SHARE) {
+            return null;
+        }
+
+        $phoneNumber = $this->resolveSharedContactPhoneNumber($message);
+
+        if (! filled($phoneNumber)) {
+            return null;
+        }
+
+        return 'Поделился номером: '.$phoneNumber;
+    }
+
+    protected function resolveSharedContactPhoneNumber(Message $message): ?string
+    {
+        $payload = is_array($message->raw_payload) ? $message->raw_payload : [];
+        $candidateContainers = [];
+
+        foreach ([
+            data_get($payload, 'message.contact'),
+            data_get($payload, 'contact'),
+            data_get($payload, 'body.contact'),
+            data_get($payload, 'body'),
+        ] as $container) {
+            if (is_array($container)) {
+                $candidateContainers[] = $container;
+            }
+        }
+
+        foreach ([
+            data_get($payload, 'attachments'),
+            data_get($payload, 'body.attachments'),
+        ] as $attachments) {
+            if (! is_array($attachments)) {
+                continue;
+            }
+
+            foreach ($attachments as $attachment) {
+                if (! is_array($attachment)) {
+                    continue;
+                }
+
+                foreach ([
+                    $attachment,
+                    data_get($attachment, 'contact'),
+                    data_get($attachment, 'payload'),
+                    data_get($attachment, 'payload.contact'),
+                ] as $container) {
+                    if (is_array($container)) {
+                        $candidateContainers[] = $container;
+                    }
+                }
+            }
+        }
+
+        foreach ($candidateContainers as $container) {
+            $phoneNumber = $this->normalizeSharedContactPhoneNumber(
+                data_get($container, 'phone_number')
+                ?? data_get($container, 'phone')
+                ?? data_get($container, 'number')
+                ?? data_get($container, 'contact.phone_number')
+                ?? data_get($container, 'contact.phone')
+                ?? data_get($container, 'payload.contact.phone_number')
+                ?? data_get($container, 'payload.contact.phone')
+            );
+
+            if (filled($phoneNumber)) {
+                return $phoneNumber;
+            }
+
+            $vcfPhoneNumber = $this->resolveSharedContactPhoneNumberFromVcf($container);
+
+            if (filled($vcfPhoneNumber)) {
+                return $vcfPhoneNumber;
+            }
+        }
+
+        return null;
+    }
+
+    protected function normalizeSharedContactPhoneNumber(mixed $value): ?string
+    {
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $phoneNumber = trim((string) $value);
+
+        return $phoneNumber !== '' ? $phoneNumber : null;
     }
 
     /**
+     * @param  array<string, mixed>  $container
+     */
+    protected function resolveSharedContactPhoneNumberFromVcf(array $container): ?string
+    {
+        $vcfInfo = $this->normalizeSharedContactPhoneNumber(
+            data_get($container, 'vcf_info')
+            ?? data_get($container, 'payload.vcf_info')
+        );
+
+        if (! filled($vcfInfo)) {
+            return null;
+        }
+
+        if (! preg_match('/^TEL(?:;[^:\r\n]+)*:([^\r\n]+)/mi', $vcfInfo, $matches)) {
+            return null;
+        }
+
+        return $this->normalizeSharedContactPhoneNumber($matches[1] ?? null);
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $media
      * @return list<string>
      */
-    protected function resolveConversationMediaBadges(Message $message): array
+    protected function resolveConversationMediaBadges(Message $message, array $media): array
     {
-        $media = $this->resolveConversationMediaItems($message);
-
         if ($media === []) {
             return [];
         }
@@ -275,15 +393,12 @@ class BuildConversationFeedViewDataAction
         ];
     }
 
-    protected function resolveMediaOnlyConversationDisplayText(Message $message): ?string
+    /**
+     * @param  list<array<string, mixed>>  $media
+     */
+    protected function resolveMediaOnlyConversationDisplayText(Message $message, array $media): ?string
     {
-        if (filled($message->text) || ! $this->messageContainsMediaMetadata($message)) {
-            return null;
-        }
-
-        $media = data_get($message->raw_payload, 'media');
-
-        if (! is_array($media) || $media === []) {
+        if (filled($message->text) || $media === []) {
             return null;
         }
 
@@ -309,12 +424,11 @@ class BuildConversationFeedViewDataAction
     }
 
     /**
+     * @param  list<array<string, mixed>>  $media
      * @return list<array{label:string,tone:string}>
      */
-    protected function resolveConversationMediaStateBadges(Message $message): array
+    protected function resolveConversationMediaStateBadges(Message $message, array $media): array
     {
-        $media = $this->resolveConversationMediaItems($message);
-
         if ($media === []) {
             return [];
         }

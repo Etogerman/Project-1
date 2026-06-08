@@ -298,6 +298,7 @@ return [
 
     'telegram' => [
         'webhook_secret_header' => 'X-Telegram-Bot-Api-Secret-Token',
+        'webhook_ip_address' => env('TELEGRAM_WEBHOOK_IP_ADDRESS'),
         'allowed_updates' => [
             'message',
             'callback_query',

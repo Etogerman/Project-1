@@ -2,6 +2,8 @@
 
 namespace App\Providers\Filament;
 
+use App\Filament\Resources\DataDictionaryEntries\DataDictionaryEntryResource;
+use App\Filament\Resources\GeoCountries\GeoCountryResource;
 use App\Http\Middleware\TrackAdminUserActivity;
 use App\Models\User;
 use Filament\Actions\Action;
@@ -11,6 +13,7 @@ use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
 use Filament\Http\Middleware\DispatchServingFilamentEvent;
+use Filament\Navigation\NavigationItem;
 use Filament\Pages\Dashboard;
 use Filament\Panel;
 use Filament\PanelProvider;
@@ -40,7 +43,7 @@ class AdminPanelProvider extends PanelProvider
                 'staging' => 'favicons/favicon-staging.svg',
                 default => 'favicons/favicon-production.svg',
             }))
-            ->sidebarFullyCollapsibleOnDesktop()
+            ->sidebarCollapsibleOnDesktop()
             ->maxContentWidth('fi-admin-content-wide')
             ->renderHook(
                 PanelsRenderHook::STYLES_AFTER,
@@ -48,19 +51,41 @@ class AdminPanelProvider extends PanelProvider
             )
             ->renderHook(
                 PanelsRenderHook::SIDEBAR_LOGO_AFTER,
-                fn (): string => view('filament.components.environment-indicator')->render(),
+                fn (): string => '',
             )
             ->renderHook(
-                PanelsRenderHook::TOPBAR_BEFORE,
-                fn (): string => view('filament.components.environment-indicator', [
-                    'centered' => true,
-                ])->render(),
+                PanelsRenderHook::SIDEBAR_FOOTER,
+                fn (): string => '',
+            )
+            ->renderHook(
+                PanelsRenderHook::TOPBAR_LOGO_AFTER,
+                fn (): string => view('filament.components.admin-topbar-start')->render(),
+            )
+            ->renderHook(
+                PanelsRenderHook::GLOBAL_SEARCH_AFTER,
+                fn (): string => view('filament.components.admin-topbar-end')->render(),
             )
             ->navigationGroups([
                 'Аудитория',
-                'Интеграции',
+                'Аналитика',
+                'Автоматизация',
                 'Команда',
                 'Настройки',
+            ])
+            ->navigationItems([
+                NavigationItem::make('Справочники')
+                    ->group('Настройки')
+                    ->icon(Heroicon::OutlinedSquares2x2)
+                    ->url(fn (): string => DataDictionaryEntryResource::getUrl())
+                    ->isActiveWhen(fn (): bool => request()->routeIs('filament.admin.resources.data-dictionary-entries.*'))
+                    ->sort(18),
+                NavigationItem::make('Адреса')
+                    ->group('Настройки')
+                    ->parentItem('Справочники')
+                    ->icon(Heroicon::OutlinedGlobeEuropeAfrica)
+                    ->url(fn (): string => GeoCountryResource::getUrl())
+                    ->isActiveWhen(fn (): bool => request()->routeIs('filament.admin.resources.geo-*'))
+                    ->sort(2),
             ])
             ->userMenuItems([
                 'profile' => fn (Action $action): Action => $action->sort(-2),

@@ -67,6 +67,10 @@ class DispatchStoredInboundScenarioAction
         $storedMessage->loadMissing(['contact', 'channel', 'contactIdentity', 'dialog']);
 
         foreach ($this->activeBindingsForChannel($channel->id) as $binding) {
+            if (! $this->scenarioRegistry->enabledForNewStarts($binding->scenario_code)) {
+                continue;
+            }
+
             $runtime = $this->scenarioRegistry->makeRuntime($binding->scenario_code);
 
             if (! $runtime instanceof PrioritizedScenarioRuntime) {
@@ -178,6 +182,10 @@ class DispatchStoredInboundScenarioAction
         $storedMessage->loadMissing(['contact', 'channel', 'contactIdentity', 'dialog']);
 
         foreach ($this->activeBindingsForChannel($channel->id) as $binding) {
+            if (! $this->scenarioRegistry->enabledForNewStarts($binding->scenario_code)) {
+                continue;
+            }
+
             $runtime = $this->scenarioRegistry->makeRuntime($binding->scenario_code);
 
             if ($runtime === null) {

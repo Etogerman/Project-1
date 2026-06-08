@@ -12,6 +12,7 @@ use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
 use App\Models\ContactStartTag;
 use App\Models\Dialog;
+use App\Models\FieldDictionaryField;
 use App\Models\Message;
 use App\Models\Tag;
 use App\Models\User;
@@ -215,7 +216,7 @@ class ContactResource extends Resource
                     ])
                     ->columns(1)
                     ->columnSpanFull(),
-                Section::make('Анкета')
+                Section::make('Сбор данных')
                     ->extraAttributes(['class' => 'ac-contact-modal-section ac-contact-modal-section--collector'])
                     ->schema([
                         ViewEntry::make('contact_collector_status')
@@ -336,9 +337,13 @@ class ContactResource extends Resource
 
     public static function table(Table $table): Table
     {
+        $contactFieldLabels = FieldDictionaryField::labelsFor(FieldDictionaryField::ENTITY_CONTACT);
+        $contactFieldLabel = static fn (string $fieldKey, string $fallback): string => FieldDictionaryField::labelFrom($contactFieldLabels, $fieldKey, $fallback);
+
         return $table
             ->recordUrl(fn (Contact $record): string => static::getUrl('view', ['record' => $record]))
             ->splitSearchTerms(false)
+            ->searchPlaceholder('Поиск контакта')
             ->columns([
                 TextColumn::make('display_name')
                     ->label('Контакт')
@@ -362,7 +367,7 @@ class ContactResource extends Resource
                     ->html()
                     ->state(fn (Contact $record): HtmlString => static::renderContactTableTags($record)),
                 TextColumn::make('primary_phone_raw')
-                    ->label('Телефон')
+                    ->label($contactFieldLabel('phones', 'Телефон'))
                     ->toggleable()
                     ->placeholder('—')
                     ->description(fn (Contact $record): ?string => static::formatPhoneCountSummary($record))
@@ -393,7 +398,7 @@ class ContactResource extends Resource
                     ->color(fn (Contact $record): string => static::getDedupStatusColor($record))
                     ->toggleable(),
                 TextColumn::make('id')
-                    ->label('ID')
+                    ->label($contactFieldLabel('id', 'ID'))
                     ->sortable()
                     ->copyable()
                     ->toggleable(),
@@ -431,13 +436,13 @@ class ContactResource extends Resource
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('phone_count')
-                    ->label('Телефонов')
+                    ->label($contactFieldLabel('phones', 'Телефонов'))
                     ->state(fn (Contact $record): int => (int) ($record->getAttribute('phone_count') ?? 0))
                     ->badge()
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('created_at')
-                    ->label('Создан')
+                    ->label($contactFieldLabel('created_at', 'Создан'))
                     ->dateTime('d.m.Y H:i')
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
@@ -895,6 +900,8 @@ class ContactResource extends Resource
         $ageSourceLabel = $record->birth_date !== null
             ? 'из даты рождения'
             : ($record->age_years !== null ? 'указан вручную' : null);
+        $genderOptionLabels = FieldDictionaryField::optionLabelsFor(FieldDictionaryField::ENTITY_CONTACT, 'gender');
+        $ageRangeOptionLabels = FieldDictionaryField::optionLabelsFor(FieldDictionaryField::ENTITY_CONTACT, 'age_range');
 
         $effectiveAgeLabel = $effectiveAgeYears !== null
             ? sprintf('%d лет%s', $effectiveAgeYears, $ageSourceLabel !== null ? ' ('.$ageSourceLabel.')' : '')
@@ -903,9 +910,9 @@ class ContactResource extends Resource
         return [
             'firstName' => $record->first_name,
             'lastName' => $record->last_name,
-            'genderLabel' => Contact::formatGender($record->gender),
+            'genderLabel' => FieldDictionaryField::optionLabelFrom($genderOptionLabels, $record->gender, Contact::formatGender($record->gender)),
             'effectiveAgeLabel' => $effectiveAgeLabel,
-            'ageRangeLabel' => Contact::formatAgeRange($record->age_range),
+            'ageRangeLabel' => FieldDictionaryField::optionLabelFrom($ageRangeOptionLabels, $record->age_range, Contact::formatAgeRange($record->age_range)),
             'birthDateLabel' => $record->birth_date?->format('d.m.Y') ?? '—',
             'country' => $record->country ?? '—',
             'city' => $record->city ?? '—',
@@ -915,11 +922,25 @@ class ContactResource extends Resource
                 ? $record->distance_to_moscow_km.' км'
                 : '—',
             'distanceToMoscowStatusLabel' => Contact::formatDistanceToMoscowStatus($record->distance_to_moscow_status),
-            'genderOptions' => Contact::genderOptions(),
-            'ageRangeOptions' => Contact::ageRangeOptions(),
+            'genderOptions' => static::applyDictionaryOptionLabels(Contact::genderOptions(), $genderOptionLabels),
+            'ageRangeOptions' => static::applyDictionaryOptionLabels(Contact::ageRangeOptions(), $ageRangeOptionLabels),
             'regionOptions' => Contact::russianRegionOptions(),
             'canEditProfile' => static::canCurrentUserManageContactProfile(),
         ];
+    }
+
+    /**
+     * @param  array<string, string>  $fallbackOptions
+     * @param  array<string, string>  $dictionaryLabels
+     * @return array<string, string>
+     */
+    protected static function applyDictionaryOptionLabels(array $fallbackOptions, array $dictionaryLabels): array
+    {
+        return collect($fallbackOptions)
+            ->mapWithKeys(fn (string $label, string $value): array => [
+                $value => FieldDictionaryField::optionLabelFrom($dictionaryLabels, $value, $label),
+            ])
+            ->all();
     }
 
     /**
@@ -962,6 +983,7 @@ class ContactResource extends Resource
      *     latestInboundPayload: ?string,
      *     routeContextRows: list<array{label:string,key:string,value:string}>,
      *     identityRows: list<array{label:string,key:string,value:string}>,
+     *     technicalContactRows: list<array{label:string,key:string,value:string}>,
      *     dedupRows: list<array{label:string,key:string,value:string}>
      * }
      */
@@ -1075,6 +1097,18 @@ class ContactResource extends Resource
                     'label' => 'Channel ID',
                     'key' => 'channel_id',
                     'value' => $diagnosticsIdentity?->channel_id !== null ? (string) $diagnosticsIdentity->channel_id : '—',
+                ],
+            ],
+            'technicalContactRows' => [
+                [
+                    'label' => 'Источник пола',
+                    'key' => 'gender_source',
+                    'value' => Contact::formatGenderSource($record->gender_source),
+                ],
+                [
+                    'label' => 'Возраст из БД',
+                    'key' => 'age_years',
+                    'value' => $record->age_years !== null ? (string) $record->age_years : '—',
                 ],
             ],
             'dedupRows' => [
@@ -1302,8 +1336,8 @@ class ContactResource extends Resource
             Message::KIND_OUTBOUND_AUTO_REPLY => 'Автоответ',
             Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION => 'Подтверждение телефона',
             Message::KIND_OUTBOUND_MANUAL_REPLY => 'Ручной ответ',
-            Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION => 'Вопрос анкеты',
-            Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION => 'Анкета завершена',
+            Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION => 'Вопрос сбора данных',
+            Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION => 'Сбор данных завершён',
             default => 'Не определен',
         };
     }
@@ -1663,6 +1697,8 @@ class ContactResource extends Resource
      *         channel_label:string,
      *         route_status_label:string,
      *         route_status_tone:string,
+     *         stage_label:string,
+     *         stage_tone:string,
      *         messenger_name_label:string,
      *         phone_label:string,
      *         route_identity_label:string,
@@ -1681,6 +1717,7 @@ class ContactResource extends Resource
     {
         return [
             'dialogs' => app(LoadContactDialogsOverviewAction::class)->handle($record)->all(),
+            'fieldLabels' => FieldDictionaryField::labelsFor(FieldDictionaryField::ENTITY_DIALOG),
         ];
     }
 
@@ -1741,8 +1778,7 @@ class ContactResource extends Resource
             ->orderBy('name')
             ->get()
             ->filter(fn (User $user): bool => $user->canBeAssignedToContacts())
-            ->pluck('name', 'id')
-            ->map(fn (string $name, int|string $id): string => filled($name) ? $name : 'Сотрудник #'.$id)
+            ->mapWithKeys(fn (User $user): array => [$user->id => $user->getFilamentName()])
             ->all();
     }
 
@@ -1788,8 +1824,8 @@ class ContactResource extends Resource
     {
         $record->loadMissing('assignedUser');
 
-        return filled($record->assignedUser?->name)
-            ? (string) $record->assignedUser->name
+        return $record->assignedUser instanceof User
+            ? $record->assignedUser->getFilamentName()
             : 'Свободен';
     }
 
@@ -1797,8 +1833,8 @@ class ContactResource extends Resource
     {
         return match (static::getContactOwnershipState($record)) {
             'mine' => 'Контакт закреплён за вами.',
-            'other' => filled($record->assignedUser?->name)
-                ? 'Контакт закреплён за '.$record->assignedUser->name.'.'
+            'other' => $record->assignedUser instanceof User
+                ? 'Контакт закреплён за '.$record->assignedUser->getFilamentName().'.'
                 : 'Контакт уже назначен другому сотруднику.',
             default => 'Контакт пока свободен. Можно выбрать ответственного или оставить контакт свободным.',
         };
@@ -1947,7 +1983,7 @@ class ContactResource extends Resource
             ['label' => 'Диалогов', 'value' => $preview->dialogsCount],
             ['label' => 'Сообщений', 'value' => $preview->messagesCount],
             ['label' => 'Телефонов', 'value' => $preview->phonesCount],
-            ['label' => 'Идентификаторов', 'value' => $preview->identitiesCount],
+            ['label' => 'Профилей каналов', 'value' => $preview->identitiesCount],
         ];
     }
 

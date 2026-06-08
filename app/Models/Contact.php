@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Support\Carbon;
 
 class Contact extends Model
 {
@@ -44,6 +45,26 @@ class Contact extends Model
 
     public const FIRST_NAME_SOURCE_MANUAL = 'manual';
 
+    public const FIRST_NAME_RESOLUTION_METHOD_MESSENGER_PROFILE = 'messenger_profile';
+
+    public const FIRST_NAME_RESOLUTION_METHOD_DICTIONARY_LOOKUP = 'dictionary_lookup';
+
+    public const FIRST_NAME_RESOLUTION_METHOD_AI_ANALYSIS = 'ai_analysis';
+
+    public const FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT = 'scenario_direct';
+
+    public const FIRST_NAME_RESOLUTION_METHOD_OPERATOR_MANUAL = 'operator_manual';
+
+    public const GENDER_SOURCE_CLIENT = 'client';
+
+    public const GENDER_SOURCE_OPERATOR = 'operator';
+
+    public const GENDER_SOURCE_SCENARIO = 'scenario';
+
+    public const GENDER_SOURCE_DICTIONARY = 'dictionary';
+
+    public const GENDER_SOURCE_AI = 'ai';
+
     public const REGION_STATUS_RESOLVED = 'resolved';
 
     public const REGION_STATUS_CLARIFICATION_PENDING = 'clarification_pending';
@@ -55,6 +76,8 @@ class Contact extends Model
     public const REGION_STATUS_OUT_OF_SCOPE = 'out_of_scope';
 
     public const REGION_SOURCE_AI = 'ai';
+
+    public const REGION_SOURCE_DICTIONARY = 'dictionary';
 
     public const REGION_SOURCE_CONFIRMED_BY_CONTACT = 'confirmed_by_contact';
 
@@ -105,8 +128,10 @@ class Contact extends Model
         'name',
         'first_name',
         'first_name_source',
+        'first_name_resolution_method',
         'last_name',
         'gender',
+        'gender_source',
         'age_years',
         'age_range',
         'birth_date',
@@ -202,6 +227,37 @@ class Contact extends Model
     /**
      * @return array<string, string>
      */
+    public static function genderSourceOptions(): array
+    {
+        return [
+            self::GENDER_SOURCE_CLIENT => 'Клиент указал',
+            self::GENDER_SOURCE_OPERATOR => 'Оператор',
+            self::GENDER_SOURCE_SCENARIO => 'Сценарий',
+            self::GENDER_SOURCE_DICTIONARY => 'Справочник',
+            self::GENDER_SOURCE_AI => 'ИИ',
+        ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    public static function allowedGenderSources(): array
+    {
+        return array_keys(self::genderSourceOptions());
+    }
+
+    public static function formatGenderSource(?string $value): string
+    {
+        if (! filled($value)) {
+            return '—';
+        }
+
+        return self::genderSourceOptions()[$value] ?? '—';
+    }
+
+    /**
+     * @return array<string, string>
+     */
     public static function russianRegionOptions(): array
     {
         $regions = config('bots.data_collection.russian_region.allowed_regions', []);
@@ -270,6 +326,39 @@ class Contact extends Model
     public static function firstNameSourceBadgeTone(?string $value): ?string
     {
         return self::firstNameSourceBadgeOptions()[$value]['tone'] ?? null;
+    }
+
+    /**
+     * @return list<string>
+     */
+    public static function allowedFirstNameResolutionMethods(): array
+    {
+        return [
+            self::FIRST_NAME_RESOLUTION_METHOD_MESSENGER_PROFILE,
+            self::FIRST_NAME_RESOLUTION_METHOD_DICTIONARY_LOOKUP,
+            self::FIRST_NAME_RESOLUTION_METHOD_AI_ANALYSIS,
+            self::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT,
+            self::FIRST_NAME_RESOLUTION_METHOD_OPERATOR_MANUAL,
+        ];
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public static function firstNameResolutionMethodOptions(): array
+    {
+        return [
+            self::FIRST_NAME_RESOLUTION_METHOD_MESSENGER_PROFILE => 'Профиль мессенджера',
+            self::FIRST_NAME_RESOLUTION_METHOD_DICTIONARY_LOOKUP => 'Справочник имён',
+            self::FIRST_NAME_RESOLUTION_METHOD_AI_ANALYSIS => 'ИИ-анализ',
+            self::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT => 'Сценарий без обработки',
+            self::FIRST_NAME_RESOLUTION_METHOD_OPERATOR_MANUAL => 'Оператор',
+        ];
+    }
+
+    public static function formatFirstNameResolutionMethod(?string $value): ?string
+    {
+        return self::firstNameResolutionMethodOptions()[$value] ?? null;
     }
 
     public static function formatFirstNameSourceTimelineLabel(?string $value): ?string
@@ -410,6 +499,19 @@ class Contact extends Model
         return $this->hasMany(ContactDuplicateReview::class);
     }
 
+    public function questionnaireRuns(): HasMany
+    {
+        return $this->hasMany(ContactQuestionnaireRun::class)
+            ->orderByDesc('started_at')
+            ->orderByDesc('id');
+    }
+
+    public function activeQuestionnaireRuns(): HasMany
+    {
+        return $this->questionnaireRuns()
+            ->whereIn('status', ContactQuestionnaireRun::activeStatuses());
+    }
+
     public function openDuplicateReviews(): HasMany
     {
         return $this->duplicateReviews()
@@ -431,6 +533,7 @@ class Contact extends Model
             ->orderByDesc('assigned_at')
             ->orderByDesc('id');
     }
+
     public function tags(): BelongsToMany
     {
         return $this->belongsToMany(Tag::class)
@@ -557,7 +660,7 @@ class Contact extends Model
     {
         return Attribute::make(
             get: function (): ?int {
-                if ($this->birth_date instanceof \Illuminate\Support\Carbon) {
+                if ($this->birth_date instanceof Carbon) {
                     if ($this->birth_date->isFuture()) {
                         return null;
                     }

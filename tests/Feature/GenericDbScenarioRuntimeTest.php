@@ -2,21 +2,30 @@
 
 namespace Tests\Feature;
 
+use App\Data\AI\AiProviderStructuredResult;
 use App\Data\Bitrix24\Bitrix24ContactSyncQueueResultData;
+use App\Data\Bitrix24\Bitrix24DealSyncQueueResultData;
+use App\Data\Bitrix24\Bitrix24HistoryExportQueueResultData;
 use App\Data\Bots\AutoReplyDeliveryResult;
 use App\Data\Bots\BotDialogTextSendResult;
+use App\Data\Bots\StoredInboundMessageResult;
 use App\Data\Dialogs\DialogRouteStatusData;
 use App\Jobs\InferContactGenderFromFirstNameJob;
 use App\Jobs\ProcessScenarioInboundJob;
 use App\Jobs\ProcessScenarioStartJob;
+use App\Jobs\ProcessScenarioV3AiAnalysisJob;
 use App\Jobs\ProcessScenarioV3OutboundMessageJob;
 use App\Jobs\ProcessScenarioV3ScheduledTransitionJob;
+use App\Models\AiRequest;
+use App\Models\AiTask;
 use App\Models\AutoReplyRule;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
+use App\Models\DataDictionaryEntry;
 use App\Models\Dialog;
+use App\Models\GeoResolutionEvent;
 use App\Models\Message;
 use App\Models\Scenario;
 use App\Models\ScenarioBuilderBlock;
@@ -28,18 +37,29 @@ use App\Models\ScenarioV3OutboundMessage;
 use App\Models\ScenarioV3ScheduledTransition;
 use App\Models\ScenarioVersion;
 use App\Models\Tag;
+use App\Services\AI\AiProviderRequestException;
+use App\Services\AI\GeminiApiService;
 use App\Services\Bitrix24\QueueBitrix24ContactSyncAction;
+use App\Services\Bitrix24\QueueBitrix24DealSyncAction;
+use App\Services\Bitrix24\QueueBitrix24HistoryExportAction;
+use App\Services\Bots\DispatchStoredInboundBotMessageAction;
 use App\Services\Bots\SendBotDialogTextAction;
 use App\Services\Bots\StoreOutboundScenarioMessageAction;
 use App\Services\Contacts\AddContactPhoneAction;
 use App\Services\DataCollection\ExtractFirstNameAction;
+use App\Services\Dialogs\DeleteLastOutboundDialogMessageAction;
+use App\Services\Geo\ResolveGeoCityAction;
 use App\Services\Scenarios\DispatchStoredInboundScenarioAction;
+use App\Services\Scenarios\GenericDbScenarioRuntime;
+use App\Services\Scenarios\ScenarioEdgeExpressionCondition;
 use App\Services\Scenarios\ScenarioRegistry;
+use Database\Seeders\GeoDictionarySeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
 use Mockery;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\Feature\Concerns\BuildsIbizaMvpSchema;
 use Tests\TestCase;
 
@@ -237,6 +257,66 @@ class GenericDbScenarioRuntimeTest extends TestCase
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && $request['chat_id'] === $dialog->external_chat_id
             && $request['text'] === 'Вот каталог');
+    }
+
+    public function test_v3_tag_effects_failure_stops_message_dispatch(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9103],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $tag = Tag::factory()->create(['name' => 'Импортированный тег']);
+        $schema = $this->v3CatalogRuntimeSchema($channel->id);
+        data_set($schema, 'builder_v3_runtime.blocks.start.actions', [[
+            'type' => 'tag_effects',
+            'assign_tag_ids' => [$tag->id],
+            'remove_tag_ids' => [],
+        ]]);
+        data_set($schema, 'builder_v3_runtime.blocks.start.message.text', 'Ответ после тега');
+        data_set($schema, 'builder_v3_runtime.blocks.start.buttons', null);
+        data_set($schema, 'builder_v3_runtime.edges', []);
+
+        $scenario = $this->createPublishedScenario('v3_tag_effects_stop', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $tag->forceFill(['is_active' => false])->save();
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+            'message_parameter' => null,
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        Http::assertNothingSent();
+        $this->assertDatabaseMissing('messages', [
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'text' => 'Ответ после тега',
+        ]);
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('start', $run->current_step);
     }
 
     public function test_v3_wait_reply_priority_can_beat_matching_button_edge(): void
@@ -510,6 +590,2875 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame(2, $sendCount);
         $this->assertSame(ScenarioV3OutboundMessage::STATUS_SENT, $targetOutbound->status);
         Queue::assertPushed(ProcessScenarioV3OutboundMessageJob::class, fn (ProcessScenarioV3OutboundMessageJob $job): bool => $job->outboundMessageId === $targetOutbound->id);
+    }
+
+    public function test_v3_ai_analysis_retries_delayed_variant_until_later_message_is_accepted(): void
+    {
+        Queue::fake([
+            ProcessScenarioV3AiAnalysisJob::class,
+        ]);
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9201]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9202]]),
+        ]);
+
+        $prompts = [];
+        $gemini = Mockery::mock(GeminiApiService::class);
+        $gemini
+            ->shouldReceive('generateStructuredWithMetadata')
+            ->twice()
+            ->andReturnUsing(function (string $systemPrompt, string $userPrompt, array $schema) use (&$prompts): AiProviderStructuredResult {
+                $prompts[] = $userPrompt;
+                $this->assertSame(['1', '2'], data_get($schema, 'properties.output_id.enum'));
+                $this->assertStringContainsString('ID 1: Имя найдено', $systemPrompt);
+                $this->assertStringContainsString('ID 2: Имя не найдено', $systemPrompt);
+
+                $payload = count($prompts) === 1
+                    ? ['output_id' => '2', 'data' => []]
+                    : ['output_id' => '1', 'data' => ['first_name' => 'Вася']];
+
+                return new AiProviderStructuredResult(
+                    provider: 'gemini',
+                    model: 'test-gemini',
+                    parsedPayload: $payload,
+                    requestBodyRaw: '{}',
+                    responseBodyRaw: '{}',
+                    httpStatus: 200,
+                    inputTokens: 10,
+                    outputTokens: 5,
+                    totalTokens: 15,
+                );
+            });
+        $this->app->instance(GeminiApiService::class, $gemini);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('v3_ai_name_retry_delay', $this->v3AiNameRuntimeSchema($channel->id));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $firstAnswer = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'Меня',
+        ]);
+
+        (new ProcessScenarioInboundJob($firstAnswer->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run->refresh();
+        $pending = data_get($run->state_payload, 'v3.ai_analysis_pending.ai');
+
+        $this->assertSame('ai', $run->current_step);
+        $this->assertSame('name_retry', data_get($pending, 'output_id'));
+        $this->assertSame(10, data_get($pending, 'delay_seconds'));
+        Queue::assertPushed(ProcessScenarioV3AiAnalysisJob::class, fn (ProcessScenarioV3AiAnalysisJob $job): bool => $job->scenarioRunId === $run->id
+            && $job->inboundMessageId === $firstAnswer->id
+            && $job->blockId === 'ai');
+
+        $secondAnswer = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'зовут Вася',
+        ]);
+
+        (new ProcessScenarioInboundJob($secondAnswer->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run->refresh();
+
+        $this->assertSame(ScenarioRun::STATUS_COMPLETED, $run->status);
+        $this->assertNull($run->current_step);
+        $this->assertSame('completed', $run->exit_outcome);
+        $this->assertNull(data_get($run->state_payload, 'v3.ai_analysis_pending.ai'));
+        $this->assertSame('Вася', data_get($run->state_payload, 'v3.ai_analysis.ai.data.first_name'));
+        $this->assertStringContainsString("Меня\nзовут Вася", $prompts[1]);
+        $contact->refresh();
+        $this->assertSame('Вася', $contact->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED, $contact->first_name_source);
+        $this->assertSame(Contact::FIRST_NAME_RESOLUTION_METHOD_AI_ANALYSIS, $contact->first_name_resolution_method);
+
+        $sentTexts = Http::recorded()
+            ->map(fn (array $record): string => (string) $record[0]['text'])
+            ->values()
+            ->all();
+
+        $this->assertSame(['Как вас зовут?', 'Имя принято'], $sentTexts);
+
+        (new ProcessScenarioV3AiAnalysisJob(
+            $run->id,
+            $dialog->id,
+            $firstAnswer->id,
+            $scenario->code,
+            $scenario->publishedVersion->id,
+            'ai',
+            (string) data_get($pending, 'token'),
+        ))->handle(app(ScenarioRegistry::class));
+
+        $run->refresh();
+
+        $this->assertSame(ScenarioRun::STATUS_COMPLETED, $run->status);
+        $this->assertNull($run->current_step);
+    }
+
+    public function test_v3_delayed_ai_analysis_does_not_reschedule_same_output_for_same_message(): void
+    {
+        Queue::fake([
+            ProcessScenarioV3AiAnalysisJob::class,
+        ]);
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9251]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9252]]),
+        ]);
+
+        $gemini = Mockery::mock(GeminiApiService::class);
+        $gemini
+            ->shouldReceive('generateStructuredWithMetadata')
+            ->times(3)
+            ->andReturn(new AiProviderStructuredResult(
+                provider: 'gemini',
+                model: 'test-gemini',
+                parsedPayload: ['output_id' => 'name_retry', 'data' => []],
+                requestBodyRaw: '{}',
+                responseBodyRaw: '{}',
+                httpStatus: 200,
+                inputTokens: 10,
+                outputTokens: 5,
+                totalTokens: 15,
+            ));
+        $this->app->instance(GeminiApiService::class, $gemini);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $schema = $this->v3AiNameRuntimeSchema($channel->id);
+        $retryToAiEdge = [
+            'id' => '40',
+            'edge_key' => 'edge_retry_to_ai',
+            'mode' => 'automatic',
+            'priority' => 10,
+            'transition_limit' => 0,
+            'source_block_id' => 'retry',
+            'target_block_id' => 'ai',
+            'from_output_id' => null,
+            'label' => 'Проверить снова',
+            'match' => [
+                'type' => 'any_inbound',
+                'text' => '',
+                'variants' => [],
+            ],
+        ];
+
+        data_set($schema, 'builder_v3_runtime.blocks.ai.ai_analysis.source', 'current_inbound_message');
+        data_set($schema, 'builder_v3_runtime.blocks.retry.automatic_edges', [$retryToAiEdge]);
+        data_set($schema, 'builder_v3_runtime.edges', [
+            ...data_get($schema, 'builder_v3_runtime.edges', []),
+            $retryToAiEdge,
+        ]);
+
+        $scenario = $this->createPublishedScenario('v3_ai_name_retry_no_loop', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $answer = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'Больше 40 лет',
+        ]);
+
+        (new ProcessScenarioInboundJob($answer->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run->refresh();
+        $pending = data_get($run->state_payload, 'v3.ai_analysis_pending.ai');
+
+        $this->assertSame('ai', $run->current_step);
+        $this->assertSame('name_retry', data_get($pending, 'output_id'));
+        Queue::assertPushed(ProcessScenarioV3AiAnalysisJob::class, 1);
+
+        (new ProcessScenarioV3AiAnalysisJob(
+            $run->id,
+            $dialog->id,
+            $answer->id,
+            $scenario->code,
+            $scenario->publishedVersion->id,
+            'ai',
+            (string) data_get($pending, 'token'),
+        ))->handle(app(ScenarioRegistry::class));
+
+        $run->refresh();
+        $sentTexts = Http::recorded()
+            ->map(fn (array $record): string => (string) $record[0]['text'])
+            ->values()
+            ->all();
+
+        $this->assertSame(['Как вас зовут?', 'Повторите имя'], $sentTexts);
+        Queue::assertPushed(ProcessScenarioV3AiAnalysisJob::class, 1);
+        $this->assertSame('ai', $run->current_step);
+        $this->assertNull(data_get($run->state_payload, 'v3.ai_analysis_pending.ai'));
+        $this->assertSame([
+            'message_id' => $answer->id,
+            'output_id' => 'name_retry',
+            'delay_seconds' => 10,
+        ], collect(data_get($run->state_payload, 'v3.ai_analysis_delayed_history.ai', []))
+            ->map(fn (array $entry): array => [
+                'message_id' => (int) ($entry['message_id'] ?? 0),
+                'output_id' => (string) ($entry['output_id'] ?? ''),
+                'delay_seconds' => (int) ($entry['delay_seconds'] ?? 0),
+            ])
+            ->first());
+    }
+
+    public function test_v3_check_data_action_finds_dictionary_name_without_ai(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9301]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9302]]),
+        ]);
+
+        $gemini = Mockery::mock(GeminiApiService::class);
+        $gemini->shouldReceive('generateStructured')->never();
+        $this->app->instance(GeminiApiService::class, $gemini);
+
+        DataDictionaryEntry::query()->create([
+            'dictionary_key' => DataDictionaryEntry::DICTIONARY_NAMES,
+            'lookup_value' => 'Вася',
+            'result_value' => 'Василий',
+            'gender' => DataDictionaryEntry::GENDER_MALE,
+            'variant_type' => DataDictionaryEntry::VARIANT_TYPE_SHORT,
+            'auto_apply' => true,
+            'is_active' => true,
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('v3_check_data_name', $this->v3CheckDataNameRuntimeSchema($channel->id));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $answer = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'Вася',
+        ]);
+
+        (new ProcessScenarioInboundJob($answer->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run->refresh();
+        $this->assertSame(ScenarioRun::STATUS_COMPLETED, $run->status);
+        $this->assertNull($run->current_step);
+        $this->assertSame('completed', $run->exit_outcome);
+        $this->assertSame('Василий', data_get($run->state_payload, 'v3.variables.first_name'));
+
+        $contact->refresh();
+        $this->assertSame('Василий', $contact->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED, $contact->first_name_source);
+        $this->assertSame(Contact::FIRST_NAME_RESOLUTION_METHOD_DICTIONARY_LOOKUP, $contact->first_name_resolution_method);
+    }
+
+    public function test_v3_check_data_action_routes_manual_required_name(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9311]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9312]]),
+        ]);
+
+        $gemini = Mockery::mock(GeminiApiService::class);
+        $gemini->shouldReceive('generateStructured')->never();
+        $this->app->instance(GeminiApiService::class, $gemini);
+
+        DataDictionaryEntry::query()->create([
+            'dictionary_key' => DataDictionaryEntry::DICTIONARY_NAMES,
+            'lookup_value' => 'Сашенька',
+            'result_value' => 'Александр',
+            'gender' => DataDictionaryEntry::GENDER_MALE,
+            'variant_type' => DataDictionaryEntry::VARIANT_TYPE_SPOKEN,
+            'auto_apply' => false,
+            'is_active' => true,
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $contact->forceFill(['gender' => DataDictionaryEntry::GENDER_MALE])->save();
+        $scenario = $this->createPublishedScenario('v3_check_data_manual_required_name', $this->v3CheckDataNameRuntimeSchema($channel->id));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $answer = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'Сашенька',
+        ]);
+
+        (new ProcessScenarioInboundJob($answer->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run->refresh();
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('manual_required', $run->current_step);
+        $this->assertNull(data_get($run->state_payload, 'v3.variables.first_name'));
+
+        $contact->refresh();
+        $this->assertNull($contact->first_name);
+
+        $sentTexts = Http::recorded()
+            ->map(fn (array $record): string => (string) $record[0]['text'])
+            ->values()
+            ->all();
+
+        $this->assertSame(['Как вас зовут?', 'Нужно уточнить'], $sentTexts);
+    }
+
+    public function test_v3_message_text_substitutes_contact_dialog_and_scenario_variables(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9361]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9362]]),
+        ]);
+
+        DataDictionaryEntry::query()->create([
+            'dictionary_key' => DataDictionaryEntry::DICTIONARY_NAMES,
+            'lookup_value' => 'Вася',
+            'result_value' => 'Василий',
+            'gender' => DataDictionaryEntry::GENDER_MALE,
+            'variant_type' => DataDictionaryEntry::VARIANT_TYPE_SHORT,
+            'auto_apply' => true,
+            'is_active' => true,
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext(
+            $channel,
+            contactOverrides: [
+                'first_name' => 'Abrikosov German',
+                'first_name_source' => Contact::FIRST_NAME_SOURCE_AUTO,
+                'gender' => 'male',
+            ],
+            dialogOverrides: ['fields_payload' => ['selected_gender' => 'male']],
+        );
+        $schema = $this->v3CheckDataNameRuntimeSchema($channel->id);
+        data_set(
+            $schema,
+            'builder_v3_runtime.blocks.accepted.message.text',
+            'Записали {{variables.first_name}} / {{contact.first_name|нет имени}} / {{contact.gender}} / {{dialog.selected_gender}}',
+        );
+        $scenario = $this->createPublishedScenario('v3_message_variables', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $answer = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'Вася',
+        ]);
+
+        (new ProcessScenarioInboundJob($answer->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['text'] === 'Записали Василий / Василий / male / male');
+    }
+
+    public function test_v3_ai_analysis_substitutes_prompt_variables(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9351]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9352]]),
+        ]);
+
+        $captured = [];
+        $gemini = Mockery::mock(GeminiApiService::class);
+        $gemini
+            ->shouldReceive('generateStructuredWithMetadata')
+            ->once()
+            ->andReturnUsing(function (string $systemPrompt, string $userPrompt, array $schema) use (&$captured): AiProviderStructuredResult {
+                $captured = [
+                    'system' => $systemPrompt,
+                    'user' => $userPrompt,
+                    'schema' => $schema,
+                ];
+
+                return new AiProviderStructuredResult(
+                    provider: 'gemini',
+                    model: 'test-gemini',
+                    parsedPayload: ['output_id' => '1', 'data' => ['first_name' => 'Николай']],
+                    requestBodyRaw: '{}',
+                    responseBodyRaw: '{}',
+                    httpStatus: 200,
+                    inputTokens: 10,
+                    outputTokens: 5,
+                    totalTokens: 15,
+                );
+            });
+        $this->app->instance(GeminiApiService::class, $gemini);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel, [
+            'gender' => 'male',
+            'city' => 'Москва',
+            'region' => 'Москва',
+        ]);
+        $schema = $this->v3AiNameRuntimeSchema($channel->id);
+        data_set(
+            $schema,
+            'builder_v3_runtime.blocks.ai.ai_analysis.prompt',
+            "Найди имя.\nПол: {{contact.gender|unknown}}\nГород: {{contact.city|none}}\nРегион: {{contact.region|none}}\nСообщения:\n{{input.client_messages}}\nПрошлое имя: {{variables.previous_name|empty}}",
+        );
+        $scenario = $this->createPublishedScenario('v3_ai_prompt_variables', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $answer = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'Коля',
+        ]);
+
+        (new ProcessScenarioInboundJob($answer->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $this->assertStringContainsString('Пол: male', $captured['system']);
+        $this->assertStringContainsString('Город: Москва', $captured['system']);
+        $this->assertStringContainsString('Регион: Москва', $captured['system']);
+        $this->assertStringContainsString("Сообщения:\nКоля", $captured['system']);
+        $this->assertStringContainsString('Прошлое имя: empty', $captured['system']);
+        $this->assertStringContainsString('ID 1: Имя найдено', $captured['system']);
+        $this->assertSame(['1', '2'], data_get($captured['schema'], 'properties.output_id.enum'));
+        $this->assertSame('Данные для анализа уже подставлены в промт оператора.', $captured['user']);
+
+        $contact->refresh();
+        $this->assertSame('Николай', $contact->first_name);
+        $this->assertSame(Contact::FIRST_NAME_RESOLUTION_METHOD_AI_ANALYSIS, $contact->first_name_resolution_method);
+    }
+
+    public function test_v3_ai_analysis_logs_non_name_request_to_ai_requests(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9361]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9362]]),
+        ]);
+
+        $gemini = Mockery::mock(GeminiApiService::class);
+        $gemini
+            ->shouldReceive('generateStructuredWithMetadata')
+            ->once()
+            ->andReturn(new AiProviderStructuredResult(
+                provider: 'gemini',
+                model: 'test-gemini',
+                parsedPayload: ['output_id' => '1', 'data' => ['geo_city' => 'Москва']],
+                requestBodyRaw: '{"request":true}',
+                responseBodyRaw: '{"output_id":"1"}',
+                httpStatus: 200,
+                inputTokens: 10,
+                outputTokens: 5,
+                totalTokens: 15,
+            ));
+        $this->app->instance(GeminiApiService::class, $gemini);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $schema = $this->v3AiNameRuntimeSchema($channel->id);
+        data_set($schema, 'builder_v3_runtime.blocks.ask_name.message.text', 'В каком городе живете?');
+        data_set($schema, 'builder_v3_runtime.blocks.ai.title', 'ИИ анализирует город');
+        data_set($schema, 'builder_v3_runtime.blocks.ai.ai_analysis.prompt', 'Определи город клиента.');
+        data_set($schema, 'builder_v3_runtime.blocks.ai.ai_analysis.extract_fields', [[
+            'key' => 'geo_city',
+            'label' => 'Город',
+            'type' => 'text',
+        ]]);
+        data_set($schema, 'builder_v3_runtime.blocks.ai.ai_analysis.outputs.0.label', 'Город найден');
+        data_set($schema, 'builder_v3_runtime.blocks.ai.ai_analysis.outputs.1.label', 'Город не найден');
+        data_set($schema, 'builder_v3_runtime.blocks.accepted.actions', []);
+        $scenario = $this->createPublishedScenario('v3_ai_geo_city_analytics', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $answer = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'Москва',
+        ]);
+
+        (new ProcessScenarioInboundJob($answer->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $request = AiRequest::query()->sole();
+        $run->refresh();
+
+        $this->assertSame(AiTask::KEY_SCENARIO_V3_AI_ANALYSIS, $request->task_key);
+        $this->assertSame(AiRequest::STATUS_SUCCESS, $request->status);
+        $this->assertSame($contact->id, $request->contact_id);
+        $this->assertSame($dialog->id, $request->dialog_id);
+        $this->assertSame($channel->id, $request->channel_id);
+        $this->assertSame($scenario->id, $request->scenario_id);
+        $this->assertSame('ai', $request->scenario_block_id);
+        $this->assertSame('scenario_v3_ai_analysis:ai', $request->prompt_key);
+        $this->assertSame($request->id, data_get($run->state_payload, 'v3.ai_analysis.ai.ai_request_id'));
+        $this->assertSame('Москва', data_get($run->state_payload, 'v3.ai_analysis.ai.data.geo_city'));
+        $this->assertFalse(data_get($run->state_payload, 'v3.ai_analysis.ai.error'));
+        $this->assertNull(data_get($run->state_payload, 'v3.ai_analysis.ai.error_reason'));
+    }
+
+    public function test_v3_ai_analysis_first_name_uses_universal_ai_request_and_name_event(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9363]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9364]]),
+        ]);
+
+        $gemini = Mockery::mock(GeminiApiService::class);
+        $gemini
+            ->shouldReceive('generateStructuredWithMetadata')
+            ->once()
+            ->andReturn(new AiProviderStructuredResult(
+                provider: 'gemini',
+                model: 'test-gemini',
+                parsedPayload: ['output_id' => '1', 'data' => ['first_name' => 'Николай']],
+                requestBodyRaw: '{}',
+                responseBodyRaw: '{}',
+                httpStatus: 200,
+                inputTokens: 10,
+                outputTokens: 5,
+                totalTokens: 15,
+            ));
+        $this->app->instance(GeminiApiService::class, $gemini);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('v3_ai_first_name_universal_analytics', $this->v3AiNameRuntimeSchema($channel->id));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $answer = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'Николай',
+        ]);
+
+        (new ProcessScenarioInboundJob($answer->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $request = AiRequest::query()->sole();
+        $run->refresh();
+
+        $this->assertSame(AiTask::KEY_SCENARIO_V3_AI_ANALYSIS, $request->task_key);
+        $this->assertSame('scenario_v3_ai_analysis:ai', $request->prompt_key);
+        $this->assertSame('ai', $request->scenario_block_id);
+        $this->assertSame($request->id, data_get($run->state_payload, 'v3.ai_analysis.ai.ai_request_id'));
+        $this->assertDatabaseHas('contact_first_name_resolution_events', [
+            'contact_id' => $contact->id,
+            'dialog_id' => $dialog->id,
+            'scenario_id' => $scenario->id,
+            'scenario_block_id' => 'ai',
+            'ai_request_id' => $request->id,
+        ]);
+    }
+
+    public function test_v3_ai_analysis_unknown_output_keeps_successful_ai_request_and_state_warning(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9365]]),
+        ]);
+
+        $gemini = Mockery::mock(GeminiApiService::class);
+        $gemini
+            ->shouldReceive('generateStructuredWithMetadata')
+            ->once()
+            ->andReturn(new AiProviderStructuredResult(
+                provider: 'gemini',
+                model: 'test-gemini',
+                parsedPayload: ['output_id' => 'unexpected', 'data' => ['geo_city' => 'Москва']],
+                requestBodyRaw: '{}',
+                responseBodyRaw: '{}',
+                httpStatus: 200,
+                inputTokens: 10,
+                outputTokens: 5,
+                totalTokens: 15,
+            ));
+        $this->app->instance(GeminiApiService::class, $gemini);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $schema = $this->v3AiNameRuntimeSchema($channel->id);
+        data_set($schema, 'builder_v3_runtime.blocks.ai.ai_analysis.extract_fields', [[
+            'key' => 'geo_city',
+            'label' => 'Город',
+            'type' => 'text',
+        ]]);
+        data_set($schema, 'builder_v3_runtime.blocks.accepted.actions', []);
+        $scenario = $this->createPublishedScenario('v3_ai_unknown_output_analytics', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $answer = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'Москва',
+        ]);
+
+        (new ProcessScenarioInboundJob($answer->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $request = AiRequest::query()->sole();
+        $run->refresh();
+
+        $this->assertSame(AiRequest::STATUS_SUCCESS, $request->status);
+        $this->assertSame($request->id, data_get($run->state_payload, 'v3.ai_analysis.ai.ai_request_id'));
+        $this->assertTrue(data_get($run->state_payload, 'v3.ai_analysis.ai.error'));
+        $this->assertSame('unknown_output', data_get($run->state_payload, 'v3.ai_analysis.ai.error_reason'));
+        $this->assertSame([], data_get($run->state_payload, 'v3.ai_analysis.ai.data'));
+    }
+
+    public function test_v3_ai_analysis_provider_error_keeps_error_request_and_state_error(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9366]]),
+        ]);
+
+        $gemini = Mockery::mock(GeminiApiService::class);
+        $gemini
+            ->shouldReceive('generateStructuredWithMetadata')
+            ->once()
+            ->andThrow(new AiProviderRequestException(
+                message: 'quota exceeded',
+                provider: 'gemini',
+                model: 'test-gemini',
+                requestBodyRaw: '{}',
+                responseBodyRaw: '{"error":"quota"}',
+                httpStatus: 429,
+            ));
+        $this->app->instance(GeminiApiService::class, $gemini);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $schema = $this->v3AiNameRuntimeSchema($channel->id);
+        data_set($schema, 'builder_v3_runtime.blocks.ai.ai_analysis.extract_fields', [[
+            'key' => 'geo_city',
+            'label' => 'Город',
+            'type' => 'text',
+        ]]);
+        $scenario = $this->createPublishedScenario('v3_ai_provider_error_analytics', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $answer = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'Москва',
+        ]);
+
+        (new ProcessScenarioInboundJob($answer->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $request = AiRequest::query()->with('attempts')->sole();
+        $run->refresh();
+
+        $this->assertSame(AiRequest::STATUS_ERROR, $request->status);
+        $this->assertSame($request->id, data_get($run->state_payload, 'v3.ai_analysis.ai.ai_request_id'));
+        $this->assertTrue(data_get($run->state_payload, 'v3.ai_analysis.ai.error'));
+        $this->assertSame('ai_failed', data_get($run->state_payload, 'v3.ai_analysis.ai.error_reason'));
+        $this->assertCount(1, $request->attempts);
+    }
+
+    public function test_v3_ai_analysis_normalizes_first_name_with_dictionary_before_contact_write(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9371]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9372]]),
+        ]);
+
+        DataDictionaryEntry::query()->create([
+            'dictionary_key' => DataDictionaryEntry::DICTIONARY_NAMES,
+            'lookup_value' => 'Клава',
+            'result_value' => 'Клавдия',
+            'gender' => DataDictionaryEntry::GENDER_FEMALE,
+            'variant_type' => DataDictionaryEntry::VARIANT_TYPE_SHORT,
+            'auto_apply' => true,
+            'is_active' => true,
+        ]);
+
+        $gemini = Mockery::mock(GeminiApiService::class);
+        $gemini
+            ->shouldReceive('generateStructuredWithMetadata')
+            ->once()
+            ->andReturn(new AiProviderStructuredResult(
+                provider: 'gemini',
+                model: 'test-gemini',
+                parsedPayload: ['output_id' => '1', 'data' => ['first_name' => 'Клава']],
+                requestBodyRaw: '{}',
+                responseBodyRaw: '{}',
+                httpStatus: 200,
+                inputTokens: 10,
+                outputTokens: 5,
+                totalTokens: 15,
+            ));
+        $this->app->instance(GeminiApiService::class, $gemini);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext(
+            $channel,
+            contactOverrides: [
+                'first_name' => 'Abrikosov German',
+                'first_name_source' => Contact::FIRST_NAME_SOURCE_AUTO,
+            ],
+        );
+        $schema = $this->v3AiNameRuntimeSchema($channel->id);
+        data_set($schema, 'builder_v3_runtime.blocks.accepted.message.text', 'Записали твое имя {{contact.first_name}}');
+        $scenario = $this->createPublishedScenario('v3_ai_name_dictionary_normalization', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $answer = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'Клава',
+        ]);
+
+        (new ProcessScenarioInboundJob($answer->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run->refresh();
+        $this->assertSame('Клавдия', data_get($run->state_payload, 'v3.ai_analysis.ai.data.first_name'));
+
+        $contact->refresh();
+        $this->assertSame('Клавдия', $contact->first_name);
+        $this->assertSame(Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED, $contact->first_name_source);
+        $this->assertSame(Contact::FIRST_NAME_RESOLUTION_METHOD_AI_ANALYSIS, $contact->first_name_resolution_method);
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['text'] === 'Записали твое имя Клавдия');
+    }
+
+    public function test_v3_action_missing_source_keeps_current_block_and_skips_success_message(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9381]]),
+        ]);
+
+        $gemini = Mockery::mock(GeminiApiService::class);
+        $gemini
+            ->shouldReceive('generateStructuredWithMetadata')
+            ->once()
+            ->andReturn(new AiProviderStructuredResult(
+                provider: 'gemini',
+                model: 'test-gemini',
+                parsedPayload: ['output_id' => '1', 'data' => ['first_name' => '']],
+                requestBodyRaw: '{}',
+                responseBodyRaw: '{}',
+                httpStatus: 200,
+                inputTokens: 10,
+                outputTokens: 5,
+                totalTokens: 15,
+            ));
+        $this->app->instance(GeminiApiService::class, $gemini);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $schema = $this->v3AiNameRuntimeSchema($channel->id);
+        data_set($schema, 'builder_v3_runtime.blocks.accepted.message.text', 'Записали твое имя {{contact.first_name}}');
+        $scenario = $this->createPublishedScenario('v3_action_missing_source_stops', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $answer = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'не имя',
+        ]);
+
+        (new ProcessScenarioInboundJob($answer->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run->refresh();
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('accepted', $run->current_step);
+
+        Http::assertSentCount(1);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['text'] === 'Как вас зовут?');
+    }
+
+    public function test_v3_change_data_action_writes_static_contact_and_dialog_values(): void
+    {
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('v3_static_change_data', $this->v3StaticChangeDataRuntimeSchema($channel->id));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->assertSame(ScenarioRun::STATUS_COMPLETED, $run->status);
+        $this->assertNull($run->current_step);
+
+        $contact->refresh();
+        $dialog->refresh();
+
+        $this->assertSame('female', $contact->gender);
+        $this->assertSame('Московская область', $contact->region);
+        $this->assertSame('female', data_get($dialog->fields_payload, 'selected_gender'));
+    }
+
+    public function test_v3_variables_action_increments_dialog_variable_and_follows_automatic_edge(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9710],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('v3_variables_increment', $this->v3VariablesRuntimeSchema($channel->id));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $dialog->refresh();
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->assertSame(1, data_get($dialog->fields_payload, 'спросили_имя'));
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('done', $run->current_step);
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['text'] === 'Попытка записана');
+    }
+
+    #[DataProvider('v3Bitrix24SyncOperationProvider')]
+    public function test_v3_bitrix24_sync_action_queues_operation_and_continues_block(
+        string $operation,
+        string $expectedQueueAction,
+    ): void {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9718],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $schema = $this->v3VariablesRuntimeSchema($channel->id);
+        data_set($schema, 'builder_v3_runtime.blocks.variables.actions', [
+            [
+                'type' => 'bitrix24_sync',
+                'operation' => $operation,
+            ],
+            [
+                'type' => 'variables',
+                'operations' => [[
+                    'operation' => 'increment',
+                    'field_key' => 'bitrix_after_sync',
+                    'amount' => 1,
+                ]],
+            ],
+        ]);
+        $scenario = $this->createPublishedScenario('v3_bitrix24_sync_'.$operation, $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $expectedContact = Mockery::on(fn ($value): bool => $value instanceof Contact && $value->is($contact));
+        $contactQueueAction = Mockery::mock(QueueBitrix24ContactSyncAction::class);
+        $dealQueueAction = Mockery::mock(QueueBitrix24DealSyncAction::class);
+        $historyQueueAction = Mockery::mock(QueueBitrix24HistoryExportAction::class);
+
+        if ($expectedQueueAction === 'contact') {
+            $contactQueueAction
+                ->shouldReceive('handle')
+                ->once()
+                ->with($expectedContact)
+                ->andReturn(new Bitrix24ContactSyncQueueResultData(
+                    queued: true,
+                    alreadyPending: false,
+                    ready: true,
+                    rootContactId: $contact->id,
+                ));
+        } else {
+            $contactQueueAction->shouldReceive('handle')->never();
+        }
+
+        if ($expectedQueueAction === 'deal') {
+            $dealQueueAction
+                ->shouldReceive('handle')
+                ->once()
+                ->with($expectedContact)
+                ->andReturn(new Bitrix24DealSyncQueueResultData(
+                    queued: true,
+                    alreadyPending: false,
+                    ready: true,
+                    rootContactId: $contact->id,
+                ));
+        } else {
+            $dealQueueAction->shouldReceive('handle')->never();
+        }
+
+        if ($expectedQueueAction === 'history') {
+            $historyQueueAction
+                ->shouldReceive('handle')
+                ->once()
+                ->with($expectedContact)
+                ->andReturn(new Bitrix24HistoryExportQueueResultData(
+                    queued: true,
+                    alreadyPending: false,
+                    ready: true,
+                    rootContactId: $contact->id,
+                ));
+        } else {
+            $historyQueueAction->shouldReceive('handle')->never();
+        }
+
+        app()->instance(QueueBitrix24ContactSyncAction::class, $contactQueueAction);
+        app()->instance(QueueBitrix24DealSyncAction::class, $dealQueueAction);
+        app()->instance(QueueBitrix24HistoryExportAction::class, $historyQueueAction);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $dialog->refresh();
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->assertSame(1, data_get($dialog->fields_payload, 'bitrix_after_sync'));
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('done', $run->current_step);
+        $this->assertSame('queued', data_get($run->state_payload, 'v3.bitrix24_sync.last.status'));
+        $this->assertSame($operation, data_get($run->state_payload, 'v3.bitrix24_sync.last.operation'));
+        $this->assertSame($contact->id, data_get($run->state_payload, 'v3.bitrix24_sync.last.root_contact_id'));
+        $this->assertTrue(data_get($run->state_payload, 'v3.bitrix24_sync.variables.0.queued'));
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['text'] === 'Попытка записана');
+    }
+
+    /**
+     * @return array<string, array{string, string}>
+     */
+    public static function v3Bitrix24SyncOperationProvider(): array
+    {
+        return [
+            'contact sync' => ['contact_sync', 'contact'],
+            'deal sync' => ['deal_sync', 'deal'],
+            'history export' => ['history_export', 'history'],
+            'contact sync with followups' => ['contact_sync_with_followups', 'contact'],
+        ];
+    }
+
+    public function test_v3_variables_action_can_store_start_parameter(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9713],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $schema = $this->v3VariablesRuntimeSchema($channel->id);
+        data_set($schema, 'builder_v3_runtime.entrypoints.0.values', ['/start 123321']);
+        data_set($schema, 'builder_v3_runtime.blocks.variables.actions.0.operations', [[
+            'operation' => 'set',
+            'field_key' => 'start_param',
+            'value_source' => 'start_param',
+            'value' => '',
+        ]]);
+        $scenario = $this->createPublishedScenario('v3_variables_start_param', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => '/start 123321',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $dialog->refresh();
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->assertSame('123321', data_get($dialog->fields_payload, 'start_param'));
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('done', $run->current_step);
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['text'] === 'Попытка записана');
+    }
+
+    public function test_v3_variables_action_can_store_message_parameter_start_parameter(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9714],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $schema = $this->v3VariablesRuntimeSchema($channel->id);
+        data_set($schema, 'builder_v3_runtime.entrypoints.0.values', ['/start fallback']);
+        data_set($schema, 'builder_v3_runtime.blocks.variables.actions.0.operations', [[
+            'operation' => 'set',
+            'field_key' => 'start_param',
+            'value_source' => 'start_param',
+            'value' => '',
+        ]]);
+        $scenario = $this->createPublishedScenario('v3_variables_message_parameter_start_param', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => '/start fallback',
+            'message_parameter' => '123321',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $dialog->refresh();
+
+        $this->assertSame('123321', data_get($dialog->fields_payload, 'start_param'));
+    }
+
+    public function test_v3_simulate_start_parameter_reroutes_to_matching_start_block(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9715],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $dialog->forceFill(['fields_payload' => ['start_param' => 'payload_42']])->save();
+        $scenario = $this->createPublishedScenario('v3_simulate_start_parameter', $this->v3SimulateStartParameterRuntimeSchema($channel->id));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'анкета',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $dialog->refresh();
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->assertSame('payload_42', data_get($dialog->fields_payload, 'start_param'));
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('payload_start', $run->current_step);
+        $this->assertSame('payload_start', data_get($run->state_payload, 'v3.current_block_id'));
+        $this->assertSame(1, Message::query()
+            ->where('dialog_id', $dialog->id)
+            ->where('direction', Message::DIRECTION_INBOUND)
+            ->count());
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['text'] === 'Сработал параметр payload_42');
+        Http::assertNotSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['text'] === 'Обычное продолжение');
+    }
+
+    public function test_v3_simulate_start_parameter_continues_when_parameter_has_no_start_block(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9716],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $dialog->forceFill(['fields_payload' => ['start_param' => 'unknown_payload']])->save();
+        $scenario = $this->createPublishedScenario('v3_simulate_start_parameter_noop', $this->v3SimulateStartParameterRuntimeSchema($channel->id));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'анкета',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('after_noop', $run->current_step);
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['text'] === 'Обычное продолжение');
+    }
+
+    public function test_v3_variables_action_fails_and_rolls_back_when_increment_value_is_not_numeric(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9711],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $dialog->forceFill(['fields_payload' => ['спросили_имя' => 'abc', 'другое' => 'ok']])->save();
+        $scenario = $this->createPublishedScenario('v3_variables_failed', $this->v3VariablesRuntimeSchema($channel->id));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $dialog->refresh();
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->assertSame('abc', data_get($dialog->fields_payload, 'спросили_имя'));
+        $this->assertSame('ok', data_get($dialog->fields_payload, 'другое'));
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('variables', $run->current_step);
+
+        Http::assertNothingSent();
+    }
+
+    public function test_v3_message_can_pick_text_by_dialog_variable(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9712],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $dialog->forceFill(['fields_payload' => ['спросили_имя' => 2]])->save();
+        $scenario = $this->createPublishedScenario('v3_variable_message', $this->v3VariableMessageRuntimeSchema($channel->id));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['text'] === 'Напиши имя полностью');
+    }
+
+    public function test_v3_message_can_pick_text_by_numeric_dialog_variable_operator(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9713],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $dialog->forceFill(['fields_payload' => ['спросили_имя' => 3]])->save();
+        $schema = $this->v3VariableMessageRuntimeSchema($channel->id);
+        data_set($schema, 'builder_v3_runtime.blocks.ask_name.message.variable_text_variants', [
+            [
+                'operator' => 'eq',
+                'value' => '1',
+                'text' => 'Как тебя зовут?',
+            ],
+            [
+                'operator' => 'gte',
+                'value' => '3',
+                'text' => "Три попытки прошло\nПередаю оператору",
+            ],
+        ]);
+        $scenario = $this->createPublishedScenario('v3_variable_message_operator', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['text'] === "Три попытки прошло\nПередаю оператору");
+    }
+
+    public function test_v3_edge_expression_supports_numeric_dialog_variables_with_cyrillic_keys(): void
+    {
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $dialog->forceFill(['fields_payload' => ['спросили_имя' => '2']])->save();
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'ответ',
+        ]);
+
+        $condition = app(ScenarioEdgeExpressionCondition::class);
+
+        $this->assertTrue($condition->evaluate('{{dialog.спросили_имя}} < 3', $message));
+        $this->assertFalse($condition->evaluate('{{dialog.спросили_имя}} >= 3', $message));
+        $this->assertTrue($condition->evaluate('{{dialog.новая_переменная}} == 0', $message));
+    }
+
+    public function test_v3_edge_expression_supports_parentheses_for_grouped_conditions(): void
+    {
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $dialog->forceFill(['fields_payload' => ['сколько_раз_спросили_имя' => 1]])->save();
+        $contact->forceFill([
+            'first_name' => '',
+            'first_name_source' => 'auto',
+        ])->save();
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'ответ',
+        ]);
+
+        $condition = app(ScenarioEdgeExpressionCondition::class);
+        $expression = '({{contact.first_name}} == "" or {{contact.first_name_source}} == "" or {{contact.first_name_source}} == "auto") and {{dialog.сколько_раз_спросили_имя}} == 1';
+
+        $this->assertTrue($condition->evaluate($expression, $message));
+        $this->assertFalse($condition->evaluate(str_replace('== 1', '== 2', $expression), $message));
+    }
+
+    public function test_v3_edge_expression_keeps_and_priority_over_or_without_parentheses(): void
+    {
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $dialog->forceFill(['fields_payload' => ['count' => 2]])->save();
+        $contact->forceFill(['first_name' => 'Герман'])->save();
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'ответ',
+        ]);
+
+        $condition = app(ScenarioEdgeExpressionCondition::class);
+
+        $this->assertTrue($condition->evaluate('{{dialog.count}} == 2 or {{dialog.count}} == 3 and {{contact.first_name}} == ""', $message));
+        $this->assertFalse($condition->evaluate('({{dialog.count}} == 2 or {{dialog.count}} == 3) and {{contact.first_name}} == ""', $message));
+    }
+
+    public function test_v3_edge_expression_rejects_unclosed_parenthesis(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        app(ScenarioEdgeExpressionCondition::class)
+            ->assertValid('({{dialog.count}} == 1 or {{dialog.count}} == 2');
+    }
+
+    public function test_v3_distance_to_moscow_action_calculates_for_ru_country_and_follows_resolved_edge(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9701],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $contact->forceFill([
+            'country' => 'RU',
+            'city' => 'Москва',
+            'distance_to_moscow_km' => null,
+            'distance_to_moscow_status' => null,
+            'distance_to_moscow_calculated_at' => null,
+        ])->save();
+
+        $scenario = $this->createPublishedScenario(
+            'v3_distance_to_moscow',
+            $this->v3DistanceToMoscowRuntimeSchema($channel->id),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $contact->refresh();
+
+        $this->assertSame(0, $contact->distance_to_moscow_km);
+        $this->assertSame(Contact::DISTANCE_TO_MOSCOW_STATUS_RESOLVED, $contact->distance_to_moscow_status);
+        $this->assertNotNull($contact->distance_to_moscow_calculated_at);
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('done', $run->current_step);
+        $this->assertSame('distance_resolved', data_get($run->state_payload, 'v3.distance_to_moscow.distance.output_id'));
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && $request['text'] === 'Расстояние рассчитано');
+    }
+
+    public function test_v3_geo_city_action_writes_contact_and_follows_found_edge(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9761]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9762]]),
+        ]);
+        $this->seed(GeoDictionarySeeder::class);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel, [
+            'country' => null,
+            'region' => null,
+            'city' => null,
+        ]);
+        $scenario = $this->createPublishedScenario(
+            'v3_geo_city_found',
+            $this->v3GeoCityRuntimeSchema($channel->id),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $run->forceFill([
+            'state_payload' => array_replace_recursive($run->state_payload ?? [], [
+                'v3' => [
+                    'geo_resolution_attempts' => [
+                        'resolve_geo' => 2,
+                    ],
+                ],
+            ]),
+        ])->save();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'я из мск');
+
+        $run->refresh();
+        $contact->refresh();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('geo_found_done', $run->current_step);
+        $this->assertSame('Россия', $contact->country);
+        $this->assertSame('Москва', $contact->region);
+        $this->assertSame('Москва', $contact->city);
+        $this->assertNull(data_get($run->state_payload, 'v3.geo_resolution_attempts.resolve_geo'));
+
+        $this->assertDatabaseHas('geo_resolution_events', [
+            'contact_id' => $contact->id,
+            'dialog_id' => $dialog->id,
+            'status' => ResolveGeoCityAction::STATUS_MATCHED_CITY,
+            'matched_alias' => 'мск',
+            'country' => 'Россия',
+            'region' => 'Москва',
+            'city' => 'Москва',
+        ]);
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && $request['text'] === 'Город найден');
+    }
+
+    public function test_v3_geo_city_action_routes_ambiguous_to_manual_required_without_mutating_contact(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9771]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9772]]),
+        ]);
+        $this->seed(GeoDictionarySeeder::class);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel, [
+            'country' => 'Россия',
+            'region' => 'Старый регион',
+            'city' => 'Старый город',
+        ]);
+        $scenario = $this->createPublishedScenario(
+            'v3_geo_city_ambiguous',
+            $this->v3GeoCityRuntimeSchema($channel->id),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'я из химок, сейчас в москве');
+
+        $run->refresh();
+        $contact->refresh();
+
+        $this->assertSame('geo_manual_required_done', $run->current_step);
+        $this->assertSame('Россия', $contact->country);
+        $this->assertSame('Старый регион', $contact->region);
+        $this->assertSame('Старый город', $contact->city);
+        $this->assertSame(1, data_get($run->state_payload, 'v3.geo_resolution_attempts.resolve_geo'));
+        $this->assertSame('ambiguous_city', data_get($run->state_payload, 'v3.geo_resolution_pending.resolve_geo.reason'));
+        $this->assertCount(2, data_get($run->state_payload, 'v3.geo_resolution_pending.resolve_geo.candidates'));
+
+        $this->assertDatabaseHas('geo_resolution_events', [
+            'contact_id' => $contact->id,
+            'dialog_id' => $dialog->id,
+            'status' => ResolveGeoCityAction::STATUS_AMBIGUOUS,
+        ]);
+    }
+
+    public function test_v3_geo_city_action_preserves_legacy_ambiguous_output_for_old_snapshot(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9773]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9774]]),
+        ]);
+        $this->seed(GeoDictionarySeeder::class);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel, [
+            'country' => 'Россия',
+            'region' => 'Старый регион',
+            'city' => 'Старый город',
+        ]);
+        $scenario = $this->createPublishedScenario(
+            'v3_geo_city_legacy_ambiguous',
+            $this->v3GeoCityRuntimeSchema($channel->id, legacyGeoOutputs: true),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'я из химок, сейчас в москве');
+
+        $run->refresh();
+
+        $this->assertSame('geo_ambiguous_done', $run->current_step);
+        $this->assertSame(1, data_get($run->state_payload, 'v3.geo_resolution_attempts.resolve_geo'));
+    }
+
+    public function test_v3_geo_city_action_handles_missing_current_inbound_message(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9781]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9782]]),
+        ]);
+        $this->seed(GeoDictionarySeeder::class);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario(
+            'v3_geo_city_missing_inbound',
+            $this->v3GeoCityRuntimeSchema($channel->id),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, '', [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_SCENARIO_MESSAGE,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+        ]);
+
+        $run->refresh();
+        $event = GeoResolutionEvent::query()->where('contact_id', $contact->id)->firstOrFail();
+
+        $this->assertSame('geo_not_found_done', $run->current_step);
+        $this->assertSame(1, data_get($run->state_payload, 'v3.geo_resolution_attempts.resolve_geo'));
+        $this->assertSame(ResolveGeoCityAction::STATUS_NOT_FOUND, $event->status);
+        $this->assertSame('missing_current_inbound_message', data_get($event->payload, 'reason'));
+    }
+
+    public function test_v3_geo_city_action_ignores_legacy_internal_limit_and_runs_resolver(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9791]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9792]]),
+        ]);
+        $this->seed(GeoDictionarySeeder::class);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel, [
+            'country' => null,
+            'region' => null,
+            'city' => null,
+        ]);
+        $scenario = $this->createPublishedScenario(
+            'v3_geo_city_limit',
+            $this->v3GeoCityRuntimeSchema($channel->id),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $run->forceFill([
+            'state_payload' => array_replace_recursive($run->state_payload ?? [], [
+                'v3' => [
+                    'geo_resolution_attempts' => [
+                        'resolve_geo' => 3,
+                    ],
+                ],
+            ]),
+        ])->save();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'я из мск');
+
+        $run->refresh();
+        $contact->refresh();
+
+        $this->assertSame('geo_found_done', $run->current_step);
+        $this->assertNull(data_get($run->state_payload, 'v3.geo_resolution_attempts.resolve_geo'));
+        $this->assertSame('Россия', $contact->country);
+        $this->assertSame('Москва', $contact->region);
+        $this->assertSame('Москва', $contact->city);
+        $event = GeoResolutionEvent::query()->where('contact_id', $contact->id)->firstOrFail();
+        $this->assertSame(ResolveGeoCityAction::STATUS_MATCHED_CITY, $event->status);
+        $this->assertSame('matched_city', data_get($event->payload, 'resolver_status'));
+        $this->assertSame('geo_found', data_get($event->payload, 'final_output'));
+    }
+
+    public function test_v3_geo_city_action_writes_contact_from_ai_analysis_data(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9793]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9794]]),
+        ]);
+        $this->seed(GeoDictionarySeeder::class);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel, [
+            'country' => null,
+            'region' => null,
+            'city' => null,
+        ]);
+        $scenario = $this->createPublishedScenario(
+            'v3_geo_city_ai_data_found',
+            $this->v3GeoCityRuntimeSchema($channel->id, geoAction: $this->v3GeoCityAiDataAction()),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $run->forceFill([
+            'state_payload' => array_replace_recursive($run->state_payload ?? [], [
+                'v3' => [
+                    'geo_resolution_attempts' => [
+                        'resolve_geo' => 2,
+                    ],
+                    'ai_analysis' => [
+                        'ai_city' => [
+                            'output_id' => 'city_found',
+                            'label' => 'Город найден',
+                            'ai_request_id' => 123,
+                            'data' => [
+                                'geo_city' => 'Химки',
+                                'geo_region' => 'Московская область',
+                                'geo_country' => 'Россия',
+                            ],
+                        ],
+                    ],
+                ],
+            ]),
+        ])->save();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'дальше');
+
+        $run->refresh();
+        $contact->refresh();
+        $event = GeoResolutionEvent::query()->where('contact_id', $contact->id)->firstOrFail();
+
+        $this->assertSame('geo_found_done', $run->current_step);
+        $this->assertSame('Россия', $contact->country);
+        $this->assertSame('Московская область', $contact->region);
+        $this->assertSame('Химки', $contact->city);
+        $this->assertNull(data_get($run->state_payload, 'v3.geo_resolution_attempts.resolve_geo'));
+        $this->assertSame(ResolveGeoCityAction::STATUS_MATCHED_CITY, $event->status);
+        $this->assertSame('ai_data', data_get($event->payload, 'source'));
+        $this->assertSame('city_found', data_get($event->payload, 'ai_output_id'));
+        $this->assertSame('Химки', data_get($event->payload, 'ai_city'));
+        $this->assertSame('Химки Московская область Россия', data_get($event->payload, 'resolver_input'));
+        $this->assertTrue(data_get($event->payload, 'resolver_ran'));
+        $this->assertSame('geo_found', data_get($event->payload, 'final_output'));
+    }
+
+    public function test_v3_geo_city_action_routes_ai_city_not_confirmed_to_not_found(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9795]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9796]]),
+        ]);
+        $this->seed(GeoDictionarySeeder::class);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel, [
+            'country' => 'Россия',
+            'region' => 'Старый регион',
+            'city' => 'Старый город',
+        ]);
+        $scenario = $this->createPublishedScenario(
+            'v3_geo_city_ai_data_not_found',
+            $this->v3GeoCityRuntimeSchema($channel->id, geoAction: $this->v3GeoCityAiDataAction()),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $run->forceFill([
+            'state_payload' => array_replace_recursive($run->state_payload ?? [], [
+                'v3' => [
+                    'ai_analysis' => [
+                        'ai_city' => [
+                            'output_id' => 'city_found',
+                            'label' => 'Город найден',
+                            'data' => [
+                                'geo_city' => 'Омск',
+                                'geo_region' => 'Омская область',
+                                'geo_country' => 'Россия',
+                            ],
+                        ],
+                    ],
+                ],
+            ]),
+        ])->save();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'дальше');
+
+        $run->refresh();
+        $contact->refresh();
+        $event = GeoResolutionEvent::query()->where('contact_id', $contact->id)->firstOrFail();
+
+        $this->assertSame('geo_not_found_done', $run->current_step);
+        $this->assertSame('Россия', $contact->country);
+        $this->assertSame('Старый регион', $contact->region);
+        $this->assertSame('Старый город', $contact->city);
+        $this->assertSame(1, data_get($run->state_payload, 'v3.geo_resolution_attempts.resolve_geo'));
+        $this->assertSame(ResolveGeoCityAction::STATUS_NOT_FOUND, $event->status);
+        $this->assertSame('geo_not_found', data_get($event->payload, 'final_output'));
+        $this->assertSame('Омск Омская область Россия', data_get($event->payload, 'resolver_input'));
+        $this->assertTrue(data_get($event->payload, 'resolver_ran'));
+    }
+
+    public function test_v3_geo_city_action_counts_missing_ai_data_and_writes_diagnostic_event(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9797]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9798]]),
+        ]);
+        $this->seed(GeoDictionarySeeder::class);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario(
+            'v3_geo_city_missing_ai_data',
+            $this->v3GeoCityRuntimeSchema($channel->id, geoAction: $this->v3GeoCityAiDataAction()),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'дальше');
+
+        $run->refresh();
+        $event = GeoResolutionEvent::query()->where('contact_id', $contact->id)->firstOrFail();
+
+        $this->assertSame('geo_not_found_done', $run->current_step);
+        $this->assertSame(1, data_get($run->state_payload, 'v3.geo_resolution_attempts.resolve_geo'));
+        $this->assertSame(ResolveGeoCityAction::STATUS_NOT_FOUND, $event->status);
+        $this->assertSame('missing_ai_data', data_get($event->payload, 'reason'));
+        $this->assertFalse(data_get($event->payload, 'resolver_ran'));
+        $this->assertNull($event->source_text);
+    }
+
+    public function test_v3_geo_city_action_counts_missing_ai_city_and_writes_diagnostic_event(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9799]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9800]]),
+        ]);
+        $this->seed(GeoDictionarySeeder::class);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario(
+            'v3_geo_city_missing_ai_city',
+            $this->v3GeoCityRuntimeSchema($channel->id, geoAction: $this->v3GeoCityAiDataAction()),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $run->forceFill([
+            'state_payload' => array_replace_recursive($run->state_payload ?? [], [
+                'v3' => [
+                    'ai_analysis' => [
+                        'ai_city' => [
+                            'output_id' => 'city_found',
+                            'label' => 'Город не найден',
+                            'data' => [
+                                'geo_region' => 'Московская область',
+                                'geo_country' => 'Россия',
+                            ],
+                        ],
+                    ],
+                ],
+            ]),
+        ])->save();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'дальше');
+
+        $run->refresh();
+        $event = GeoResolutionEvent::query()->where('contact_id', $contact->id)->firstOrFail();
+
+        $this->assertSame('geo_not_found_done', $run->current_step);
+        $this->assertSame(1, data_get($run->state_payload, 'v3.geo_resolution_attempts.resolve_geo'));
+        $this->assertSame('missing_ai_city', data_get($event->payload, 'reason'));
+        $this->assertSame('Московская область', data_get($event->payload, 'ai_region'));
+        $this->assertFalse(data_get($event->payload, 'resolver_ran'));
+    }
+
+    public function test_v3_geo_city_action_uses_ai_data_even_when_legacy_internal_limit_exists(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9801]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9802]]),
+        ]);
+        $this->seed(GeoDictionarySeeder::class);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario(
+            'v3_geo_city_ai_data_limit',
+            $this->v3GeoCityRuntimeSchema($channel->id, geoAction: $this->v3GeoCityAiDataAction()),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $run->forceFill([
+            'state_payload' => array_replace_recursive($run->state_payload ?? [], [
+                'v3' => [
+                    'geo_resolution_attempts' => [
+                        'resolve_geo' => 3,
+                    ],
+                    'ai_analysis' => [
+                        'ai_city' => [
+                            'output_id' => 'city_found',
+                            'label' => 'Город найден',
+                            'data' => [
+                                'geo_city' => 'Химки',
+                                'geo_region' => 'Московская область',
+                                'geo_country' => 'Россия',
+                            ],
+                        ],
+                    ],
+                ],
+            ]),
+        ])->save();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'дальше');
+
+        $run->refresh();
+
+        $contact->refresh();
+
+        $this->assertSame('geo_found_done', $run->current_step);
+        $this->assertNull(data_get($run->state_payload, 'v3.geo_resolution_attempts.resolve_geo'));
+        $this->assertSame('Россия', $contact->country);
+        $this->assertSame('Московская область', $contact->region);
+        $this->assertSame('Химки', $contact->city);
+        $event = GeoResolutionEvent::query()->where('contact_id', $contact->id)->firstOrFail();
+        $this->assertSame(ResolveGeoCityAction::STATUS_MATCHED_CITY, $event->status);
+        $this->assertSame('ai_data', data_get($event->payload, 'source'));
+        $this->assertSame('matched_city', data_get($event->payload, 'resolver_status'));
+        $this->assertSame('geo_found', data_get($event->payload, 'final_output'));
+    }
+
+    public function test_v3_unsupported_legacy_action_uses_failed_output(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*sendMessage' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9751],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel, [
+            'gender' => 'unknown',
+            'first_name' => null,
+            'country' => null,
+            'city' => null,
+            'region' => null,
+            'age_range' => null,
+        ]);
+        $schema = $this->v3UnsupportedActionRuntimeSchema($channel->id);
+        $failedEdge = [
+            'id' => 'edge_failed',
+            'edge_key' => 'edge_failed',
+            'mode' => 'action_result',
+            'priority' => 10,
+            'transition_limit' => 0,
+            'source_block_id' => 'legacy_action',
+            'target_block_id' => 'after_failed',
+            'from_output_id' => 'failed',
+            'label' => 'Старое действие отключено',
+        ];
+        $schema['builder_v3_runtime']['blocks']['legacy_action']['action_result_edges'][] = $failedEdge;
+        $schema['builder_v3_runtime']['edges'][] = $failedEdge;
+        $schema['builder_v3_runtime']['blocks']['after_failed'] = [
+            'id' => 'after_failed',
+            'db_id' => 99,
+            'kind' => 'state',
+            'title' => 'Старое действие отключено',
+            'actions' => null,
+            'message' => [
+                'text' => 'Старое действие отключено',
+                'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+            ],
+            'buttons' => null,
+            'wait_reply_edges' => [],
+            'automatic_edges' => [],
+            'action_result_edges' => [],
+            'default_target_block_id' => null,
+        ];
+        $scenario = $this->createPublishedScenario('v3_unsupported_legacy_action', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $scenarioRuns = ScenarioRun::query()
+            ->where('scenario_code', $scenario->code)
+            ->orderBy('id')
+            ->get();
+        $outboundTexts = Message::query()
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->where('message_kind', Message::KIND_OUTBOUND_SCENARIO_MESSAGE)
+            ->orderBy('id')
+            ->pluck('text')
+            ->all();
+
+        $this->assertCount(1, $scenarioRuns);
+        $this->assertSame([
+            'Старое действие отключено',
+        ], $outboundTexts);
+    }
+
+    public function test_v3_edit_message_action_removes_previous_inline_buttons_and_cleans_reply_keyboard_on_next_plain_message(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9601]])
+                ->push(['ok' => true, 'result' => true])
+                ->push(['ok' => true, 'result' => ['message_id' => 9602]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario(
+            'v3_edit_message_remove_buttons',
+            $this->v3EditMessageRemoveButtonsRuntimeSchema($channel->id),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Убрать кнопки');
+
+        $run->refresh();
+
+        $this->assertSame('done', $run->current_step);
+        $this->assertFalse((bool) data_get($run->state_payload, 'v3.pending_remove_telegram_keyboard', false));
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/editMessageReplyMarkup'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && (string) $request['message_id'] === '9601'
+            && data_get($request->data(), 'reply_markup.inline_keyboard') === []);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['text'] === 'Кнопки убраны'
+            && data_get($request->data(), 'reply_markup.remove_keyboard') === null);
+    }
+
+    public function test_v3_edit_message_action_deletes_previous_message_and_continues(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9631]])
+                ->push(['ok' => true, 'result' => true])
+                ->push(['ok' => true, 'result' => ['message_id' => 9632]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario(
+            'v3_edit_message_delete_message',
+            $this->v3EditMessageRemoveButtonsRuntimeSchema(
+                $channel->id,
+                operation: 'delete_message',
+                target: 'last_current_run_outbound',
+            ),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Убрать кнопки');
+
+        $run->refresh();
+
+        $this->assertSame('done', $run->current_step);
+        $this->assertFalse((bool) data_get($run->state_payload, 'v3.pending_remove_telegram_keyboard', false));
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/deleteMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && (string) $request['message_id'] === '9631');
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['text'] === 'Кнопки убраны'
+            && data_get($request->data(), 'reply_markup.remove_keyboard') === true);
+    }
+
+    public function test_v3_edit_message_action_on_start_deletes_last_dialog_outbound_message(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => true])
+                ->push(['ok' => true, 'result' => ['message_id' => 9642]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+
+        $previousOutbound = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'external_chat_id' => $dialog->external_chat_id,
+            'external_message_id' => '9641',
+            'text' => 'Предыдущее сообщение',
+        ]);
+        $dialog->forceFill([
+            'last_outbound_message_id' => $previousOutbound->id,
+            'last_outbound_message_preview' => 'Предыдущее сообщение',
+        ])->save();
+
+        $scenario = $this->createPublishedScenario(
+            'v3_edit_message_delete_on_start',
+            $this->v3EditMessageDeleteOnStartRuntimeSchema($channel->id),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/deleteMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && (string) $request['message_id'] === '9641');
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['text'] === 'Новое стартовое сообщение');
+
+        $previousOutbound->refresh();
+        $this->assertSame(DeleteLastOutboundDialogMessageAction::STATUS_DELETED, data_get($previousOutbound->raw_payload, 'delete_action_result'));
+    }
+
+    public function test_v3_delete_message_action_cleans_reply_keyboard_before_next_inline_buttons(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9611]])
+                ->push(['ok' => true, 'result' => true])
+                ->push(['ok' => true, 'result' => ['message_id' => 9612]])
+                ->push(['ok' => true, 'result' => true])
+                ->push(['ok' => true, 'result' => ['message_id' => 9613]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario(
+            'v3_edit_message_defer_keyboard_cleanup',
+            $this->v3EditMessageRemoveButtonsRuntimeSchema(
+                $channel->id,
+                operation: 'delete_message',
+                target: 'last_current_run_outbound',
+                nextHasInlineButtons: true,
+            ),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Убрать кнопки');
+
+        $run->refresh();
+
+        $this->assertFalse((bool) data_get($run->state_payload, 'v3.pending_remove_telegram_keyboard', false));
+
+        Http::assertSentCount(5);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/deleteMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && (string) $request['message_id'] === '9611');
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && data_get($request->data(), 'reply_markup.remove_keyboard') === true
+            && ($request['disable_notification'] ?? false) === true);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/deleteMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && (string) $request['message_id'] === '9612');
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['text'] === 'Выберите следующий шаг'
+            && data_get($request->data(), 'reply_markup.inline_keyboard.0.0.text') === 'Дальше'
+            && data_get($request->data(), 'reply_markup.remove_keyboard') === null);
+    }
+
+    public function test_v3_edit_message_action_logs_telegram_error_and_continues(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9621]])
+                ->push(['ok' => false, 'description' => 'Bad Request'], 400)
+                ->push(['ok' => true, 'result' => ['message_id' => 9622]]),
+        ]);
+        Log::spy();
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario(
+            'v3_edit_message_error_continues',
+            $this->v3EditMessageRemoveButtonsRuntimeSchema($channel->id),
+        );
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Убрать кнопки');
+
+        $run->refresh();
+
+        $this->assertSame('done', $run->current_step);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['text'] === 'Кнопки убраны');
+        Log::shouldHaveReceived('warning')
+            ->with('scenario.v3_edit_message_remove_buttons_failed', Mockery::on(fn (array $context): bool => ($context['exception'] ?? null) !== null
+                && ($context['scenario_code'] ?? null) === $scenario->code
+                && ($context['scenario_run_id'] ?? null) === $run->id));
     }
 
     public function test_v3_wait_reply_delivery_failure_stays_pending_and_can_retry(): void
@@ -1057,6 +4006,98 @@ class GenericDbScenarioRuntimeTest extends TestCase
             && $request['text'] === 'Callback принят');
     }
 
+    public function test_v3_telegram_inline_button_callback_can_be_consumed_as_wait_reply_answer(): void
+    {
+        Queue::fake();
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9271]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9272]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $schema = $this->v3WaitReplyRuntimeSchema($channel->id, [
+            $this->v3WaitReplyEdge(
+                id: '20',
+                edgeKey: 'edge_age_range',
+                targetBlockId: 'accepted',
+                inputCapture: [
+                    'enabled' => true,
+                    'field_scope' => 'contact',
+                    'field_key' => 'age_range',
+                    'data_type' => 'any_text',
+                ],
+            ),
+        ], [
+            'accepted' => 'Возраст принят',
+        ]);
+        data_set($schema, 'builder_v3_runtime.blocks.start.buttons', [
+            'placement' => 'inline_message',
+            'rows' => [[[
+                'id' => 'btn_24_29',
+                'text' => '24 - 29 лет',
+                'type' => 'text',
+                'normalized_text' => '24 - 29 лет',
+                'output_id' => 'btn_24_29',
+                'target_block_id' => null,
+            ]]],
+        ]);
+
+        $scenario = $this->createPublishedScenario('v3_wait_reply_telegram_button_capture', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $runtime = app(ScenarioRegistry::class)->makeRuntime($scenario->code);
+
+        $this->assertNotNull($runtime);
+        $this->assertTrue($runtime->supportsTelegramCallbackContinuation($run, 'v3b:start:btn_24_29'));
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'v3b:start:btn_24_29', [
+            'raw_payload' => [
+                'callback_query' => [
+                    'data' => 'v3b:start:btn_24_29',
+                ],
+            ],
+        ]);
+
+        $run->refresh();
+        $dialog->refresh();
+        $contact->refresh();
+
+        $counterKey = 'published_'.$scenario->publishedVersion->id.':edge_age_range';
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('accepted', $run->current_step);
+        $this->assertSame('24_29', $contact->age_range);
+        $this->assertNull(data_get($dialog->fields_payload, 'age_range'));
+        $this->assertSame(1, data_get($dialog->fields_payload, '_v3.transition_counts.'.$counterKey));
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && $request['text'] === 'Возраст принят');
+    }
+
     public function test_v3_wait_reply_skips_edge_when_contact_phone_condition_does_not_match(): void
     {
         Http::fake([
@@ -1258,6 +4299,215 @@ class GenericDbScenarioRuntimeTest extends TestCase
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && $request['chat_id'] === $dialog->external_chat_id
             && $request['text'] === 'Обычный лид');
+    }
+
+    public function test_v3_wait_reply_uses_first_name_source_contact_field_condition(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9283]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9284]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $contact->forceFill([
+            'first_name' => 'Герман',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_MANUAL,
+        ])->save();
+        $scenario = $this->createPublishedScenario('v3_wait_reply_first_name_source_condition', $this->v3WaitReplyRuntimeSchema($channel->id, [
+            $this->v3WaitReplyEdge(
+                id: '20',
+                edgeKey: 'edge_manual_name',
+                targetBlockId: 'manual_name',
+                priority: 20,
+                fieldCondition: [
+                    'enabled' => true,
+                    'field_scope' => 'contact',
+                    'field_key' => 'first_name_source',
+                    'operator' => 'equals',
+                    'value' => Contact::FIRST_NAME_SOURCE_MANUAL,
+                ],
+            ),
+            $this->v3WaitReplyEdge(
+                id: '10',
+                edgeKey: 'edge_fallback',
+                targetBlockId: 'fallback',
+                priority: 10,
+            ),
+        ], [
+            'manual_name' => 'Имя указал оператор',
+            'fallback' => 'Обычный лид',
+        ]));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'любой ответ');
+
+        $run->refresh();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('manual_name', $run->current_step);
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && $request['text'] === 'Имя указал оператор');
+    }
+
+    public function test_v3_wait_reply_uses_expression_condition_with_fallback(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9285]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9286]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $contact->forceFill(['gender' => 'unknown'])->save();
+        $dialog->forceFill(['fields_payload' => ['region' => 'Москва']])->save();
+        $scenario = $this->createPublishedScenario('v3_wait_reply_expression_condition', $this->v3WaitReplyRuntimeSchema($channel->id, [
+            $this->v3WaitReplyEdge(
+                id: '20',
+                edgeKey: 'edge_known_gender',
+                targetBlockId: 'known_gender',
+                priority: 20,
+                expression: '{{contact.gender}} == "male" or {{contact.gender}} == "female" and {{dialog.region}} == "Москва"',
+            ),
+            $this->v3WaitReplyEdge(
+                id: '10',
+                edgeKey: 'edge_fallback',
+                targetBlockId: 'fallback',
+                priority: 10,
+            ),
+        ], [
+            'known_gender' => 'Пол известен',
+            'fallback' => 'Пол неизвестен',
+        ]));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'любой ответ');
+
+        $run->refresh();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('fallback', $run->current_step);
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && $request['text'] === 'Пол неизвестен');
+    }
+
+    public function test_v3_wait_reply_expression_condition_matches_contact_and_dialog_values(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9287]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9288]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $contact->forceFill([
+            'gender' => 'male',
+            'age_years' => 18,
+        ])->save();
+        $dialog->forceFill(['fields_payload' => ['region' => 'Москва']])->save();
+        $scenario = $this->createPublishedScenario('v3_wait_reply_expression_match', $this->v3WaitReplyRuntimeSchema($channel->id, [
+            $this->v3WaitReplyEdge(
+                id: '20',
+                edgeKey: 'edge_match',
+                targetBlockId: 'match',
+                priority: 20,
+                expression: '{{contact.gender}} == "male" and {{contact.age_years}} == "18" and {{dialog.region}} == "Москва"',
+            ),
+            $this->v3WaitReplyEdge(
+                id: '10',
+                edgeKey: 'edge_fallback',
+                targetBlockId: 'fallback',
+                priority: 10,
+            ),
+        ], [
+            'match' => 'Условие прошло',
+            'fallback' => 'Fallback',
+        ]));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'любой ответ');
+
+        $run->refresh();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('match', $run->current_step);
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && $request['text'] === 'Условие прошло');
     }
 
     public function test_v3_wait_reply_skips_exhausted_transition_limit_and_uses_next_edge(): void
@@ -1527,6 +4777,170 @@ class GenericDbScenarioRuntimeTest extends TestCase
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && $request['chat_id'] === $dialog->external_chat_id
             && $request['text'] === 'Это не номер телефона');
+    }
+
+    public function test_v3_transition_actions_write_contact_and_dialog_fields(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9404]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9405]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('v3_transition_actions_write_fields', $this->v3WaitReplyRuntimeSchema($channel->id, [
+            $this->v3WaitReplyEdge(
+                id: '20',
+                edgeKey: 'edge_gender_male',
+                targetBlockId: 'accepted',
+                matchType: 'exact_text',
+                variants: ['Мужской'],
+                transitionActions: [
+                    [
+                        'type' => 'write_field',
+                        'target_scope' => 'contact',
+                        'target_field' => 'gender',
+                        'value_source' => 'static',
+                        'value' => 'male',
+                    ],
+                    [
+                        'type' => 'write_field',
+                        'target_scope' => 'contact',
+                        'target_field' => 'gender_source',
+                        'value_source' => 'static',
+                        'value' => 'client',
+                    ],
+                    [
+                        'type' => 'write_field',
+                        'target_scope' => 'dialog',
+                        'target_field' => 'questionnaire_step',
+                        'value_source' => 'static',
+                        'value' => 'gender_done',
+                    ],
+                ],
+            ),
+        ], [
+            'accepted' => 'Пол записан',
+        ]));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Мужской');
+
+        $run->refresh();
+        $contact->refresh();
+        $dialog->refresh();
+        $counterKey = 'published_'.$scenario->publishedVersion->id.':edge_gender_male';
+
+        $this->assertSame('accepted', $run->current_step);
+        $this->assertSame('male', $contact->gender);
+        $this->assertSame(Contact::GENDER_SOURCE_CLIENT, $contact->gender_source);
+        $this->assertSame('gender_done', data_get($dialog->fields_payload, 'questionnaire_step'));
+        $this->assertSame(1, data_get($dialog->fields_payload, '_v3.transition_counts.'.$counterKey));
+    }
+
+    public function test_v3_transition_action_failure_rolls_back_and_uses_next_edge(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9406]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9407]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('v3_transition_actions_fallback', $this->v3WaitReplyRuntimeSchema($channel->id, [
+            $this->v3WaitReplyEdge(
+                id: '30',
+                edgeKey: 'edge_invalid_action',
+                targetBlockId: 'invalid',
+                priority: 20,
+                transitionActions: [
+                    [
+                        'type' => 'write_field',
+                        'target_scope' => 'contact',
+                        'target_field' => 'gender',
+                        'value_source' => 'static',
+                        'value' => 'male',
+                    ],
+                    [
+                        'type' => 'write_field',
+                        'target_scope' => 'contact',
+                        'target_field' => 'gender_source',
+                        'value_source' => 'static',
+                        'value' => 'bad_source',
+                    ],
+                ],
+            ),
+            $this->v3WaitReplyEdge(
+                id: '20',
+                edgeKey: 'edge_fallback_after_action',
+                targetBlockId: 'fallback',
+                priority: 10,
+            ),
+        ], [
+            'invalid' => 'Не должно отправиться',
+            'fallback' => 'Fallback',
+        ]));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'Мужской');
+
+        $run->refresh();
+        $contact->refresh();
+        $dialog->refresh();
+        $invalidKey = 'published_'.$scenario->publishedVersion->id.':edge_invalid_action';
+        $fallbackKey = 'published_'.$scenario->publishedVersion->id.':edge_fallback_after_action';
+
+        $this->assertSame('fallback', $run->current_step);
+        $this->assertNull($contact->gender);
+        $this->assertNull($contact->gender_source);
+        $this->assertNull(data_get($dialog->fields_payload, '_v3.transition_counts.'.$invalidKey));
+        $this->assertSame(1, data_get($dialog->fields_payload, '_v3.transition_counts.'.$fallbackKey));
     }
 
     public function test_v3_wait_reply_number_capture_enforces_format_and_saves_normalized_decimal(): void
@@ -2299,6 +5713,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame(['Стартовый блок'], $sentTexts);
 
         $this->travelTo(now()->addMinutes(5));
+        $channel->forceFill(['connection_checked_at' => now()])->save();
         (new ProcessScenarioV3ScheduledTransitionJob($transition->id, $run->id))
             ->handle(app(ScenarioRegistry::class));
 
@@ -2647,7 +6062,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         ]);
 
         $runtime = app(ScenarioRegistry::class)->makeRuntime($scenario->code);
-        $this->assertInstanceOf(\App\Services\Scenarios\GenericDbScenarioRuntime::class, $runtime);
+        $this->assertInstanceOf(GenericDbScenarioRuntime::class, $runtime);
 
         $method = new \ReflectionMethod($runtime, 'finishV3ScheduledTransition');
         $method->setAccessible(true);
@@ -2733,6 +6148,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame('start', $run->current_step);
 
         $this->travelTo($scheduledAt);
+        $channel->forceFill(['connection_checked_at' => now()])->save();
         (new ProcessScenarioV3ScheduledTransitionJob($transition->id, $run->id))
             ->handle(app(ScenarioRegistry::class));
 
@@ -2820,6 +6236,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         app(ScenarioRegistry::class)->forgetCachedDefinitions();
 
         $this->travelTo($scheduledAt);
+        $channel->forceFill(['connection_checked_at' => now()])->save();
         (new ProcessScenarioV3ScheduledTransitionJob($transition->id, $run->id))
             ->handle(app(ScenarioRegistry::class));
 
@@ -3341,7 +6758,305 @@ class GenericDbScenarioRuntimeTest extends TestCase
 
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && $request['chat_id'] === $dialog->external_chat_id
-            && $request['text'] === 'Спасибо, телефон получен');
+            && $request['text'] === 'Спасибо, телефон получен'
+            && data_get($request->data(), 'reply_markup.remove_keyboard') === true);
+    }
+
+    public function test_v3_contact_share_reevaluates_current_block_automatic_edges(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9403]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9404]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $schema = $this->v3RequestPhoneButtonRuntimeSchema($channel->id);
+
+        data_set($schema, 'builder_v3_runtime.blocks.ask_phone.buttons.rows.0.0.target_block_id', null);
+        data_set($schema, 'builder_v3_runtime.blocks.ask_phone.automatic_edges', [[
+            'id' => 'edge_auto_has_phone',
+            'edge_key' => 'edge_auto_has_phone',
+            'mode' => 'automatic',
+            'priority' => 10,
+            'transition_limit' => 0,
+            'source_block_id' => 'ask_phone',
+            'target_block_id' => 'after_phone',
+            'from_output_id' => null,
+            'label' => 'Телефон есть',
+            'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE,
+            'dialog_phone_condition' => '',
+            'match' => [
+                'type' => 'any_inbound',
+                'text' => '',
+                'variants' => [],
+            ],
+        ]]);
+        data_set($schema, 'builder_v3_runtime.blocks.after_phone', [
+            'id' => 'after_phone',
+            'db_id' => 3,
+            'kind' => 'state',
+            'title' => 'Телефон есть',
+            'message' => [
+                'text' => 'Продолжим анкету',
+                'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+            ],
+            'buttons' => null,
+            'wait_reply_edges' => [],
+            'automatic_edges' => [],
+            'default_target_block_id' => null,
+        ]);
+        data_set($schema, 'builder_v3_runtime.edges', data_get($schema, 'builder_v3_runtime.blocks.ask_phone.automatic_edges'));
+
+        $scenario = $this->createPublishedScenario('v3_request_phone_auto_after_share', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+            'message_parameter' => null,
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('ask_phone', $run->current_step);
+        $this->assertTrue(app(ScenarioRegistry::class)->makeRuntime($scenario->code)->supportsContactShareContinuation($run));
+
+        $contact->phoneNumbers()->create([
+            'phone_raw' => '+79263527111',
+            'phone_normalized' => '+79263527111',
+            'source' => ContactPhoneNumber::SOURCE_TELEGRAM_CONTACT_SHARE,
+            'is_primary' => true,
+        ]);
+
+        $phoneShare = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_CONTACT_SHARE,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => null,
+        ]);
+
+        (new ProcessScenarioInboundJob($phoneShare->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run->refresh();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('after_phone', $run->current_step);
+        $this->assertSame('after_phone', data_get($run->state_payload, 'v3.current_block_id'));
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && $request['text'] === 'Продолжим анкету'
+            && data_get($request->data(), 'reply_markup.remove_keyboard') === true);
+    }
+
+    public function test_v3_plain_inbound_reevaluates_current_block_automatic_edges(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9411]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $edge = [
+            'id' => 'edge_auto_next',
+            'edge_key' => 'edge_auto_next',
+            'mode' => 'automatic',
+            'priority' => 10,
+            'transition_limit' => 0,
+            'source_block_id' => 'current',
+            'target_block_id' => 'next',
+            'from_output_id' => null,
+            'label' => 'Дальше',
+            'match' => [
+                'type' => 'any_inbound',
+                'text' => '',
+                'variants' => [],
+            ],
+        ];
+        $scenario = $this->createPublishedScenario('v3_plain_inbound_auto_edge', [
+            'version' => 3,
+            'builder_v3_runtime' => [
+                'schema_version' => 3,
+                'source_revision' => 'v3:test',
+                'compiled_at' => now()->toISOString(),
+                'entrypoints' => [],
+                'blocks' => [
+                    'current' => [
+                        'id' => 'current',
+                        'db_id' => 1,
+                        'kind' => 'state',
+                        'title' => 'Текущий',
+                        'message' => null,
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [$edge],
+                        'default_target_block_id' => null,
+                    ],
+                    'next' => [
+                        'id' => 'next',
+                        'db_id' => 2,
+                        'kind' => 'state',
+                        'title' => 'Следующий',
+                        'message' => [
+                            'text' => 'Дальше пошли',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                ],
+                'edges' => [$edge],
+            ],
+        ]);
+        $run = ScenarioRun::query()->create([
+            'scenario_code' => $scenario->code,
+            'dialog_id' => $dialog->id,
+            'status' => ScenarioRun::STATUS_ACTIVE,
+            'current_step' => 'current',
+            'state_payload' => [
+                'v3' => [
+                    'schema_version' => 3,
+                    'current_block_id' => 'current',
+                    'published_version_id' => $scenario->publishedVersion->id,
+                ],
+            ],
+            'started_at' => now(),
+        ]);
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => '1',
+        ]);
+
+        (new ProcessScenarioInboundJob($message->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run->refresh();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('next', $run->current_step);
+        $this->assertSame('next', data_get($run->state_payload, 'v3.current_block_id'));
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && $request['text'] === 'Дальше пошли');
+    }
+
+    public function test_v3_request_phone_share_cleans_reply_keyboard_before_next_inline_buttons(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9411]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9412]])
+                ->push(['ok' => true, 'result' => true])
+                ->push(['ok' => true, 'result' => ['message_id' => 9413]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $schema = $this->v3RequestPhoneButtonRuntimeSchema($channel->id);
+        data_set($schema, 'builder_v3_runtime.blocks.thanks.buttons', [
+            'placement' => 'inline_message',
+            'rows' => [[
+                [
+                    'id' => 'btn_gender_male',
+                    'text' => 'Мужской',
+                    'type' => 'text',
+                    'normalized_text' => 'мужской',
+                    'output_id' => 'gender_male',
+                    'target_block_id' => null,
+                ],
+            ]],
+        ]);
+        $scenario = $this->createPublishedScenario('v3_request_phone_then_inline', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+            'message_parameter' => null,
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $phoneShare = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_CONTACT_SHARE,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => null,
+        ]);
+
+        (new ProcessScenarioInboundJob($phoneShare->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run->refresh();
+        $this->assertFalse((bool) data_get($run->state_payload, 'v3.pending_remove_telegram_keyboard', false));
+
+        Http::assertSentCount(4);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && data_get($request->data(), 'reply_markup.keyboard.0.0.request_contact') === true);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && data_get($request->data(), 'reply_markup.remove_keyboard') === true
+            && ($request['disable_notification'] ?? false) === true);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/deleteMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && (string) $request['message_id'] === '9412');
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['text'] === 'Спасибо, телефон получен'
+            && data_get($request->data(), 'reply_markup.inline_keyboard.0.0.text') === 'Мужской'
+            && data_get($request->data(), 'reply_markup.remove_keyboard') === null);
     }
 
     public function test_v3_inline_message_buttons_render_telegram_inline_and_manual_text_advances(): void
@@ -3619,7 +7334,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
             && $request['text'] === 'Спасибо, телефон получен');
     }
 
-    public function test_v3_reply_keyboard_buttons_are_hidden_for_max_but_manual_text_advances(): void
+    public function test_v3_reply_keyboard_buttons_are_sent_as_inline_keyboard_for_max(): void
     {
         Http::fake([
             'https://platform-api.max.ru/*' => Http::sequence()
@@ -3634,7 +7349,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
             dialogOverrides: ['external_chat_id' => 'max-chat-700'],
         );
         $scenario = $this->createPublishedScenario(
-            'v3_max_hidden_reply_keyboard',
+            'v3_max_reply_keyboard_as_inline',
             $this->v3CatalogRuntimeSchema($channel->id, placement: 'reply_keyboard'),
         );
 
@@ -3666,7 +7381,9 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame(['btn_catalog'], data_get($run->state_payload, 'v3.waiting_output_ids'));
         Http::assertSent(fn ($request): bool => str_starts_with($request->url(), 'https://platform-api.max.ru/messages')
             && $request['text'] === 'Выберите действие'
-            && ! array_key_exists('attachments', $request->data()));
+            && data_get($request->data(), 'attachments.0.type') === 'inline_keyboard'
+            && data_get($request->data(), 'attachments.0.payload.buttons.0.0.type') === 'message'
+            && data_get($request->data(), 'attachments.0.payload.buttons.0.0.text') === 'Получить каталог');
 
         $buttonText = Message::factory()->create([
             'contact_id' => $contact->id,
@@ -4276,6 +7993,152 @@ class GenericDbScenarioRuntimeTest extends TestCase
 
         $this->assertNotNull($runtime);
         $this->assertTrue($runtime->shouldStart($message));
+    }
+
+    public function test_published_builder_start_condition_expression_filters_entrypoint(): void
+    {
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $matchingDialog] = $this->createDialogContext($channel, dialogOverrides: [
+            'external_chat_id' => 'start-expression-match',
+            'fields_payload' => ['start_param' => '123321'],
+        ]);
+        [, , $otherDialog] = $this->createDialogContext($channel, identityOverrides: [
+            'external_user_id' => 'start-expression-other',
+        ], dialogOverrides: [
+            'external_chat_id' => 'start-expression-other',
+            'fields_payload' => ['start_param' => 'other'],
+        ]);
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 926 352 71 11',
+            'phone_normalized' => '+79263527111',
+        ]);
+        $scenario = $this->createPublishedScenario(
+            'builder_start_expression_filter',
+            $this->v3StartExpressionRuntimeSchema(
+                $channel->id,
+                '{{dialog.start_param}} == "123321" and {{contact.phone}} != ""',
+                AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE,
+            ),
+        );
+
+        $matchingMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $matchingDialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $matchingDialog->external_chat_id,
+            'text' => '/start gate',
+            'message_parameter' => 'gate',
+        ]);
+        $otherMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $otherDialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $otherDialog->external_chat_id,
+            'text' => '/start gate',
+            'message_parameter' => 'gate',
+        ]);
+
+        $runtime = app(ScenarioRegistry::class)->makeRuntime($scenario->code);
+
+        $this->assertNotNull($runtime);
+        $this->assertTrue($runtime->shouldStart($matchingMessage));
+        $this->assertFalse($runtime->shouldStart($otherMessage));
+    }
+
+    public function test_published_builder_start_condition_expression_can_read_dialog_phone(): void
+    {
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $matchingDialog] = $this->createDialogContext($channel, dialogOverrides: [
+            'external_chat_id' => 'start-expression-dialog-phone-match',
+            'confirmed_phone_raw' => '+7 926 352 71 11',
+            'confirmed_phone_normalized' => '+79263527111',
+        ]);
+        [, , $otherDialog] = $this->createDialogContext($channel, identityOverrides: [
+            'external_user_id' => 'start-expression-dialog-phone-other',
+        ], dialogOverrides: [
+            'external_chat_id' => 'start-expression-dialog-phone-other',
+            'confirmed_phone_raw' => null,
+            'confirmed_phone_normalized' => null,
+        ]);
+        $scenario = $this->createPublishedScenario(
+            'builder_start_expression_dialog_phone',
+            $this->v3StartExpressionRuntimeSchema($channel->id, '{{dialog.phone}} != ""'),
+        );
+
+        $matchingMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $matchingDialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $matchingDialog->external_chat_id,
+            'text' => '/start gate',
+            'message_parameter' => 'gate',
+        ]);
+        $otherMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $otherDialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $otherDialog->external_chat_id,
+            'text' => '/start gate',
+            'message_parameter' => 'gate',
+        ]);
+
+        $runtime = app(ScenarioRegistry::class)->makeRuntime($scenario->code);
+
+        $this->assertNotNull($runtime);
+        $this->assertTrue($runtime->shouldStart($matchingMessage));
+        $this->assertFalse($runtime->shouldStart($otherMessage));
+    }
+
+    public function test_published_builder_start_condition_broken_expression_is_skipped_without_crash(): void
+    {
+        Log::spy();
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario(
+            'builder_start_expression_broken',
+            $this->v3StartExpressionRuntimeSchema($channel->id, '{{dialog.start_param}} = "123321"'),
+        );
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => '/start gate',
+            'message_parameter' => 'gate',
+        ]);
+
+        $runtime = app(ScenarioRegistry::class)->makeRuntime($scenario->code);
+
+        $this->assertNotNull($runtime);
+        $this->assertFalse($runtime->shouldStart($message));
+        Log::shouldHaveReceived('warning')
+            ->with('V3 start expression condition failed.', Mockery::on(
+                fn (array $context): bool => ($context['scenario_id'] ?? null) === $scenario->id
+                    && ($context['block_id'] ?? null) === 'start'
+                    && ($context['message_id'] ?? null) === $message->id,
+            ))
+            ->once();
     }
 
     public function test_published_builder_start_condition_starts_its_target_runtime_block(): void
@@ -6391,6 +10254,38 @@ class GenericDbScenarioRuntimeTest extends TestCase
     }
 
     /**
+     * @param  array<string, mixed>  $rawPayload
+     */
+    private function dispatchStoredInboundText(
+        Channel $channel,
+        Contact $contact,
+        ContactIdentity $identity,
+        Dialog $dialog,
+        string $text,
+        array $rawPayload = [],
+    ): Message {
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => $text,
+            'raw_payload' => $rawPayload,
+        ]);
+
+        app(DispatchStoredInboundBotMessageAction::class)->handle(
+            $channel,
+            new StoredInboundMessageResult($message->fresh(['contact', 'channel', 'dialog'])),
+        );
+
+        return $message;
+    }
+
+    /**
      * @param  array<string, mixed>  $schemaPayload
      */
     private function createPublishedScenario(string $code, array $schemaPayload): Scenario
@@ -6410,6 +10305,51 @@ class GenericDbScenarioRuntimeTest extends TestCase
         ]);
 
         return $scenario->fresh('publishedVersion');
+    }
+
+    private function v3StartExpressionRuntimeSchema(
+        int $channelId,
+        string $expression,
+        string $contactPhoneCondition = '',
+    ): array {
+        return [
+            'version' => 3,
+            'builder_v3_runtime' => [
+                'schema_version' => 3,
+                'source_revision' => 'v3:test',
+                'compiled_at' => now()->toISOString(),
+                'entrypoints' => [
+                    [
+                        'block_id' => 'start',
+                        'channel_ids' => [$channelId],
+                        'match' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+                        'values' => ['gate'],
+                        'contact_phone_condition' => $contactPhoneCondition,
+                        'dialog_phone_condition' => '',
+                        'expression' => $expression,
+                        'priority' => 10,
+                    ],
+                ],
+                'blocks' => [
+                    'start' => [
+                        'id' => 'start',
+                        'db_id' => 1,
+                        'kind' => 'state',
+                        'title' => 'Старт',
+                        'message' => [
+                            'text' => 'Старт сработал',
+                            'text_format' => 'plain_text',
+                        ],
+                        'buttons' => ['placement' => 'auto', 'rows' => []],
+                        'actions' => [],
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'action_result_edges' => [],
+                    ],
+                ],
+                'edges' => [],
+            ],
+        ];
     }
 
     private function successfulBotSendResult(Dialog $dialog, string $text, string $externalMessageId): BotDialogTextSendResult
@@ -6506,6 +10446,1111 @@ class GenericDbScenarioRuntimeTest extends TestCase
                     'from_output_id' => 'btn_catalog',
                     'label' => 'Получить каталог',
                 ]],
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function v3CheckDataNameRuntimeSchema(int $channelId): array
+    {
+        $waitEdge = $this->v3WaitReplyEdge('10', 'edge_to_check', 'check_name');
+        $foundEdge = [
+            'id' => '20',
+            'edge_key' => 'edge_data_found',
+            'mode' => 'automatic',
+            'priority' => 10,
+            'transition_limit' => 0,
+            'source_block_id' => 'check_name',
+            'target_block_id' => 'accepted',
+            'from_output_id' => 'data_found',
+            'label' => 'Найдено',
+            'match' => [
+                'type' => 'any_inbound',
+                'text' => '',
+                'variants' => [],
+            ],
+            'input_capture' => [
+                'enabled' => false,
+                'field_scope' => 'dialog',
+                'field_key' => '',
+                'data_type' => 'any_text',
+            ],
+        ];
+        $manualRequiredEdge = [
+            'id' => '25',
+            'edge_key' => 'edge_data_manual_required',
+            'mode' => 'action_result',
+            'priority' => 10,
+            'transition_limit' => 0,
+            'source_block_id' => 'check_name',
+            'target_block_id' => 'manual_required',
+            'from_output_id' => 'data_manual_required',
+            'label' => 'Требует уточнения',
+            'match' => [
+                'type' => 'any_inbound',
+                'text' => '',
+                'variants' => [],
+            ],
+            'input_capture' => [
+                'enabled' => false,
+                'field_scope' => 'dialog',
+                'field_key' => '',
+                'data_type' => 'any_text',
+            ],
+        ];
+        $notFoundEdge = [
+            'id' => '30',
+            'edge_key' => 'edge_data_not_found',
+            'mode' => 'action_result',
+            'priority' => 10,
+            'transition_limit' => 0,
+            'source_block_id' => 'check_name',
+            'target_block_id' => 'retry',
+            'from_output_id' => 'data_not_found',
+            'label' => 'Не найдено',
+            'match' => [
+                'type' => 'any_inbound',
+                'text' => '',
+                'variants' => [],
+            ],
+            'input_capture' => [
+                'enabled' => false,
+                'field_scope' => 'dialog',
+                'field_key' => '',
+                'data_type' => 'any_text',
+            ],
+        ];
+
+        return [
+            'version' => 3,
+            'builder_v3_runtime' => [
+                'schema_version' => 3,
+                'source_revision' => 'v3:test',
+                'compiled_at' => now()->toISOString(),
+                'entrypoints' => [[
+                    'block_id' => 'ask_name',
+                    'channel_ids' => [$channelId],
+                    'match' => 'strict',
+                    'values' => ['старт'],
+                    'priority' => 10,
+                ]],
+                'blocks' => [
+                    'ask_name' => [
+                        'id' => 'ask_name',
+                        'db_id' => 1,
+                        'kind' => 'state',
+                        'title' => 'Спрашиваем имя',
+                        'message' => [
+                            'text' => 'Как вас зовут?',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => null,
+                        'wait_reply_edges' => [$waitEdge],
+                        'automatic_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                    'check_name' => [
+                        'id' => 'check_name',
+                        'db_id' => 2,
+                        'kind' => 'state',
+                        'title' => 'Проверяем имя',
+                        'actions' => [
+                            [
+                                'type' => 'check_data',
+                                'source_type' => 'inbound_message',
+                                'check_source' => 'current_inbound_message',
+                                'dictionary_key' => 'names',
+                                'lookup_field' => 'lookup_value',
+                                'result_field' => 'result_value',
+                                'target_variable_key' => 'first_name',
+                            ],
+                        ],
+                        'action_result_edges' => [$foundEdge, $manualRequiredEdge, $notFoundEdge],
+                        'message' => null,
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                    'accepted' => [
+                        'id' => 'accepted',
+                        'db_id' => 3,
+                        'kind' => 'state',
+                        'title' => 'Имя принято',
+                        'actions' => [
+                            [
+                                'type' => 'write_contact_field',
+                                'source_type' => 'ai_data',
+                                'source_block_id' => 'legacy_ai_block',
+                                'source_field_key' => 'first_name',
+                                'target_scope' => 'contact',
+                                'target_field' => 'first_name',
+                            ],
+                        ],
+                        'message' => [
+                            'text' => 'Имя принято',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                    'retry' => [
+                        'id' => 'retry',
+                        'db_id' => 4,
+                        'kind' => 'state',
+                        'title' => 'Повторить вопрос',
+                        'message' => [
+                            'text' => 'Не нашли',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                    'manual_required' => [
+                        'id' => 'manual_required',
+                        'db_id' => 5,
+                        'kind' => 'state',
+                        'title' => 'Нужно уточнить',
+                        'message' => [
+                            'text' => 'Нужно уточнить',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                ],
+                'edges' => [$waitEdge, $foundEdge, $manualRequiredEdge, $notFoundEdge],
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function v3StaticChangeDataRuntimeSchema(int $channelId): array
+    {
+        return [
+            'version' => 3,
+            'builder_v3_runtime' => [
+                'schema_version' => 3,
+                'source_revision' => 'v3:test',
+                'compiled_at' => now()->toISOString(),
+                'entrypoints' => [[
+                    'block_id' => 'change_data',
+                    'channel_ids' => [$channelId],
+                    'match' => 'strict',
+                    'values' => ['старт'],
+                    'priority' => 10,
+                ]],
+                'blocks' => [
+                    'change_data' => [
+                        'id' => 'change_data',
+                        'db_id' => 1,
+                        'kind' => 'state',
+                        'title' => 'Изменить данные',
+                        'actions' => [
+                            [
+                                'type' => 'write_contact_field',
+                                'source_type' => 'static_value',
+                                'static_value' => 'Московская область',
+                                'source_block_id' => '',
+                                'source_field_key' => '',
+                                'target_scope' => 'contact',
+                                'target_field' => 'region',
+                            ],
+                            [
+                                'type' => 'write_contact_field',
+                                'source_type' => 'static_value',
+                                'static_value' => 'female',
+                                'source_block_id' => '',
+                                'source_field_key' => '',
+                                'target_scope' => 'contact',
+                                'target_field' => 'gender',
+                            ],
+                            [
+                                'type' => 'write_contact_field',
+                                'source_type' => 'static_value',
+                                'static_value' => 'female',
+                                'source_block_id' => '',
+                                'source_field_key' => '',
+                                'target_scope' => 'dialog',
+                                'target_field' => 'selected_gender',
+                            ],
+                        ],
+                        'message' => null,
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                ],
+                'edges' => [],
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function v3VariablesRuntimeSchema(int $channelId): array
+    {
+        $doneEdge = [
+            'id' => '10',
+            'edge_key' => 'edge_variables_done',
+            'mode' => 'automatic',
+            'priority' => 10,
+            'transition_limit' => 0,
+            'source_block_id' => 'variables',
+            'target_block_id' => 'done',
+            'from_output_id' => null,
+            'label' => 'Дальше',
+        ];
+
+        return [
+            'version' => 3,
+            'builder_v3_runtime' => [
+                'schema_version' => 3,
+                'source_revision' => 'v3:test',
+                'compiled_at' => now()->toISOString(),
+                'entrypoints' => [[
+                    'block_id' => 'variables',
+                    'channel_ids' => [$channelId],
+                    'match' => 'strict',
+                    'values' => ['старт'],
+                    'priority' => 10,
+                ]],
+                'blocks' => [
+                    'variables' => [
+                        'id' => 'variables',
+                        'db_id' => 1,
+                        'kind' => 'state',
+                        'title' => 'Калькулятор',
+                        'actions' => [[
+                            'type' => 'variables',
+                            'operations' => [[
+                                'operation' => 'increment',
+                                'field_key' => 'спросили_имя',
+                                'amount' => 1,
+                            ]],
+                        ]],
+                        'message' => null,
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [$doneEdge],
+                        'action_result_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                    'done' => [
+                        'id' => 'done',
+                        'db_id' => 2,
+                        'kind' => 'state',
+                        'title' => 'Готово',
+                        'message' => [
+                            'text' => 'Попытка записана',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                ],
+                'edges' => [$doneEdge],
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function v3SimulateStartParameterRuntimeSchema(int $channelId): array
+    {
+        $afterNoopEdge = [
+            'id' => '20',
+            'edge_key' => 'edge_after_noop',
+            'mode' => 'automatic',
+            'priority' => 10,
+            'transition_limit' => 0,
+            'source_block_id' => 'simulate',
+            'target_block_id' => 'after_noop',
+            'from_output_id' => null,
+            'label' => 'Дальше',
+        ];
+
+        return [
+            'version' => 3,
+            'builder_v3_runtime' => [
+                'schema_version' => 3,
+                'source_revision' => 'v3:test',
+                'compiled_at' => now()->toISOString(),
+                'entrypoints' => [
+                    [
+                        'block_id' => 'simulate',
+                        'channel_ids' => [$channelId],
+                        'match' => 'strict',
+                        'values' => ['анкета'],
+                        'priority' => 10,
+                    ],
+                    [
+                        'block_id' => 'payload_start',
+                        'channel_ids' => [$channelId],
+                        'match' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+                        'values' => ['payload_42'],
+                        'priority' => 10,
+                    ],
+                ],
+                'blocks' => [
+                    'simulate' => [
+                        'id' => 'simulate',
+                        'db_id' => 1,
+                        'kind' => 'state',
+                        'title' => 'Имитировать старт',
+                        'actions' => [[
+                            'type' => 'simulate_start_parameter',
+                            'source_scope' => 'dialog',
+                            'source_field_key' => 'start_param',
+                        ]],
+                        'message' => null,
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [$afterNoopEdge],
+                        'action_result_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                    'payload_start' => [
+                        'id' => 'payload_start',
+                        'db_id' => 2,
+                        'kind' => 'state',
+                        'title' => 'Старт по параметру',
+                        'message' => [
+                            'text' => 'Сработал параметр {{input.start_param}}',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                    'after_noop' => [
+                        'id' => 'after_noop',
+                        'db_id' => 3,
+                        'kind' => 'state',
+                        'title' => 'Обычное продолжение',
+                        'message' => [
+                            'text' => 'Обычное продолжение',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                ],
+                'edges' => [$afterNoopEdge],
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function v3VariableMessageRuntimeSchema(int $channelId): array
+    {
+        return [
+            'version' => 3,
+            'builder_v3_runtime' => [
+                'schema_version' => 3,
+                'source_revision' => 'v3:test',
+                'compiled_at' => now()->toISOString(),
+                'entrypoints' => [[
+                    'block_id' => 'ask_name',
+                    'channel_ids' => [$channelId],
+                    'match' => 'strict',
+                    'values' => ['старт'],
+                    'priority' => 10,
+                ]],
+                'blocks' => [
+                    'ask_name' => [
+                        'id' => 'ask_name',
+                        'db_id' => 1,
+                        'kind' => 'state',
+                        'title' => 'Спросить имя',
+                        'message' => [
+                            'text' => 'Как тебя зовут?',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                            'text_mode' => 'by_dialog_variable',
+                            'variable_key' => 'спросили_имя',
+                            'variable_text_variants' => [
+                                [
+                                    'value' => '1',
+                                    'text' => 'Как тебя зовут?',
+                                ],
+                                [
+                                    'value' => '2',
+                                    'text' => 'Напиши имя полностью',
+                                ],
+                            ],
+                            'fallback_text' => 'Напиши своё имя',
+                        ],
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                ],
+                'edges' => [],
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function v3GeoCityRuntimeSchema(
+        int $channelId,
+        bool $legacyGeoOutputs = false,
+        array $geoAction = [],
+    ): array {
+        $waitEdge = $this->v3WaitReplyEdge('10', 'edge_to_geo', 'resolve_geo');
+        $foundEdge = $this->v3GeoCityActionResultEdge('20', 'edge_geo_found', 'geo_found', 'geo_found_done', 'Город найден');
+        $manualRequiredEdge = $this->v3GeoCityActionResultEdge('30', 'edge_geo_manual_required', 'geo_manual_required', 'geo_manual_required_done', 'Нужно уточнить');
+        $ambiguousEdge = $this->v3GeoCityActionResultEdge('40', 'edge_geo_ambiguous', 'geo_ambiguous', 'geo_ambiguous_done', 'Несколько вариантов');
+        $notFoundEdge = $this->v3GeoCityActionResultEdge('50', 'edge_geo_not_found', 'geo_not_found', 'geo_not_found_done', 'Не найдено');
+        $belowThresholdEdge = $this->v3GeoCityActionResultEdge('60', 'edge_geo_below_threshold', 'geo_below_threshold', 'geo_below_threshold_done', 'Низкая уверенность');
+        $inactiveEdge = $this->v3GeoCityActionResultEdge('70', 'edge_geo_inactive', 'geo_inactive', 'geo_inactive_done', 'Отключено');
+        $failedEdge = $this->v3GeoCityActionResultEdge('80', 'edge_geo_failed', 'geo_failed', 'geo_failed_done', 'Ошибка');
+        $limitEdge = $this->v3GeoCityActionResultEdge('90', 'edge_geo_limit_reached', 'geo_limit_reached', 'geo_limit_reached_done', 'Лимит');
+        $resultEdges = $legacyGeoOutputs
+            ? [
+                $foundEdge,
+                $manualRequiredEdge,
+                $ambiguousEdge,
+                $notFoundEdge,
+                $belowThresholdEdge,
+                $inactiveEdge,
+                $failedEdge,
+                $limitEdge,
+            ]
+            : [
+                $foundEdge,
+                $manualRequiredEdge,
+                $notFoundEdge,
+            ];
+        $doneBlockLabels = [
+            'geo_found_done' => 'Город найден',
+            'geo_manual_required_done' => 'Нужно уточнить город',
+            'geo_not_found_done' => 'Город не найден',
+        ];
+
+        if ($legacyGeoOutputs) {
+            $doneBlockLabels += [
+                'geo_ambiguous_done' => 'Нашли несколько вариантов',
+                'geo_below_threshold_done' => 'Нужна проверка города',
+                'geo_inactive_done' => 'Вариант отключён',
+                'geo_failed_done' => 'Ошибка распознавания',
+                'geo_limit_reached_done' => 'Лимит попыток',
+            ];
+        }
+
+        $doneBlocks = collect($doneBlockLabels)->mapWithKeys(fn (string $text, string $id): array => [
+            $id => [
+                'id' => $id,
+                'db_id' => crc32($id),
+                'kind' => 'state',
+                'title' => $text,
+                'message' => [
+                    'text' => $text,
+                    'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                ],
+                'buttons' => null,
+                'wait_reply_edges' => [],
+                'automatic_edges' => [],
+                'default_target_block_id' => null,
+            ],
+        ])->all();
+
+        return [
+            'version' => 3,
+            'builder_v3_runtime' => [
+                'schema_version' => 3,
+                'source_revision' => 'v3:test',
+                'compiled_at' => now()->toISOString(),
+                'entrypoints' => [[
+                    'block_id' => 'start',
+                    'channel_ids' => [$channelId],
+                    'match' => 'strict',
+                    'values' => ['старт'],
+                    'priority' => 10,
+                ]],
+                'blocks' => array_merge([
+                    'start' => [
+                        'id' => 'start',
+                        'db_id' => 1,
+                        'kind' => 'state',
+                        'title' => 'Спросить город',
+                        'message' => [
+                            'text' => 'В каком городе живёте?',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => null,
+                        'wait_reply_edges' => [$waitEdge],
+                        'automatic_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                    'resolve_geo' => [
+                        'id' => 'resolve_geo',
+                        'db_id' => 2,
+                        'kind' => 'state',
+                        'title' => 'Распознать город',
+                        'actions' => [array_replace([
+                            'type' => 'resolve_geo_city',
+                            'source' => 'current_inbound_message',
+                        ], $geoAction)],
+                        'message' => null,
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'action_result_edges' => $resultEdges,
+                        'default_target_block_id' => null,
+                    ],
+                ], $doneBlocks),
+                'edges' => array_merge([$waitEdge], $resultEdges),
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function v3GeoCityAiDataAction(): array
+    {
+        return [
+            'type' => 'resolve_geo_city',
+            'source' => 'ai_data',
+            'source_block_client_key' => 'block_ai_city',
+            'source_block_id' => 'ai_city',
+            'city_field_key' => 'geo_city',
+            'region_field_key' => 'geo_region',
+            'country_field_key' => 'geo_country',
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function v3GeoCityActionResultEdge(
+        string $id,
+        string $edgeKey,
+        string $outputId,
+        string $targetBlockId,
+        string $label,
+    ): array {
+        return [
+            'id' => $id,
+            'edge_key' => $edgeKey,
+            'mode' => 'action_result',
+            'priority' => 10,
+            'transition_limit' => 0,
+            'source_block_id' => 'resolve_geo',
+            'target_block_id' => $targetBlockId,
+            'from_output_id' => $outputId,
+            'label' => $label,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function v3DistanceToMoscowRuntimeSchema(int $channelId): array
+    {
+        $resolvedEdge = [
+            'id' => 'edge_distance_resolved',
+            'edge_key' => 'edge_distance_resolved',
+            'mode' => 'action_result',
+            'priority' => 10,
+            'transition_limit' => 0,
+            'source_block_id' => 'distance',
+            'target_block_id' => 'done',
+            'from_output_id' => 'distance_resolved',
+            'label' => 'Рассчитано',
+        ];
+
+        return [
+            'version' => 3,
+            'builder_v3_runtime' => [
+                'schema_version' => 3,
+                'source_revision' => 'v3:test',
+                'compiled_at' => now()->toISOString(),
+                'entrypoints' => [[
+                    'block_id' => 'distance',
+                    'channel_ids' => [$channelId],
+                    'match' => 'strict',
+                    'values' => ['старт'],
+                    'priority' => 10,
+                ]],
+                'blocks' => [
+                    'distance' => [
+                        'id' => 'distance',
+                        'db_id' => 1,
+                        'kind' => 'state',
+                        'title' => 'Расстояние до Москвы',
+                        'actions' => [[
+                            'type' => 'calculate_distance_to_moscow',
+                        ]],
+                        'message' => null,
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'action_result_edges' => [$resolvedEdge],
+                        'default_target_block_id' => null,
+                    ],
+                    'done' => [
+                        'id' => 'done',
+                        'db_id' => 2,
+                        'kind' => 'state',
+                        'title' => 'Готово',
+                        'message' => [
+                            'text' => 'Расстояние рассчитано',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                ],
+                'edges' => [$resolvedEdge],
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function v3UnsupportedActionRuntimeSchema(int $channelId): array
+    {
+        $waitingEdge = [
+            'id' => 'edge_waiting',
+            'edge_key' => 'edge_waiting',
+            'mode' => 'action_result',
+            'priority' => 10,
+            'transition_limit' => 0,
+            'source_block_id' => 'legacy_action',
+            'target_block_id' => 'after_waiting',
+            'from_output_id' => 'waiting',
+            'label' => 'Ждёт ответ',
+        ];
+        $completedEdge = [
+            'id' => 'edge_completed',
+            'edge_key' => 'edge_completed',
+            'mode' => 'action_result',
+            'priority' => 10,
+            'transition_limit' => 0,
+            'source_block_id' => 'legacy_action',
+            'target_block_id' => 'after_completed',
+            'from_output_id' => 'completed',
+            'label' => 'Заполнена',
+        ];
+
+        return [
+            'version' => 3,
+            'builder_v3_runtime' => [
+                'schema_version' => 3,
+                'source_revision' => 'v3:test',
+                'compiled_at' => now()->toISOString(),
+                'entrypoints' => [[
+                    'block_id' => 'legacy_action',
+                    'channel_ids' => [$channelId],
+                    'match' => 'strict',
+                    'values' => ['старт'],
+                    'priority' => 10,
+                ]],
+                'blocks' => [
+                    'legacy_action' => [
+                        'id' => 'legacy_action',
+                        'db_id' => 1,
+                        'kind' => 'state',
+                        'title' => 'Старое действие',
+                        'actions' => [[
+                            'type' => 'legacy_removed_action',
+                        ]],
+                        'message' => null,
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'action_result_edges' => [$waitingEdge, $completedEdge],
+                        'default_target_block_id' => null,
+                    ],
+                    'after_waiting' => [
+                        'id' => 'after_waiting',
+                        'db_id' => 2,
+                        'kind' => 'state',
+                        'title' => 'После ожидания',
+                        'message' => [
+                            'text' => 'Не должно отправиться сразу',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                    'after_completed' => [
+                        'id' => 'after_completed',
+                        'db_id' => 3,
+                        'kind' => 'state',
+                        'title' => 'Старое действие завершено',
+                        'message' => [
+                            'text' => 'Старое действие завершено',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                ],
+                'edges' => [$waitingEdge, $completedEdge],
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function v3EditMessageRemoveButtonsRuntimeSchema(
+        int $channelId,
+        bool $nextHasInlineButtons = false,
+        string $operation = 'remove_buttons',
+        string $target = 'last_current_run_outbound_with_inline_buttons',
+    ): array {
+        $edgeToAction = [
+            'id' => 'edge_remove_buttons',
+            'source_block_id' => 'start',
+            'target_block_id' => 'remove_buttons',
+            'from_output_id' => 'btn_remove',
+            'label' => 'Убрать кнопки',
+        ];
+        $edgeToDone = [
+            'id' => 'edge_done',
+            'edge_key' => 'edge_done',
+            'mode' => 'automatic',
+            'priority' => 10,
+            'transition_limit' => 0,
+            'source_block_id' => 'remove_buttons',
+            'target_block_id' => 'done',
+            'from_output_id' => null,
+            'label' => 'Дальше',
+            'match' => [
+                'type' => 'any_inbound',
+                'text' => '',
+                'variants' => [],
+            ],
+            'input_capture' => [
+                'enabled' => false,
+                'field_scope' => 'dialog',
+                'field_key' => '',
+                'data_type' => 'any_text',
+            ],
+        ];
+
+        return [
+            'version' => 3,
+            'builder_v3_runtime' => [
+                'schema_version' => 3,
+                'source_revision' => 'v3:test',
+                'compiled_at' => now()->toISOString(),
+                'entrypoints' => [[
+                    'block_id' => 'start',
+                    'channel_ids' => [$channelId],
+                    'match' => 'strict',
+                    'values' => ['старт'],
+                    'priority' => 10,
+                ]],
+                'blocks' => [
+                    'start' => [
+                        'id' => 'start',
+                        'db_id' => 1,
+                        'kind' => 'state',
+                        'title' => 'Старт',
+                        'message' => [
+                            'text' => 'Сообщение с inline-кнопкой',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => [
+                            'placement' => 'inline_message',
+                            'rows' => [[
+                                [
+                                    'id' => 'btn_remove',
+                                    'text' => 'Убрать кнопки',
+                                    'type' => 'text',
+                                    'normalized_text' => 'убрать кнопки',
+                                    'output_id' => 'btn_remove',
+                                    'target_block_id' => 'remove_buttons',
+                                ],
+                            ]],
+                        ],
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                    'remove_buttons' => [
+                        'id' => 'remove_buttons',
+                        'db_id' => 2,
+                        'kind' => 'state',
+                        'title' => 'Убрать кнопки',
+                        'actions' => [[
+                            'type' => 'edit_message',
+                            'operation' => $operation,
+                            'target' => $target,
+                        ]],
+                        'message' => null,
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [$edgeToDone],
+                        'default_target_block_id' => 'done',
+                    ],
+                    'done' => [
+                        'id' => 'done',
+                        'db_id' => 3,
+                        'kind' => 'state',
+                        'title' => 'Готово',
+                        'message' => [
+                            'text' => $nextHasInlineButtons ? 'Выберите следующий шаг' : 'Кнопки убраны',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => $nextHasInlineButtons ? [
+                            'placement' => 'inline_message',
+                            'rows' => [[
+                                [
+                                    'id' => 'btn_next',
+                                    'text' => 'Дальше',
+                                    'type' => 'text',
+                                    'normalized_text' => 'дальше',
+                                    'output_id' => 'btn_next',
+                                    'target_block_id' => null,
+                                ],
+                            ]],
+                        ] : null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                ],
+                'edges' => [$edgeToAction, $edgeToDone],
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function v3EditMessageDeleteOnStartRuntimeSchema(int $channelId): array
+    {
+        return [
+            'version' => 3,
+            'builder_v3_runtime' => [
+                'schema_version' => 3,
+                'source_revision' => 'v3:test',
+                'compiled_at' => now()->toISOString(),
+                'entrypoints' => [[
+                    'block_id' => 'start',
+                    'channel_ids' => [$channelId],
+                    'match' => 'strict',
+                    'values' => ['старт'],
+                    'priority' => 10,
+                ]],
+                'blocks' => [
+                    'start' => [
+                        'id' => 'start',
+                        'db_id' => 1,
+                        'kind' => 'state',
+                        'title' => 'Старт',
+                        'actions' => [[
+                            'type' => 'edit_message',
+                            'operation' => 'delete_message',
+                            'target' => 'last_current_run_outbound',
+                        ]],
+                        'message' => [
+                            'text' => 'Новое стартовое сообщение',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                ],
+                'edges' => [],
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function v3AiNameRuntimeSchema(int $channelId): array
+    {
+        $waitEdge = $this->v3WaitReplyEdge('10', 'edge_to_ai', 'ai');
+        $acceptedEdge = [
+            'id' => '20',
+            'edge_key' => 'edge_name_accepted',
+            'mode' => 'ai_analysis',
+            'priority' => 10,
+            'transition_limit' => 0,
+            'source_block_id' => 'ai',
+            'target_block_id' => 'accepted',
+            'from_output_id' => 'name_accepted',
+            'label' => 'Имя найдено',
+            'match' => [
+                'type' => 'any_inbound',
+                'text' => '',
+                'variants' => [],
+            ],
+            'input_capture' => [
+                'enabled' => false,
+                'field_scope' => 'dialog',
+                'field_key' => '',
+                'data_type' => 'any_text',
+            ],
+        ];
+        $retryEdge = [
+            'id' => '30',
+            'edge_key' => 'edge_name_retry',
+            'mode' => 'ai_analysis',
+            'priority' => 10,
+            'transition_limit' => 0,
+            'source_block_id' => 'ai',
+            'target_block_id' => 'retry',
+            'from_output_id' => 'name_retry',
+            'label' => 'Имя не найдено',
+            'match' => [
+                'type' => 'any_inbound',
+                'text' => '',
+                'variants' => [],
+            ],
+            'input_capture' => [
+                'enabled' => false,
+                'field_scope' => 'dialog',
+                'field_key' => '',
+                'data_type' => 'any_text',
+            ],
+        ];
+
+        return [
+            'version' => 3,
+            'builder_v3_runtime' => [
+                'schema_version' => 3,
+                'source_revision' => 'v3:test',
+                'compiled_at' => now()->toISOString(),
+                'entrypoints' => [[
+                    'block_id' => 'ask_name',
+                    'channel_ids' => [$channelId],
+                    'match' => 'strict',
+                    'values' => ['старт'],
+                    'priority' => 10,
+                ]],
+                'blocks' => [
+                    'ask_name' => [
+                        'id' => 'ask_name',
+                        'db_id' => 1,
+                        'kind' => 'state',
+                        'title' => 'Спрашиваем имя',
+                        'message' => [
+                            'text' => 'Как вас зовут?',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => null,
+                        'wait_reply_edges' => [$waitEdge],
+                        'automatic_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                    'ai' => [
+                        'id' => 'ai',
+                        'db_id' => 2,
+                        'kind' => 'state',
+                        'title' => 'ИИ анализирует имя',
+                        'message' => null,
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'default_target_block_id' => null,
+                        'ai_analysis' => [
+                            'prompt' => 'Определи, есть ли в сообщениях клиента имя.',
+                            'source' => 'inbound_messages_after_previous_bot_message',
+                            'extract_fields' => [
+                                [
+                                    'key' => 'first_name',
+                                    'label' => 'Имя клиента',
+                                    'type' => 'text',
+                                ],
+                            ],
+                            'outputs' => [
+                                [
+                                    'id' => 'name_accepted',
+                                    'label' => 'Имя найдено',
+                                    'delay_seconds' => 0,
+                                    'target_block_id' => 'accepted',
+                                    'edge' => $acceptedEdge,
+                                ],
+                                [
+                                    'id' => 'name_retry',
+                                    'label' => 'Имя не найдено',
+                                    'delay_seconds' => 10,
+                                    'target_block_id' => 'retry',
+                                    'edge' => $retryEdge,
+                                ],
+                            ],
+                        ],
+                    ],
+                    'accepted' => [
+                        'id' => 'accepted',
+                        'db_id' => 3,
+                        'kind' => 'state',
+                        'title' => 'Имя принято',
+                        'actions' => [
+                            [
+                                'type' => 'write_contact_field',
+                                'source_type' => 'ai_data',
+                                'source_block_id' => '',
+                                'source_field_key' => 'first_name',
+                                'target_scope' => 'contact',
+                                'target_field' => 'first_name',
+                            ],
+                        ],
+                        'message' => [
+                            'text' => 'Имя принято',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                    'retry' => [
+                        'id' => 'retry',
+                        'db_id' => 4,
+                        'kind' => 'state',
+                        'title' => 'Повторить вопрос',
+                        'message' => [
+                            'text' => 'Повторите имя',
+                            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                        ],
+                        'buttons' => null,
+                        'wait_reply_edges' => [],
+                        'automatic_edges' => [],
+                        'default_target_block_id' => null,
+                    ],
+                ],
+                'edges' => [$waitEdge, $acceptedEdge, $retryEdge],
             ],
         ];
     }
@@ -6719,10 +11764,13 @@ class GenericDbScenarioRuntimeTest extends TestCase
                         'id' => $edge['id'],
                         'edge_key' => $edge['edge_key'],
                         'mode' => 'wait_reply',
+                        'priority' => $edge['priority'] ?? 10,
+                        'transition_limit' => $edge['transition_limit'] ?? 0,
                         'source_block_id' => 'start',
                         'target_block_id' => $edge['target_block_id'],
                         'from_output_id' => null,
                         'label' => $edge['label'] ?? '',
+                        'transition_actions' => $edge['transition_actions'] ?? [],
                     ])
                     ->values()
                     ->all(),
@@ -6831,6 +11879,8 @@ class GenericDbScenarioRuntimeTest extends TestCase
         string $contactPhoneCondition = '',
         string $dialogPhoneCondition = '',
         array $fieldCondition = [],
+        string $expression = '',
+        array $transitionActions = [],
     ): array {
         return [
             'id' => $id,
@@ -6840,6 +11890,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
             'transition_limit' => $transitionLimit,
             'contact_phone_condition' => $contactPhoneCondition,
             'dialog_phone_condition' => $dialogPhoneCondition,
+            'expression' => $expression,
             'field_condition' => array_merge([
                 'enabled' => false,
                 'field_scope' => 'dialog',
@@ -6862,6 +11913,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
                 'field_key' => '',
                 'data_type' => 'any_text',
             ], $inputCapture),
+            'transition_actions' => $transitionActions,
         ];
     }
 

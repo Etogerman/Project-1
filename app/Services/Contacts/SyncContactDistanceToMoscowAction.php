@@ -137,7 +137,7 @@ class SyncContactDistanceToMoscowAction
     {
         $normalized = mb_strtolower(trim($country));
 
-        return in_array($normalized, ['россия', 'российская федерация', 'рф', 'russia'], true);
+        return in_array($normalized, ['ru', 'rus', 'россия', 'российская федерация', 'рф', 'russia'], true);
     }
 
     private function isMoscowCity(string $city): bool

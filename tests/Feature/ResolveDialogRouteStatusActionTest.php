@@ -65,7 +65,7 @@ class ResolveDialogRouteStatusActionTest extends TestCase
         $this->assertFalse(app(CanSendThroughDialogAction::class)->handle($dialog));
     }
 
-    public function test_resolve_dialog_route_status_keeps_stale_successful_telegram_check_sendable(): void
+    public function test_resolve_dialog_route_status_blocks_stale_successful_telegram_check(): void
     {
         $dialog = $this->createDialog(
             channelAttributes: [
@@ -83,11 +83,11 @@ class ResolveDialogRouteStatusActionTest extends TestCase
 
         $status = app(ResolveDialogRouteStatusAction::class)->handle($dialog);
 
-        $this->assertSame(DialogRouteStatusData::CODE_READY, $status->code);
-        $this->assertSame('Маршрут готов', $status->label);
-        $this->assertTrue($status->isSendable);
-        $this->assertNull($status->blockedReason);
-        $this->assertTrue(app(CanSendThroughDialogAction::class)->handle($dialog));
+        $this->assertSame(DialogRouteStatusData::CODE_CHANNEL_NOT_CONNECTED, $status->code);
+        $this->assertSame('Канал не подключен', $status->label);
+        $this->assertFalse($status->isSendable);
+        $this->assertSame(Channel::CONNECTION_ERROR_STALE, $status->blockedReason);
+        $this->assertFalse(app(CanSendThroughDialogAction::class)->handle($dialog));
     }
 
     public function test_resolve_dialog_route_status_marks_missing_telegram_chat_id(): void

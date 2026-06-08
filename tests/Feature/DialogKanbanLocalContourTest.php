@@ -16,6 +16,8 @@ use App\Models\User;
 use App\Services\Dialogs\BuildDialogMessageSnapshotPayloadAction;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -34,9 +36,16 @@ class DialogKanbanLocalContourTest extends TestCase
     public function test_active_admin_can_open_dialog_kanban_page(): void
     {
         $admin = $this->createAdmin();
+        $assignee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'name' => 'Оператор Канбана',
+            'last_name' => 'Петров',
+        ]);
         $dialog = $this->createKanbanDialog([
             'contactName' => 'Канбан Клиент',
             'stage' => Dialog::STAGE_NEW_DIALOG,
+            'assignedUserId' => $assignee->id,
         ]);
 
         $this->actingAs($admin)
@@ -45,10 +54,13 @@ class DialogKanbanLocalContourTest extends TestCase
             ->assertSee('Диалоги')
             ->assertSee('Канбан')
             ->assertSee('Фильтры')
+            ->assertSee('Сортировка')
             ->assertSee('Таблица')
             ->assertSeeInOrder(['Фильтры', 'Таблица'])
+            ->assertDontSee('Сортировка появится следующим срезом')
             ->assertDontSee('Требует проверки')
             ->assertSee($dialog->contact->display_name)
+            ->assertSee('Оператор Канбана Петров')
             ->assertSee('Открыть диалог');
     }
 
@@ -73,6 +85,216 @@ class DialogKanbanLocalContourTest extends TestCase
             ->assertSee($noNewDialog->contact->display_name);
     }
 
+    public function test_kanban_resolves_inbox_status_without_per_card_latest_message_queries(): void
+    {
+        $admin = $this->createAdmin();
+        $dialogs = collect(range(1, 6))
+            ->map(fn (int $index): Dialog => $this->createKanbanDialog([
+                'contactName' => 'Клиент канбана '.$index,
+                'stage' => Dialog::STAGE_NEW_DIALOG,
+                'withInboundUserMessage' => true,
+                'lastMessageAt' => now()->subMinutes($index),
+            ]));
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+
+        Livewire::actingAs($admin)
+            ->test(DialogKanban::class)
+            ->assertSee($dialogs->firstOrFail()->contact->display_name)
+            ->assertSee($dialogs->last()->contact->display_name)
+            ->assertSee('Требует ответа');
+
+        $queries = collect(DB::getQueryLog())->pluck('query');
+        DB::disableQueryLog();
+
+        $latestMessageLookups = $queries
+            ->filter(function (string $query): bool {
+                $query = strtolower($query);
+
+                return str_starts_with($query, 'select * from "messages"')
+                    && str_contains($query, '"messages"."dialog_id"')
+                    && str_contains($query, 'limit 1');
+            })
+            ->count();
+
+        $this->assertSame(0, $latestMessageLookups, $queries->implode(PHP_EOL));
+    }
+
+    public function test_kanban_resolves_route_status_without_per_card_connection_type_queries(): void
+    {
+        $admin = $this->createAdmin();
+        $dialogs = collect(range(1, 6))
+            ->map(fn (int $index): Dialog => $this->createKanbanDialog([
+                'contactName' => 'Аккаунт канал '.$index,
+                'stage' => Dialog::STAGE_NEW_DIALOG,
+                'channelAttributes' => [
+                    'platform' => Channel::PLATFORM_TELEGRAM,
+                    'connection_type' => Channel::CONNECTION_TYPE_ACCOUNT,
+                    'bot_token_present' => false,
+                ],
+                'lastMessageAt' => now()->subMinutes($index),
+            ]));
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+
+        Livewire::actingAs($admin)
+            ->test(DialogKanban::class)
+            ->assertSee($dialogs->firstOrFail()->contact->display_name)
+            ->assertSee($dialogs->last()->contact->display_name);
+
+        $queries = collect(DB::getQueryLog())->pluck('query');
+        DB::disableQueryLog();
+
+        $connectionTypeLookups = $queries
+            ->filter(function (string $query): bool {
+                $query = strtolower($query);
+
+                return str_starts_with($query, 'select * from "channel_connection_types"')
+                    && str_contains($query, 'limit 1');
+            })
+            ->count();
+
+        $this->assertSame(0, $connectionTypeLookups, $queries->implode(PHP_EOL));
+    }
+
+    public function test_kanban_inbox_status_filter_keeps_only_matching_cards(): void
+    {
+        $admin = $this->createAdmin();
+        $requiresReplyDialog = $this->createKanbanDialog([
+            'contactName' => 'Канбан нужен ответ',
+            'stage' => Dialog::STAGE_NEW_DIALOG,
+            'withInboundUserMessage' => true,
+            'lastMessageAt' => now()->subMinutes(5),
+        ]);
+        $noNewDialog = $this->createKanbanDialog([
+            'contactName' => 'Канбан ответ уже есть',
+            'stage' => Dialog::STAGE_NEW_DIALOG,
+            'withInboundUserMessage' => true,
+            'withOutboundManualReply' => true,
+            'lastMessageAt' => now()->subMinutes(4),
+        ]);
+
+        Livewire::withQueryParams([
+            'inbox' => DialogInboxStatusData::CODE_REQUIRES_REPLY,
+        ])
+            ->actingAs($admin)
+            ->test(DialogKanban::class)
+            ->assertSee($requiresReplyDialog->contact->display_name)
+            ->assertDontSee($noNewDialog->contact->display_name);
+    }
+
+    public function test_kanban_route_status_filter_keeps_only_matching_cards(): void
+    {
+        $admin = $this->createAdmin();
+        $readyDialog = $this->createKanbanDialog([
+            'contactName' => 'Канбан маршрут готов',
+            'stage' => Dialog::STAGE_NEW_DIALOG,
+            'channelAttributes' => [
+                'platform' => Channel::PLATFORM_MAX,
+                'connection_type' => Channel::CONNECTION_TYPE_BOT,
+                'bot_token_present' => true,
+                'is_active' => true,
+            ],
+            'externalChatId' => 'ready-route-chat',
+        ]);
+        $problemDialog = $this->createKanbanDialog([
+            'contactName' => 'Канбан маршрут проблема',
+            'stage' => Dialog::STAGE_NEW_DIALOG,
+            'channelAttributes' => [
+                'platform' => Channel::PLATFORM_MAX,
+                'connection_type' => Channel::CONNECTION_TYPE_BOT,
+                'bot_token_present' => true,
+                'is_active' => false,
+            ],
+            'externalChatId' => 'problem-route-chat',
+        ]);
+
+        Livewire::withQueryParams([
+            'route' => 'ready',
+        ])
+            ->actingAs($admin)
+            ->test(DialogKanban::class)
+            ->assertSee($readyDialog->contact->display_name)
+            ->assertDontSee($problemDialog->contact->display_name);
+
+        Livewire::withQueryParams([
+            'route' => 'problem',
+        ])
+            ->actingAs($admin)
+            ->test(DialogKanban::class)
+            ->assertSee($problemDialog->contact->display_name)
+            ->assertDontSee($readyDialog->contact->display_name);
+    }
+
+    public function test_kanban_sort_menu_sorts_cards_by_oldest_activity(): void
+    {
+        $admin = $this->createAdmin();
+        $olderDialog = $this->createKanbanDialog([
+            'contactName' => 'Старый диалог',
+            'stage' => Dialog::STAGE_NEW_DIALOG,
+            'lastMessageAt' => Carbon::parse('2026-05-26 10:00:00'),
+        ]);
+        $newerDialog = $this->createKanbanDialog([
+            'contactName' => 'Новый диалог',
+            'stage' => Dialog::STAGE_NEW_DIALOG,
+            'lastMessageAt' => Carbon::parse('2026-05-26 12:00:00'),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(DialogKanban::class)
+            ->assertSeeInOrder([
+                $newerDialog->contact->display_name,
+                $olderDialog->contact->display_name,
+            ])
+            ->call('toggleSortPanel')
+            ->assertSet('sortPanelOpen', true)
+            ->assertSee('Сначала старые')
+            ->call('selectKanbanSort', 'activity_asc')
+            ->assertSet('selectedSort', 'activity_asc')
+            ->assertSet('sortPanelOpen', false);
+
+        Livewire::withQueryParams([
+            'sort' => 'activity_asc',
+        ])
+            ->actingAs($admin)
+            ->test(DialogKanban::class)
+            ->assertSeeInOrder([
+                $olderDialog->contact->display_name,
+                $newerDialog->contact->display_name,
+            ]);
+    }
+
+    public function test_kanban_sort_menu_can_put_dialogs_requiring_reply_first(): void
+    {
+        $admin = $this->createAdmin();
+        $answeredDialog = $this->createKanbanDialog([
+            'contactName' => 'Ответ уже есть',
+            'stage' => Dialog::STAGE_NEW_DIALOG,
+            'withInboundUserMessage' => true,
+            'withOutboundManualReply' => true,
+            'lastMessageAt' => Carbon::parse('2026-05-26 12:00:00'),
+        ]);
+        $requiresReplyDialog = $this->createKanbanDialog([
+            'contactName' => 'Нужен ответ',
+            'stage' => Dialog::STAGE_NEW_DIALOG,
+            'withInboundUserMessage' => true,
+            'lastMessageAt' => Carbon::parse('2026-05-26 10:00:00'),
+        ]);
+
+        Livewire::withQueryParams([
+            'sort' => 'requires_reply_first',
+        ])
+            ->actingAs($admin)
+            ->test(DialogKanban::class)
+            ->assertSet('selectedSort', 'requires_reply_first')
+            ->assertSeeInOrder([
+                $requiresReplyDialog->contact->display_name,
+                $answeredDialog->contact->display_name,
+            ]);
+    }
+
     public function test_kanban_page_marks_empty_columns_for_compact_layout(): void
     {
         $admin = $this->createAdmin();
@@ -94,6 +316,8 @@ class DialogKanbanLocalContourTest extends TestCase
         $assignee = User::factory()->create([
             'is_active' => true,
             'is_admin' => false,
+            'name' => 'German',
+            'last_name' => 'Abrikosov',
         ]);
 
         Livewire::withQueryParams([
@@ -111,6 +335,7 @@ class DialogKanbanLocalContourTest extends TestCase
             ->assertSet('selectedInboxStatus', DialogInboxStatusData::CODE_NO_NEW)
             ->assertSet('search', '@german_abrikosov')
             ->assertSet('filtersPanelOpen', true)
+            ->assertSee('German Abrikosov')
             ->assertSeeInOrder(['Поиск', 'Канал', 'Ответственный', 'Маршрут', 'Статус диалога']);
     }
 
@@ -492,7 +717,7 @@ class DialogKanbanLocalContourTest extends TestCase
     {
         $admin = $this->createAdmin();
 
-        foreach (range(1, 31) as $number) {
+        foreach (range(1, 16) as $number) {
             $this->createKanbanDialog([
                 'contactName' => 'Карточка '.$number,
                 'stage' => Dialog::STAGE_NEW_DIALOG,
@@ -503,9 +728,9 @@ class DialogKanbanLocalContourTest extends TestCase
         Livewire::actingAs($admin)
             ->test(DialogKanban::class)
             ->assertSee('Карточка 1')
-            ->assertDontSee('Карточка 31')
+            ->assertDontSee('Карточка 16')
             ->call('loadMoreCards', Dialog::STAGE_NEW_DIALOG)
-            ->assertSee('Карточка 31');
+            ->assertSee('Карточка 16');
     }
 
     public function test_kanban_page_renders_legacy_review_dialog_in_effective_stage_column(): void
@@ -565,7 +790,9 @@ class DialogKanbanLocalContourTest extends TestCase
      *     contactName?:string,
      *     stage?:string|null,
      *     withInboundUserMessage?:bool,
-     *     lastMessageAt?:\Illuminate\Support\Carbon|null,
+     *     withOutboundManualReply?:bool,
+     *     lastMessageAt?:Carbon|null,
+     *     channelAttributes?:array<string, mixed>,
      *     externalUsername?:string|null,
      *     externalChatId?:string|null,
      *     confirmedPhoneRaw?:string|null,
@@ -576,8 +803,9 @@ class DialogKanbanLocalContourTest extends TestCase
     {
         $contact = Contact::factory()->create([
             'name' => $overrides['contactName'] ?? 'Контакт канбана',
+            'assigned_user_id' => $overrides['assignedUserId'] ?? null,
         ]);
-        $channel = Channel::factory()->create();
+        $channel = Channel::factory()->create($overrides['channelAttributes'] ?? []);
         $identity = ContactIdentity::factory()->create([
             'contact_id' => $contact->id,
             'channel_id' => $channel->id,
@@ -610,6 +838,21 @@ class DialogKanbanLocalContourTest extends TestCase
                 'external_chat_id' => 'kanban-chat-'.$contact->id,
                 'received_at' => $lastMessageAt,
             ]);
+
+            if (($overrides['withOutboundManualReply'] ?? false) === true) {
+                Message::factory()->create([
+                    'dialog_id' => $dialog->id,
+                    'contact_id' => $contact->id,
+                    'contact_identity_id' => $identity->id,
+                    'channel_id' => $channel->id,
+                    'direction' => Message::DIRECTION_OUTBOUND,
+                    'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+                    'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+                    'text' => 'Ручной ответ оператора',
+                    'external_chat_id' => 'kanban-chat-'.$contact->id,
+                    'received_at' => $lastMessageAt->copy()->addMinute(),
+                ]);
+            }
 
             $dialog->forceFill(app(BuildDialogMessageSnapshotPayloadAction::class)->fromMessages(
                 Message::query()

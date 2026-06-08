@@ -37,14 +37,17 @@ class ContactNameSliceThreeUiTest extends TestCase
             'name' => 'Legacy имя',
             'first_name' => 'Герман',
             'first_name_source' => Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
+            'first_name_resolution_method' => Contact::FIRST_NAME_RESOLUTION_METHOD_DICTIONARY_LOOKUP,
             'last_name' => 'Абрикосов',
         ]);
 
         Livewire::actingAs($admin)
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->assertSee('Абрикосов Герман')
-            ->assertSee('Откуда знаем имя?')
-            ->assertSee('Клиент назвал')
+            ->assertSee('Откуда знаем имя')
+            ->assertSee('Клиент подтвердил')
+            ->assertSee('Как обработали имя')
+            ->assertSee('Справочник имён')
             ->assertDontSee('Имя (мессенджер)');
     }
 
@@ -62,7 +65,7 @@ class ContactNameSliceThreeUiTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
-            ->assertSee('Откуда знаем имя?')
+            ->assertSee('Откуда знаем имя')
             ->assertSee('Источник не определён');
     }
 
