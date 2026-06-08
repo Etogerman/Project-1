@@ -11,6 +11,7 @@ use App\Services\Geo\GeoCsvImportService;
 use App\Services\Geo\ResolveGeoCityAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
+use League\Csv\Reader;
 use Tests\TestCase;
 
 class GeoDictionaryImportTest extends TestCase
@@ -85,6 +86,47 @@ class GeoDictionaryImportTest extends TestCase
         $this->assertStringContainsString('city;RU;;;;RU-MOW;Москва;', $csv);
     }
 
+    public function test_locations_export_neutralizes_formula_cells(): void
+    {
+        $country = GeoCountry::query()->create([
+            'iso2' => 'RU',
+            'iso3' => 'RUS',
+            'name_ru' => '=Россия',
+            'name_en' => '+Russia',
+            'normalized_name' => 'россия',
+            'active' => true,
+        ]);
+        $region = GeoRegion::query()->create([
+            'country_id' => $country->id,
+            'code' => 'RU-TEST',
+            'name_ru' => '@Регион',
+            'type' => "\t=type",
+            'normalized_name' => 'регион',
+            'active' => true,
+        ]);
+        GeoCity::query()->create([
+            'country_id' => $country->id,
+            'region_id' => $region->id,
+            'name_ru' => '-Город',
+            'name_en' => "\r=City",
+            'normalized_name' => 'город',
+            'active' => true,
+        ]);
+
+        $csv = app(GeoCsvExportService::class)->exportLocations();
+        $reader = Reader::createFromString(substr($csv, 3));
+        $reader->setDelimiter(';');
+        $reader->setHeaderOffset(0);
+        $records = iterator_to_array($reader->getRecords());
+
+        $this->assertContains("'=Россия", array_column($records, 'country_name_ru'));
+        $this->assertContains("'+Russia", array_column($records, 'country_name_en'));
+        $this->assertContains("'@Регион", array_column($records, 'region_name_ru'));
+        $this->assertContains("'\t=type", array_column($records, 'region_type'));
+        $this->assertContains("'-Город", array_column($records, 'city_name_ru'));
+        $this->assertContains("'\r=City", array_column($records, 'city_name_en'));
+    }
+
     public function test_alias_import_creates_alias_and_resolver_uses_it(): void
     {
         $city = $this->createMoscow();
@@ -147,6 +189,32 @@ class GeoDictionaryImportTest extends TestCase
 
         $this->assertStringStartsWith("\xEF\xBB\xBFalias;city_name_ru;region_name_ru;country_iso2;language;alias_type;confidence;auto_apply;active;comment", $csv);
         $this->assertStringContainsString('мск;Москва;Москва;RU;ru;short;95;да;да;сокращение', $csv);
+    }
+
+    public function test_aliases_export_neutralizes_formula_cells(): void
+    {
+        $city = $this->createMoscow();
+
+        GeoAlias::query()->create([
+            'alias' => '=alias',
+            'normalized_alias' => 'alias',
+            'city_id' => $city->id,
+            'language' => 'ru',
+            'alias_type' => GeoAlias::TYPE_SHORT,
+            'confidence' => 95,
+            'auto_apply' => true,
+            'active' => true,
+            'comment' => '+comment',
+        ]);
+
+        $csv = app(GeoCsvExportService::class)->exportAliases();
+        $reader = Reader::createFromString(substr($csv, 3));
+        $reader->setDelimiter(';');
+        $reader->setHeaderOffset(0);
+        $records = iterator_to_array($reader->getRecords());
+
+        $this->assertContains("'=alias", array_column($records, 'alias'));
+        $this->assertContains("'+comment", array_column($records, 'comment'));
     }
 
     public function test_geo_import_commands_use_shared_service(): void

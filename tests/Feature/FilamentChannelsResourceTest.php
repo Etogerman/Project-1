@@ -163,7 +163,37 @@ class FilamentChannelsResourceTest extends TestCase
             ->assertTableActionVisible('checkConnection', $channel)
             ->assertTableActionVisible('syncBotMetadata', $channel)
             ->assertTableActionVisible('manageScenarios', $channel)
-            ->assertTableActionVisible('delete', $channel);
+            ->assertTableActionHidden('delete', $channel);
+    }
+
+    public function test_channel_delete_is_blocked_even_for_channel_editor(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'is_active' => true,
+        ]);
+
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'channels.view', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'channels.edit', true);
+
+        $this->assertFalse(Gate::forUser($employee->fresh())->allows('delete', $channel));
+
+        Livewire::actingAs($employee)
+            ->test(ManageChannels::class)
+            ->assertTableActionHidden('delete', $channel);
+
+        $this->actingAs($employee->fresh());
+
+        $authorizer = new ReflectionMethod(ChannelResource::class, 'authorizeChannelDelete');
+        $authorizer->setAccessible(true);
+
+        $this->assertHttpForbidden(fn () => $authorizer->invoke(null, $channel));
     }
 
     public function test_channel_update_guard_rejects_employee_without_channel_edit_permission(): void
@@ -700,7 +730,7 @@ class FilamentChannelsResourceTest extends TestCase
             ->assertTableColumnStateSet('last_error_message', 'Актуальная account runtime ошибка', $channel->fresh('runtimeState'));
     }
 
-    public function test_channel_delete_policy_uses_channel_edit_permission_and_bulk_delete_stays_forbidden(): void
+    public function test_channel_delete_policy_blocks_hard_delete_and_bulk_delete(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -715,17 +745,17 @@ class FilamentChannelsResourceTest extends TestCase
 
         $this->setRolePermission(User::ROLE_EMPLOYEE, 'channels.edit', false);
 
-        $this->assertTrue(Gate::forUser($admin)->allows('delete', $channel));
+        $this->assertFalse(Gate::forUser($admin)->allows('delete', $channel));
         $this->assertFalse(Gate::forUser($employee)->allows('delete', $channel));
         $this->assertFalse(Gate::forUser($admin)->allows('deleteAny', Channel::class));
 
         $this->setRolePermission(User::ROLE_EMPLOYEE, 'channels.edit', true);
 
-        $this->assertTrue(Gate::forUser($employee->fresh())->allows('delete', $channel));
+        $this->assertFalse(Gate::forUser($employee->fresh())->allows('delete', $channel));
         $this->assertFalse(Gate::forUser($employee->fresh())->allows('deleteAny', Channel::class));
     }
 
-    public function test_admin_can_delete_unused_channel_from_resource_table(): void
+    public function test_admin_cannot_delete_unused_channel_from_resource_table(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -739,15 +769,14 @@ class FilamentChannelsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ManageChannels::class)
-            ->assertTableActionVisible('delete', $channel)
-            ->assertTableActionEnabled('delete', $channel)
-            ->callTableAction('delete', $channel)
-            ->assertHasNoTableActionErrors();
+            ->assertTableActionHidden('delete', $channel);
 
-        $this->assertModelMissing($channel);
+        $this->assertDatabaseHas('channels', [
+            'id' => $channel->id,
+        ]);
     }
 
-    public function test_used_channel_delete_action_keeps_channel_when_blocked(): void
+    public function test_used_channel_delete_action_is_hidden_and_keeps_channel(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -767,17 +796,14 @@ class FilamentChannelsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ManageChannels::class)
-            ->assertTableActionVisible('delete', $channel)
-            ->assertTableActionEnabled('delete', $channel)
-            ->callTableAction('delete', $channel)
-            ->assertHasNoTableActionErrors();
+            ->assertTableActionHidden('delete', $channel);
 
         $this->assertDatabaseHas('channels', [
             'id' => $channel->id,
         ]);
     }
 
-    public function test_admin_can_delete_channel_with_history_after_dialogs_are_removed(): void
+    public function test_admin_cannot_delete_channel_with_history_after_dialogs_are_removed(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -802,14 +828,17 @@ class FilamentChannelsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ManageChannels::class)
-            ->assertTableActionVisible('delete', $channel)
-            ->assertTableActionEnabled('delete', $channel)
-            ->callTableAction('delete', $channel)
-            ->assertHasNoTableActionErrors();
+            ->assertTableActionHidden('delete', $channel);
 
-        $this->assertModelMissing($channel);
-        $this->assertModelMissing($identity);
-        $this->assertModelMissing($message);
+        $this->assertDatabaseHas('channels', [
+            'id' => $channel->id,
+        ]);
+        $this->assertDatabaseHas('contact_identities', [
+            'id' => $identity->id,
+        ]);
+        $this->assertDatabaseHas('messages', [
+            'id' => $message->id,
+        ]);
     }
 
     public function test_channel_defaults_to_rules_only_when_not_explicitly_set(): void

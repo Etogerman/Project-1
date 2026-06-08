@@ -29,7 +29,7 @@ class ChannelPolicy
 
     public function delete(User $user, Channel $channel): bool
     {
-        return $user->hasRolePermission('channels.edit');
+        return false;
     }
 
     public function deleteAny(User $user): bool

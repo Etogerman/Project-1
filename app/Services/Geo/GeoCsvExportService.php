@@ -39,8 +39,8 @@ class GeoCsvExportService
                     'country',
                     $country->iso2,
                     $country->iso3,
-                    $country->name_ru,
-                    $country->name_en,
+                    $this->safeCsvCell($country->name_ru),
+                    $this->safeCsvCell($country->name_en),
                     '',
                     '',
                     '',
@@ -68,8 +68,8 @@ class GeoCsvExportService
                     '',
                     '',
                     $region->code,
-                    $region->name_ru,
-                    $region->type,
+                    $this->safeCsvCell($region->name_ru),
+                    $this->safeCsvCell($region->type),
                     '',
                     '',
                     '',
@@ -96,10 +96,10 @@ class GeoCsvExportService
                     '',
                     '',
                     $city->region?->code,
-                    $city->region?->name_ru,
-                    $city->region?->type,
-                    $city->name_ru,
-                    $city->name_en,
+                    $this->safeCsvCell($city->region?->name_ru),
+                    $this->safeCsvCell($city->region?->type),
+                    $this->safeCsvCell($city->name_ru),
+                    $this->safeCsvCell($city->name_en),
                     $city->population,
                     $city->lat,
                     $city->lon,
@@ -142,16 +142,16 @@ class GeoCsvExportService
                 $city = $alias->city;
 
                 $csv->insertOne([
-                    $alias->alias,
-                    $city?->name_ru,
-                    $city?->region?->name_ru,
+                    $this->safeCsvCell($alias->alias),
+                    $this->safeCsvCell($city?->name_ru),
+                    $this->safeCsvCell($city?->region?->name_ru),
                     $city?->country?->iso2,
                     $alias->language,
                     $alias->alias_type,
                     $alias->confidence,
                     $this->booleanLabel($alias->auto_apply),
                     $this->booleanLabel($alias->active),
-                    $alias->comment,
+                    $this->safeCsvCell($alias->comment),
                 ]);
             });
 
@@ -161,5 +161,16 @@ class GeoCsvExportService
     private function booleanLabel(bool $value): string
     {
         return $value ? 'да' : 'нет';
+    }
+
+    private function safeCsvCell(?string $value): string
+    {
+        $value ??= '';
+
+        if ($value !== '' && preg_match('/^[=+\-@\t\r]/', $value) === 1) {
+            return "'".$value;
+        }
+
+        return $value;
     }
 }

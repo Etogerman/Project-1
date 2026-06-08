@@ -7,6 +7,8 @@ use App\Services\DataDictionaries\ExportDataDictionaryEntriesCsvAction;
 use App\Services\DataDictionaries\ImportDataDictionaryEntriesCsvAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Validation\ValidationException;
+use League\Csv\Reader;
+use ReflectionMethod;
 use Tests\TestCase;
 
 class DataDictionaryCsvImportExportTest extends TestCase
@@ -31,6 +33,48 @@ class DataDictionaryCsvImportExportTest extends TestCase
 
         $this->assertStringStartsWith("\xEF\xBB\xBFID,Вариант,\"Полное имя\",Пол", $csv);
         $this->assertStringContainsString('Вася,Василий,Мужской,Русское,Краткое,да,да,"Основной вариант"', $csv);
+    }
+
+    public function test_export_names_dictionary_neutralizes_formula_cells(): void
+    {
+        DataDictionaryEntry::query()->create([
+            'dictionary_key' => DataDictionaryEntry::DICTIONARY_NAMES,
+            'lookup_value' => '=1+1',
+            'result_value' => '+SUM(A1:A2)',
+            'gender' => DataDictionaryEntry::GENDER_UNKNOWN,
+            'language' => DataDictionaryEntry::LANGUAGE_RU,
+            'variant_type' => DataDictionaryEntry::VARIANT_TYPE_SHORT,
+            'auto_apply' => false,
+            'is_active' => true,
+            'comment' => '-10+20',
+        ]);
+        DataDictionaryEntry::query()->create([
+            'dictionary_key' => DataDictionaryEntry::DICTIONARY_NAMES,
+            'lookup_value' => '@cmd',
+            'result_value' => "\t=1+1",
+            'gender' => DataDictionaryEntry::GENDER_MALE,
+            'language' => DataDictionaryEntry::LANGUAGE_FOREIGN,
+            'variant_type' => DataDictionaryEntry::VARIANT_TYPE_SHORT,
+            'auto_apply' => false,
+            'is_active' => true,
+            'comment' => "\r=1+1",
+        ]);
+
+        $csv = app(ExportDataDictionaryEntriesCsvAction::class)->handle();
+        $reader = Reader::createFromString(substr($csv, 3));
+        $reader->setHeaderOffset(0);
+        $records = iterator_to_array($reader->getRecords());
+
+        $this->assertContains("'=1+1", array_column($records, 'Вариант'));
+        $this->assertContains("'+SUM(A1:A2)", array_column($records, 'Полное имя'));
+        $this->assertContains("'-10+20", array_column($records, 'Комментарий'));
+        $this->assertContains("'@cmd", array_column($records, 'Вариант'));
+
+        $safeCell = new ReflectionMethod(ExportDataDictionaryEntriesCsvAction::class, 'safeCsvCell');
+        $safeCell->setAccessible(true);
+
+        $this->assertSame("'\t=1+1", $safeCell->invoke(app(ExportDataDictionaryEntriesCsvAction::class), "\t=1+1"));
+        $this->assertSame("'\r=1+1", $safeCell->invoke(app(ExportDataDictionaryEntriesCsvAction::class), "\r=1+1"));
     }
 
     public function test_import_names_csv_creates_and_updates_rows(): void
