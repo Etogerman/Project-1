@@ -13,7 +13,7 @@ class ScenarioRegistry
     private const DB_DEFINITIONS_CACHE_KEY = 'scenarios:db-definitions:v1';
 
     /**
-     * @return array<string, array{type: 'builtin'|'database', handler: class-string|null, label: string, platforms: list<string>|null}>
+     * @return array<string, array{type: 'builtin'|'database', handler: class-string|null, label: string, platforms: list<string>|null, enabled_for_new_starts: bool, deprecated: bool}>
      */
     public function definitions(): array
     {
@@ -72,6 +72,16 @@ class ScenarioRegistry
     public function label(?string $scenarioCode): ?string
     {
         return $this->definition($scenarioCode)['label'] ?? null;
+    }
+
+    public function enabledForNewStarts(?string $scenarioCode): bool
+    {
+        return (bool) ($this->definition($scenarioCode)['enabled_for_new_starts'] ?? false);
+    }
+
+    public function deprecated(?string $scenarioCode): bool
+    {
+        return (bool) ($this->definition($scenarioCode)['deprecated'] ?? false);
     }
 
     public function make(?string $scenarioCode): ?object
@@ -180,7 +190,8 @@ class ScenarioRegistry
     {
         return array_values(array_filter(
             $this->compatibleScenarioCodesForChannel($channel),
-            static fn (string $scenarioCode): bool => $scenarioCode !== Scenario::CONSTRUCTOR_WORKSPACE_CODE,
+            fn (string $scenarioCode): bool => $scenarioCode !== Scenario::CONSTRUCTOR_WORKSPACE_CODE
+                && $this->enabledForNewStarts($scenarioCode),
         ));
     }
 
@@ -216,7 +227,7 @@ class ScenarioRegistry
     }
 
     /**
-     * @return array{type: 'builtin'|'database', handler: class-string|null, label: string, platforms: list<string>|null}|null
+     * @return array{type: 'builtin'|'database', handler: class-string|null, label: string, platforms: list<string>|null, enabled_for_new_starts: bool, deprecated: bool}|null
      */
     private function definition(?string $scenarioCode): ?array
     {
@@ -241,7 +252,7 @@ class ScenarioRegistry
     }
 
     /**
-     * @return array<string, array{type: 'builtin', handler: class-string|null, label: string, platforms: list<string>|null}>
+     * @return array<string, array{type: 'builtin', handler: class-string|null, label: string, platforms: list<string>|null, enabled_for_new_starts: bool, deprecated: bool}>
      */
     private function builtInDefinitions(): array
     {
@@ -277,7 +288,7 @@ class ScenarioRegistry
     }
 
     /**
-     * @return array<string, array{type: 'database', handler: null, label: string, platforms: null}>
+     * @return array<string, array{type: 'database', handler: null, label: string, platforms: null, enabled_for_new_starts: bool, deprecated: bool}>
      */
     private function databaseDefinitions(): array
     {
@@ -285,7 +296,7 @@ class ScenarioRegistry
             return $this->queryDatabaseDefinitions();
         }
 
-        /** @var array<string, array{type: 'database', handler: null, label: string, platforms: null}> $definitions */
+        /** @var array<string, array{type: 'database', handler: null, label: string, platforms: null, enabled_for_new_starts: bool, deprecated: bool}> $definitions */
         $definitions = Cache::rememberForever(
             self::DB_DEFINITIONS_CACHE_KEY,
             fn (): array => $this->queryDatabaseDefinitions(),
@@ -295,7 +306,7 @@ class ScenarioRegistry
     }
 
     /**
-     * @return array<string, array{type: 'database', handler: null, label: string, platforms: null}>
+     * @return array<string, array{type: 'database', handler: null, label: string, platforms: null, enabled_for_new_starts: bool, deprecated: bool}>
      */
     private function queryDatabaseDefinitions(): array
     {
@@ -311,19 +322,23 @@ class ScenarioRegistry
                     'handler' => null,
                     'label' => (string) $scenario->name,
                     'platforms' => null,
+                    'enabled_for_new_starts' => true,
+                    'deprecated' => false,
                 ],
             ])
             ->all();
     }
 
     /**
-     * @return array{type: 'builtin', handler: class-string|null, label: string, platforms: list<string>|null}|null
+     * @return array{type: 'builtin', handler: class-string|null, label: string, platforms: list<string>|null, enabled_for_new_starts: bool, deprecated: bool}|null
      */
     private function normalizeDefinition(mixed $definition): ?array
     {
         $handlerClass = null;
         $label = null;
         $platforms = null;
+        $enabledForNewStarts = true;
+        $deprecated = false;
 
         if (is_string($definition)) {
             $handlerClass = trim($definition);
@@ -353,6 +368,14 @@ class ScenarioRegistry
                     static fn (?string $platform): bool => $platform !== null,
                 ));
             }
+
+            if (array_key_exists('enabled_for_new_starts', $definition)) {
+                $enabledForNewStarts = (bool) $definition['enabled_for_new_starts'];
+            }
+
+            if (array_key_exists('deprecated', $definition)) {
+                $deprecated = (bool) $definition['deprecated'];
+            }
         }
 
         if (! is_string($handlerClass) || $handlerClass === '' || ! class_exists($handlerClass)) {
@@ -364,6 +387,8 @@ class ScenarioRegistry
             'handler' => $handlerClass,
             'label' => is_string($label) && $label !== '' ? $label : class_basename($handlerClass),
             'platforms' => $platforms === [] ? null : $platforms,
+            'enabled_for_new_starts' => $enabledForNewStarts,
+            'deprecated' => $deprecated,
         ];
     }
 

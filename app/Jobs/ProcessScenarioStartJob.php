@@ -98,6 +98,10 @@ class ProcessScenarioStartJob implements ShouldQueue
             return;
         }
 
+        if (! $scenarioRegistry->enabledForNewStarts($binding->scenario_code)) {
+            return;
+        }
+
         $runtime = $scenarioRegistry->makeRuntime($binding->scenario_code);
 
         if ($runtime === null || ! $runtime->shouldStart($message)) {

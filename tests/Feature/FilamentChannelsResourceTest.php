@@ -873,7 +873,7 @@ class FilamentChannelsResourceTest extends TestCase
             ->mountTableAction('manageScenarios', $channel)
             ->assertMountedActionModalSee('Сценарии канала')
             ->assertMountedActionModalSee('Активные сценарии')
-            ->assertMountedActionModalSee('Прогрев')
+            ->assertDontSee('Прогрев')
             ->assertMountedActionModalSee('Выявление потребностей')
             ->assertTableActionDataSet([
                 'scenario_codes' => [],
@@ -895,11 +895,11 @@ class FilamentChannelsResourceTest extends TestCase
             ->mountTableAction('manageScenarios', $channel)
             ->assertMountedActionModalSee('Сценарии канала')
             ->assertMountedActionModalSee('Активные сценарии')
-            ->assertMountedActionModalSee('Прогрев')
+            ->assertDontSee('Прогрев')
             ->assertMountedActionModalSee('Выявление потребностей');
     }
 
-    public function test_admin_can_enable_warmup_scenario_for_telegram_channel(): void
+    public function test_admin_cannot_enable_disabled_warmup_scenario_for_telegram_channel(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -914,12 +914,11 @@ class FilamentChannelsResourceTest extends TestCase
             ->callTableAction('manageScenarios', $channel, [
                 'scenario_codes' => ['warmup'],
             ])
-            ->assertHasNoTableActionErrors();
+            ->assertHasTableActionErrors();
 
-        $this->assertDatabaseHas('scenario_channel_bindings', [
+        $this->assertDatabaseMissing('scenario_channel_bindings', [
             'channel_id' => $channel->id,
             'scenario_code' => 'warmup',
-            'is_active' => true,
         ]);
     }
 
@@ -935,28 +934,28 @@ class FilamentChannelsResourceTest extends TestCase
 
         ScenarioChannelBinding::query()->create([
             'channel_id' => $channel->id,
-            'scenario_code' => 'warmup',
+            'scenario_code' => 'needs_discovery',
             'is_active' => false,
         ]);
 
         Livewire::actingAs($admin)
             ->test(ManageChannels::class)
             ->callTableAction('manageScenarios', $channel, [
-                'scenario_codes' => ['warmup'],
+                'scenario_codes' => ['needs_discovery'],
             ])
             ->assertHasNoTableActionErrors()
             ->callTableAction('manageScenarios', $channel, [
-                'scenario_codes' => ['warmup'],
+                'scenario_codes' => ['needs_discovery'],
             ])
             ->assertHasNoTableActionErrors();
 
         $this->assertSame(1, ScenarioChannelBinding::query()
             ->where('channel_id', $channel->id)
-            ->where('scenario_code', 'warmup')
+            ->where('scenario_code', 'needs_discovery')
             ->count());
         $this->assertDatabaseHas('scenario_channel_bindings', [
             'channel_id' => $channel->id,
-            'scenario_code' => 'warmup',
+            'scenario_code' => 'needs_discovery',
             'is_active' => true,
         ]);
     }
@@ -973,7 +972,7 @@ class FilamentChannelsResourceTest extends TestCase
 
         ScenarioChannelBinding::query()->create([
             'channel_id' => $channel->id,
-            'scenario_code' => 'warmup',
+            'scenario_code' => 'needs_discovery',
             'is_active' => true,
         ]);
 
@@ -986,11 +985,11 @@ class FilamentChannelsResourceTest extends TestCase
 
         $this->assertSame(1, ScenarioChannelBinding::query()
             ->where('channel_id', $channel->id)
-            ->where('scenario_code', 'warmup')
+            ->where('scenario_code', 'needs_discovery')
             ->count());
         $this->assertDatabaseHas('scenario_channel_bindings', [
             'channel_id' => $channel->id,
-            'scenario_code' => 'warmup',
+            'scenario_code' => 'needs_discovery',
             'is_active' => false,
         ]);
     }
@@ -1138,7 +1137,7 @@ class FilamentChannelsResourceTest extends TestCase
         ]);
     }
 
-    public function test_admin_can_enable_warmup_scenario_for_max_channel(): void
+    public function test_admin_can_enable_needs_discovery_scenario_for_max_channel(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -1151,13 +1150,13 @@ class FilamentChannelsResourceTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ManageChannels::class)
             ->callTableAction('manageScenarios', $channel, [
-                'scenario_codes' => ['warmup'],
+                'scenario_codes' => ['needs_discovery'],
             ])
             ->assertHasNoTableActionErrors();
 
         $this->assertDatabaseHas('scenario_channel_bindings', [
             'channel_id' => $channel->id,
-            'scenario_code' => 'warmup',
+            'scenario_code' => 'needs_discovery',
             'is_active' => true,
         ]);
     }

@@ -248,6 +248,58 @@ class ProcessScenarioStartJobTest extends TestCase
         $this->assertDatabaseCount('messages', 1);
     }
 
+    public function test_job_skips_disabled_scenario_binding_without_starting_runtime(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'telegram-user-205',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'telegram-chat-305',
+        ]);
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'disabled warmup',
+            'raw_payload' => [],
+        ]);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => 'warmup',
+            'is_active' => true,
+        ]);
+
+        $registry = $this->createMock(ScenarioRegistry::class);
+        $registry->expects($this->once())
+            ->method('enabledForNewStarts')
+            ->with('warmup')
+            ->willReturn(false);
+        $registry->expects($this->never())->method('makeRuntime');
+
+        $job = new ProcessScenarioStartJob($message->id, $dialog->id, 'warmup');
+
+        $job->handle($registry);
+
+        $this->assertDatabaseCount('scenario_runs', 0);
+        $this->assertDatabaseCount('messages', 1);
+    }
+
     public function test_job_starts_scenario_even_when_contact_has_legacy_data_collection_state(): void
     {
         $channel = Channel::factory()->create([
@@ -312,6 +364,11 @@ class ProcessScenarioStartJobTest extends TestCase
         $registry = $this->createMock(ScenarioRegistry::class);
 
         $registry->expects($this->once())
+            ->method('enabledForNewStarts')
+            ->with('warmup')
+            ->willReturn(true);
+
+        $registry->expects($this->once())
             ->method('makeRuntime')
             ->with('warmup')
             ->willReturn(new class implements ResolvedScenarioRuntime
@@ -359,6 +416,11 @@ class ProcessScenarioStartJobTest extends TestCase
     private function startingScenarioRegistry(): ScenarioRegistry
     {
         $registry = $this->createMock(ScenarioRegistry::class);
+
+        $registry->expects($this->once())
+            ->method('enabledForNewStarts')
+            ->with('warmup')
+            ->willReturn(true);
 
         $registry->expects($this->once())
             ->method('makeRuntime')
