@@ -570,6 +570,10 @@ class Channel extends Model
             return false;
         }
 
+        if ($this->hasUnreadableCredentials()) {
+            return false;
+        }
+
         if ($this->isAccountConnection()) {
             return $this->hasReadyTelegramAccountGatewayOutgoingReplies();
         }

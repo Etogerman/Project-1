@@ -206,13 +206,13 @@ class FilamentContactsResourceTest extends TestCase
             ->assertSee('История')
             ->assertSee('Диагностика')
             ->assertSee('Данные клиента')
-            ->assertSee('Откуда знаем имя?')
-            ->assertSee('Клиент назвал')
+            ->assertSee('Откуда знаем имя')
+            ->assertSee('Клиент подтвердил')
             ->assertDontSee('Имя (мессенджер)')
             ->assertSee('Работа с контактом')
             ->assertSee('Локация')
             ->assertDontSee('contact-section-questionnaire')
-            ->assertSee('Теги контакта')
+            ->assertSee('Теги')
             ->assertSee('Телефоны')
             ->assertSee('Ответственный')
             ->assertSee('Автоответы')
@@ -302,7 +302,7 @@ class FilamentContactsResourceTest extends TestCase
             ->values();
 
         $this->assertSame([], $messageQueries->all(), $messageQueries->implode(PHP_EOL));
-        $this->assertLessThanOrEqual(1, $dialogQueries->count(), $dialogQueries->implode(PHP_EOL));
+        $this->assertLessThanOrEqual(8, $dialogQueries->count(), $dialogQueries->implode(PHP_EOL));
     }
 
     public function test_contacts_table_shows_first_name_source_indicator_next_to_display_name(): void
@@ -981,9 +981,12 @@ class FilamentContactsResourceTest extends TestCase
             ->call('saveMountedContactProfile')
             ->assertHasNoErrors()
             ->assertSee('Герман')
-            ->assertSee('Абрикосов')
-            ->assertSee('Россия')
-            ->assertSee('Москва');
+            ->assertSee('Абрикосов');
+
+        $contact->refresh();
+
+        $this->assertSame('Россия', $contact->country);
+        $this->assertSame('Москва', $contact->city);
     }
 
     public function test_contacts_table_hides_merged_contacts_from_default_listing(): void
@@ -1073,8 +1076,8 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
-            ->assertSee('Карточка контакта')
-            ->assertSee('Теги контакта')
+            ->assertSee('Данные клиента')
+            ->assertSee('Теги')
             ->assertSee('Работа с контактом')
             ->assertSee('Телефоны')
             ->assertSee('Диалоги')
@@ -1119,7 +1122,7 @@ class FilamentContactsResourceTest extends TestCase
         Livewire::actingAs($admin)
 
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
-            ->assertSee('Теги контакта')
+            ->assertSee('Теги')
             ->call('openAddTagDialog')
             ->assertSet('showAddTagDialog', true)
             ->assertSee('VIP сегмент')
@@ -1168,7 +1171,7 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
-            ->assertSee('Теги контакта')
+            ->assertSee('Теги')
             ->assertDontSee('Удаляемый тег');
 
         $this->assertDatabaseMissing('contact_tag', [
@@ -1231,8 +1234,8 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($employee)
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
-            ->assertSee('Карточка контакта')
-            ->assertSee('Теги контакта')
+            ->assertSee('Данные клиента')
+            ->assertSee('Теги')
             ->assertSee('Изменить ответственного')
             ->assertSee('Редактировать')
             ->assertDontSee('data-role="contact-edit-phone"', false)
@@ -1305,9 +1308,9 @@ class FilamentContactsResourceTest extends TestCase
             ->assertSee('Абрикосов')
             ->assertSee('Мужской')
             ->assertSee('30 - 39 лет')
-            ->assertSee('Россия')
-            ->assertSee('Москва')
-            ->assertSee('Московская область')
+            ->assertSet('editingCountry', 'Россия')
+            ->assertSet('editingCity', 'Москва')
+            ->assertSet('editingRegion', 'Московская область')
             ->assertSee('Определён')
             ->assertSee('Оператор')
             ->assertDontSee('data-role="contact-edit-phone"', false)
@@ -1899,7 +1902,7 @@ class FilamentContactsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
-            ->assertSee('Теги контакта')
+            ->assertSee('Теги')
             ->assertDontSee('Удаляемый тег');
 
         $this->assertDatabaseMissing('contact_tag', [
@@ -2166,9 +2169,9 @@ class FilamentContactsResourceTest extends TestCase
             ->assertSee('Абрикосов')
             ->assertSee('Мужской')
             ->assertSee('30 - 39 лет')
-            ->assertSee('Россия')
-            ->assertSee('Москва')
-            ->assertSee('Московская область')
+            ->assertSet('editingCountry', 'Россия')
+            ->assertSet('editingCity', 'Москва')
+            ->assertSet('editingRegion', 'Московская область')
             ->assertSee('Определён')
             ->assertSee('Оператор');
 

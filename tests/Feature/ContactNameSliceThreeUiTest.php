@@ -44,9 +44,9 @@ class ContactNameSliceThreeUiTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->assertSee('Абрикосов Герман')
-            ->assertSee('Откуда знаем имя?')
-            ->assertSee('Клиент назвал')
-            ->assertSee('Как обработали имя?')
+            ->assertSee('Откуда знаем имя')
+            ->assertSee('Клиент подтвердил')
+            ->assertSee('Как обработали имя')
             ->assertSee('Справочник имён')
             ->assertDontSee('Имя (мессенджер)');
     }
@@ -65,7 +65,7 @@ class ContactNameSliceThreeUiTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
-            ->assertSee('Откуда знаем имя?')
+            ->assertSee('Откуда знаем имя')
             ->assertSee('Источник не определён');
     }
 

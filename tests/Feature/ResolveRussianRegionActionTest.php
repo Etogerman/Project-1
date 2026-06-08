@@ -37,6 +37,7 @@ class ResolveRussianRegionActionTest extends TestCase
             'status' => Contact::REGION_STATUS_RESOLVED,
             'region' => 'Московская область',
             'candidate_regions' => [],
+            'source' => 'dictionary',
         ], $result);
     }
 
@@ -64,6 +65,7 @@ class ResolveRussianRegionActionTest extends TestCase
             'status' => Contact::REGION_STATUS_RESOLVED,
             'region' => 'Мурманская область',
             'candidate_regions' => [],
+            'source' => 'dictionary',
         ], $result);
     }
 
@@ -93,6 +95,7 @@ class ResolveRussianRegionActionTest extends TestCase
             'status' => Contact::REGION_STATUS_CLARIFICATION_PENDING,
             'region' => null,
             'candidate_regions' => ['Волгоградская область', 'Воронежская область', 'Приморский край'],
+            'source' => 'dictionary',
         ], $result);
     }
 
@@ -136,6 +139,7 @@ class ResolveRussianRegionActionTest extends TestCase
                 'Приморский край',
                 'Тульская область',
             ],
+            'source' => 'dictionary',
         ], $result);
     }
 
@@ -162,6 +166,7 @@ class ResolveRussianRegionActionTest extends TestCase
             'status' => Contact::REGION_STATUS_UNKNOWN,
             'region' => null,
             'candidate_regions' => [],
+            'source' => null,
         ], $result);
     }
 
@@ -187,6 +192,7 @@ class ResolveRussianRegionActionTest extends TestCase
             'status' => Contact::REGION_STATUS_RESOLVED,
             'region' => 'Республика Татарстан',
             'candidate_regions' => [],
+            'source' => 'ai',
         ], $result);
     }
 
@@ -209,6 +215,7 @@ class ResolveRussianRegionActionTest extends TestCase
             'status' => Contact::REGION_STATUS_OUT_OF_SCOPE,
             'region' => null,
             'candidate_regions' => [],
+            'source' => null,
         ], $result);
     }
 
@@ -226,6 +233,7 @@ class ResolveRussianRegionActionTest extends TestCase
             'status' => Contact::REGION_STATUS_UNKNOWN,
             'region' => null,
             'candidate_regions' => [],
+            'source' => null,
         ], $result);
     }
 
