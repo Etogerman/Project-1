@@ -2951,6 +2951,11 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                     'block_id' => $blockId,
                     'ai_request_id' => $result['ai_request_id'] ?? null,
                 ]);
+
+                return $this->activeProgress(
+                    $blockId,
+                    $this->markV3Waiting($statePayload, $blockId, $block, $message->channel),
+                );
             }
 
             return null;
@@ -5373,6 +5378,9 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                     $this->v3AiAnalysisSchema($outputs, $extractFields),
                     $aiContext,
                     $existingAiRequest instanceof AiRequest ? $existingAiRequest : null,
+                    function (array $payload) use ($outputs): void {
+                        $this->validateV3AiAnalysisResponseOutput($payload, $outputs);
+                    },
                 );
 
                 $aiRequestId = is_numeric($cycleResult['ai_request_id'] ?? null) ? (int) $cycleResult['ai_request_id'] : null;
@@ -5480,13 +5488,6 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 || ($candidate['id'] ?? null) === $outputId);
 
         if (! is_array($output)) {
-            Log::warning('scenario.v3_ai_analysis_unknown_output', [
-                'scenario_code' => $this->code(),
-                'dialog_id' => $message->dialog_id,
-                'message_id' => $message->id,
-                'output_id' => $outputId,
-            ]);
-
             return [
                 'output_id' => self::V3_AI_FAILED_OUTPUT_ID,
                 'label' => 'Ошибка ИИ',
@@ -5522,6 +5523,29 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             'error' => false,
             'error_reason' => null,
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @param  list<array{id: string, choice_id: string, label: string, delay_seconds: int}>  $outputs
+     */
+    private function validateV3AiAnalysisResponseOutput(array $payload, array $outputs): void
+    {
+        $outputId = trim((string) ($payload['output_id'] ?? ''));
+        $output = collect($outputs)
+            ->first(fn (array $candidate): bool => ($candidate['choice_id'] ?? null) === $outputId
+                || ($candidate['id'] ?? null) === $outputId);
+
+        if (is_array($output)) {
+            return;
+        }
+
+        Log::warning('scenario.v3_ai_analysis_unknown_output', [
+            'scenario_code' => $this->code(),
+            'output_id' => $outputId,
+        ]);
+
+        throw new RuntimeException("AI analysis returned unknown output_id [{$outputId}].");
     }
 
     /**

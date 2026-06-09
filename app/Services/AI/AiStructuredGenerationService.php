@@ -126,6 +126,7 @@ class AiStructuredGenerationService
 
     /**
      * @param  array<string, mixed>  $responseJsonSchema
+     * @param  (callable(array<string, mixed>): void)|null  $validateParsedPayload
      * @return array{
      *     status: 'success'|'temporary_failed'|'failed',
      *     result?: AiStructuredGenerationResult,
@@ -141,6 +142,7 @@ class AiStructuredGenerationService
         array $responseJsonSchema,
         AiGenerationContext $context,
         ?AiRequest $aiRequest = null,
+        ?callable $validateParsedPayload = null,
     ): array {
         $aiRequest ??= $this->aiRequestAnalyticsService->start($context, $systemPrompt, $userPrompt);
         $processors = $this->activeProcessors();
@@ -161,6 +163,7 @@ class AiStructuredGenerationService
                     userPrompt: $userPrompt,
                     responseJsonSchema: $responseJsonSchema,
                     settings: $processor instanceof AiProcessor ? $processor->structuredSettings() : null,
+                    validateParsedPayload: $validateParsedPayload,
                 );
 
                 return [
@@ -218,6 +221,7 @@ class AiStructuredGenerationService
     /**
      * @param  array<string, mixed>  $responseJsonSchema
      * @param  array<string, mixed>|null  $settings
+     * @param  (callable(array<string, mixed>): void)|null  $validateParsedPayload
      */
     private function generateWithAnalyticsAttempt(
         ?AiRequest $aiRequest,
@@ -227,6 +231,7 @@ class AiStructuredGenerationService
         string $userPrompt,
         array $responseJsonSchema,
         ?array $settings,
+        ?callable $validateParsedPayload = null,
     ): AiStructuredGenerationResult {
         $startedAt = now();
 
@@ -240,6 +245,10 @@ class AiStructuredGenerationService
                 ),
                 default => throw new RuntimeException("AI provider [{$processor?->provider}] is not supported."),
             };
+
+            if ($validateParsedPayload !== null) {
+                $validateParsedPayload($response->parsedPayload);
+            }
         } catch (AiProviderRequestException $throwable) {
             $finishedAt = now();
             $attempt = $this->aiRequestAnalyticsService->recordErrorAttempt(

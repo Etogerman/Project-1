@@ -4682,11 +4682,11 @@ function ScenarioNode({
                                 output.kind === 'default' ? 'is-default-output' : 'is-button-output',
                                 output.legacy ? 'is-legacy-output' : '',
                             ].filter(Boolean).join(' ')}
-                            title={output.kind === 'default'
+                            title={output.hint || (output.kind === 'default'
                                 ? 'Связать автопереход с блоком'
                                 : (output.legacy
                                     ? 'Старый выход: можно удалить существующую стрелку, новые стрелки не создаются'
-                                    : (output.kind === 'ai' ? 'Связать результат ИИ с блоком' : 'Связать кнопку с блоком'))}
+                                    : (output.kind === 'ai' ? 'Связать результат ИИ с блоком' : 'Связать кнопку с блоком')))}
                             onPointerDown={(event) => onStartConnection(event, block, output)}
                             onClick={(event) => event.stopPropagation()}
                         >
@@ -9816,7 +9816,12 @@ function blockOutputs(block) {
             id: output.id,
             label: output.label || output.id,
             kind: output.source || 'button',
-            caption: output.system ? 'Система' : (output.source === 'ai' ? 'ИИ' : (output.source === 'action' ? 'Действие' : null)),
+            caption: output.id === AI_FAILED_OUTPUT.id
+                ? 'Система · резервная ветка'
+                : (output.system ? 'Система' : (output.source === 'ai' ? 'ИИ' : (output.source === 'action' ? 'Действие' : null))),
+            hint: output.id === AI_FAILED_OUTPUT.id
+                ? 'Рекомендуется провести резервную стрелку: она сработает, если ИИ не дал корректный результат после повторных попыток.'
+                : null,
             legacy: Boolean(output.legacy) || output.id === ACTION_GEO_CITY_LEGACY_LIMIT_OUTPUT.id,
         }));
     }

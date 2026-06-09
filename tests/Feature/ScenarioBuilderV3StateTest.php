@@ -1086,6 +1086,9 @@ class ScenarioBuilderV3StateTest extends TestCase
         $aiPayload = $this->edgePayload('name_accepted', 'Имя найдено');
         $aiPayload['mode'] = 'ai_analysis';
         $aiPayload['match'] = ['type' => 'any_inbound', 'text' => ''];
+        $aiFailedPayload = $this->edgePayload('ai_failed', 'Ошибка ИИ');
+        $aiFailedPayload['mode'] = 'ai_analysis';
+        $aiFailedPayload['match'] = ['type' => 'any_inbound', 'text' => ''];
         $edges = [
             [
                 'id' => null,
@@ -1101,6 +1104,13 @@ class ScenarioBuilderV3StateTest extends TestCase
                 'target' => ['block_id' => null, 'client_key' => 'tmp_action'],
                 'condition_payload' => $aiPayload,
             ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_ai_failed',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_ai', 'output_id' => 'ai_failed'],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_action'],
+                'condition_payload' => $aiFailedPayload,
+            ],
         ];
 
         $saved = $this->actingAs($admin)
@@ -1109,6 +1119,8 @@ class ScenarioBuilderV3StateTest extends TestCase
             ->assertJsonPath('builder.blocks.1.settings_payload.modules.0.type', 'ai')
             ->assertJsonPath('builder.blocks.1.settings_payload.outputs.0.id', 'name_accepted')
             ->assertJsonPath('builder.edges.1.condition_payload.mode', 'ai_analysis')
+            ->assertJsonPath('builder.edges.2.source.output_id', 'ai_failed')
+            ->assertJsonPath('builder.edges.2.condition_payload.mode', 'ai_analysis')
             ->json();
 
         $this->actingAs($admin)
@@ -1140,6 +1152,14 @@ class ScenarioBuilderV3StateTest extends TestCase
         );
         $this->assertTrue(
             (bool) data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$aiBlockId.ai_analysis.outputs.2.system"),
+        );
+        $this->assertSame(
+            'ai_analysis',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$aiBlockId.ai_analysis.outputs.2.edge.mode"),
+        );
+        $this->assertSame(
+            $actionBlockId,
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$aiBlockId.ai_analysis.outputs.2.target_block_id"),
         );
         $this->assertSame(
             'first_name',
