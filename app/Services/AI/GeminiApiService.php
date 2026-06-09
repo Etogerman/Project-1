@@ -7,6 +7,7 @@ use App\Models\AiProcessor;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
+use Throwable;
 
 class GeminiApiService
 {
@@ -47,12 +48,33 @@ class GeminiApiService
         $requestBody = $this->structuredRequestBody($systemPrompt, $userPrompt, $responseJsonSchema, $settings);
         $requestBodyRaw = $this->encodeBody($requestBody);
 
-        $response = Http::asJson()
-            ->timeout($this->timeoutSeconds($settings))
-            ->withHeaders([
-                'x-goog-api-key' => $apiKey,
-            ])
-            ->post($url, $requestBody);
+        try {
+            $response = Http::asJson()
+                ->timeout($this->timeoutSeconds($settings))
+                ->withHeaders([
+                    'x-goog-api-key' => $apiKey,
+                ])
+                ->post($url, $requestBody);
+        } catch (Throwable $throwable) {
+            $this->logStructuredFailure(
+                model: $model,
+                httpStatus: null,
+                systemPrompt: $systemPrompt,
+                userPrompt: $userPrompt,
+                rawBody: '',
+                error: 'Gemini API request failed before HTTP response.',
+            );
+
+            throw new AiProviderRequestException(
+                'Gemini API request failed before HTTP response: '.$throwable->getMessage(),
+                AiProcessor::PROVIDER_GEMINI,
+                $model,
+                $requestBodyRaw,
+                '',
+                null,
+                previous: $throwable,
+            );
+        }
 
         $httpStatus = $response->status();
         $rawBody = $response->body();

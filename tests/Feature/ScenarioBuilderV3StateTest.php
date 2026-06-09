@@ -1135,6 +1135,13 @@ class ScenarioBuilderV3StateTest extends TestCase
             data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$aiBlockId.ai_analysis.outputs.1.delay_seconds"),
         );
         $this->assertSame(
+            'ai_failed',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$aiBlockId.ai_analysis.outputs.2.id"),
+        );
+        $this->assertTrue(
+            (bool) data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$aiBlockId.ai_analysis.outputs.2.system"),
+        );
+        $this->assertSame(
             'first_name',
             data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$aiBlockId.ai_analysis.extract_fields.0.key"),
         );

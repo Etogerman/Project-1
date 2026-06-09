@@ -53,6 +53,8 @@ class ValidateScenarioBuilderV3StateAction
 
     private const MAX_AI_VARIANT_DELAY_SECONDS = 300;
 
+    private const AI_FAILED_OUTPUT_ID = 'ai_failed';
+
     private const MAX_ACTIONS_PER_BLOCK = 20;
 
     private const ACTION_TYPES = [
@@ -315,6 +317,7 @@ class ValidateScenarioBuilderV3StateAction
         $outputs = $this->hasResolveGeoCityAction($modules)
             ? $this->geoCityCanonicalOutputs($modules)
             : ($this->hasVariablesAction($modules) ? $this->withoutLegacyVariableOutputs($outputs) : $outputs);
+        $outputs = $this->hasAiModuleInModules($modules) ? $this->withAiFailedOutput($outputs) : $outputs;
         $kind = $this->optionalStringValue(
             $settingsPayload['kind'] ?? 'state',
             "builder.blocks.$blockIndex.settings_payload.kind",
@@ -1900,6 +1903,14 @@ class ValidateScenarioBuilderV3StateAction
             return true;
         }
 
+        if (
+            $outputId === self::AI_FAILED_OUTPUT_ID
+            && is_array($block)
+            && $this->hasAiModuleInModules(data_get($block, 'settings_payload.modules', []))
+        ) {
+            return true;
+        }
+
         $outputs = data_get($block, 'settings_payload.outputs', []);
 
         return collect(is_array($outputs) ? $outputs : [])
@@ -2012,6 +2023,21 @@ class ValidateScenarioBuilderV3StateAction
         return false;
     }
 
+    private function hasAiModuleInModules(mixed $modules): bool
+    {
+        if (! is_array($modules)) {
+            return false;
+        }
+
+        foreach ($modules as $module) {
+            if (is_array($module) && ($module['type'] ?? null) === 'ai') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /**
      * @param  list<array<string, mixed>>  $modules
      * @return list<array<string, mixed>>
@@ -2062,6 +2088,30 @@ class ValidateScenarioBuilderV3StateAction
                 && ! in_array((string) ($output['id'] ?? ''), self::VARIABLES_LEGACY_OUTPUTS, true))
             ->values()
             ->all();
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $outputs
+     * @return list<array<string, mixed>>
+     */
+    private function withAiFailedOutput(array $outputs): array
+    {
+        $outputs = collect($outputs)
+            ->reject(fn (array $output): bool => ($output['id'] ?? null) === self::AI_FAILED_OUTPUT_ID)
+            ->values()
+            ->all();
+
+        $outputs[] = [
+            'id' => self::AI_FAILED_OUTPUT_ID,
+            'label' => 'Ошибка ИИ',
+            'source' => 'ai',
+            'module_id' => 'mod_ai',
+            'ai_variant_id' => self::AI_FAILED_OUTPUT_ID,
+            'ai_choice_id' => null,
+            'system' => true,
+        ];
+
+        return $outputs;
     }
 
     /**

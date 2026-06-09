@@ -126,6 +126,97 @@ class AiStructuredGenerationService
 
     /**
      * @param  array<string, mixed>  $responseJsonSchema
+     * @return array{
+     *     status: 'success'|'temporary_failed'|'failed',
+     *     result?: AiStructuredGenerationResult,
+     *     ai_request_id?: ?int,
+     *     last_attempt_id?: ?int,
+     *     error_message?: string,
+     *     has_non_temporary_error?: bool
+     * }
+     */
+    public function generateStructuredV3Cycle(
+        string $systemPrompt,
+        string $userPrompt,
+        array $responseJsonSchema,
+        AiGenerationContext $context,
+        ?AiRequest $aiRequest = null,
+    ): array {
+        $aiRequest ??= $this->aiRequestAnalyticsService->start($context, $systemPrompt, $userPrompt);
+        $processors = $this->activeProcessors();
+        $processors = $processors !== [] ? $processors : [null];
+        $lastThrowable = null;
+        $lastAttempt = null;
+        $hasNonTemporaryError = false;
+
+        foreach ($processors as $processor) {
+            $attemptNumber = $this->aiRequestAnalyticsService->nextAttemptNumber($aiRequest);
+
+            try {
+                $result = $this->generateWithAnalyticsAttempt(
+                    aiRequest: $aiRequest,
+                    attemptNumber: $attemptNumber,
+                    processor: $processor,
+                    systemPrompt: $systemPrompt,
+                    userPrompt: $userPrompt,
+                    responseJsonSchema: $responseJsonSchema,
+                    settings: $processor instanceof AiProcessor ? $processor->structuredSettings() : null,
+                );
+
+                return [
+                    'status' => 'success',
+                    'result' => $result,
+                    'ai_request_id' => $aiRequest?->id,
+                    'last_attempt_id' => $result->finalAttemptId,
+                    'has_non_temporary_error' => $hasNonTemporaryError,
+                ];
+            } catch (AiProviderRequestException $throwable) {
+                $lastThrowable = $throwable;
+                $lastAttempt = $aiRequest?->attempts()->latest('id')->first();
+
+                if ($processor instanceof AiProcessor) {
+                    $this->markProcessorFailed($processor, $throwable);
+                }
+
+                if (! $throwable->isTemporary()) {
+                    $hasNonTemporaryError = true;
+                }
+            } catch (Throwable $throwable) {
+                $lastThrowable = $throwable;
+                $lastAttempt = $aiRequest?->attempts()->latest('id')->first();
+                $hasNonTemporaryError = true;
+
+                if ($processor instanceof AiProcessor) {
+                    $this->markProcessorFailed($processor, $throwable);
+                }
+            }
+        }
+
+        if (! $hasNonTemporaryError) {
+            $this->aiRequestAnalyticsService->markRetrying($aiRequest);
+
+            return [
+                'status' => 'temporary_failed',
+                'ai_request_id' => $aiRequest?->id,
+                'last_attempt_id' => $lastAttempt?->id,
+                'error_message' => $lastThrowable?->getMessage() ?? 'Temporary AI provider error.',
+                'has_non_temporary_error' => false,
+            ];
+        }
+
+        $this->aiRequestAnalyticsService->finalize($aiRequest, $lastAttempt, false);
+
+        return [
+            'status' => 'failed',
+            'ai_request_id' => $aiRequest?->id,
+            'last_attempt_id' => $lastAttempt?->id,
+            'error_message' => $lastThrowable?->getMessage() ?? 'AI provider error.',
+            'has_non_temporary_error' => true,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $responseJsonSchema
      * @param  array<string, mixed>|null  $settings
      */
     private function generateWithAnalyticsAttempt(
@@ -150,6 +241,18 @@ class AiStructuredGenerationService
                 default => throw new RuntimeException("AI provider [{$processor?->provider}] is not supported."),
             };
         } catch (AiProviderRequestException $throwable) {
+            $finishedAt = now();
+            $attempt = $this->aiRequestAnalyticsService->recordErrorAttempt(
+                $aiRequest,
+                $attemptNumber,
+                $processor,
+                $throwable,
+                $startedAt,
+                $finishedAt,
+            );
+
+            throw $throwable;
+        } catch (Throwable $throwable) {
             $finishedAt = now();
             $attempt = $this->aiRequestAnalyticsService->recordErrorAttempt(
                 $aiRequest,

@@ -143,6 +143,8 @@ class AiRequestResource extends Resource
                     ->options([
                         AiRequest::STATUS_SUCCESS => 'Успешно',
                         AiRequest::STATUS_ERROR => 'Ошибка',
+                        AiRequest::STATUS_RETRYING => 'Повтор',
+                        AiRequest::STATUS_CANCELLED => 'Отменён',
                     ]),
                 SelectFilter::make('channel_id')
                     ->label('Канал')

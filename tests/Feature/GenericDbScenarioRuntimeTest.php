@@ -16,6 +16,7 @@ use App\Jobs\ProcessScenarioStartJob;
 use App\Jobs\ProcessScenarioV3AiAnalysisJob;
 use App\Jobs\ProcessScenarioV3OutboundMessageJob;
 use App\Jobs\ProcessScenarioV3ScheduledTransitionJob;
+use App\Jobs\RetryScenarioV3AiAnalysisJob;
 use App\Models\AiRequest;
 use App\Models\AiTask;
 use App\Models\AutoReplyRule;
@@ -1458,8 +1459,11 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame([], data_get($run->state_payload, 'v3.ai_analysis.ai.data'));
     }
 
-    public function test_v3_ai_analysis_provider_error_keeps_error_request_and_state_error(): void
+    public function test_v3_ai_analysis_temporary_provider_error_schedules_retry(): void
     {
+        Queue::fake([
+            RetryScenarioV3AiAnalysisJob::class,
+        ]);
         Http::fake([
             'https://api.telegram.org/*' => Http::sequence()
                 ->push(['ok' => true, 'result' => ['message_id' => 9366]]),
@@ -1529,11 +1533,127 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $request = AiRequest::query()->with('attempts')->sole();
         $run->refresh();
 
-        $this->assertSame(AiRequest::STATUS_ERROR, $request->status);
-        $this->assertSame($request->id, data_get($run->state_payload, 'v3.ai_analysis.ai.ai_request_id'));
-        $this->assertTrue(data_get($run->state_payload, 'v3.ai_analysis.ai.error'));
-        $this->assertSame('ai_failed', data_get($run->state_payload, 'v3.ai_analysis.ai.error_reason'));
+        $retry = data_get($run->state_payload, 'v3.ai_analysis_retry.ai');
+
+        $this->assertSame(AiRequest::STATUS_RETRYING, $request->status);
+        $this->assertSame('ai', $run->current_step);
+        $this->assertSame($request->id, data_get($retry, 'ai_request_id'));
+        $this->assertSame(2, data_get($retry, 'cycle'));
+        $this->assertSame('temporary_provider_error', data_get($retry, 'reason'));
         $this->assertCount(1, $request->attempts);
+        Queue::assertPushed(RetryScenarioV3AiAnalysisJob::class, fn (RetryScenarioV3AiAnalysisJob $job): bool => $job->scenarioRunId === $run->id
+            && $job->inboundMessageId === $answer->id
+            && $job->blockId === 'ai'
+            && $job->cycle === 2);
+    }
+
+    public function test_v3_ai_analysis_exhausted_temporary_retries_routes_to_ai_failed(): void
+    {
+        Queue::fake([
+            RetryScenarioV3AiAnalysisJob::class,
+        ]);
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9367]]),
+        ]);
+
+        $gemini = Mockery::mock(GeminiApiService::class);
+        $gemini
+            ->shouldReceive('generateStructuredWithMetadata')
+            ->twice()
+            ->andThrow(new AiProviderRequestException(
+                message: 'overloaded',
+                provider: 'gemini',
+                model: 'test-gemini',
+                requestBodyRaw: '{}',
+                responseBodyRaw: '{"error":"overloaded"}',
+                httpStatus: 503,
+            ));
+        $this->app->instance(GeminiApiService::class, $gemini);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $schema = $this->v3AiNameRuntimeSchema($channel->id);
+        data_set($schema, 'builder_v3_runtime.blocks.ai.ai_analysis.extract_fields', [[
+            'key' => 'geo_city',
+            'label' => 'Город',
+            'type' => 'text',
+        ]]);
+        $scenario = $this->createPublishedScenario('v3_ai_retry_exhausted', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+        $answer = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'Москва',
+        ]);
+
+        (new ProcessScenarioInboundJob($answer->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $request = AiRequest::query()->with('attempts')->sole();
+        $run->refresh();
+        $token = 'final-retry-token';
+        $statePayload = $run->state_payload;
+        data_set($statePayload, 'v3.ai_analysis_retry.ai', [
+            'token' => $token,
+            'cycle' => 4,
+            'max_cycles' => 4,
+            'ai_request_id' => $request->id,
+            'message_id' => $answer->id,
+            'reason' => 'temporary_provider_error',
+        ]);
+        $run->forceFill(['state_payload' => $statePayload])->save();
+
+        (new RetryScenarioV3AiAnalysisJob(
+            $run->id,
+            $dialog->id,
+            $answer->id,
+            $scenario->code,
+            $scenario->publishedVersion->id,
+            'ai',
+            $token,
+            4,
+        ))->handle(app(ScenarioRegistry::class));
+
+        $request->refresh()->load('attempts');
+        $run->refresh();
+
+        $this->assertSame(AiRequest::STATUS_ERROR, $request->status);
+        $this->assertCount(2, $request->attempts);
+        $this->assertNull(data_get($run->state_payload, 'v3.ai_analysis_retry.ai'));
+        $this->assertSame('ai_failed', data_get($run->state_payload, 'v3.ai_analysis.ai.output_id'));
+        $this->assertSame('ai_failed', data_get($run->state_payload, 'v3.ai_analysis.ai.error_reason'));
+        $this->assertSame('ai_failed_no_edge', data_get($run->state_payload, 'v3.ai_analysis.ai.route_error_reason'));
+        $this->assertSame('ai', $run->current_step);
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
     }
 
     public function test_v3_ai_analysis_normalizes_first_name_with_dictionary_before_contact_write(): void
