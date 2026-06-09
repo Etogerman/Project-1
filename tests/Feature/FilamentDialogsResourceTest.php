@@ -496,6 +496,7 @@ class FilamentDialogsResourceTest extends TestCase
         $config = collect(DialogResource::getDialogsTableColumnLayoutConfig())->keyBy('id');
 
         $this->assertSame([
+            'selection',
             'contact',
             'status',
             'last_message',
@@ -513,6 +514,10 @@ class FilamentDialogsResourceTest extends TestCase
             'external_chat_id',
         ], $config->keys()->all());
 
+        $this->assertSame('__selection', $config['selection']['filament']);
+        $this->assertSame(48, $config['selection']['defaultWidth']);
+        $this->assertSame(48, $config['selection']['minWidth']);
+        $this->assertTrue($config['selection']['defaultVisible']);
         $this->assertSame('preview-text', $config['last_message']['filament']);
         $this->assertSame(260, $config['last_message']['defaultWidth']);
         $this->assertSame(180, $config['last_message']['minWidth']);
@@ -534,6 +539,7 @@ class FilamentDialogsResourceTest extends TestCase
             ->get(DialogResource::getUrl('index'))
             ->assertOk()
             ->assertSee('ab.dialogs.table.columns.v1.user.', false)
+            ->assertSee('"id":"selection"', false)
             ->assertSee('"id":"last_message"', false)
             ->assertSee('"defaultWidth":260', false)
             ->assertSee("sortTable('contact_label')", false)

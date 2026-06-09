@@ -9372,6 +9372,15 @@
         outline: 1px dashed var(--ac-primary);
     }
 
+    .fi-resource-dialogs .ac-dialogs-columns-row.is-fixed {
+        cursor: default;
+    }
+
+    .fi-resource-dialogs .ac-dialogs-columns-row.is-fixed .ac-dialogs-columns-drag {
+        visibility: hidden;
+        cursor: default;
+    }
+
     .fi-resource-dialogs .ac-dialogs-columns-drag {
         width: 1rem;
         color: var(--ac-text-soft);
@@ -10015,6 +10024,7 @@
         const toolbarSelector = '.fi-resource-dialogs .fi-ta-header-toolbar';
         const scrollSelector = '.fi-resource-dialogs .fi-ta-content-ctn';
         const configByFilament = new Map(columnConfig.map((column) => [column.filament, column]));
+        const selectionColumnConfig = columnConfig.find((column) => column.id === 'selection') || null;
         const tableSortOptions = [
             { code: 'last_message_at:desc', label: 'Сначала новые' },
             { code: 'last_message_at:asc', label: 'Сначала старые' },
@@ -10111,10 +10121,34 @@
             return text || fallback;
         };
 
+        const normalizeSelectionColumn = (table) => {
+            const header = Array.from(table.querySelectorAll('thead tr:first-child > th'))
+                .find((node) => node.querySelector('.fi-checkbox-input'));
+
+            if (!header) {
+                return null;
+            }
+
+            return {
+                id: selectionColumnConfig?.id || 'selection',
+                suffix: '__selection',
+                label: selectionColumnConfig?.label || 'Выбор строк',
+                defaultWidth: selectionColumnConfig?.defaultWidth || 48,
+                minWidth: selectionColumnConfig?.minWidth || 48,
+                defaultVisible: selectionColumnConfig?.defaultVisible ?? true,
+                defaultOrder: selectionColumnConfig?.defaultOrder ?? 0,
+                header,
+                isSelection: true,
+                resizable: false,
+                reorderable: false,
+            };
+        };
+
         const normalizeColumns = (table) => {
             const headers = Array.from(table.querySelectorAll('thead tr:first-child > th'));
+            const selectionColumn = normalizeSelectionColumn(table);
 
-            return headers
+            const dataColumns = headers
                 .map((header, index) => {
                     const suffix = getColumnSuffixFromHeader(header);
 
@@ -10139,9 +10173,15 @@
                     };
                 })
                 .filter(Boolean);
+
+            return selectionColumn ? [selectionColumn, ...dataColumns] : dataColumns;
         };
 
         const getCells = (table, column) => {
+            if (column.isSelection) {
+                return Array.from(table.querySelectorAll('tbody td.fi-ta-selection-cell, tbody td.fi-ta-group-selection-cell'));
+            }
+
             return Array.from(table.querySelectorAll(`.fi-ta-cell-${column.suffix}`));
         };
 
@@ -10160,6 +10200,23 @@
             };
         };
 
+        const hasVisibleDataColumn = (columns, visible) => {
+            return columns.some((column) => !column.isSelection && visible[column.id]);
+        };
+
+        const normalizeOrder = (columns, order) => {
+            const fixedIds = columns
+                .filter((column) => column.reorderable === false)
+                .sort((a, b) => a.defaultOrder - b.defaultOrder)
+                .map((column) => column.id);
+            const fixed = new Set(fixedIds);
+
+            return [
+                ...fixedIds,
+                ...order.filter((id) => !fixed.has(id)),
+            ];
+        };
+
         const normalizeState = (columns, settings = {}) => {
             const defaults = defaultStateFor(columns);
             const known = new Set(columns.map((column) => column.id));
@@ -10173,6 +10230,8 @@
                 }
             });
 
+            const normalizedOrder = normalizeOrder(columns, order);
+
             const visible = { ...defaults.visible };
             Object.entries(settings.visible || {}).forEach(([id, value]) => {
                 if (known.has(id)) {
@@ -10180,8 +10239,9 @@
                 }
             });
 
-            if (!Object.values(visible).some(Boolean) && order.length > 0) {
-                visible[order[0]] = true;
+            if (!hasVisibleDataColumn(columns, visible) && normalizedOrder.length > 0) {
+                const firstDataColumn = columns.find((column) => !column.isSelection);
+                visible[firstDataColumn?.id || normalizedOrder[0]] = true;
             }
 
             const widths = { ...defaults.widths };
@@ -10194,7 +10254,7 @@
                 }
             });
 
-            return { order, visible, widths };
+            return { order: normalizedOrder, visible, widths };
         };
 
         const settingsFromState = (state) => ({
@@ -10221,13 +10281,13 @@
             state.order.forEach((id) => {
                 const column = columns.find((item) => item.id === id);
 
-                if (!column) {
+                if (!column || !state.visible[column.id]) {
                     return;
                 }
 
                 const col = document.createElement('col');
                 col.dataset.acDialogsCol = column.id;
-                col.style.width = `${state.visible[column.id] ? state.widths[column.id] : 0}px`;
+                col.style.width = `${state.widths[column.id]}px`;
                 colgroup.appendChild(col);
             });
         };
@@ -10248,7 +10308,9 @@
                 }
 
                 rows.forEach((row) => {
-                    const cell = row.querySelector(`.fi-ta-cell-${column.suffix}`);
+                    const cell = column.isSelection
+                        ? row.querySelector('td.fi-ta-selection-cell, td.fi-ta-group-selection-cell')
+                        : row.querySelector(`.fi-ta-cell-${column.suffix}`);
 
                     if (cell) {
                         row.appendChild(cell);
@@ -10300,6 +10362,14 @@
             const minWidth = scroll?.clientWidth || 0;
             table.style.width = `${Math.max(visibleWidth, minWidth)}px`;
             table.style.minWidth = `${Math.max(visibleWidth, minWidth)}px`;
+            const selectionColumn = columns.find((column) => column.isSelection);
+            const selectionVisible = selectionColumn ? Boolean(state.visible[selectionColumn.id]) : true;
+            const tableContainer = table.closest('.fi-ta-ctn');
+            tableContainer?.classList.toggle('ac-dialogs-selection-hidden', !selectionVisible);
+            tableContainer?.querySelectorAll('.fi-ta-selection-indicator').forEach((node) => {
+                node.hidden = !selectionVisible;
+                node.style.display = selectionVisible ? '' : 'none';
+            });
             setLastVisibleBoundary(table, columns, state);
             updateScrollState(scroll);
         };
@@ -10331,7 +10401,7 @@
 
         const ensureResizeHandles = (table, columns, state) => {
             columns.forEach((column) => {
-                if (!column.header || column.header.querySelector('[data-ac-dialogs-resize]')) {
+                if (column.resizable === false || !column.header || column.header.querySelector('[data-ac-dialogs-resize]')) {
                     return;
                 }
 
@@ -10526,7 +10596,8 @@
 
                 const row = document.createElement('div');
                 row.className = 'ac-dialogs-columns-row';
-                row.draggable = true;
+                row.draggable = column.reorderable !== false;
+                row.classList.toggle('is-fixed', column.reorderable === false);
                 row.dataset.acDialogsColumnsRow = column.id;
                 row.innerHTML = `
                     <span class="ac-dialogs-columns-drag" aria-hidden="true">⋮⋮</span>
@@ -10544,9 +10615,9 @@
                 input.addEventListener('change', () => {
                     const nextVisible = { ...draft.visible, [column.id]: input.checked };
 
-                    if (!Object.values(nextVisible).some(Boolean)) {
+                    if (!hasVisibleDataColumn(columns, nextVisible)) {
                         input.checked = true;
-                        message.textContent = 'Оставьте хотя бы одну колонку.';
+                        message.textContent = 'Оставьте хотя бы одну колонку данных.';
 
                         return;
                     }
@@ -10556,6 +10627,10 @@
                 });
 
                     list.appendChild(row);
+
+                    if (column.reorderable === false) {
+                        return;
+                    }
 
                     const dragHandle = row.querySelector('.ac-dialogs-columns-drag');
                     dragHandle?.addEventListener('pointerdown', (event) => {
@@ -10570,7 +10645,7 @@
 
                         const moveRow = (moveEvent) => {
                             const rows = Array.from(list.querySelectorAll('[data-ac-dialogs-columns-row]'))
-                                .filter((candidate) => candidate !== row);
+                                .filter((candidate) => candidate !== row && !candidate.classList.contains('is-fixed'));
                             const target = rows.find((candidate) => {
                                 const rect = candidate.getBoundingClientRect();
 
@@ -10803,10 +10878,10 @@
                         .map((row) => row.dataset.acDialogsColumnsRow)
                         .filter(Boolean);
 
-                    draft.order = order.length ? order : draft.order;
+                    draft.order = order.length ? normalizeOrder(columns, order) : draft.order;
 
-                    if (!Object.values(draft.visible).some(Boolean)) {
-                        details.querySelector('[data-ac-dialogs-columns-message]').textContent = 'Оставьте хотя бы одну колонку.';
+                    if (!hasVisibleDataColumn(columns, draft.visible)) {
+                        details.querySelector('[data-ac-dialogs-columns-message]').textContent = 'Оставьте хотя бы одну колонку данных.';
 
                         return;
                     }
@@ -10838,7 +10913,7 @@
                     const dragging = list.querySelector('.is-dragging');
                     const target = event.target.closest('[data-ac-dialogs-columns-row]');
 
-                    if (!dragging || !target || dragging === target) {
+                    if (!dragging || !target || dragging === target || target.classList.contains('is-fixed')) {
                         return;
                     }
 
