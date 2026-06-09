@@ -103,7 +103,12 @@
 
                     <span class="ac-kanban-view-switch" role="group" aria-label="Вид диалогов">
                         <span class="ac-kanban-view-switch__item is-active">Канбан</span>
-                        <a href="{{ $table_url }}" class="ac-kanban-view-switch__item">
+                        <a
+                            href="{{ $table_url }}"
+                            class="ac-kanban-view-switch__item"
+                            wire:navigate.hover
+                            data-ac-dialogs-view-link
+                        >
                             Таблица
                         </a>
                     </span>

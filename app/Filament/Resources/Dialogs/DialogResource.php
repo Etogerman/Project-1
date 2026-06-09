@@ -322,6 +322,7 @@ class DialogResource extends Resource
     public static function getDialogsTableColumnLayoutConfig(): array
     {
         return [
+            ['id' => 'selection', 'filament' => '__selection', 'label' => 'Выбор строк', 'defaultWidth' => 48, 'minWidth' => 48, 'defaultVisible' => true, 'defaultOrder' => 0],
             ['id' => 'contact', 'filament' => 'contact-label', 'label' => 'Контакт', 'defaultWidth' => 160, 'minWidth' => 120, 'defaultVisible' => true, 'defaultOrder' => 10],
             ['id' => 'status', 'filament' => 'inbox-status', 'label' => 'Статус', 'defaultWidth' => 130, 'minWidth' => 110, 'defaultVisible' => true, 'defaultOrder' => 20],
             ['id' => 'last_message', 'filament' => 'preview-text', 'label' => 'Последнее сообщение', 'defaultWidth' => 260, 'minWidth' => 180, 'defaultVisible' => true, 'defaultOrder' => 30],
