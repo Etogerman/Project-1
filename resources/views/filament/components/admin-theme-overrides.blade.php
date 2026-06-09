@@ -5150,6 +5150,35 @@
         box-shadow: none;
     }
 
+    .ac-kanban-view-switch.is-loading {
+        pointer-events: none;
+    }
+
+    .ac-kanban-view-switch__item[data-ac-dialogs-view-link] {
+        position: relative;
+    }
+
+    .ac-kanban-view-switch__item[data-ac-dialogs-view-link].is-loading {
+        opacity: 0.72;
+    }
+
+    .ac-kanban-view-switch__item[data-ac-dialogs-view-link].is-loading::after {
+        content: '';
+        width: 0.68rem;
+        height: 0.68rem;
+        margin-left: 0.38rem;
+        border: 2px solid currentColor;
+        border-right-color: transparent;
+        border-radius: 999px;
+        animation: ac-dialogs-view-switch-spin 760ms linear infinite;
+    }
+
+    @keyframes ac-dialogs-view-switch-spin {
+        to {
+            transform: rotate(360deg);
+        }
+    }
+
     .ac-kanban-sort-wrap {
         position: relative;
         display: inline-flex;
@@ -10033,11 +10062,69 @@
         ];
         let sortFallbackListenerReady = false;
         let rowNavigationFallbackReady = false;
+        let viewSwitchLoadingListenerReady = false;
+        let viewSwitchLoadingResetTimer = null;
 
         const isDialogsIndex = () => {
             const path = window.location.pathname.replace(/\/+$/, '');
 
             return !!document.querySelector('.fi-resource-dialogs') && path === '/admin/dialogs';
+        };
+
+        const resetViewSwitchLoading = () => {
+            if (viewSwitchLoadingResetTimer !== null) {
+                window.clearTimeout(viewSwitchLoadingResetTimer);
+                viewSwitchLoadingResetTimer = null;
+            }
+
+            document.querySelectorAll('.ac-kanban-view-switch.is-loading').forEach((switcher) => {
+                switcher.classList.remove('is-loading');
+                switcher.removeAttribute('aria-busy');
+            });
+
+            document.querySelectorAll('[data-ac-dialogs-view-link].is-loading').forEach((link) => {
+                link.classList.remove('is-loading');
+                link.removeAttribute('aria-busy');
+            });
+        };
+
+        const installViewSwitchLoadingListener = () => {
+            if (viewSwitchLoadingListenerReady) {
+                return;
+            }
+
+            viewSwitchLoadingListenerReady = true;
+
+            document.addEventListener('click', (event) => {
+                const link = event.target?.closest?.('[data-ac-dialogs-view-link]');
+
+                if (!link || event.defaultPrevented || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+                    return;
+                }
+
+                const href = link.getAttribute('href');
+
+                if (!href) {
+                    return;
+                }
+
+                const targetUrl = new URL(href, window.location.href);
+
+                if (targetUrl.href === window.location.href) {
+                    return;
+                }
+
+                const switcher = link.closest('.ac-kanban-view-switch');
+                switcher?.classList.add('is-loading');
+                switcher?.setAttribute('aria-busy', 'true');
+                link.classList.add('is-loading');
+                link.setAttribute('aria-busy', 'true');
+
+                viewSwitchLoadingResetTimer = window.setTimeout(resetViewSwitchLoading, 12000);
+            }, true);
+
+            document.addEventListener('livewire:navigated', resetViewSwitchLoading);
+            window.addEventListener('pageshow', resetViewSwitchLoading);
         };
 
         const readSettings = () => {
@@ -10763,7 +10850,12 @@
                         </div>
                     </div>
                     <span class="ac-kanban-view-switch ac-dialogs-view-switch" role="group" aria-label="Вид диалогов">
-                        <a href="${dialogsKanbanUrl()}" class="ac-kanban-view-switch__item">
+                        <a
+                            href="${dialogsKanbanUrl()}"
+                            class="ac-kanban-view-switch__item"
+                            wire:navigate.hover
+                            data-ac-dialogs-view-link
+                        >
                             Канбан
                         </a>
                         <span class="ac-kanban-view-switch__item is-active">
@@ -10995,6 +11087,7 @@
 
         installSortFallbackListener();
         installRowNavigationFallbackListener();
+        installViewSwitchLoadingListener();
 
         let initQueued = false;
 
