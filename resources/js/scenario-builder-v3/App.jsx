@@ -443,6 +443,15 @@ const DEFAULT_AI_VARIANTS = [
     { id: '1', label: 'Имя найдено', delay_seconds: 0 },
     { id: '2', label: 'Имя не найдено', delay_seconds: DEFAULT_AI_RETRY_DELAY_SECONDS },
 ];
+const AI_FAILED_OUTPUT = {
+    id: 'ai_failed',
+    label: 'Ошибка ИИ',
+    source: 'ai',
+    module_id: 'mod_ai',
+    ai_variant_id: 'ai_failed',
+    ai_choice_id: null,
+    system: true,
+};
 const AI_EXTRACT_FIELD_TYPE_OPTIONS = [
     ['text', 'Текст'],
     ['number', 'Число'],
@@ -2211,7 +2220,10 @@ export default function App({
         if (type === 'ai' && ! enabled) {
             const currentBlock = blocks.find((block) => block.client_key === clientKey);
             const currentAi = findModule(currentBlock?.settings_payload, 'ai');
-            const aiOutputIds = new Set(aiVariantDefinitions(currentAi).map((output) => output.id));
+            const aiOutputIds = new Set([
+                ...aiVariantDefinitions(currentAi).map((output) => output.id),
+                AI_FAILED_OUTPUT.id,
+            ]);
 
             updateEdges(edges.filter((edge) => (
                 edge.source?.client_key !== clientKey
@@ -4670,11 +4682,11 @@ function ScenarioNode({
                                 output.kind === 'default' ? 'is-default-output' : 'is-button-output',
                                 output.legacy ? 'is-legacy-output' : '',
                             ].filter(Boolean).join(' ')}
-                            title={output.kind === 'default'
+                            title={output.hint || (output.kind === 'default'
                                 ? 'Связать автопереход с блоком'
                                 : (output.legacy
                                     ? 'Старый выход: можно удалить существующую стрелку, новые стрелки не создаются'
-                                    : (output.kind === 'ai' ? 'Связать результат ИИ с блоком' : 'Связать кнопку с блоком'))}
+                                    : (output.kind === 'ai' ? 'Связать результат ИИ с блоком' : 'Связать кнопку с блоком')))}
                             onPointerDown={(event) => onStartConnection(event, block, output)}
                             onClick={(event) => event.stopPropagation()}
                         >
@@ -9804,7 +9816,12 @@ function blockOutputs(block) {
             id: output.id,
             label: output.label || output.id,
             kind: output.source || 'button',
-            caption: output.source === 'ai' ? 'ИИ' : (output.source === 'action' ? 'Действие' : null),
+            caption: output.id === AI_FAILED_OUTPUT.id
+                ? 'Система · резервная ветка'
+                : (output.system ? 'Система' : (output.source === 'ai' ? 'ИИ' : (output.source === 'action' ? 'Действие' : null))),
+            hint: output.id === AI_FAILED_OUTPUT.id
+                ? 'Рекомендуется провести резервную стрелку: она сработает, если ИИ не дал корректный результат после повторных попыток.'
+                : null,
             legacy: Boolean(output.legacy) || output.id === ACTION_GEO_CITY_LEGACY_LIMIT_OUTPUT.id,
         }));
     }
@@ -10859,6 +10876,10 @@ function syncOutputs(settingsPayload) {
             ai_variant_id: output.id,
             ai_choice_id: String(index + 1),
         }));
+    const aiSystemOutputs = ai ? [{
+        ...AI_FAILED_OUTPUT,
+        module_id: ai?.id ?? AI_FAILED_OUTPUT.module_id,
+    }] : [];
     const action = findModule(settingsPayload, 'action');
     const actionDefinitions = actionItems(action);
     const actionOutputs = [
@@ -10872,7 +10893,7 @@ function syncOutputs(settingsPayload) {
 
     return {
         ...settingsPayload,
-        outputs: [...buttonOutputs, ...aiOutputs, ...actionOutputs],
+        outputs: [...buttonOutputs, ...aiOutputs, ...aiSystemOutputs, ...actionOutputs],
     };
 }
 

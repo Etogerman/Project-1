@@ -21,6 +21,7 @@ class AiRequestAnalyticsTest extends TestCase
     public function test_structured_generation_with_analytics_logs_successful_fallback_attempts_and_cost(): void
     {
         config()->set('bots.gemini.api_key', null);
+        AiProcessor::query()->delete();
 
         $contact = Contact::factory()->create();
         $this->createProcessor('Gemini основной', 'gemini-primary', 'primary-key', 10);
@@ -67,6 +68,7 @@ class AiRequestAnalyticsTest extends TestCase
     public function test_structured_generation_with_analytics_logs_full_fallback_error(): void
     {
         config()->set('bots.gemini.api_key', null);
+        AiProcessor::query()->delete();
 
         $contact = Contact::factory()->create();
         $this->createProcessor('Gemini основной', 'gemini-primary', 'primary-key', 10);

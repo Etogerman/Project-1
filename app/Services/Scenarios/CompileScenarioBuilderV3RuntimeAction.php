@@ -14,6 +14,8 @@ use Throwable;
 
 class CompileScenarioBuilderV3RuntimeAction
 {
+    private const AI_FAILED_OUTPUT_ID = 'ai_failed';
+
     private const BUTTON_PLACEMENTS = ['auto', 'reply_keyboard', 'inline_message'];
 
     private const EDGE_MODE_WAIT_REPLY = 'wait_reply';
@@ -248,6 +250,26 @@ class CompileScenarioBuilderV3RuntimeAction
             ->filter(fn (array $output): bool => $output['id'] !== '')
             ->values()
             ->all();
+
+        $failedEdge = $outgoingEdges->first(
+            fn (ScenarioBuilderEdge $edge): bool => $this->edgeOutputId($edge) === self::AI_FAILED_OUTPUT_ID
+                && $this->edgeMode($edge) === self::EDGE_MODE_AI_ANALYSIS,
+        );
+
+        $compiledFailedEdge = $failedEdge instanceof ScenarioBuilderEdge
+            ? $this->compileEdge($failedEdge, $runtimeBlockIdsByDbId)
+            : null;
+
+        $outputs[] = [
+            'id' => self::AI_FAILED_OUTPUT_ID,
+            'label' => 'Ошибка ИИ',
+            'variant_id' => self::AI_FAILED_OUTPUT_ID,
+            'choice_id' => '',
+            'delay_seconds' => 0,
+            'target_block_id' => $compiledFailedEdge['target_block_id'] ?? null,
+            'edge' => $compiledFailedEdge,
+            'system' => true,
+        ];
 
         return [
             'prompt' => (string) data_get($ai, 'payload.prompt', ''),

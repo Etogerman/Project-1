@@ -12,6 +12,8 @@ use App\Jobs\InferContactGenderFromFirstNameJob;
 use App\Jobs\ProcessScenarioV3AiAnalysisJob;
 use App\Jobs\ProcessScenarioV3OutboundMessageJob;
 use App\Jobs\ProcessScenarioV3ScheduledTransitionJob;
+use App\Jobs\RetryScenarioV3AiAnalysisJob;
+use App\Models\AiRequest;
 use App\Models\AiTask;
 use App\Models\AutoReplyRule;
 use App\Models\Channel;
@@ -31,6 +33,7 @@ use App\Models\ScenarioV3OutboundMessage;
 use App\Models\ScenarioV3ScheduledTransition;
 use App\Models\ScenarioVersion;
 use App\Models\Tag;
+use App\Services\AI\AiRequestAnalyticsService;
 use App\Services\AI\AiStructuredGenerationException;
 use App\Services\AI\AiStructuredGenerationService;
 use App\Services\Analytics\FirstNameResolutionAnalyticsService;
@@ -83,6 +86,16 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
     private const V3_BUTTON_PLACEMENT_INLINE_MESSAGE = 'inline_message';
 
     private const V3_AI_MESSAGE_BUNDLE_LIMIT = 10;
+
+    private const V3_AI_FAILED_OUTPUT_ID = 'ai_failed';
+
+    private const V3_AI_RETRY_MAX_CYCLES = 4;
+
+    private const V3_AI_RETRY_BACKOFF_SECONDS = [
+        2 => 10,
+        3 => 30,
+        4 => 60,
+    ];
 
     private const V3_TELEGRAM_BUTTON_CALLBACK_PREFIX = 'v3b:';
 
@@ -238,6 +251,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         private readonly DeleteLastOutboundDialogMessageAction $deleteLastOutboundDialogMessageAction,
         private readonly PrepareMessageContentAction $prepareMessageContentAction,
         private readonly AiStructuredGenerationService $aiStructuredGenerationService,
+        private readonly AiRequestAnalyticsService $aiRequestAnalyticsService,
         private readonly FirstNameResolutionAnalyticsService $firstNameResolutionAnalyticsService,
         private readonly ExtractFirstNameAction $extractFirstNameAction,
         private readonly ApplyContactFirstNameAction $applyContactFirstNameAction,
@@ -447,6 +461,91 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                     run: $run,
                     suppressMessage: true,
                     allowDelayedAiOutputs: false,
+                );
+
+                $run->forceFill([
+                    'status' => $progress['status'],
+                    'current_step' => $progress['current_step'],
+                    'state_payload' => $progress['state_payload'],
+                    'exit_outcome' => $progress['exit_outcome'],
+                    'finished_at' => $progress['status'] === ScenarioRun::STATUS_ACTIVE ? null : now(),
+                ])->save();
+            });
+        });
+    }
+
+    public function handleRetryV3AiAnalysis(
+        int $scenarioRunId,
+        int $dialogId,
+        int $inboundMessageId,
+        int $publishedVersionId,
+        string $blockId,
+        string $token,
+        int $cycle,
+    ): void {
+        $this->withDeferredV3ScenarioMessages(function () use ($scenarioRunId, $dialogId, $inboundMessageId, $publishedVersionId, $blockId, $token, $cycle): void {
+            DB::transaction(function () use ($scenarioRunId, $dialogId, $inboundMessageId, $publishedVersionId, $blockId, $token, $cycle): void {
+                if ((int) $this->publishedVersion->id !== $publishedVersionId) {
+                    return;
+                }
+
+                $dialog = Dialog::query()
+                    ->whereKey($dialogId)
+                    ->lockForUpdate()
+                    ->first();
+                $run = ScenarioRun::query()
+                    ->whereKey($scenarioRunId)
+                    ->lockForUpdate()
+                    ->first();
+                $message = Message::query()
+                    ->with(['channel', 'contact', 'contactIdentity', 'dialog'])
+                    ->find($inboundMessageId);
+
+                if (
+                    ! $dialog instanceof Dialog
+                    || ! $run instanceof ScenarioRun
+                    || ! $run->isActive()
+                    || ! $message instanceof Message
+                    || (int) $run->dialog_id !== $dialogId
+                ) {
+                    return;
+                }
+
+                $runtime = $this->v3RuntimeOrNull();
+
+                if ($runtime === null) {
+                    return;
+                }
+
+                $statePayload = $this->v3StatePayload($run->state_payload);
+                $currentBlockId = $this->v3RuntimeBlockId(
+                    $runtime,
+                    trim((string) data_get($statePayload, 'v3.current_block_id', '')),
+                    $statePayload,
+                );
+
+                if (
+                    $currentBlockId !== $blockId
+                    || (string) data_get($statePayload, "v3.ai_analysis_retry.$blockId.token", '') !== $token
+                    || (int) data_get($statePayload, "v3.ai_analysis_retry.$blockId.cycle", 0) !== $cycle
+                ) {
+                    return;
+                }
+
+                if ($this->v3HasNewerInboundMessage($message)) {
+                    $statePayload = $this->cancelV3AiAnalysisRetry($statePayload, $blockId, 'newer_inbound_message_exists');
+                    $run->forceFill(['state_payload' => $statePayload])->save();
+
+                    return;
+                }
+
+                $progress = $this->advanceV3FromBlock(
+                    $message,
+                    $runtime,
+                    $blockId,
+                    $statePayload,
+                    run: $run,
+                    suppressMessage: true,
                 );
 
                 $run->forceFill([
@@ -1446,6 +1545,8 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                         exitOutcome: null,
                     );
                 }
+
+                $statePayload = $this->cancelV3AiAnalysisRetry($statePayload, $currentBlockId, 'new_inbound_message');
 
                 $progress = $this->advanceV3FromBlock(
                     $message,
@@ -2799,6 +2900,26 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
         $blockId = filled($block['id'] ?? null) ? (string) $block['id'] : 'unknown';
         $result = $this->v3AiAnalysisResult($message, $analysis, $statePayload, $blockId);
+
+        if (($result['status'] ?? null) === 'retry_scheduled') {
+            $statePayload = $this->scheduleV3AiAnalysisRetry(
+                $message,
+                $run,
+                $blockId,
+                $statePayload,
+                (int) ($result['next_cycle'] ?? 2),
+                is_numeric($result['ai_request_id'] ?? null) ? (int) $result['ai_request_id'] : null,
+                is_numeric($result['last_attempt_id'] ?? null) ? (int) $result['last_attempt_id'] : null,
+                filled($result['error_reason'] ?? null) ? (string) $result['error_reason'] : 'temporary_provider_error',
+            );
+
+            return $this->activeProgress(
+                $blockId,
+                $this->markV3Waiting($statePayload, $blockId, $block, $message->channel),
+            );
+        }
+
+        $statePayload = $this->clearV3AiAnalysisRetry($statePayload, $blockId);
         $outputId = (string) ($result['output_id'] ?? '');
         $delaySeconds = max(0, min(300, (int) ($result['delay_seconds'] ?? 0)));
 
@@ -2820,6 +2941,23 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         $edges = $this->v3AiAnalysisEdges($analysis, $outputId);
 
         if ($edges === []) {
+            if ($outputId === self::V3_AI_FAILED_OUTPUT_ID) {
+                data_set($statePayload, "v3.ai_analysis.$blockId.route_error_reason", 'ai_failed_no_edge');
+
+                Log::warning('scenario.v3_ai_analysis_failed_no_edge', [
+                    'scenario_code' => $this->code(),
+                    'dialog_id' => $message->dialog_id,
+                    'message_id' => $message->id,
+                    'block_id' => $blockId,
+                    'ai_request_id' => $result['ai_request_id'] ?? null,
+                ]);
+
+                return $this->activeProgress(
+                    $blockId,
+                    $this->markV3Waiting($statePayload, $blockId, $block, $message->channel),
+                );
+            }
+
             return null;
         }
 
@@ -5091,8 +5229,116 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
     }
 
     /**
+     * @param  array<string, mixed>  $statePayload
+     * @return array<string, mixed>
+     */
+    private function scheduleV3AiAnalysisRetry(
+        Message $message,
+        ?ScenarioRun $run,
+        string $blockId,
+        array $statePayload,
+        int $cycle,
+        ?int $aiRequestId,
+        ?int $lastAttemptId,
+        string $reason,
+    ): array {
+        if (! $run instanceof ScenarioRun || $message->dialog_id === null) {
+            return $statePayload;
+        }
+
+        $cycle = max(2, min(self::V3_AI_RETRY_MAX_CYCLES, $cycle));
+        $delaySeconds = self::V3_AI_RETRY_BACKOFF_SECONDS[$cycle] ?? null;
+
+        if ($delaySeconds === null) {
+            return $statePayload;
+        }
+
+        $token = (string) Str::uuid();
+        $scheduledFor = CarbonImmutable::now()->addSeconds($delaySeconds);
+
+        data_set($statePayload, "v3.ai_analysis_retry.$blockId", [
+            'token' => $token,
+            'cycle' => $cycle,
+            'max_cycles' => self::V3_AI_RETRY_MAX_CYCLES,
+            'ai_request_id' => $aiRequestId,
+            'last_attempt_id' => $lastAttemptId,
+            'message_id' => (int) $message->id,
+            'reason' => $reason,
+            'scheduled_for' => $scheduledFor->toJSON(),
+        ]);
+
+        RetryScenarioV3AiAnalysisJob::dispatch(
+            (int) $run->id,
+            (int) $message->dialog_id,
+            (int) $message->id,
+            $this->code(),
+            (int) $this->publishedVersion->id,
+            $blockId,
+            $token,
+            $cycle,
+        )
+            ->delay($scheduledFor)
+            ->afterCommit();
+
+        Log::info('scenario.v3_ai_analysis_retry_scheduled', [
+            'scenario_code' => $this->code(),
+            'scenario_run_id' => $run->id,
+            'dialog_id' => $message->dialog_id,
+            'message_id' => $message->id,
+            'block_id' => $blockId,
+            'cycle' => $cycle,
+            'delay_seconds' => $delaySeconds,
+            'ai_request_id' => $aiRequestId,
+            'reason' => $reason,
+        ]);
+
+        return $statePayload;
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @return array<string, mixed>
+     */
+    private function clearV3AiAnalysisRetry(array $statePayload, string $blockId): array
+    {
+        data_forget($statePayload, "v3.ai_analysis_retry.$blockId");
+
+        return $statePayload;
+    }
+
+    /**
+     * @param  array<string, mixed>  $statePayload
+     * @return array<string, mixed>
+     */
+    private function cancelV3AiAnalysisRetry(array $statePayload, string $blockId, string $reason): array
+    {
+        $retryState = data_get($statePayload, "v3.ai_analysis_retry.$blockId", []);
+        $retryState = is_array($retryState) ? $retryState : [];
+        $aiRequestId = is_numeric($retryState['ai_request_id'] ?? null) ? (int) $retryState['ai_request_id'] : null;
+
+        if ($aiRequestId !== null) {
+            $this->aiRequestAnalyticsService->markCancelled(AiRequest::query()->find($aiRequestId), $reason);
+        }
+
+        return $this->clearV3AiAnalysisRetry($statePayload, $blockId);
+    }
+
+    private function v3HasNewerInboundMessage(Message $message): bool
+    {
+        if ($message->dialog_id === null || ! is_numeric($message->id)) {
+            return false;
+        }
+
+        return Message::query()
+            ->where('dialog_id', (int) $message->dialog_id)
+            ->where('direction', Message::DIRECTION_INBOUND)
+            ->where('id', '>', (int) $message->id)
+            ->exists();
+    }
+
+    /**
      * @param  array<string, mixed>  $analysis
-     * @return array{output_id: string, label: string, delay_seconds: int, data: array<string, mixed>, ai_request_id?: ?int, first_name_resolution_event_id?: ?int, first_name_resolution_correlation_id?: ?string, error?: bool, error_reason?: ?string}
+     * @return array{status?: string, output_id: string, label: string, delay_seconds: int, data: array<string, mixed>, ai_request_id?: ?int, last_attempt_id?: ?int, first_name_resolution_event_id?: ?int, first_name_resolution_correlation_id?: ?string, error?: bool, error_reason?: ?string, next_cycle?: int}
      */
     private function v3AiAnalysisResult(Message $message, array $analysis, array $statePayload, string $blockId): array
     {
@@ -5101,8 +5347,8 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
         if ($outputs === []) {
             return [
-                'output_id' => '',
-                'label' => '',
+                'output_id' => self::V3_AI_FAILED_OUTPUT_ID,
+                'label' => 'Ошибка ИИ',
                 'delay_seconds' => 0,
                 'data' => [],
                 'error' => true,
@@ -5113,6 +5359,9 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         $tracksNameResolution = $this->v3AiAnalysisTracksNameResolution($message, $extractFields);
         $aiResult = null;
         $aiRequestId = null;
+        $retryState = data_get($statePayload, "v3.ai_analysis_retry.$blockId", []);
+        $retryState = is_array($retryState) ? $retryState : [];
+        $cycle = max(1, min(self::V3_AI_RETRY_MAX_CYCLES, (int) ($retryState['cycle'] ?? 1)));
 
         try {
             $systemPrompt = $this->v3AiAnalysisSystemPrompt($message, $analysis, $outputs, $extractFields, $statePayload, $blockId);
@@ -5120,12 +5369,72 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             $aiContext = $this->v3AiAnalysisContext($message, $blockId);
 
             if ($aiContext instanceof AiGenerationContext) {
-                $aiResult = $this->aiStructuredGenerationService->generateStructuredWithAnalytics(
+                $existingAiRequest = is_numeric($retryState['ai_request_id'] ?? null)
+                    ? AiRequest::query()->find((int) $retryState['ai_request_id'])
+                    : null;
+                $cycleResult = $this->aiStructuredGenerationService->generateStructuredV3Cycle(
                     $systemPrompt,
                     $userPrompt,
                     $this->v3AiAnalysisSchema($outputs, $extractFields),
                     $aiContext,
+                    $existingAiRequest instanceof AiRequest ? $existingAiRequest : null,
+                    function (array $payload) use ($outputs): void {
+                        $this->validateV3AiAnalysisResponseOutput($payload, $outputs);
+                    },
                 );
+
+                $aiRequestId = is_numeric($cycleResult['ai_request_id'] ?? null) ? (int) $cycleResult['ai_request_id'] : null;
+
+                if (($cycleResult['status'] ?? null) === 'temporary_failed') {
+                    if ($cycle < self::V3_AI_RETRY_MAX_CYCLES) {
+                        return [
+                            'status' => 'retry_scheduled',
+                            'output_id' => '',
+                            'label' => '',
+                            'delay_seconds' => 0,
+                            'data' => [],
+                            'ai_request_id' => $aiRequestId,
+                            'last_attempt_id' => is_numeric($cycleResult['last_attempt_id'] ?? null) ? (int) $cycleResult['last_attempt_id'] : null,
+                            'next_cycle' => $cycle + 1,
+                            'error' => true,
+                            'error_reason' => 'temporary_provider_error',
+                        ];
+                    }
+
+                    $aiRequest = $aiRequestId !== null ? AiRequest::query()->find($aiRequestId) : null;
+                    $this->aiRequestAnalyticsService->finalize($aiRequest, null, false);
+
+                    return [
+                        'output_id' => self::V3_AI_FAILED_OUTPUT_ID,
+                        'label' => 'Ошибка ИИ',
+                        'delay_seconds' => 0,
+                        'data' => [],
+                        'ai_request_id' => $aiRequestId,
+                        'last_attempt_id' => is_numeric($cycleResult['last_attempt_id'] ?? null) ? (int) $cycleResult['last_attempt_id'] : null,
+                        'error' => true,
+                        'error_reason' => 'ai_failed',
+                    ];
+                }
+
+                if (($cycleResult['status'] ?? null) === 'failed') {
+                    return [
+                        'output_id' => self::V3_AI_FAILED_OUTPUT_ID,
+                        'label' => 'Ошибка ИИ',
+                        'delay_seconds' => 0,
+                        'data' => [],
+                        'ai_request_id' => $aiRequestId,
+                        'last_attempt_id' => is_numeric($cycleResult['last_attempt_id'] ?? null) ? (int) $cycleResult['last_attempt_id'] : null,
+                        'error' => true,
+                        'error_reason' => 'ai_failed',
+                    ];
+                }
+
+                $aiResult = $cycleResult['result'] ?? null;
+
+                if (! $aiResult instanceof \App\Data\AI\AiStructuredGenerationResult) {
+                    throw new RuntimeException('AI cycle did not return a structured result.');
+                }
+
                 $aiRequestId = $aiResult->aiRequestId;
                 $response = $aiResult->data;
             } else {
@@ -5136,11 +5445,14 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                     'block_id' => $blockId,
                 ]);
 
-                $response = $this->aiStructuredGenerationService->generateStructured(
-                    $systemPrompt,
-                    $userPrompt,
-                    $this->v3AiAnalysisSchema($outputs, $extractFields),
-                );
+                return [
+                    'output_id' => self::V3_AI_FAILED_OUTPUT_ID,
+                    'label' => 'Ошибка ИИ',
+                    'delay_seconds' => 0,
+                    'data' => [],
+                    'error' => true,
+                    'error_reason' => 'missing_context',
+                ];
             }
         } catch (Throwable $throwable) {
             Log::warning('scenario.v3_ai_analysis_failed', [
@@ -5160,8 +5472,8 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             }
 
             return [
-                'output_id' => '',
-                'label' => '',
+                'output_id' => self::V3_AI_FAILED_OUTPUT_ID,
+                'label' => 'Ошибка ИИ',
                 'delay_seconds' => 0,
                 'data' => [],
                 'ai_request_id' => $aiRequestId,
@@ -5176,16 +5488,9 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 || ($candidate['id'] ?? null) === $outputId);
 
         if (! is_array($output)) {
-            Log::warning('scenario.v3_ai_analysis_unknown_output', [
-                'scenario_code' => $this->code(),
-                'dialog_id' => $message->dialog_id,
-                'message_id' => $message->id,
-                'output_id' => $outputId,
-            ]);
-
             return [
-                'output_id' => '',
-                'label' => '',
+                'output_id' => self::V3_AI_FAILED_OUTPUT_ID,
+                'label' => 'Ошибка ИИ',
                 'delay_seconds' => 0,
                 'data' => [],
                 'ai_request_id' => $aiRequestId,
@@ -5221,6 +5526,29 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
     }
 
     /**
+     * @param  array<string, mixed>  $payload
+     * @param  list<array{id: string, choice_id: string, label: string, delay_seconds: int}>  $outputs
+     */
+    private function validateV3AiAnalysisResponseOutput(array $payload, array $outputs): void
+    {
+        $outputId = trim((string) ($payload['output_id'] ?? ''));
+        $output = collect($outputs)
+            ->first(fn (array $candidate): bool => ($candidate['choice_id'] ?? null) === $outputId
+                || ($candidate['id'] ?? null) === $outputId);
+
+        if (is_array($output)) {
+            return;
+        }
+
+        Log::warning('scenario.v3_ai_analysis_unknown_output', [
+            'scenario_code' => $this->code(),
+            'output_id' => $outputId,
+        ]);
+
+        throw new RuntimeException("AI analysis returned unknown output_id [{$outputId}].");
+    }
+
+    /**
      * @param  array<string, mixed>  $analysis
      * @return list<array{id: string, choice_id: string, label: string, delay_seconds: int}>
      */
@@ -5231,6 +5559,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         return collect($outputs)
             ->filter(fn (mixed $output): bool => is_array($output)
                 && filled($output['id'] ?? null)
+                && ($output['id'] ?? null) !== self::V3_AI_FAILED_OUTPUT_ID
                 && filled($output['label'] ?? null))
             ->values()
             ->map(fn (array $output, int $index): array => [

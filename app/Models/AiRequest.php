@@ -12,6 +12,10 @@ class AiRequest extends Model
 
     public const STATUS_ERROR = 'error';
 
+    public const STATUS_RETRYING = 'retrying';
+
+    public const STATUS_CANCELLED = 'cancelled';
+
     public const COST_STATUS_CALCULATED = 'calculated';
 
     public const COST_STATUS_PARTIAL = 'partial';
@@ -79,6 +83,8 @@ class AiRequest extends Model
         return match ($status) {
             self::STATUS_SUCCESS => 'Успешно',
             self::STATUS_ERROR => 'Ошибка',
+            self::STATUS_RETRYING => 'Повтор',
+            self::STATUS_CANCELLED => 'Отменён',
             default => 'Неизвестно',
         };
     }

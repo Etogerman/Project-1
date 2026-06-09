@@ -121,7 +121,7 @@ class AiRequestAnalyticsService
         ?AiRequest $request,
         int $attemptNumber,
         ?AiProcessor $processor,
-        AiProviderRequestException $exception,
+        Throwable $exception,
         Carbon $startedAt,
         Carbon $finishedAt,
     ): ?AiRequestAttempt {
@@ -130,14 +130,26 @@ class AiRequestAnalyticsService
         }
 
         try {
-            $requestBody = $this->truncateRawBody($exception->requestBodyRaw);
-            $responseBody = $this->truncateRawBody($exception->responseBodyRaw);
+            $provider = $exception instanceof AiProviderRequestException
+                ? $exception->provider
+                : ($processor?->provider ?? AiProcessor::PROVIDER_GEMINI);
+            $model = $exception instanceof AiProviderRequestException ? $exception->model : $processor?->model;
+            $requestBodyRaw = $exception instanceof AiProviderRequestException ? $exception->requestBodyRaw : null;
+            $responseBodyRaw = $exception instanceof AiProviderRequestException ? $exception->responseBodyRaw : null;
+            $inputTokens = $exception instanceof AiProviderRequestException ? $exception->inputTokens : null;
+            $outputTokens = $exception instanceof AiProviderRequestException ? $exception->outputTokens : null;
+            $thinkingTokens = $exception instanceof AiProviderRequestException ? $exception->thinkingTokens : null;
+            $totalTokens = $exception instanceof AiProviderRequestException
+                ? ($exception->totalTokens ?? $this->sumNullableTokens($inputTokens, $outputTokens, $thinkingTokens))
+                : null;
+            $requestBody = $this->truncateRawBody($requestBodyRaw ?? '');
+            $responseBody = $this->truncateRawBody($responseBodyRaw ?? '');
             $cost = $this->costFor(
-                provider: $exception->provider,
-                model: $exception->model,
-                inputTokens: $exception->inputTokens,
-                outputTokens: $exception->outputTokens,
-                thinkingTokens: $exception->thinkingTokens,
+                provider: $provider,
+                model: $model,
+                inputTokens: $inputTokens,
+                outputTokens: $outputTokens,
+                thinkingTokens: $thinkingTokens,
                 at: $startedAt,
             );
 
@@ -145,22 +157,22 @@ class AiRequestAnalyticsService
                 'ai_request_id' => $request->id,
                 'ai_processor_id' => $processor?->id,
                 'attempt_number' => $attemptNumber,
-                'provider' => $exception->provider,
-                'model' => $exception->model,
+                'provider' => $provider,
+                'model' => $model,
                 'status' => AiRequestAttempt::STATUS_ERROR,
-                'http_status' => $exception->httpStatus,
+                'http_status' => $exception instanceof AiProviderRequestException ? $exception->httpStatus : null,
                 'request_body_raw' => $requestBody['value'],
                 'response_body_raw' => $responseBody['value'],
                 'raw_body_truncated' => $requestBody['truncated'] || $responseBody['truncated'],
-                'input_tokens' => $exception->inputTokens,
-                'output_tokens' => $exception->outputTokens,
-                'thinking_tokens' => $exception->thinkingTokens,
-                'total_tokens' => $exception->totalTokens ?? $this->sumNullableTokens($exception->inputTokens, $exception->outputTokens, $exception->thinkingTokens),
+                'input_tokens' => $inputTokens,
+                'output_tokens' => $outputTokens,
+                'thinking_tokens' => $thinkingTokens,
+                'total_tokens' => $totalTokens,
                 'estimated_cost' => $cost['estimated_cost'],
                 'currency' => $cost['currency'],
                 'cost_status' => $cost['cost_status'],
                 'error_message' => $this->safeErrorMessage($exception),
-                'response_preview' => $this->preview($exception->responseBodyRaw, 1000),
+                'response_preview' => $this->preview($responseBodyRaw ?? $exception->getMessage(), 1000),
                 'started_at' => $startedAt,
                 'finished_at' => $finishedAt,
                 'latency_ms' => (int) max(0, round($startedAt->diffInMilliseconds($finishedAt))),
@@ -176,6 +188,60 @@ class AiRequestAnalyticsService
     }
 
     public function finalize(?AiRequest $request, ?AiRequestAttempt $representativeAttempt, bool $success): void
+    {
+        $this->finalizeWithStatus(
+            $request,
+            $representativeAttempt,
+            $success ? AiRequest::STATUS_SUCCESS : AiRequest::STATUS_ERROR,
+            $success,
+        );
+    }
+
+    public function markRetrying(?AiRequest $request): void
+    {
+        if (! $request instanceof AiRequest) {
+            return;
+        }
+
+        try {
+            $request->forceFill([
+                'status' => AiRequest::STATUS_RETRYING,
+                'finished_at' => null,
+                'latency_ms' => null,
+            ])->save();
+        } catch (Throwable $throwable) {
+            $this->logFailure('ai.analytics_retrying_failed', $throwable, [
+                'ai_request_id' => $request->id,
+            ]);
+        }
+    }
+
+    public function markCancelled(?AiRequest $request, string $reason): void
+    {
+        $this->finalizeWithStatus($request, null, AiRequest::STATUS_CANCELLED, false, [
+            'response_preview' => 'cancelled: '.$reason,
+        ]);
+    }
+
+    public function nextAttemptNumber(?AiRequest $request): int
+    {
+        if (! $request instanceof AiRequest) {
+            return 1;
+        }
+
+        return ((int) $request->attempts()->max('attempt_number')) + 1;
+    }
+
+    /**
+     * @param  array<string, mixed>  $extra
+     */
+    private function finalizeWithStatus(
+        ?AiRequest $request,
+        ?AiRequestAttempt $representativeAttempt,
+        string $status,
+        bool $success,
+        array $extra = [],
+    ): void
     {
         if (! $request instanceof AiRequest) {
             return;
@@ -195,8 +261,8 @@ class AiRequestAnalyticsService
                 ? $representativeAttempt
                 : $attempts->last();
 
-            $request->forceFill([
-                'status' => $success ? AiRequest::STATUS_SUCCESS : AiRequest::STATUS_ERROR,
+            $payload = [
+                'status' => $status,
                 'final_attempt_id' => $success ? $representative?->id : null,
                 'provider' => $representative?->provider,
                 'model' => $representative?->model,
@@ -217,7 +283,9 @@ class AiRequestAnalyticsService
                 'latency_ms' => $request->started_at instanceof Carbon
                     ? (int) max(0, round($request->started_at->diffInMilliseconds(now())))
                     : null,
-            ])->save();
+            ];
+
+            $request->forceFill(array_merge($payload, $extra))->save();
         } catch (Throwable $throwable) {
             $this->logFailure('ai.analytics_finalize_failed', $throwable, [
                 'ai_request_id' => $request->id,

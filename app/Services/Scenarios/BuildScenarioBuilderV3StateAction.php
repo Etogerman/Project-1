@@ -393,6 +393,10 @@ class BuildScenarioBuilderV3StateAction
             $settingsPayload['outputs'] = $this->withoutLegacyVariableOutputs($settingsPayload['outputs']);
         }
 
+        if ($this->hasAiModule($settingsPayload['modules'])) {
+            $settingsPayload['outputs'] = $this->withAiFailedOutput($settingsPayload['outputs']);
+        }
+
         return $settingsPayload;
     }
 
@@ -627,6 +631,20 @@ class BuildScenarioBuilderV3StateAction
         return false;
     }
 
+    /**
+     * @param  list<array<string, mixed>>  $modules
+     */
+    private function hasAiModule(array $modules): bool
+    {
+        foreach ($modules as $module) {
+            if (($module['type'] ?? null) === 'ai') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private function displayOutputIdForEdge(ScenarioBuilderEdge $edge, ?string $outputId): ?string
     {
         if ($outputId === null) {
@@ -704,6 +722,30 @@ class BuildScenarioBuilderV3StateAction
                 && ! in_array((string) ($output['id'] ?? ''), self::VARIABLES_LEGACY_OUTPUTS, true))
             ->values()
             ->all();
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $outputs
+     * @return list<array<string, mixed>>
+     */
+    private function withAiFailedOutput(array $outputs): array
+    {
+        $outputs = collect($outputs)
+            ->reject(fn (array $output): bool => ($output['id'] ?? null) === 'ai_failed')
+            ->values()
+            ->all();
+
+        $outputs[] = [
+            'id' => 'ai_failed',
+            'label' => 'Ошибка ИИ',
+            'source' => 'ai',
+            'module_id' => 'mod_ai',
+            'ai_variant_id' => 'ai_failed',
+            'ai_choice_id' => null,
+            'system' => true,
+        ];
+
+        return $outputs;
     }
 
     /**
