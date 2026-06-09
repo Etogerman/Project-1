@@ -25,7 +25,7 @@ class AiProviderRequestException extends RuntimeException
 
     public function isTemporary(): bool
     {
-        if (in_array($this->httpStatus, [429, 503], true)) {
+        if (in_array($this->httpStatus, [429, 502, 503, 504], true)) {
             return true;
         }
 
