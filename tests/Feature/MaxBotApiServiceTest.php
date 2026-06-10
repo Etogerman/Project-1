@@ -30,6 +30,26 @@ class MaxBotApiServiceTest extends TestCase
             && $request->hasHeader('Authorization', 'max-token'));
     }
 
+    public function test_delete_message_throws_when_max_returns_success_false(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => ['token' => 'max-token'],
+        ]);
+
+        Http::fake([
+            'https://platform-api.max.ru/messages*' => Http::response([
+                'success' => false,
+                'message' => 'message deletion is not allowed',
+            ]),
+        ]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('message deletion is not allowed');
+
+        app(MaxBotApiService::class)->deleteMessage($channel, 'mid-123');
+    }
+
     public function test_fetch_webhook_urls_returns_unique_subscription_urls(): void
     {
         $channel = Channel::factory()->create([

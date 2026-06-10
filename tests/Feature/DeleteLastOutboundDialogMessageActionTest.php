@@ -144,6 +144,35 @@ class DeleteLastOutboundDialogMessageActionTest extends TestCase
         $this->assertStringContainsString('Access denied', (string) data_get($message->raw_payload, 'delete_action_error'));
     }
 
+    public function test_max_success_false_keeps_dialog_link_for_retry(): void
+    {
+        Http::fake([
+            'https://platform-api.max.ru/messages*' => Http::response([
+                'success' => false,
+                'message' => 'message deletion is not allowed',
+            ]),
+        ]);
+
+        [$dialog, $message] = $this->dialogWithLastOutbound([
+            'platform' => Channel::PLATFORM_MAX,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'max-token'],
+        ], [
+            'raw_payload' => ['provider' => 'max_bot'],
+        ]);
+
+        $result = app(DeleteLastOutboundDialogMessageAction::class)->handle($dialog);
+
+        $dialog->refresh();
+        $message->refresh();
+
+        $this->assertSame(DeleteLastOutboundDialogMessageAction::STATUS_PROVIDER_FAILED, $result->status);
+        $this->assertSame($message->id, $dialog->last_outbound_message_id);
+        $this->assertSame(DeleteLastOutboundDialogMessageAction::STATUS_PROVIDER_FAILED, data_get($message->raw_payload, 'delete_action_result'));
+        $this->assertEmpty(data_get($message->raw_payload, 'deleted_by_action_at'));
+        $this->assertStringContainsString('message deletion is not allowed', (string) data_get($message->raw_payload, 'delete_action_error'));
+    }
+
     public function test_unsupported_channel_clears_dialog_link_without_provider_call(): void
     {
         Http::fake();
