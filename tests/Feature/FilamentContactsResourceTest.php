@@ -4119,6 +4119,125 @@ class FilamentContactsResourceTest extends TestCase
             ->assertCanSeeTableRecords([$olderContact, $newerContact], inOrder: true);
     }
 
+    public function test_contacts_table_places_contacts_without_activity_after_contacts_with_activity(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $channel = Channel::factory()->create([
+            'name' => 'Telegram Support',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $activeContact = Contact::factory()->create([
+            'name' => 'Контакт с активностью',
+        ]);
+        $activeIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $activeContact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'telegram-active',
+        ]);
+
+        Message::query()->create([
+            'contact_id' => $activeContact->id,
+            'contact_identity_id' => $activeIdentity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'chat-active',
+            'external_message_id' => 'msg-active',
+            'text' => 'Контакт написал сообщение',
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now(),
+        ]);
+
+        $emptyActivityContact = Contact::factory()->create([
+            'name' => 'Контакт без активности',
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->assertCanSeeTableRecords([$activeContact, $emptyActivityContact], inOrder: true);
+    }
+
+    public function test_contacts_table_treats_empty_activity_as_minimum_when_sorting_activity_asc(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $channel = Channel::factory()->create([
+            'name' => 'Telegram Support',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $emptyActivityContact = Contact::factory()->create([
+            'name' => 'Контакт без активности',
+        ]);
+        $activeContact = Contact::factory()->create([
+            'name' => 'Контакт с активностью',
+        ]);
+        $activeIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $activeContact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'telegram-active-asc',
+        ]);
+
+        Message::query()->create([
+            'contact_id' => $activeContact->id,
+            'contact_identity_id' => $activeIdentity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'chat-active-asc',
+            'external_message_id' => 'msg-active-asc',
+            'text' => 'Контакт написал сообщение',
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->call('sortTable', 'latest_message_received_at', 'asc')
+            ->assertCanSeeTableRecords([$emptyActivityContact, $activeContact], inOrder: true);
+    }
+
+    public function test_contacts_table_persists_selected_sort_in_session(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $firstContact = Contact::factory()->create([
+            'name' => 'Первый контакт',
+        ]);
+        $secondContact = Contact::factory()->create([
+            'name' => 'Второй контакт',
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->call('sortTable', 'id', 'desc')
+            ->assertSet('tableSort', 'id:desc')
+            ->assertCanSeeTableRecords([$secondContact, $firstContact], inOrder: true);
+
+        $this->assertSame(
+            'id:desc',
+            session()->get('tables.'.md5(ManageContacts::class).'_sort'),
+        );
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->assertSet('tableSort', 'id:desc')
+            ->assertCanSeeTableRecords([$secondContact, $firstContact], inOrder: true);
+    }
+
     public function test_contact_modal_can_assign_current_employee_via_responsible_dialog(): void
     {
         $admin = User::factory()->create([
