@@ -40,6 +40,37 @@ class DeleteLastOutboundDialogMessageActionTest extends TestCase
             && $request['message_id'] === '1001');
     }
 
+    public function test_deletes_last_outbound_max_bot_message_and_clears_dialog_link(): void
+    {
+        Http::fake([
+            'https://platform-api.max.ru/messages*' => Http::response(['success' => true]),
+        ]);
+
+        [$dialog, $message] = $this->dialogWithLastOutbound([
+            'platform' => Channel::PLATFORM_MAX,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'max-token'],
+        ], [
+            'external_chat_id' => '',
+            'raw_payload' => ['provider' => 'max_bot'],
+        ]);
+
+        $result = app(DeleteLastOutboundDialogMessageAction::class)->handle($dialog);
+
+        $dialog->refresh();
+        $message->refresh();
+
+        $this->assertSame(DeleteLastOutboundDialogMessageAction::STATUS_DELETED, $result->status);
+        $this->assertNull($dialog->last_outbound_message_id);
+        $this->assertNull($dialog->last_outbound_message_preview);
+        $this->assertSame(DeleteLastOutboundDialogMessageAction::STATUS_DELETED, data_get($message->raw_payload, 'delete_action_result'));
+        $this->assertNotEmpty(data_get($message->raw_payload, 'deleted_by_action_at'));
+
+        Http::assertSent(fn (Request $request): bool => $request->method() === 'DELETE'
+            && $request->url() === 'https://platform-api.max.ru/messages?message_id=1001'
+            && $request->hasHeader('Authorization', 'max-token'));
+    }
+
     public function test_provider_not_found_clears_dialog_link(): void
     {
         Http::fake([
@@ -84,13 +115,43 @@ class DeleteLastOutboundDialogMessageActionTest extends TestCase
         $this->assertEmpty(data_get($message->raw_payload, 'deleted_by_action_at'));
     }
 
+    public function test_max_provider_failed_keeps_dialog_link_for_retry(): void
+    {
+        Http::fake([
+            'https://platform-api.max.ru/messages*' => Http::response([
+                'success' => false,
+                'message' => 'Access denied: message cannot be deleted',
+            ], 403),
+        ]);
+
+        [$dialog, $message] = $this->dialogWithLastOutbound([
+            'platform' => Channel::PLATFORM_MAX,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'max-token'],
+        ], [
+            'raw_payload' => ['provider' => 'max_bot'],
+        ]);
+
+        $result = app(DeleteLastOutboundDialogMessageAction::class)->handle($dialog);
+
+        $dialog->refresh();
+        $message->refresh();
+
+        $this->assertSame(DeleteLastOutboundDialogMessageAction::STATUS_PROVIDER_FAILED, $result->status);
+        $this->assertSame($message->id, $dialog->last_outbound_message_id);
+        $this->assertSame(DeleteLastOutboundDialogMessageAction::STATUS_PROVIDER_FAILED, data_get($message->raw_payload, 'delete_action_result'));
+        $this->assertEmpty(data_get($message->raw_payload, 'deleted_by_action_at'));
+        $this->assertStringContainsString('Access denied', (string) data_get($message->raw_payload, 'delete_action_error'));
+    }
+
     public function test_unsupported_channel_clears_dialog_link_without_provider_call(): void
     {
         Http::fake();
 
         [$dialog, $message] = $this->dialogWithLastOutbound([
-            'platform' => Channel::PLATFORM_MAX,
-            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_ACCOUNT,
+            'credentials' => [],
         ]);
 
         $result = app(DeleteLastOutboundDialogMessageAction::class)->handle($dialog);
