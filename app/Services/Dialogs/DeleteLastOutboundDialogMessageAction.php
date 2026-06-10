@@ -6,10 +6,12 @@ use App\Data\Dialogs\DeleteLastOutboundMessageResult;
 use App\Models\Channel;
 use App\Models\Dialog;
 use App\Models\Message;
+use App\Services\Bots\MaxBotApiService;
 use App\Services\Bots\TelegramBotApiService;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use InvalidArgumentException;
 use Throwable;
 
 class DeleteLastOutboundDialogMessageAction
@@ -32,6 +34,7 @@ class DeleteLastOutboundDialogMessageAction
 
     public function __construct(
         private readonly TelegramBotApiService $telegramBotApiService,
+        private readonly MaxBotApiService $maxBotApiService,
     ) {}
 
     public function handle(Dialog $dialog): DeleteLastOutboundMessageResult
@@ -102,8 +105,9 @@ class DeleteLastOutboundDialogMessageAction
         }
 
         $externalChatId = $this->externalChatId($lockedDialog, $message);
+        $requiresExternalChatId = $channel?->platform === Channel::PLATFORM_TELEGRAM;
 
-        if ($externalChatId === null) {
+        if ($requiresExternalChatId && $externalChatId === null) {
             $this->markMessage($message, self::STATUS_MISSING_EXTERNAL_ID);
             $this->clearLastOutboundLink($lockedDialog);
 
@@ -115,7 +119,7 @@ class DeleteLastOutboundDialogMessageAction
         }
 
         try {
-            $this->telegramBotApiService->deleteMessage($channel, $externalChatId, $externalMessageId);
+            $this->deleteProviderMessage($channel, $externalChatId, $externalMessageId);
         } catch (Throwable $throwable) {
             if ($this->isProviderNotFound($throwable)) {
                 $this->markMessage($message, self::STATUS_NOT_FOUND, $this->safeError($throwable), deleted: true);
@@ -159,8 +163,17 @@ class DeleteLastOutboundDialogMessageAction
     private function supportsDelete(mixed $channel): bool
     {
         return $channel instanceof Channel
-            && $channel->platform === Channel::PLATFORM_TELEGRAM
+            && in_array($channel->platform, [Channel::PLATFORM_TELEGRAM, Channel::PLATFORM_MAX], true)
             && $channel->isBotConnection();
+    }
+
+    private function deleteProviderMessage(Channel $channel, ?string $externalChatId, string $externalMessageId): void
+    {
+        match ($channel->platform) {
+            Channel::PLATFORM_TELEGRAM => $this->telegramBotApiService->deleteMessage($channel, $externalChatId, $externalMessageId),
+            Channel::PLATFORM_MAX => $this->maxBotApiService->deleteMessage($channel, $externalMessageId),
+            default => throw new InvalidArgumentException("Channel [{$channel->id}] does not support message deletion."),
+        };
     }
 
     private function externalMessageId(Message $message): ?string
@@ -221,7 +234,8 @@ class DeleteLastOutboundDialogMessageAction
         $description = Str::lower($this->safeError($throwable));
 
         return str_contains($description, 'message to delete not found')
-            || str_contains($description, 'message not found');
+            || str_contains($description, 'message not found')
+            || (str_contains($description, 'not found') && str_contains($description, 'message'));
     }
 
     private function safeError(Throwable $throwable): string
@@ -230,7 +244,12 @@ class DeleteLastOutboundDialogMessageAction
 
         if ($throwable instanceof RequestException && $throwable->response !== null) {
             $responsePayload = $throwable->response->json();
-            $description = is_array($responsePayload) ? data_get($responsePayload, 'description') : null;
+            $description = is_array($responsePayload)
+                ? data_get($responsePayload, 'description')
+                    ?? data_get($responsePayload, 'message')
+                    ?? data_get($responsePayload, 'error')
+                    ?? data_get($responsePayload, 'code')
+                : null;
 
             if (is_string($description) && trim($description) !== '') {
                 $message = $description;

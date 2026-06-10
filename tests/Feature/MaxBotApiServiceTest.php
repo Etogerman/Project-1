@@ -5,12 +5,51 @@ namespace Tests\Feature;
 use App\Data\Bots\MaxChatAvatarData;
 use App\Models\Channel;
 use App\Services\Bots\MaxBotApiService;
+use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use InvalidArgumentException;
 use Tests\TestCase;
 
 class MaxBotApiServiceTest extends TestCase
 {
+    public function test_delete_message_calls_max_delete_messages_endpoint(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => ['token' => 'max-token'],
+        ]);
+
+        Http::fake([
+            'https://platform-api.max.ru/messages*' => Http::response(['success' => true]),
+        ]);
+
+        app(MaxBotApiService::class)->deleteMessage($channel, 'mid-123');
+
+        Http::assertSent(fn (Request $request): bool => $request->method() === 'DELETE'
+            && $request->url() === 'https://platform-api.max.ru/messages?message_id=mid-123'
+            && $request->hasHeader('Authorization', 'max-token'));
+    }
+
+    public function test_delete_message_throws_when_max_returns_success_false(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => ['token' => 'max-token'],
+        ]);
+
+        Http::fake([
+            'https://platform-api.max.ru/messages*' => Http::response([
+                'success' => false,
+                'message' => 'message deletion is not allowed',
+            ]),
+        ]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('message deletion is not allowed');
+
+        app(MaxBotApiService::class)->deleteMessage($channel, 'mid-123');
+    }
+
     public function test_fetch_webhook_urls_returns_unique_subscription_urls(): void
     {
         $channel = Channel::factory()->create([

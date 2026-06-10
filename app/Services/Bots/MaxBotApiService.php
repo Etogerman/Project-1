@@ -83,6 +83,30 @@ class MaxBotApiService
         );
     }
 
+    public function deleteMessage(Channel $channel, string $messageId): void
+    {
+        if (! filled($messageId)) {
+            throw new InvalidArgumentException("MAX message for channel [{$channel->id}] does not have message id.");
+        }
+
+        $response = $this->client($channel)
+            ->delete(
+                'https://platform-api.max.ru/messages?'.http_build_query([
+                    'message_id' => $messageId,
+                ]),
+            )
+            ->throw()
+            ->json();
+
+        if (is_array($response) && array_key_exists('success', $response) && $response['success'] !== true) {
+            $message = filled(data_get($response, 'message'))
+                ? (string) data_get($response, 'message')
+                : "MAX message [{$messageId}] was not deleted.";
+
+            throw new InvalidArgumentException($message);
+        }
+    }
+
     public function registerWebhook(Channel $channel, string $url, string $secret): void
     {
         $client = $this->client($channel);
