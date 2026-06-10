@@ -308,7 +308,16 @@ class ManageFieldDictionaryFields extends Page
             return 'Контакты';
         }
 
-        if (in_array($field->field_key, ['country', 'region', 'city', 'location_source'], true)) {
+        if (in_array($field->field_key, [
+            'country',
+            'region',
+            'region_status',
+            'region_source',
+            'city',
+            'distance_to_moscow_km',
+            'distance_to_moscow_status',
+            'distance_to_moscow_calculated_at',
+        ], true)) {
             return 'Адрес';
         }
 

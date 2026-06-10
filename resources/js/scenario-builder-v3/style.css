@@ -17,6 +17,7 @@
     --edge-wait: #2c2f36;
     --edge-auto: oklch(0.55 0.18 292);
     --edge-ai: oklch(0.58 0.14 182);
+    --edge-action: var(--action);
     --danger: oklch(0.62 0.18 25);
     --warning: oklch(0.72 0.14 75);
     --grid: rgba(0, 0, 0, 0.06);
@@ -568,13 +569,22 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
 }
 
 .ac-v3-builder__sheet-actions .ac-v3-builder__sheet-list-button {
-    width: auto;
-    min-width: 58px;
-    padding: 0 9px !important;
+    position: relative;
+    min-width: 24px;
 }
 
-.ac-v3-builder__sheet-actions button.is-danger {
-    color: color-mix(in oklch, var(--danger) 78%, var(--text-2));
+.ac-v3-builder__sheet-actions .ac-v3-builder__sheet-list-button span {
+    position: absolute;
+    top: -7px;
+    right: -7px;
+    min-width: 16px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: white;
+    font-size: 10px;
+    font-weight: 800;
+    line-height: 16px;
+    text-align: center;
 }
 
 .ac-v3-builder__sheet-actions button:hover:not(:disabled) {
@@ -774,6 +784,11 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
     stroke-width: 2.6;
 }
 
+.ac-v3-builder__edges g.is-action-edge .ac-v3-builder__edge {
+    stroke: var(--edge-action);
+    stroke-width: 2.6;
+}
+
 .ac-v3-builder__edge-hit {
     fill: none;
     cursor: pointer;
@@ -880,6 +895,10 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
     fill: var(--edge-ai);
 }
 
+.ac-v3-builder__edges #ac-v3-arrow-action path {
+    fill: var(--edge-action);
+}
+
 .ac-v3-builder__edges #ac-v3-arrow-selected path {
     fill: var(--accent);
 }
@@ -910,6 +929,10 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
 
 .ac-v3-builder__edges g.is-ai-edge .ac-v3-builder__edge-label {
     fill: color-mix(in oklch, var(--edge-ai) 72%, var(--text));
+}
+
+.ac-v3-builder__edges g.is-action-edge .ac-v3-builder__edge-label {
+    fill: color-mix(in oklch, var(--edge-action) 74%, var(--text));
 }
 
 .ac-v3-builder__node {
@@ -1290,6 +1313,10 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
 
 .ac-v3-builder__ports button.is-button-output span {
     color: var(--text-2);
+}
+
+.ac-v3-builder__ports button.is-action-output span {
+    color: color-mix(in oklch, var(--edge-action) 76%, var(--text));
 }
 
 .ac-v3-builder__ports button.is-legacy-output {
@@ -4527,7 +4554,7 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
     padding: 8px;
 }
 
-.ac-v3-builder__action-row button {
+.ac-v3-builder__action-row .ac-v3-builder__action-remove-btn {
     justify-self: end;
     width: 30px;
     height: 34px;

@@ -1183,6 +1183,146 @@ class ScenarioBuilderV3StateTest extends TestCase
         );
     }
 
+    public function test_publish_keeps_change_field_ai_result_source_in_runtime_snapshot(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['name' => 'Telegram Change Field AI']);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_change_field_ai_result',
+            'name' => 'V3 Change Field AI Result',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_start',
+                'type' => 'state',
+                'title' => 'Старт',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->startSettings('/start', [$channel->id]),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_ai',
+                'type' => 'state',
+                'title' => 'ИИ',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->aiAnalysisSettings(),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_action',
+                'type' => 'state',
+                'title' => 'Изменить поле',
+                'position' => ['x' => 840, 'y' => 120],
+                'settings_payload' => $this->changeFieldActionSettings([
+                    'target_scope' => 'contact',
+                    'target_field' => 'first_name',
+                    'value_source' => 'ai_result',
+                    'source_block_client_key' => 'tmp_ai',
+                    'source_field_key' => 'first_name',
+                ]),
+            ],
+        ];
+        $waitPayload = $this->edgePayload(null, 'Ответ клиента');
+        $aiPayload = $this->edgePayload('name_accepted', 'Имя найдено');
+        $aiPayload['mode'] = 'ai_analysis';
+        $edges = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_wait',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_start', 'output_id' => null],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_ai'],
+                'condition_payload' => $waitPayload,
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_ai_found',
+                'source' => ['block_id' => null, 'client_key' => 'tmp_ai', 'output_id' => 'name_accepted'],
+                'target' => ['block_id' => null, 'client_key' => 'tmp_action'],
+                'condition_payload' => $aiPayload,
+            ],
+        ];
+
+        $saved = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
+            ->assertOk()
+            ->assertJsonPath('builder.blocks.2.settings_payload.modules.0.payload.actions.0.type', 'change_field')
+            ->assertJsonPath('builder.blocks.2.settings_payload.modules.0.payload.actions.0.value_source', 'ai_result')
+            ->json();
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $saved['scenario']['draft_version_id'],
+                'base_revision' => $saved['builder']['revision'],
+            ])
+            ->assertOk();
+
+        $scenario->refresh()->load('publishedVersion');
+        $aiBlockId = (string) $saved['id_map']['blocks']['tmp_ai'];
+        $actionBlockId = (string) $saved['id_map']['blocks']['tmp_action'];
+
+        $this->assertSame(
+            'change_field',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$actionBlockId.actions.0.type"),
+        );
+        $this->assertSame(
+            $aiBlockId,
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$actionBlockId.actions.0.source_block_id"),
+        );
+        $this->assertSame(
+            'first_name',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$actionBlockId.actions.0.source_field_key"),
+        );
+    }
+
+    public function test_state_rejects_change_field_ai_result_without_ai_block(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['name' => 'Telegram Change Field Invalid AI']);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_change_field_invalid_ai_source',
+            'name' => 'V3 Change Field Invalid AI Source',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_start',
+                'type' => 'state',
+                'title' => 'Старт',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->startSettings('/start', [$channel->id]),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_action',
+                'type' => 'state',
+                'title' => 'Изменить поле',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->changeFieldActionSettings([
+                    'target_scope' => 'contact',
+                    'target_field' => 'first_name',
+                    'value_source' => 'ai_result',
+                    'source_block_client_key' => 'tmp_start',
+                    'source_field_key' => 'first_name',
+                ]),
+            ],
+        ];
+        $payload = $this->edgePayload(null, 'Дальше');
+        $edges = [[
+            'id' => null,
+            'client_key' => 'tmp_edge',
+            'source' => ['block_id' => null, 'client_key' => 'tmp_start', 'output_id' => null],
+            'target' => ['block_id' => null, 'client_key' => 'tmp_action'],
+            'condition_payload' => $payload,
+        ]];
+
+        $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
+            ->assertStatus(422);
+    }
+
     public function test_publish_keeps_check_data_action_outputs_in_runtime_snapshot(): void
     {
         $admin = $this->adminUser();
@@ -3867,6 +4007,75 @@ class ScenarioBuilderV3StateTest extends TestCase
         );
     }
 
+    public function test_publish_keeps_simulate_start_clear_source_field_flag_in_runtime_snapshot(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['name' => 'Telegram Simulate Start']);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_simulate_start_clear',
+            'name' => 'V3 Simulate Start Clear',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_start',
+                'type' => 'state',
+                'title' => 'Старт',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->startSettings('/start', [$channel->id]),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_simulate',
+                'type' => 'state',
+                'title' => 'Имитировать старт',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->simulateStartParameterActionSettings(clearAfterReroute: true),
+            ],
+        ];
+        $edgePayload = $this->edgePayload(null, 'Дальше');
+        $edgePayload['mode'] = 'automatic';
+        $edges = [[
+            'id' => null,
+            'client_key' => 'tmp_start_edge',
+            'source' => ['block_id' => null, 'client_key' => 'tmp_start', 'output_id' => null],
+            'target' => ['block_id' => null, 'client_key' => 'tmp_simulate'],
+            'condition_payload' => $edgePayload,
+        ]];
+
+        $saved = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
+            ->assertOk()
+            ->assertJsonPath('builder.blocks.1.settings_payload.modules.0.payload.actions.0.type', 'simulate_start_parameter')
+            ->assertJsonPath('builder.blocks.1.settings_payload.modules.0.payload.actions.0.source_scope', 'dialog')
+            ->assertJsonPath('builder.blocks.1.settings_payload.modules.0.payload.actions.0.source_field_key', 'start_param')
+            ->assertJsonPath('builder.blocks.1.settings_payload.modules.0.payload.actions.0.clear_source_field_after_reroute', true)
+            ->json();
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $saved['scenario']['draft_version_id'],
+                'base_revision' => $saved['builder']['revision'],
+            ])
+            ->assertOk();
+
+        $scenario->refresh()->load('publishedVersion');
+        $simulateBlockId = (string) $saved['id_map']['blocks']['tmp_simulate'];
+
+        $this->assertSame(
+            'simulate_start_parameter',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$simulateBlockId.actions.0.type"),
+        );
+        $this->assertSame(
+            'start_param',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$simulateBlockId.actions.0.source_field_key"),
+        );
+        $this->assertTrue(
+            (bool) data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$simulateBlockId.actions.0.clear_source_field_after_reroute"),
+        );
+    }
+
     public function test_publish_keeps_tag_effects_action_in_runtime_snapshot(): void
     {
         $admin = $this->adminUser();
@@ -4704,6 +4913,41 @@ class ScenarioBuilderV3StateTest extends TestCase
     }
 
     /**
+     * @param  array<string, mixed>  $action
+     * @return array<string, mixed>
+     */
+    private function changeFieldActionSettings(array $action): array
+    {
+        return [
+            'schema_version' => 3,
+            'kind' => 'state',
+            'ui' => ['sheet_id' => 'main', 'width' => 320, 'collapsed' => false],
+            'modules' => [
+                [
+                    'id' => 'mod_action',
+                    'type' => 'action',
+                    'enabled' => true,
+                    'payload' => [
+                        'actions' => [
+                            [
+                                'type' => 'change_field',
+                                'target_scope' => (string) ($action['target_scope'] ?? 'contact'),
+                                'target_field' => (string) ($action['target_field'] ?? 'first_name'),
+                                'value_source' => (string) ($action['value_source'] ?? 'manual'),
+                                'manual_value' => (string) ($action['manual_value'] ?? ''),
+                                'source_block_client_key' => (string) ($action['source_block_client_key'] ?? ''),
+                                'source_block_id' => '',
+                                'source_field_key' => (string) ($action['source_field_key'] ?? ''),
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+            'outputs' => [],
+        ];
+    }
+
+    /**
      * @return array<string, mixed>
      */
     private function variablesActionSettings(): array
@@ -4728,6 +4972,36 @@ class ScenarioBuilderV3StateTest extends TestCase
                                         'amount' => 1,
                                     ],
                                 ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+            'outputs' => [],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function simulateStartParameterActionSettings(bool $clearAfterReroute = false): array
+    {
+        return [
+            'schema_version' => 3,
+            'kind' => 'state',
+            'ui' => ['sheet_id' => 'main', 'width' => 320, 'collapsed' => false],
+            'modules' => [
+                [
+                    'id' => 'mod_action',
+                    'type' => 'action',
+                    'enabled' => true,
+                    'payload' => [
+                        'actions' => [
+                            [
+                                'type' => 'simulate_start_parameter',
+                                'source_scope' => 'dialog',
+                                'source_field_key' => 'start_param',
+                                'clear_source_field_after_reroute' => $clearAfterReroute,
                             ],
                         ],
                     ],

@@ -381,6 +381,7 @@ class CompileScenarioBuilderV3RuntimeAction
                         'type' => 'simulate_start_parameter',
                         'source_scope' => 'dialog',
                         'source_field_key' => (string) ($item['source_field_key'] ?? ''),
+                        'clear_source_field_after_reroute' => (bool) ($item['clear_source_field_after_reroute'] ?? false),
                     ];
                 }
 
@@ -396,6 +397,24 @@ class CompileScenarioBuilderV3RuntimeAction
                     return [
                         'type' => 'bitrix24_sync',
                         'operation' => (string) ($item['operation'] ?? 'contact_sync'),
+                    ];
+                }
+
+                if ($type === 'change_field') {
+                    $valueSource = (string) ($item['value_source'] ?? 'manual');
+
+                    return [
+                        'type' => 'change_field',
+                        'target_scope' => (string) ($item['target_scope'] ?? 'contact'),
+                        'target_field' => (string) ($item['target_field'] ?? ''),
+                        'value_source' => $valueSource,
+                        'manual_value' => (string) ($item['manual_value'] ?? ''),
+                        'source_block_id' => $valueSource === 'ai_result' && $sourceBlockClientKey !== ''
+                            ? ($runtimeBlockIdsByClientKey[$sourceBlockClientKey] ?? '')
+                            : '',
+                        'source_field_key' => $valueSource === 'ai_result'
+                            ? (string) ($item['source_field_key'] ?? '')
+                            : '',
                     ];
                 }
 
@@ -436,6 +455,10 @@ class CompileScenarioBuilderV3RuntimeAction
                     'history_export',
                     'contact_sync_with_followups',
                 ], true),
+                'change_field' => (($item['target_field'] ?? '') !== ''
+                    && in_array($item['value_source'] ?? '', ['manual', 'start_parameter', 'ai_result'], true)
+                    && (($item['value_source'] ?? '') !== 'ai_result'
+                        || (($item['source_block_id'] ?? '') !== '' && ($item['source_field_key'] ?? '') !== ''))),
                 default => (($item['target_field'] ?? '') !== ''
                     && (($item['source_type'] ?? '') === 'static_value'
                         ? trim((string) ($item['static_value'] ?? '')) !== ''

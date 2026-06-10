@@ -179,6 +179,12 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         'gender',
         'age_years',
         'age_range',
+        'region_status',
+        'region_source',
+        'location_source',
+        'distance_to_moscow_km',
+        'distance_to_moscow_status',
+        'distance_to_moscow_calculated_at',
     ];
 
     private const V3_CONTACT_CAPTURE_DATA_TYPES = [
@@ -191,6 +197,17 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         'gender' => 'any_text',
         'age_years' => 'number',
         'age_range' => 'any_text',
+    ];
+
+    private const V3_CHANGE_FIELD_CONTACT_FIELDS = [
+        'first_name',
+        'last_name',
+        'country',
+        'region',
+        'city',
+        'gender',
+        'age_years',
+        'age_range',
     ];
 
     private const V3_CONTACT_TRANSITION_WRITE_FIELDS = [
@@ -1403,11 +1420,14 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                     ->firstOrFail();
 
                 $startBlockId = $this->v3StartBlockIdForMessage($message, $runtime);
+                $statePayload = $this->v3StatePayload($lockedRun->state_payload);
+                data_set($statePayload, 'v3.entrypoint.parameter', $this->v3StartParameterFromMessage($message));
+
                 $progress = $this->advanceV3FromBlock(
                     $message,
                     $runtime,
                     $startBlockId,
-                    $this->v3StatePayload($lockedRun->state_payload),
+                    $statePayload,
                     run: $lockedRun,
                 );
 
@@ -1984,6 +2004,10 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 ->filter(fn (mixed $value): bool => trim((string) $value) !== '')
                 ->values()
                 ->all();
+        }
+
+        if ($fieldKey === 'location_source') {
+            $fieldKey = 'region_source';
         }
 
         return $contact->{$fieldKey} ?? null;
@@ -2648,7 +2672,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             $this->v3SimulateStartDepth++;
 
             try {
-                return $this->advanceV3FromBlock(
+                $progress = $this->advanceV3FromBlock(
                     $rerouteMessage,
                     $runtime,
                     (string) $actionResult['reroute_block_id'],
@@ -2656,6 +2680,17 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                     $remainingTransitions - 1,
                     $run,
                 );
+
+                $this->clearV3SimulatedStartSourceFieldAfterReroute(
+                    $message,
+                    $run,
+                    $blockId,
+                    is_array($actionResult['clear_source_field_after_reroute'] ?? null)
+                        ? $actionResult['clear_source_field_after_reroute']
+                        : null,
+                );
+
+                return $progress;
             } finally {
                 $this->v3SimulateStartDepth = max(0, $this->v3SimulateStartDepth - 1);
             }
@@ -3159,6 +3194,18 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 continue;
             }
 
+            if (($action['type'] ?? null) === 'change_field') {
+                $this->applyV3ChangeFieldAction(
+                    $message,
+                    $action,
+                    $statePayload,
+                    filled($block['id'] ?? null) ? (string) $block['id'] : null,
+                    $run,
+                );
+
+                continue;
+            }
+
             if (($action['type'] ?? null) !== 'write_contact_field') {
                 Log::warning('scenario.v3_unsupported_action_skipped', [
                     'scenario_code' => $this->code(),
@@ -3512,7 +3559,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
      * @param  array<string, mixed>  $action
      * @param  array<string, mixed>  $block
      * @param  array<string, mixed>  $statePayload
-     * @return array{state_payload: array<string, mixed>, output_id: ?string, reroute_block_id?: string, reroute_message?: Message}
+     * @return array{state_payload: array<string, mixed>, output_id: ?string, reroute_block_id?: string, reroute_message?: Message, clear_source_field_after_reroute?: array{source_scope: string, source_field_key: string, used_value: string}}
      */
     private function applyV3SimulateStartParameterAction(
         Message $message,
@@ -3525,8 +3572,16 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         $blockId = filled($block['id'] ?? null) ? (string) $block['id'] : null;
         $sourceScope = (string) ($action['source_scope'] ?? 'dialog');
         $sourceFieldKey = trim((string) ($action['source_field_key'] ?? ''));
+        $clearSourceFieldAfterReroute = (bool) ($action['clear_source_field_after_reroute'] ?? false);
 
         if ($sourceScope !== 'dialog' || ! $this->validV3DialogVariableKey($sourceFieldKey)) {
+            if ($clearSourceFieldAfterReroute && $sourceScope !== 'dialog') {
+                $this->logV3SimulateStartParameter($message, $run, $blockId, 'source_field_clear_skipped_not_dialog_scope', [
+                    'source_scope' => $sourceScope,
+                    'source_field_key' => $sourceFieldKey,
+                ]);
+            }
+
             $this->logV3SimulateStartParameter($message, $run, $blockId, 'invalid_action', [
                 'source_scope' => $sourceScope,
                 'source_field_key' => $sourceFieldKey,
@@ -3546,6 +3601,12 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         $parameter = $this->v3DialogFieldStringValue($message, $sourceFieldKey);
 
         if ($parameter === '') {
+            if ($clearSourceFieldAfterReroute) {
+                $this->logV3SimulateStartParameter($message, $run, $blockId, 'source_field_clear_skipped_empty_parameter', [
+                    'source_field_key' => $sourceFieldKey,
+                ]);
+            }
+
             $this->logV3SimulateStartParameter($message, $run, $blockId, 'empty_parameter', [
                 'source_field_key' => $sourceFieldKey,
             ]);
@@ -3566,6 +3627,13 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         $targetBlockId = $this->matchingV3EntrypointBlockId($startMessage, $runtime);
 
         if ($targetBlockId === null) {
+            if ($clearSourceFieldAfterReroute) {
+                $this->logV3SimulateStartParameter($message, $run, $blockId, 'source_field_clear_skipped_not_found', [
+                    'source_field_key' => $sourceFieldKey,
+                    'parameter' => $parameter,
+                ]);
+            }
+
             $this->logV3SimulateStartParameter($message, $run, $blockId, 'start_block_not_found', [
                 'source_field_key' => $sourceFieldKey,
                 'parameter' => $parameter,
@@ -3595,11 +3663,20 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             'target_block_id' => $targetBlockId,
         ]);
 
+        data_set($statePayload, 'v3.entrypoint.parameter', $parameter);
+
         return [
             'state_payload' => $statePayload,
             'output_id' => null,
             'reroute_block_id' => $targetBlockId,
             'reroute_message' => $startMessage,
+            ...($clearSourceFieldAfterReroute ? [
+                'clear_source_field_after_reroute' => [
+                    'source_scope' => 'dialog',
+                    'source_field_key' => $sourceFieldKey,
+                    'used_value' => $parameter,
+                ],
+            ] : []),
         ];
     }
 
@@ -4056,8 +4133,11 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         $contactId = null;
 
         try {
-            $rootContact = $message->contact instanceof Contact
-                ? $this->resolveRootContactAction->handle($message->contact)
+            $messageContactId = is_numeric($message->contact_id)
+                ? (int) $message->contact_id
+                : ($message->contact instanceof Contact ? (int) $message->contact->getKey() : null);
+            $rootContact = $messageContactId !== null && $messageContactId > 0
+                ? $this->resolveRootContactAction->handle($messageContactId)
                 : null;
 
             if (! $rootContact instanceof Contact) {
@@ -4654,6 +4734,189 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
     /**
      * @param  array<string, mixed>  $action
      * @param  array<string, mixed>  $statePayload
+     */
+    private function applyV3ChangeFieldAction(
+        Message $message,
+        array $action,
+        array $statePayload,
+        ?string $blockId,
+        ?ScenarioRun $run,
+    ): void {
+        $targetScope = (string) ($action['target_scope'] ?? '');
+        $targetField = trim((string) ($action['target_field'] ?? ''));
+        $valueResult = $this->v3ChangeFieldValue($action, $statePayload);
+
+        if (($valueResult['status'] ?? null) !== 'ok') {
+            $this->logV3ChangeFieldAction($message, $run, $blockId, $action, (string) ($valueResult['status'] ?? 'missing_source'));
+
+            return;
+        }
+
+        $value = (string) ($valueResult['value'] ?? '');
+        $written = match ($targetScope) {
+            'dialog' => $this->applyV3WriteDialogFieldAction($message, $targetField, $value),
+            'contact' => $this->applyV3ChangeContactFieldAction($message, $targetField, $value, $action, $statePayload),
+            default => false,
+        };
+
+        $this->logV3ChangeFieldAction(
+            $message,
+            $run,
+            $blockId,
+            $action,
+            $written ? ($value === '' ? 'cleared' : 'written') : 'validation_failed',
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $action
+     * @param  array<string, mixed>  $statePayload
+     * @return array{status: string, value?: string}
+     */
+    private function v3ChangeFieldValue(array $action, array $statePayload): array
+    {
+        $valueSource = (string) ($action['value_source'] ?? 'manual');
+
+        if ($valueSource === 'manual') {
+            return ['status' => 'ok', 'value' => (string) ($action['manual_value'] ?? '')];
+        }
+
+        if ($valueSource === 'start_parameter') {
+            $value = data_get($statePayload, 'v3.entrypoint.parameter');
+
+            return is_scalar($value) && trim((string) $value) !== ''
+                ? ['status' => 'ok', 'value' => trim((string) $value)]
+                : ['status' => 'missing_source'];
+        }
+
+        if ($valueSource === 'ai_result') {
+            $sourceBlockId = trim((string) ($action['source_block_id'] ?? ''));
+            $sourceFieldKey = trim((string) ($action['source_field_key'] ?? ''));
+            $value = $sourceBlockId !== '' && $sourceFieldKey !== ''
+                ? data_get($statePayload, "v3.ai_analysis.$sourceBlockId.data.$sourceFieldKey")
+                : null;
+
+            return is_scalar($value) && trim((string) $value) !== ''
+                ? ['status' => 'ok', 'value' => trim((string) $value)]
+                : ['status' => 'missing_source'];
+        }
+
+        return ['status' => 'validation_failed'];
+    }
+
+    /**
+     * @param  array<string, mixed>  $action
+     * @param  array<string, mixed>  $statePayload
+     */
+    private function applyV3ChangeContactFieldAction(
+        Message $message,
+        string $fieldKey,
+        string $value,
+        array $action,
+        array $statePayload,
+    ): bool {
+        if (! $message->contact instanceof Contact || ! in_array($fieldKey, self::V3_CHANGE_FIELD_CONTACT_FIELDS, true)) {
+            return false;
+        }
+
+        $contact = $this->resolveRootContactAction->handle($message->contact);
+        $lockedContact = Contact::query()
+            ->whereKey($contact->id)
+            ->lockForUpdate()
+            ->first();
+
+        if (! $lockedContact instanceof Contact) {
+            return false;
+        }
+
+        if ($fieldKey === 'first_name') {
+            if ($value === '') {
+                $result = $this->applyContactFirstNameAction->clear(
+                    $lockedContact,
+                    ApplyContactFirstNameAction::REASON_SCENARIO_CONFIRMED,
+                );
+
+                if ($result->bitrix24RelevantChanged) {
+                    $this->queueBitrix24ContactSyncAction->handle($lockedContact);
+                }
+
+                return true;
+            }
+
+            $resolutionMethod = ($action['value_source'] ?? null) === 'ai_result'
+                ? Contact::FIRST_NAME_RESOLUTION_METHOD_AI_ANALYSIS
+                : Contact::FIRST_NAME_RESOLUTION_METHOD_SCENARIO_DIRECT;
+
+            return $this->applyV3ContactFirstNameCapture(
+                $lockedContact,
+                $value,
+                $resolutionMethod,
+                $this->v3ActionFirstNameResolutionWriteContext(
+                    $message,
+                    $statePayload,
+                    trim((string) ($action['source_block_id'] ?? '')),
+                    trim((string) ($action['source_field_key'] ?? '')),
+                ),
+            );
+        }
+
+        if (in_array($fieldKey, ['last_name', 'country', 'region', 'city'], true)) {
+            if (mb_strlen($value) > 255) {
+                return false;
+            }
+
+            return $this->updateV3ContactAttribute($lockedContact, $fieldKey, $value === '' ? null : $value);
+        }
+
+        if ($fieldKey === 'gender') {
+            return $value === ''
+                ? $this->updateV3ContactAttribute($lockedContact, $fieldKey, null)
+                : $this->applyV3ContactEnumCapture($lockedContact, $fieldKey, $value, Contact::genderOptions());
+        }
+
+        if ($fieldKey === 'age_range') {
+            return $value === ''
+                ? $this->updateV3ContactAttribute($lockedContact, $fieldKey, null)
+                : $this->applyV3ContactEnumCapture($lockedContact, $fieldKey, $value, Contact::ageRangeOptions());
+        }
+
+        if ($fieldKey === 'age_years') {
+            return $value === ''
+                ? $this->updateV3ContactAttribute($lockedContact, $fieldKey, null)
+                : $this->applyV3ContactAgeYearsCapture($lockedContact, $value);
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  array<string, mixed>  $action
+     */
+    private function logV3ChangeFieldAction(
+        Message $message,
+        ?ScenarioRun $run,
+        ?string $blockId,
+        array $action,
+        string $status,
+    ): void {
+        Log::info('scenario.v3_change_field_action', [
+            'scenario_code' => $this->code(),
+            'scenario_run_id' => $run?->id,
+            'dialog_id' => $message->dialog_id,
+            'message_id' => $message->id,
+            'block_id' => $blockId,
+            'status' => $status,
+            'target_scope' => is_scalar($action['target_scope'] ?? null) ? (string) $action['target_scope'] : null,
+            'target_field' => is_scalar($action['target_field'] ?? null) ? (string) $action['target_field'] : null,
+            'value_source' => is_scalar($action['value_source'] ?? null) ? (string) $action['value_source'] : null,
+            'source_block_id' => is_scalar($action['source_block_id'] ?? null) ? (string) $action['source_block_id'] : null,
+            'source_field_key' => is_scalar($action['source_field_key'] ?? null) ? (string) $action['source_field_key'] : null,
+        ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $action
+     * @param  array<string, mixed>  $statePayload
      * @return array{state_payload: array<string, mixed>, output_id: ?string, stop_current_execution?: bool}
      */
     private function applyV3VariablesAction(
@@ -4934,6 +5197,89 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             'status' => $status,
             ...$context,
         ]);
+    }
+
+    /**
+     * @param  array{source_scope?: string, source_field_key?: string, used_value?: string}|null  $clearRequest
+     */
+    private function clearV3SimulatedStartSourceFieldAfterReroute(
+        Message $message,
+        ?ScenarioRun $run,
+        ?string $blockId,
+        ?array $clearRequest,
+    ): void {
+        if ($clearRequest === null) {
+            return;
+        }
+
+        $sourceScope = (string) ($clearRequest['source_scope'] ?? '');
+        $sourceFieldKey = trim((string) ($clearRequest['source_field_key'] ?? ''));
+        $usedValue = trim((string) ($clearRequest['used_value'] ?? ''));
+
+        if ($sourceScope !== 'dialog') {
+            $this->logV3SimulateStartParameter($message, $run, $blockId, 'source_field_clear_skipped_not_dialog_scope', [
+                'source_scope' => $sourceScope,
+                'source_field_key' => $sourceFieldKey,
+            ]);
+
+            return;
+        }
+
+        if (! $this->validV3DialogVariableKey($sourceFieldKey) || $usedValue === '') {
+            $this->logV3SimulateStartParameter($message, $run, $blockId, 'source_field_clear_failed', [
+                'source_scope' => $sourceScope,
+                'source_field_key' => $sourceFieldKey,
+                'reason' => 'invalid_clear_request',
+            ]);
+
+            return;
+        }
+
+        try {
+            DB::transaction(function () use ($message, $run, $blockId, $sourceFieldKey, $usedValue): void {
+                $dialog = Dialog::query()
+                    ->whereKey($message->dialog_id)
+                    ->lockForUpdate()
+                    ->first();
+
+                if (! $dialog instanceof Dialog) {
+                    $this->logV3SimulateStartParameter($message, $run, $blockId, 'source_field_clear_failed', [
+                        'source_field_key' => $sourceFieldKey,
+                        'reason' => 'dialog_not_found',
+                    ]);
+
+                    return;
+                }
+
+                $fields = is_array($dialog->fields_payload) ? $dialog->fields_payload : [];
+                $currentValueExists = array_key_exists($sourceFieldKey, $fields);
+                $currentValue = $currentValueExists ? trim((string) ($fields[$sourceFieldKey] ?? '')) : '';
+
+                if (! $currentValueExists || $currentValue === '' || $currentValue !== $usedValue) {
+                    $this->logV3SimulateStartParameter($message, $run, $blockId, 'source_field_clear_skipped_changed', [
+                        'source_field_key' => $sourceFieldKey,
+                        'used_value' => $usedValue,
+                    ]);
+
+                    return;
+                }
+
+                unset($fields[$sourceFieldKey]);
+
+                $dialog->forceFill(['fields_payload' => $fields])->save();
+
+                $this->logV3SimulateStartParameter($message, $run, $blockId, 'source_field_cleared', [
+                    'source_field_key' => $sourceFieldKey,
+                    'used_value' => $usedValue,
+                ]);
+            });
+        } catch (Throwable $throwable) {
+            $this->logV3SimulateStartParameter($message, $run, $blockId, 'source_field_clear_failed', [
+                'source_field_key' => $sourceFieldKey,
+                'reason' => 'exception',
+                'error_class' => $throwable::class,
+            ]);
+        }
     }
 
     /**
@@ -6006,8 +6352,16 @@ TEXT;
             'region',
             'city',
             'gender',
+            'gender_source',
+            'birth_date',
             'age_years',
             'age_range',
+            'region_status',
+            'region_source',
+            'location_source',
+            'distance_to_moscow_km',
+            'distance_to_moscow_status',
+            'distance_to_moscow_calculated_at',
         ];
 
         if (! in_array($field, $allowedFields, true)) {
@@ -6028,6 +6382,10 @@ TEXT;
                 ->value('phone_normalized');
 
             return $phone === null ? null : trim((string) $phone);
+        }
+
+        if ($field === 'location_source') {
+            $field = 'region_source';
         }
 
         $value = $contact->getAttribute($field);

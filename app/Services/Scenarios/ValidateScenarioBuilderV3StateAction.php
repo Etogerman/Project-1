@@ -58,6 +58,7 @@ class ValidateScenarioBuilderV3StateAction
     private const MAX_ACTIONS_PER_BLOCK = 20;
 
     private const ACTION_TYPES = [
+        'change_field',
         'write_contact_field',
         'check_data',
         'edit_message',
@@ -98,6 +99,8 @@ class ValidateScenarioBuilderV3StateAction
     ];
 
     private const ACTION_SOURCE_TYPES = ['ai_data', 'inbound_message', 'static_value'];
+
+    private const CHANGE_FIELD_VALUE_SOURCES = ['manual', 'start_parameter', 'ai_result'];
 
     private const ACTION_CHECK_SOURCES = ['current_inbound_message'];
 
@@ -164,6 +167,17 @@ class ValidateScenarioBuilderV3StateAction
 
     private const EDGE_CONTACT_CAPTURE_DATA_TYPES = [
         'phone' => 'phone',
+        'first_name' => 'any_text',
+        'last_name' => 'any_text',
+        'country' => 'any_text',
+        'region' => 'any_text',
+        'city' => 'any_text',
+        'gender' => 'any_text',
+        'age_years' => 'number',
+        'age_range' => 'any_text',
+    ];
+
+    private const CHANGE_FIELD_CONTACT_DATA_TYPES = [
         'first_name' => 'any_text',
         'last_name' => 'any_text',
         'country' => 'any_text',
@@ -868,10 +882,12 @@ class ValidateScenarioBuilderV3StateAction
             $action = $this->arrayValue($action, "builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex");
             $type = trim((string) ($action['type'] ?? 'write_contact_field'));
             $sourceType = trim((string) ($action['source_type'] ?? 'ai_data'));
+            $valueSource = trim((string) ($action['value_source'] ?? 'manual'));
             $sourceBlockClientKey = trim((string) ($action['source_block_client_key'] ?? ''));
             $sourceBlockId = trim((string) ($action['source_block_id'] ?? ''));
             $sourceFieldKey = trim((string) ($action['source_field_key'] ?? ''));
             $staticValue = trim((string) ($action['static_value'] ?? ''));
+            $manualValue = trim((string) ($action['manual_value'] ?? $action['static_value'] ?? ''));
             $targetScope = trim((string) ($action['target_scope'] ?? 'contact'));
             $targetField = trim((string) ($action['target_field'] ?? ''));
             $checkSource = trim((string) ($action['check_source'] ?? 'current_inbound_message'));
@@ -885,6 +901,7 @@ class ValidateScenarioBuilderV3StateAction
             $geoCountryFieldKey = trim((string) ($action['country_field_key'] ?? 'geo_country'));
             $simulateStartSourceScope = trim((string) ($action['source_scope'] ?? 'dialog'));
             $simulateStartSourceFieldKey = trim((string) ($action['source_field_key'] ?? ''));
+            $simulateStartClearSourceField = (bool) ($action['clear_source_field_after_reroute'] ?? false);
             $bitrix24Operation = trim((string) ($action['operation'] ?? 'contact_sync'));
 
             if (! in_array($type, self::ACTION_TYPES, true)) {
@@ -1031,6 +1048,7 @@ class ValidateScenarioBuilderV3StateAction
                     'type' => $type,
                     'source_scope' => 'dialog',
                     'source_field_key' => $simulateStartSourceFieldKey,
+                    'clear_source_field_after_reroute' => $simulateStartClearSourceField,
                 ];
 
                 continue;
@@ -1072,6 +1090,59 @@ class ValidateScenarioBuilderV3StateAction
                 $normalized[] = [
                     'type' => $type,
                     'operation' => $bitrix24Operation,
+                ];
+
+                continue;
+            }
+
+            if ($type === 'change_field') {
+                if (! in_array($valueSource, self::CHANGE_FIELD_VALUE_SOURCES, true)) {
+                    $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.value_source", 'Unknown field value source.');
+                }
+
+                if (! in_array($targetScope, self::EDGE_CAPTURE_FIELD_SCOPES, true)) {
+                    $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.target_scope", 'Unknown action target.');
+                }
+
+                if ($targetScope === 'contact' && ! array_key_exists($targetField, self::CHANGE_FIELD_CONTACT_DATA_TYPES)) {
+                    $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.target_field", 'Unknown contact field.');
+                }
+
+                if ($targetScope === 'dialog' && ! $this->validDialogVariableKey($targetField)) {
+                    $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.target_field", 'Invalid dialog field.');
+                }
+
+                if (mb_strlen($manualValue) > 2000) {
+                    $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.manual_value", 'Action value is too long.');
+                }
+
+                if ($valueSource === 'ai_result') {
+                    if ($sourceBlockClientKey === '') {
+                        $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.source_block_client_key", 'AI source block is required.');
+                    }
+
+                    if ($sourceFieldKey === '' || ! preg_match('/^[A-Za-z][A-Za-z0-9_]*$/', $sourceFieldKey)) {
+                        $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.source_field_key", 'Invalid AI result field.');
+                    }
+                }
+
+                if ($valueSource === 'manual' && $targetScope === 'contact') {
+                    $this->validateManualChangeFieldContactValue(
+                        $manualValue,
+                        $targetField,
+                        "builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.manual_value",
+                    );
+                }
+
+                $normalized[] = [
+                    'type' => 'change_field',
+                    'target_scope' => $targetScope,
+                    'target_field' => $targetField,
+                    'value_source' => $valueSource,
+                    'manual_value' => $manualValue,
+                    'source_block_client_key' => $valueSource === 'ai_result' ? $sourceBlockClientKey : '',
+                    'source_block_id' => $valueSource === 'ai_result' ? $sourceBlockId : '',
+                    'source_field_key' => $valueSource === 'ai_result' ? $sourceFieldKey : '',
                 ];
 
                 continue;
@@ -1888,6 +1959,37 @@ class ValidateScenarioBuilderV3StateAction
         $this->fail($key, 'Edge endpoint block does not exist.');
     }
 
+    private function validateManualChangeFieldContactValue(string $value, string $targetField, string $path): void
+    {
+        if ($value === '') {
+            return;
+        }
+
+        if (in_array($targetField, ['first_name', 'last_name', 'country', 'region', 'city'], true) && mb_strlen($value) > 255) {
+            $this->fail($path, 'Action value is too long.');
+        }
+
+        if ($targetField === 'gender' && ! array_key_exists($value, Contact::genderOptions())) {
+            $this->fail($path, 'Unknown gender value.');
+        }
+
+        if ($targetField === 'age_range' && ! array_key_exists($value, Contact::ageRangeOptions())) {
+            $this->fail($path, 'Unknown age range value.');
+        }
+
+        if ($targetField === 'age_years') {
+            if (preg_match('/^\d{1,3}$/', $value) !== 1) {
+                $this->fail($path, 'Invalid age value.');
+            }
+
+            $age = (int) $value;
+
+            if ($age < 1 || $age > 120) {
+                $this->fail($path, 'Invalid age value.');
+            }
+        }
+    }
+
     /**
      * @param  Collection<string, array<string, mixed>>  $blockKeys
      */
@@ -2140,6 +2242,27 @@ class ValidateScenarioBuilderV3StateAction
                 }
 
                 foreach ($actions as $actionIndex => $action) {
+                    $path = "builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex";
+
+                    if (
+                        is_array($action)
+                        && ($action['type'] ?? null) === 'change_field'
+                        && ($action['value_source'] ?? null) === 'ai_result'
+                    ) {
+                        $sourceBlockClientKey = (string) ($action['source_block_client_key'] ?? '');
+                        $sourceBlock = $blocksByClientKey->get($sourceBlockClientKey);
+
+                        if (! is_array($sourceBlock) || ! $this->hasAiModule($sourceBlock)) {
+                            $this->fail("$path.source_block_client_key", 'AI source block must be an AI analysis block.');
+                        }
+
+                        $sourceFieldKey = (string) ($action['source_field_key'] ?? '');
+
+                        if (! in_array($sourceFieldKey, $this->aiExtractFieldKeys($sourceBlock), true)) {
+                            $this->fail("$path.source_field_key", 'AI source field must exist in selected AI analysis block.');
+                        }
+                    }
+
                     if (
                         ! is_array($action)
                         || ($action['type'] ?? null) !== 'resolve_geo_city'
@@ -2150,7 +2273,6 @@ class ValidateScenarioBuilderV3StateAction
 
                     $sourceBlockClientKey = (string) ($action['source_block_client_key'] ?? '');
                     $sourceBlock = $blocksByClientKey->get($sourceBlockClientKey);
-                    $path = "builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex";
 
                     if (! is_array($sourceBlock) || ! $this->hasAiModule($sourceBlock)) {
                         $this->fail("$path.source_block_client_key", 'Geo source block must be an AI analysis block.');
