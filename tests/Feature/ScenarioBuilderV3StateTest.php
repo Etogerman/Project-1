@@ -1276,6 +1276,61 @@ class ScenarioBuilderV3StateTest extends TestCase
         );
     }
 
+    public function test_put_state_preserves_legacy_phone_write_contact_field_action(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['name' => 'Telegram Legacy Phone Write']);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_legacy_phone_write_contact_field',
+            'name' => 'V3 Legacy Phone Write Contact Field',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_start',
+                'type' => 'state',
+                'title' => 'Старт',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->startSettings('/start', [$channel->id]),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_action',
+                'type' => 'state',
+                'title' => 'Записать телефон',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->actionSettings('phone', 'phone'),
+            ],
+        ];
+
+        $saved = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks))
+            ->assertOk()
+            ->assertJsonPath('builder.blocks.1.settings_payload.modules.0.payload.actions.0.type', 'write_contact_field')
+            ->assertJsonPath('builder.blocks.1.settings_payload.modules.0.payload.actions.0.target_field', 'phone')
+            ->json();
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $saved['scenario']['draft_version_id'],
+                'base_revision' => $saved['builder']['revision'],
+            ])
+            ->assertOk();
+
+        $scenario->refresh()->load('publishedVersion');
+        $actionBlockId = (string) $saved['id_map']['blocks']['tmp_action'];
+
+        $this->assertSame(
+            'write_contact_field',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$actionBlockId.actions.0.type"),
+        );
+        $this->assertSame(
+            'phone',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$actionBlockId.actions.0.target_field"),
+        );
+    }
+
     public function test_state_rejects_change_field_ai_result_without_ai_block(): void
     {
         $admin = $this->adminUser();

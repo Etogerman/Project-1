@@ -5,6 +5,7 @@
         "build": "vite build",
         "dev": "vite",
         "playwright:install": "playwright install chromium",
+        "test:js": "node --test tests/js/*.test.mjs",
         "test:e2e": "playwright test",
         "test:e2e:headed": "playwright test --headed",
         "test:e2e:report": "playwright show-report"
