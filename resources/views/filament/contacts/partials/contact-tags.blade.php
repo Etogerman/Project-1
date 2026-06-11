@@ -1,13 +1,7 @@
 @if (($renderSurface ?? true))
-    <section data-role="contact-tags" class="ac-surface ac-surface--secondary">
-        <div class="ac-surface__header ac-surface__header--centered">
-            <div class="ac-surface__title-group">
-                <p class="ac-surface__eyebrow">Сегментация</p>
-                <h3 class="ac-surface__title">Теги контакта</h3>
-                <p class="ac-surface__subtitle">
-                    Теги помогают быстро выделять сегменты и рабочие состояния клиента.
-                </p>
-            </div>
+    <section data-role="contact-tags" class="ac-contact-form-section ac-contact-tag-section">
+        <div class="ac-contact-form-section__header">
+            <h3 class="ac-contact-form-section__title">Теги</h3>
 
             @if ($canManageTags)
                 <button
@@ -16,7 +10,7 @@
                     wire:click="openAddTagDialog"
                     wire:loading.attr="disabled"
                     wire:target="openAddTagDialog,saveMountedContactTag"
-                    class="ac-button ac-button--primary-soft"
+                    class="ac-inline-action"
                 >
                     Добавить тег
                 </button>
@@ -24,39 +18,35 @@
         </div>
 
         @if ($tags === [])
-            <div data-role="contact-tags-empty" class="ac-empty-state ac-surface__divider">
-                Для этого контакта теги ещё не назначены.
+            <div data-role="contact-tags-empty" class="ac-contact-empty-line">
+                Теги не назначены
             </div>
         @else
-            <div class="ac-list-stack ac-surface__divider">
+            <div class="ac-tag-list">
                 @foreach ($tags as $tag)
-                    <article class="ac-list-card ac-list-card--soft">
-                        <div class="ac-inline-split">
-                            <div class="ac-surface__title-group">
-                                <p class="ac-list-card__title">
-                                    <span class="ac-pill" data-tone="{{ $tag['color'] }}">{{ $tag['name'] }}</span>
-                                </p>
-                                <p class="ac-list-card__body">
-                                    Код: {{ $tag['slug'] }}
-                                    @if (! $tag['is_active'])
-                                        · Тег отключён
-                                    @endif
-                                </p>
-                            </div>
-
-                            @if ($canManageTags)
-                                <button
-                                    data-role="contact-remove-tag"
-                                    type="button"
-                                    wire:click="removeMountedContactTag({{ $tag['id'] }})"
-                                    wire:loading.attr="disabled"
-                                    wire:target="removeMountedContactTag"
-                                    class="ac-button ac-button--danger-soft"
-                                >
-                                    Снять
-                                </button>
-                            @endif
+                    <article class="ac-tag-row">
+                        <div class="ac-tag-row__body">
+                            <span class="ac-pill" data-tone="{{ $tag['color'] }}">{{ $tag['name'] }}</span>
+                            <span class="ac-tag-row__meta">
+                                {{ $tag['slug'] }}
+                                @if (! $tag['is_active'])
+                                    · отключён
+                                @endif
+                            </span>
                         </div>
+
+                        @if ($canManageTags)
+                            <button
+                                data-role="contact-remove-tag"
+                                type="button"
+                                wire:click="removeMountedContactTag({{ $tag['id'] }})"
+                                wire:loading.attr="disabled"
+                                wire:target="removeMountedContactTag"
+                                class="ac-inline-action ac-inline-action--danger"
+                            >
+                                Снять
+                            </button>
+                        @endif
                     </article>
                 @endforeach
             </div>

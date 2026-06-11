@@ -57,7 +57,13 @@ class Channel extends Model
 
     public const CONNECTION_ERROR_STALE = 'Данные проверки устарели';
 
+    public const CONNECTION_ERROR_GATEWAY_STALE = 'Gateway не отвечает';
+
     public const CONNECTION_ERROR_EXPECTED_URL_CHANGED = 'Ожидаемый webhook URL изменился. Нужно выполнить проверку или переустановить webhook.';
+
+    public const CONNECTION_CHECK_FRESH_FOR_MINUTES = 2;
+
+    public const GATEWAY_HEARTBEAT_FRESH_FOR_MINUTES = 2;
 
     /**
      * @var list<string>
@@ -509,6 +515,16 @@ class Channel extends Model
             return 'Без webhook';
         }
 
+        if ($this->supportsConnectionCheck()) {
+            if (! $this->hasFreshConnectionCheck()) {
+                return $this->connection_checked_at === null ? 'Не проверен' : 'Проверка устарела';
+            }
+
+            if (! $this->hasCurrentInstalledWebhook()) {
+                return 'Не подключен';
+            }
+        }
+
         if ($this->last_error_at !== null && ($this->last_reply_sent_at === null || $this->last_error_at->greaterThanOrEqualTo($this->last_reply_sent_at))) {
             return 'Ошибка';
         }
@@ -531,7 +547,7 @@ class Channel extends Model
                 'Работает' => 'success',
                 'Синхронизация' => 'info',
                 'Авторизация', 'Ограниченно' => 'warning',
-                'Ошибка', 'Отозван' => 'danger',
+                'Ошибка', 'Отозван', 'Gateway не отвечает' => 'danger',
                 'Отключен', 'Не авторизован' => 'gray',
                 default => 'gray',
             };
@@ -541,8 +557,8 @@ class Channel extends Model
             'Работает' => 'success',
             'Webhook' => 'info',
             'Не проверен' => 'gray',
-            'Без webhook' => 'warning',
-            'Ошибка', 'Ошибка настроек' => 'danger',
+            'Без webhook', 'Проверка устарела' => 'warning',
+            'Ошибка', 'Ошибка настроек', 'Не подключен' => 'danger',
             'Отключен' => 'gray',
             default => 'gray',
         };
@@ -554,13 +570,17 @@ class Channel extends Model
             return false;
         }
 
+        if ($this->hasUnreadableCredentials()) {
+            return false;
+        }
+
         if ($this->isAccountConnection()) {
             return $this->hasReadyTelegramAccountGatewayOutgoingReplies();
         }
 
         return $this->isBotConnection()
             && $this->hasBotTokenConfigured()
-            && in_array($this->getHealthStatusColor(), ['success', 'info'], true);
+            && $this->hasCurrentInstalledWebhook();
     }
 
     public function hasReadyTelegramAccountGatewayOutgoingReplies(): bool
@@ -580,7 +600,83 @@ class Channel extends Model
         return $runtimeState->auth_status === ChannelRuntimeState::AUTH_STATUS_AUTHORIZED
             && $runtimeState->authorization_state === ChannelRuntimeState::AUTHORIZATION_STATE_READY
             && $runtimeState->sync_status === ChannelRuntimeState::SYNC_STATUS_LIVE
+            && $this->hasFreshTelegramAccountGatewayHeartbeat()
             && data_get($runtimeState->runtime_payload, 'gateway_capabilities.outgoing_replies') === true;
+    }
+
+    public function hasFreshConnectionCheck(): bool
+    {
+        return $this->connection_checked_at !== null
+            && $this->connection_checked_at->greaterThanOrEqualTo(now()->subMinutes(self::CONNECTION_CHECK_FRESH_FOR_MINUTES));
+    }
+
+    public function hasCurrentInstalledWebhook(): bool
+    {
+        return $this->supportsConnectionCheck()
+            && $this->hasFreshConnectionCheck()
+            && $this->hasWebhookUrlForCurrentApp()
+            && $this->connection_status === self::CONNECTION_STATUS_CONNECTED
+            && $this->webhook_status === self::WEBHOOK_STATUS_INSTALLED;
+    }
+
+    public function hasWebhookUrlForCurrentApp(): bool
+    {
+        $currentWebhookUrl = $this->currentWebhookUrl();
+
+        if ($currentWebhookUrl === null) {
+            return false;
+        }
+
+        if (filled($this->expected_webhook_url) && ! $this->webhookUrlsMatch($currentWebhookUrl, (string) $this->expected_webhook_url)) {
+            return false;
+        }
+
+        if (filled($this->provider_webhook_url) && ! $this->webhookUrlsMatch($currentWebhookUrl, (string) $this->provider_webhook_url)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    protected function currentWebhookUrl(): ?string
+    {
+        if (! $this->exists || ! $this->supportsConnectionCheck()) {
+            return null;
+        }
+
+        $baseUrl = rtrim((string) config('app.url'), '/');
+
+        if ($baseUrl === '') {
+            return null;
+        }
+
+        $path = match ($this->platform) {
+            self::PLATFORM_TELEGRAM => route('webhooks.telegram.handle', ['channel' => $this], absolute: false),
+            self::PLATFORM_MAX => route('webhooks.max.handle', ['channel' => $this], absolute: false),
+            default => null,
+        };
+
+        return $path === null ? null : $baseUrl.$path;
+    }
+
+    protected function webhookUrlsMatch(string $expectedUrl, string $actualUrl): bool
+    {
+        return rtrim($expectedUrl, '/') === rtrim($actualUrl, '/');
+    }
+
+    public function hasFreshTelegramAccountGatewayHeartbeat(): bool
+    {
+        if (! $this->isAccountConnection() || $this->platform !== self::PLATFORM_TELEGRAM) {
+            return false;
+        }
+
+        $this->loadMissing('runtimeState');
+
+        $runtimeState = $this->runtimeState;
+
+        return $runtimeState instanceof ChannelRuntimeState
+            && $runtimeState->last_gateway_heartbeat_at !== null
+            && $runtimeState->last_gateway_heartbeat_at->greaterThanOrEqualTo(now()->subMinutes(self::GATEWAY_HEARTBEAT_FRESH_FOR_MINUTES));
     }
 
     protected function getAccountHealthStatusLabel(): string
@@ -608,6 +704,10 @@ class Channel extends Model
             || $runtimeState->authorization_state !== ChannelRuntimeState::AUTHORIZATION_STATE_READY
         ) {
             return 'Авторизация';
+        }
+
+        if (! $this->hasFreshTelegramAccountGatewayHeartbeat()) {
+            return self::CONNECTION_ERROR_GATEWAY_STALE;
         }
 
         return match ($runtimeState->sync_status) {

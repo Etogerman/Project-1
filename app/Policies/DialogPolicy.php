@@ -29,11 +29,11 @@ class DialogPolicy
 
     public function delete(User $user, Dialog $dialog): bool
     {
-        return false;
+        return $user->hasRolePermission('dialogs.delete');
     }
 
     public function deleteAny(User $user): bool
     {
-        return false;
+        return $user->hasRolePermission('dialogs.delete');
     }
 }

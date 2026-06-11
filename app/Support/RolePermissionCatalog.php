@@ -202,6 +202,31 @@ class RolePermissionCatalog
                 ],
             ],
             [
+                'key' => 'analytics',
+                'label' => 'Аналитика',
+                'description' => 'Права для просмотра аналитики распознавания имён и ИИ-запросов.',
+                'actions' => [
+                    [
+                        'code' => 'analytics.view',
+                        'label' => 'Просмотр',
+                        'description' => 'Доступ к разделу аналитики, спискам событий и агрегатам.',
+                        'isRuntimeActive' => true,
+                        'isPreparatory' => false,
+                        'preparatoryLabel' => null,
+                        'preparatoryDescription' => null,
+                    ],
+                    [
+                        'code' => 'analytics.debug',
+                        'label' => 'Технические детали',
+                        'description' => 'Просмотр raw body ИИ-запросов, prompt/response preview и технических payload.',
+                        'isRuntimeActive' => true,
+                        'isPreparatory' => false,
+                        'preparatoryLabel' => null,
+                        'preparatoryDescription' => null,
+                    ],
+                ],
+            ],
+            [
                 'key' => 'scenarios',
                 'label' => 'Сценарии',
                 'description' => 'Права для управления сценариями и их жизненным циклом.',

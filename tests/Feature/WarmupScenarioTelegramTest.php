@@ -12,6 +12,7 @@ use App\Models\ContactIdentity;
 use App\Models\Message;
 use App\Models\ScenarioChannelBinding;
 use App\Models\ScenarioRun;
+use App\Services\Scenarios\ScenarioRegistry;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
@@ -20,6 +21,14 @@ use Tests\TestCase;
 class WarmupScenarioTelegramTest extends TestCase
 {
     use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        config()->set('scenarios.warmup.enabled_for_new_starts', true);
+        app(ScenarioRegistry::class)->forgetCachedDefinitions();
+    }
 
     public function test_warmup_starts_on_first_telegram_inbound_and_preempts_auto_reply(): void
     {

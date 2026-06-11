@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Scenario;
+use App\Models\ScenarioBuilderBlock;
 use App\Models\ScenarioVersion;
 use App\Services\Scenarios\ArchiveScenarioAction;
 use App\Services\Scenarios\CreateNextScenarioDraftAction;
@@ -60,6 +61,81 @@ class ScenarioVersionLifecycleTest extends TestCase
         $this->expectException(ValidationException::class);
 
         app(PublishScenarioVersionAction::class)->handle($scenario->fresh()->draftVersion);
+    }
+
+    public function test_publish_scenario_version_rejects_builder_v3_payload_without_mutating_versions(): void
+    {
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_builder_payload',
+            'name' => 'V3 через Конструктор',
+        ]);
+        $draftVersion = $scenario->fresh()->draftVersion;
+
+        $draftVersion->forceFill([
+            'schema_payload' => [
+                'version' => 3,
+                'builder_v3' => [
+                    'schema_version' => 3,
+                ],
+            ],
+        ])->save();
+
+        try {
+            app(PublishScenarioVersionAction::class)->handle($draftVersion);
+
+            $this->fail('Old scenario publish action must reject V3 builder payload.');
+        } catch (ValidationException $exception) {
+            $this->assertSame(
+                'V3-сценарий публикуется через Конструктор.',
+                $exception->errors()['version'][0] ?? null,
+            );
+        }
+
+        $scenario->refresh();
+
+        $this->assertSame(ScenarioVersion::STATUS_DRAFT, $draftVersion->fresh()->status);
+        $this->assertNull($scenario->publishedVersion);
+    }
+
+    public function test_publish_scenario_version_rejects_builder_blocks_without_mutating_versions(): void
+    {
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_builder_blocks',
+            'name' => 'V3 блоки',
+        ]);
+        $draftVersion = $scenario->fresh()->draftVersion;
+
+        $draftVersion->forceFill([
+            'schema_payload' => $this->sliceOneSchema('v3_builder_blocks'),
+        ])->save();
+
+        ScenarioBuilderBlock::query()->create([
+            'scenario_version_id' => $draftVersion->id,
+            'type' => 'state',
+            'title' => 'V3 блок',
+            'position_x' => 100,
+            'position_y' => 120,
+            'settings_payload' => [
+                'schema_version' => 3,
+                'modules' => [],
+            ],
+        ]);
+
+        try {
+            app(PublishScenarioVersionAction::class)->handle($draftVersion);
+
+            $this->fail('Old scenario publish action must reject versions with builder blocks.');
+        } catch (ValidationException $exception) {
+            $this->assertSame(
+                'V3-сценарий публикуется через Конструктор.',
+                $exception->errors()['version'][0] ?? null,
+            );
+        }
+
+        $scenario->refresh();
+
+        $this->assertSame(ScenarioVersion::STATUS_DRAFT, $draftVersion->fresh()->status);
+        $this->assertNull($scenario->publishedVersion);
     }
 
     public function test_publish_scenario_version_archives_previous_published_version(): void

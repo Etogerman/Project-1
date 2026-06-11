@@ -34,7 +34,7 @@ class BotConstructor extends Page
 
     protected static ?string $navigationLabel = 'Конструктор';
 
-    protected static string|UnitEnum|null $navigationGroup = 'Интеграции';
+    protected static string|UnitEnum|null $navigationGroup = 'Автоматизация';
 
     protected static ?int $navigationSort = 15;
 

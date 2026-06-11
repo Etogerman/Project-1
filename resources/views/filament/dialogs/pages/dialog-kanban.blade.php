@@ -1,4 +1,13 @@
 <x-filament-panels::page>
+    @php
+        $dialogFieldLabels = $field_labels ?? [];
+        $dialogFieldLabel = static function (string $fieldKey, string $fallback) use ($dialogFieldLabels): string {
+            $label = trim((string) ($dialogFieldLabels[$fieldKey] ?? ''));
+
+            return $label !== '' ? $label : $fallback;
+        };
+    @endphp
+
     <div
         data-role="dialog-kanban-page"
         class="ac-panel-stack ac-panel-stack--relaxed"
@@ -46,18 +55,60 @@
                         @endif
                     </button>
 
-                    <button
-                        type="button"
-                        class="ac-button ac-button--secondary"
-                        disabled
-                        title="Сортировка появится следующим срезом"
-                    >
-                        Сортировка
-                    </button>
+                    <div class="ac-kanban-sort-wrap">
+                        <button
+                            type="button"
+                            wire:click="toggleSortPanel"
+                            @class([
+                                'ac-button',
+                                'ac-kanban-sort-button',
+                                'ac-button--secondary' => ! $sortPanelOpen && $sort_state['is_default'],
+                                'ac-button--warning-soft' => $sortPanelOpen || ! $sort_state['is_default'],
+                            ])
+                            aria-haspopup="menu"
+                            aria-expanded="{{ $sortPanelOpen ? 'true' : 'false' }}"
+                        >
+                            Сортировка
+                        </button>
+
+                        @if ($sortPanelOpen)
+                            <div class="ac-kanban-sort-popover" role="menu" wire:key="dialog-kanban-sort-popover">
+                                <div class="ac-kanban-sort-popover__head">
+                                    <span>Сортировка</span>
+                                </div>
+
+                                <div class="ac-kanban-sort-popover__list">
+                                    @foreach ($sort_options as $sortCode => $sortLabel)
+                                        <button
+                                            type="button"
+                                            wire:click="selectKanbanSort('{{ $sortCode }}')"
+                                            @class([
+                                                'ac-kanban-sort-option',
+                                                'is-active' => $sort_state['selected'] === $sortCode,
+                                            ])
+                                            role="menuitemradio"
+                                            aria-checked="{{ $sort_state['selected'] === $sortCode ? 'true' : 'false' }}"
+                                        >
+                                            <span>{{ $sortLabel }}</span>
+
+                                            @if ($sort_state['selected'] === $sortCode)
+                                                <span class="ac-kanban-sort-option__mark">✓</span>
+                                            @endif
+                                        </button>
+                                    @endforeach
+                                </div>
+                            </div>
+                        @endif
+                    </div>
 
                     <span class="ac-kanban-view-switch" role="group" aria-label="Вид диалогов">
                         <span class="ac-kanban-view-switch__item is-active">Канбан</span>
-                        <a href="{{ $table_url }}" class="ac-kanban-view-switch__item">
+                        <a
+                            href="{{ $table_url }}"
+                            class="ac-kanban-view-switch__item"
+                            wire:navigate.hover
+                            data-ac-dialogs-view-link
+                        >
                             Таблица
                         </a>
                     </span>
@@ -91,22 +142,22 @@
                                 <label class="ac-kanban-fields-popover__row">
                                     <input type="checkbox" data-kanban-card-field="id" checked>
                                     <span class="ac-kanban-fields-popover__box"></span>
-                                    <span>ID диалога</span>
+                                    <span>{{ $dialogFieldLabel('id', 'ID диалога') }}</span>
                                 </label>
                                 <label class="ac-kanban-fields-popover__row">
                                     <input type="checkbox" data-kanban-card-field="channel" checked>
                                     <span class="ac-kanban-fields-popover__box"></span>
-                                    <span>Канал</span>
+                                    <span>{{ $dialogFieldLabel('channel_id', 'Канал') }}</span>
                                 </label>
                                 <label class="ac-kanban-fields-popover__row">
                                     <input type="checkbox" data-kanban-card-field="status" checked>
                                     <span class="ac-kanban-fields-popover__box"></span>
-                                    <span>Статус ответа</span>
+                                    <span>{{ $dialogFieldLabel('status', 'Статус ответа') }}</span>
                                 </label>
                                 <label class="ac-kanban-fields-popover__row">
                                     <input type="checkbox" data-kanban-card-field="preview" checked>
                                     <span class="ac-kanban-fields-popover__box"></span>
-                                    <span>Последнее сообщение</span>
+                                    <span>{{ $dialogFieldLabel('last_message_at', 'Последнее сообщение') }}</span>
                                 </label>
                                 <label class="ac-kanban-fields-popover__row">
                                     <input type="checkbox" data-kanban-card-field="route" checked>

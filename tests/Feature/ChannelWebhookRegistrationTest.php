@@ -95,6 +95,55 @@ class ChannelWebhookRegistrationTest extends TestCase
         ]);
     }
 
+    public function test_telegram_webhook_registration_can_pass_configured_ip_address(): void
+    {
+        config()->set('bots.telegram.webhook_ip_address', '187.77.47.5');
+
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push([
+                    'ok' => true,
+                ], 200)
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'id' => 123456789,
+                        'is_bot' => true,
+                        'first_name' => 'Staging Bot',
+                        'username' => 'stagin_g_1_bot',
+                    ],
+                ], 200)
+                ->push([
+                    'ok' => true,
+                    'result' => [
+                        'url' => "https://connector.example/webhooks/telegram/{$channel->id}",
+                    ],
+                ], 200),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->callTableAction('registerWebhook', $channel)
+            ->assertHasNoTableActionErrors();
+
+        Http::assertSent(function ($request) use ($channel): bool {
+            return $request->url() === 'https://api.telegram.org/bottelegram-token/setWebhook'
+                && $request['url'] === "https://connector.example/webhooks/telegram/{$channel->id}"
+                && $request['ip_address'] === '187.77.47.5';
+        });
+    }
+
     public function test_admin_can_register_max_webhook_from_filament_resource(): void
     {
         Http::fake([

@@ -15,6 +15,8 @@ return [
     'warmup' => [
         'handler' => \App\Services\Scenarios\WarmupScenario::class,
         'label' => 'Прогрев',
+        'enabled_for_new_starts' => false,
+        'deprecated' => true,
         'platforms' => [
             Channel::PLATFORM_TELEGRAM,
             Channel::PLATFORM_MAX,

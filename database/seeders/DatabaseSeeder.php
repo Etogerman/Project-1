@@ -11,5 +11,7 @@ class DatabaseSeeder extends Seeder
      */
     public function run(): void
     {
+        $this->call(FieldDictionaryFieldSeeder::class);
+        $this->call(GeoDictionarySeeder::class);
     }
 }

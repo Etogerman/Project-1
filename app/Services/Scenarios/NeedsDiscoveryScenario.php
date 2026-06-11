@@ -43,6 +43,7 @@ class NeedsDiscoveryScenario implements ScenarioHandler
     public function __construct(
         private readonly SendBotDialogTextAction $sendBotDialogTextAction,
         private readonly StoreOutboundScenarioMessageAction $storeOutboundScenarioMessageAction,
+        private readonly ScenarioRegistry $scenarioRegistry,
     ) {}
 
     public function shouldStart(Message $message): bool
@@ -238,6 +239,10 @@ class NeedsDiscoveryScenario implements ScenarioHandler
 
     private function warmupAllowsStart(Message $message): bool
     {
+        if (! $this->scenarioRegistry->enabledForNewStarts(WarmupScenario::code())) {
+            return true;
+        }
+
         $warmupIsBound = ScenarioChannelBinding::query()
             ->active()
             ->where('channel_id', $message->channel_id)

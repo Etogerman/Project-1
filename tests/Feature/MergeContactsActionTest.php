@@ -383,10 +383,12 @@ class MergeContactsActionTest extends TestCase
         $primary = Contact::factory()->create([
             'first_name' => null,
             'first_name_source' => null,
+            'first_name_resolution_method' => null,
         ]);
         $secondary = Contact::factory()->create([
             'first_name' => 'Герман',
             'first_name_source' => Contact::FIRST_NAME_SOURCE_MANUAL,
+            'first_name_resolution_method' => Contact::FIRST_NAME_RESOLUTION_METHOD_OPERATOR_MANUAL,
         ]);
 
         ContactIdentity::factory()->create([
@@ -414,9 +416,11 @@ class MergeContactsActionTest extends TestCase
         $this->assertTrue($result->wasMerged);
         $this->assertSame('Герман', $primary->first_name);
         $this->assertSame(Contact::FIRST_NAME_SOURCE_MANUAL, $primary->first_name_source);
+        $this->assertSame(Contact::FIRST_NAME_RESOLUTION_METHOD_OPERATOR_MANUAL, $primary->first_name_resolution_method);
         $this->assertSame($primary->id, $secondary->merged_into_contact_id);
         $this->assertSame('Герман', data_get($result->fieldsCopied, 'first_name'));
         $this->assertSame(Contact::FIRST_NAME_SOURCE_MANUAL, data_get($result->fieldsCopied, 'first_name_source'));
+        $this->assertSame(Contact::FIRST_NAME_RESOLUTION_METHOD_OPERATOR_MANUAL, data_get($result->fieldsCopied, 'first_name_resolution_method'));
     }
 
     public function test_it_preserves_secondary_pending_auto_reply_source_message_when_merging_dialogs(): void

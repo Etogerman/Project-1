@@ -10,14 +10,18 @@ use App\Filament\Resources\Dialogs\Pages\ViewDialog;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\Dialog;
+use App\Models\FieldDictionaryField;
 use App\Models\Message;
+use App\Models\User;
 use App\Services\Contacts\ResolveContactDisplayNameAction;
 use App\Services\Dialogs\BuildConversationFeedViewDataAction;
 use App\Services\Dialogs\MessageChronology;
-use App\Services\Dialogs\ResolveDialogStageAction;
 use App\Services\Dialogs\ResolveDialogRouteStatusAction;
+use App\Services\Dialogs\ResolveDialogStageAction;
 use BackedEnum;
 use Closure;
+use Filament\Actions\Action;
+use Filament\Actions\DeleteBulkAction;
 use Filament\Resources\Resource;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
@@ -54,7 +58,7 @@ class DialogResource extends Resource
     {
         return parent::getEloquentQuery()
             ->with([
-                'channel',
+                'channel.connectionTypeDefinition',
                 'currentContactIdentity',
                 'contact.assignedUser',
                 'contact.phoneNumbers',
@@ -87,28 +91,30 @@ class DialogResource extends Resource
 
     public static function getTableRecordQuery(bool $excludeMerged = true): Builder
     {
-        $query = parent::getEloquentQuery()
-            ->addSelect([
-                'latest_inbound_user_message_id' => static::buildLatestMessageIdSubquery(
-                    fn (Builder $query): Builder => $query->where('message_kind', Message::KIND_INBOUND_USER),
-                ),
-                'latest_inbound_user_message_sort_at' => static::buildLatestMessageSortAtSubquery(
-                    fn (Builder $query): Builder => $query->where('message_kind', Message::KIND_INBOUND_USER),
-                ),
-                'latest_outbound_manual_reply_message_id' => static::buildLatestMessageIdSubquery(
-                    fn (Builder $query): Builder => $query->where('message_kind', Message::KIND_OUTBOUND_MANUAL_REPLY),
-                ),
-                'latest_outbound_manual_reply_message_sort_at' => static::buildLatestMessageSortAtSubquery(
-                    fn (Builder $query): Builder => $query->where('message_kind', Message::KIND_OUTBOUND_MANUAL_REPLY),
-                ),
-            ])
+        $query = static::addInboxStatusProjection(parent::getEloquentQuery())
             ->with([
-                'channel',
+                'channel.connectionTypeDefinition',
                 'currentContactIdentity',
                 'contact.assignedUser',
                 'contact.primaryIdentity',
-                'lastMessage.channel',
+                'lastMessage.channel.connectionTypeDefinition',
                 'lastMessage.sentByUser',
+            ]);
+
+        if ($excludeMerged) {
+            $query->whereHas('contact', fn (Builder $query): Builder => $query->whereNull('merged_into_contact_id'));
+        }
+
+        return $query;
+    }
+
+    public static function getKanbanRecordQuery(bool $excludeMerged = true): Builder
+    {
+        $query = static::addInboxStatusProjection(parent::getEloquentQuery())
+            ->with([
+                'channel.connectionTypeDefinition',
+                'currentContactIdentity',
+                'contact.assignedUser',
             ]);
 
         if ($excludeMerged) {
@@ -120,35 +126,49 @@ class DialogResource extends Resource
 
     public static function table(Table $table): Table
     {
+        $dialogFieldLabels = FieldDictionaryField::labelsFor(FieldDictionaryField::ENTITY_DIALOG);
+        $dialogStageOptionLabels = FieldDictionaryField::optionLabelsFor(FieldDictionaryField::ENTITY_DIALOG, 'stage');
+        $dialogFieldLabel = static fn (string $fieldKey, string $fallback): string => FieldDictionaryField::labelFrom($dialogFieldLabels, $fieldKey, $fallback);
+
         return $table
             ->poll('10s')
             ->splitSearchTerms(false)
+            ->header(view('filament.dialogs.partials.table-header'))
+            ->searchPlaceholder('Поиск диалога')
             ->columns([
                 TextColumn::make('contact_label')
-                    ->label('Контакт')
+                    ->label($dialogFieldLabel('contact_id', 'Контакт'))
                     ->state(fn (Dialog $record): string => static::resolveContactLabel($record))
                     ->searchable(query: fn (Builder $query, string $search): Builder => static::applyTableSearch($query, $search))
+                    ->sortable(query: fn (Builder $query, string $direction): Builder => static::applyContactLabelSort($query, $direction))
                     ->toggleable(),
                 TextColumn::make('inbox_status')
-                    ->label('Статус')
+                    ->label($dialogFieldLabel('status', 'Статус'))
                     ->state(fn (Dialog $record): string => static::formatInboxStatus($record))
                     ->badge()
                     ->color(fn (Dialog $record): string => static::getInboxStatusColor($record))
                     ->toggleable(),
+                TextColumn::make('preview_text')
+                    ->label($dialogFieldLabel('last_message_at', 'Последнее сообщение'))
+                    ->state(fn (Dialog $record): string => static::resolvePreviewText($record))
+                    ->description(fn (Dialog $record): ?string => static::formatPreviewMetaSummary($record))
+                    ->tooltip(fn (Dialog $record): string => static::resolvePreviewText($record))
+                    ->limit(80)
+                    ->toggleable(),
                 TextColumn::make('stage')
-                    ->label('Этап')
-                    ->state(fn (Dialog $record): string => static::formatStageLabel($record))
+                    ->label($dialogFieldLabel('stage', 'Этап'))
+                    ->state(fn (Dialog $record): string => static::formatStageLabel($record, $dialogStageOptionLabels))
                     ->badge()
                     ->color(fn (Dialog $record): string => static::getStageColor($record))
                     ->toggleable(),
                 TextColumn::make('assigned_user')
                     ->label('Ответственный')
-                    ->state(fn (Dialog $record): string => filled($record->contact?->assignedUser?->name)
-                        ? (string) $record->contact->assignedUser->name
+                    ->state(fn (Dialog $record): string => $record->contact?->assignedUser instanceof User
+                        ? $record->contact->assignedUser->getFilamentName()
                         : 'Свободен')
                     ->toggleable(),
                 TextColumn::make('channel_label')
-                    ->label('Канал')
+                    ->label($dialogFieldLabel('channel_id', 'Канал'))
                     ->state(fn (Dialog $record): string => static::formatChannelLabel($record))
                     ->toggleable(),
                 TextColumn::make('route_status')
@@ -164,13 +184,6 @@ class DialogResource extends Resource
                     ->color(fn (Dialog $record): string => static::resolvePreviewSenderTone($record))
                     ->placeholder('—')
                     ->toggleable(),
-                TextColumn::make('preview_text')
-                    ->label('Последнее сообщение')
-                    ->state(fn (Dialog $record): string => static::resolvePreviewText($record))
-                    ->description(fn (Dialog $record): ?string => static::formatPreviewMetaSummary($record))
-                    ->tooltip(fn (Dialog $record): string => static::resolvePreviewText($record))
-                    ->limit(80)
-                    ->toggleable(),
                 TextColumn::make('last_message_at')
                     ->label('Активность')
                     ->dateTime('d.m.Y H:i')
@@ -180,9 +193,9 @@ class DialogResource extends Resource
                         ->orderBy('dialogs.id', $direction))
                     ->toggleable(),
                 TextColumn::make('id')
-                    ->label('ID')
+                    ->label($dialogFieldLabel('id', 'ID'))
                     ->sortable()
-                    ->toggleable(),
+                    ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('external_user_id')
                     ->label('Внешний ID')
                     ->state(fn (Dialog $record): ?string => static::resolveDialogExternalUserId($record))
@@ -194,7 +207,7 @@ class DialogResource extends Resource
                     ->placeholder('—')
                     ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('phone_label')
-                    ->label('Номер телефона')
+                    ->label($dialogFieldLabel('phone', 'Номер телефона'))
                     ->state(fn (Dialog $record): ?string => static::resolveDialogPhoneValue($record))
                     ->placeholder('—')
                     ->toggleable(isToggledHiddenByDefault: true),
@@ -237,8 +250,8 @@ class DialogResource extends Resource
                         ->mapWithKeys(fn (Channel $channel): array => [$channel->id => $channel->display_title])
                         ->all()),
                 SelectFilter::make('stage')
-                    ->label('Этап')
-                    ->options(fn (): array => Dialog::stageLabels())
+                    ->label($dialogFieldLabel('stage', 'Этап'))
+                    ->options(fn (): array => static::applyDictionaryOptionLabels(Dialog::stageLabels(), $dialogStageOptionLabels))
                     ->query(function (Builder $query, array $data): void {
                         $stage = $data['value'] ?? null;
 
@@ -255,16 +268,24 @@ class DialogResource extends Resource
                     ->label('Проблема маршрута')
                     ->query(fn (Builder $query): Builder => $query->whereRouteProblem()),
             ])
+            ->filtersTriggerAction(
+                fn (Action $action): Action => $action
+                    ->button()
+                    ->label('Фильтры')
+                    ->extraAttributes(['class' => 'ac-dialogs-filter-trigger'], merge: true),
+            )
+            ->selectable()
+            ->toolbarActions([
+                DeleteBulkAction::make()
+                    ->label('Удалить выбранные'),
+            ])
             ->defaultSort('last_message_at', 'desc')
             ->recordUrl(fn (Dialog $record): string => static::getUrl('view', [
                 'record' => $record,
                 'back_to' => static::getUrl('index'),
             ]))
             ->emptyStateHeading('Диалогов ещё нет')
-            ->emptyStateDescription('Диалоги появятся после первых входящих сообщений от внешней аудитории.')
-            ->columnManager()
-            ->deferColumnManager(false)
-            ->reorderableColumns();
+            ->emptyStateDescription('Диалоги появятся после первых входящих сообщений от внешней аудитории.');
     }
 
     public static function getRecordTitle(?Model $record): ?string
@@ -285,6 +306,58 @@ class DialogResource extends Resource
             'kanban' => DialogKanban::route('/kanban'),
             'view' => ViewDialog::route('/{record}'),
         ];
+    }
+
+    /**
+     * @return array<int, array{
+     *     id:string,
+     *     filament:string,
+     *     label:string,
+     *     defaultWidth:int,
+     *     minWidth:int,
+     *     defaultVisible:bool,
+     *     defaultOrder:int
+     * }>
+     */
+    public static function getDialogsTableColumnLayoutConfig(): array
+    {
+        return [
+            ['id' => 'selection', 'filament' => '__selection', 'label' => 'Выбор строк', 'defaultWidth' => 48, 'minWidth' => 48, 'defaultVisible' => true, 'defaultOrder' => 0],
+            ['id' => 'contact', 'filament' => 'contact-label', 'label' => 'Контакт', 'defaultWidth' => 160, 'minWidth' => 120, 'defaultVisible' => true, 'defaultOrder' => 10],
+            ['id' => 'status', 'filament' => 'inbox-status', 'label' => 'Статус', 'defaultWidth' => 130, 'minWidth' => 110, 'defaultVisible' => true, 'defaultOrder' => 20],
+            ['id' => 'last_message', 'filament' => 'preview-text', 'label' => 'Последнее сообщение', 'defaultWidth' => 260, 'minWidth' => 180, 'defaultVisible' => true, 'defaultOrder' => 30],
+            ['id' => 'stage', 'filament' => 'stage', 'label' => 'Этап', 'defaultWidth' => 140, 'minWidth' => 110, 'defaultVisible' => true, 'defaultOrder' => 40],
+            ['id' => 'assignee', 'filament' => 'assigned-user', 'label' => 'Ответственный', 'defaultWidth' => 130, 'minWidth' => 100, 'defaultVisible' => true, 'defaultOrder' => 50],
+            ['id' => 'channel', 'filament' => 'channel-label', 'label' => 'Канал', 'defaultWidth' => 180, 'minWidth' => 140, 'defaultVisible' => true, 'defaultOrder' => 60],
+            ['id' => 'route', 'filament' => 'route-status', 'label' => 'Маршрут', 'defaultWidth' => 150, 'minWidth' => 120, 'defaultVisible' => true, 'defaultOrder' => 70],
+            ['id' => 'actor', 'filament' => 'preview-sender-label', 'label' => 'Кто', 'defaultWidth' => 110, 'minWidth' => 90, 'defaultVisible' => true, 'defaultOrder' => 80],
+            ['id' => 'activity', 'filament' => 'last-message-at', 'label' => 'Активность', 'defaultWidth' => 110, 'minWidth' => 90, 'defaultVisible' => true, 'defaultOrder' => 90],
+            ['id' => 'id', 'filament' => 'id', 'label' => 'ID', 'defaultWidth' => 72, 'minWidth' => 56, 'defaultVisible' => true, 'defaultOrder' => 100],
+            ['id' => 'external_user_id', 'filament' => 'external-user-id', 'label' => 'Внешний ID', 'defaultWidth' => 140, 'minWidth' => 90, 'defaultVisible' => false, 'defaultOrder' => 110],
+            ['id' => 'external_username', 'filament' => 'external-username', 'label' => 'Username', 'defaultWidth' => 140, 'minWidth' => 90, 'defaultVisible' => false, 'defaultOrder' => 120],
+            ['id' => 'phone', 'filament' => 'phone-label', 'label' => 'Номер телефона', 'defaultWidth' => 140, 'minWidth' => 90, 'defaultVisible' => false, 'defaultOrder' => 130],
+            ['id' => 'route_source', 'filament' => 'route-source', 'label' => 'Источник маршрута', 'defaultWidth' => 160, 'minWidth' => 100, 'defaultVisible' => false, 'defaultOrder' => 140],
+            ['id' => 'external_chat_id', 'filament' => 'external-chat-id', 'label' => 'ID чата', 'defaultWidth' => 120, 'minWidth' => 90, 'defaultVisible' => false, 'defaultOrder' => 150],
+        ];
+    }
+
+    protected static function dialogFieldLabel(string $fieldKey, string $fallback): string
+    {
+        return FieldDictionaryField::labelFor(FieldDictionaryField::ENTITY_DIALOG, $fieldKey, $fallback);
+    }
+
+    /**
+     * @param  array<string, string>  $fallbackOptions
+     * @param  array<string, string>  $dictionaryLabels
+     * @return array<string, string>
+     */
+    protected static function applyDictionaryOptionLabels(array $fallbackOptions, array $dictionaryLabels): array
+    {
+        return collect($fallbackOptions)
+            ->mapWithKeys(fn (string $label, string $value): array => [
+                $value => FieldDictionaryField::optionLabelFrom($dictionaryLabels, $value, $label),
+            ])
+            ->all();
     }
 
     protected static function isDialogsBrowsingUrl(string $url): bool
@@ -493,9 +566,11 @@ class DialogResource extends Resource
         };
     }
 
-    protected static function formatStageLabel(Dialog $record): string
+    protected static function formatStageLabel(Dialog $record, array $stageOptionLabels = []): string
     {
-        return Dialog::stageLabel(static::resolveEffectiveStage($record));
+        $stage = static::resolveEffectiveStage($record);
+
+        return FieldDictionaryField::optionLabelFrom($stageOptionLabels, $stage, Dialog::stageLabel($stage));
     }
 
     protected static function getStageColor(Dialog $record): string
@@ -508,7 +583,7 @@ class DialogResource extends Resource
         return app(ResolveDialogStageAction::class)->handle($record);
     }
 
-    protected static function applyStageFilter(Builder $query, string $stage): void
+    public static function applyStageFilter(Builder $query, string $stage): void
     {
         if (Dialog::isServiceStage($stage)) {
             $query->where('dialogs.stage', $stage);
@@ -562,42 +637,37 @@ class DialogResource extends Resource
 
     protected static function applyRequiresManualReplyFilter(Builder $query): Builder
     {
-        [
-            'latestInboundUserMessageId' => $latestInboundUserMessageId,
-            'latestOutboundManualReplyMessageId' => $latestOutboundManualReplyMessageId,
-            'latestInboundAfterOutboundManualReply' => $latestInboundAfterOutboundManualReply,
-        ] = static::buildInboxStatusFilterFragments();
-
-        return $query
-            ->whereRaw(
-                $latestInboundUserMessageId['sql'].' is not null',
-                $latestInboundUserMessageId['bindings'],
-            )
-            ->where(function (Builder $query) use (
-                $latestOutboundManualReplyMessageId,
-                $latestInboundAfterOutboundManualReply,
-            ): Builder {
-                return $query
-                    ->whereRaw(
-                        $latestOutboundManualReplyMessageId['sql'].' is null',
-                        $latestOutboundManualReplyMessageId['bindings'],
-                    )
-                    ->orWhereRaw(
-                        $latestInboundAfterOutboundManualReply['sql'],
-                        $latestInboundAfterOutboundManualReply['bindings'],
-                    );
-            })
-            ->where(function (Builder $query) use ($latestInboundUserMessageId): Builder {
-                return $query
-                    ->whereNull('dialogs.manual_reply_dismissed_source_message_id')
-                    ->orWhereRaw(
-                        $latestInboundUserMessageId['sql'].' <> dialogs.manual_reply_dismissed_source_message_id',
-                        $latestInboundUserMessageId['bindings'],
-                    );
+        return $query->whereExists(function (QueryBuilder $inbound): void {
+            $inbound
+                ->selectRaw('1')
+                ->from('messages as latest_inbound_user')
+                ->whereColumn('latest_inbound_user.dialog_id', 'dialogs.id')
+                ->where('latest_inbound_user.message_kind', Message::KIND_INBOUND_USER)
+                ->whereNotExists(function (QueryBuilder $newerInbound): void {
+                    $newerInbound
+                        ->selectRaw('1')
+                        ->from('messages as newer_inbound_user')
+                        ->whereColumn('newer_inbound_user.dialog_id', 'dialogs.id')
+                        ->where('newer_inbound_user.message_kind', Message::KIND_INBOUND_USER)
+                        ->whereRaw(static::messageIsAfterSql('newer_inbound_user', 'latest_inbound_user'));
+                })
+                ->where(function (QueryBuilder $query): void {
+                    $query
+                        ->whereNull('dialogs.manual_reply_dismissed_source_message_id')
+                        ->orWhereColumn('dialogs.manual_reply_dismissed_source_message_id', '<>', 'latest_inbound_user.id');
+                })
+                ->whereNotExists(function (QueryBuilder $outbound): void {
+                    $outbound
+                        ->selectRaw('1')
+                        ->from('messages as later_outbound_manual_reply')
+                        ->whereColumn('later_outbound_manual_reply.dialog_id', 'dialogs.id')
+                        ->where('later_outbound_manual_reply.message_kind', Message::KIND_OUTBOUND_MANUAL_REPLY)
+                        ->whereRaw(static::messageIsAfterSql('later_outbound_manual_reply', 'latest_inbound_user'));
+                });
             });
     }
 
-    protected static function applyInboxStatusFilter(Builder $query, string $status): Builder
+    public static function applyInboxStatusFilter(Builder $query, string $status): Builder
     {
         if ($status === DialogInboxStatusData::CODE_REQUIRES_REPLY) {
             return static::applyRequiresManualReplyFilter($query);
@@ -662,6 +732,20 @@ class DialogResource extends Resource
         };
     }
 
+    protected static function messageIsAfterSql(string $leftAlias, string $rightAlias): string
+    {
+        $leftSortAt = static::messageChronology()->sqlSortAt($leftAlias);
+        $rightSortAt = static::messageChronology()->sqlSortAt($rightAlias);
+
+        return sprintf(
+            '((%1$s > %2$s) or ((%1$s = %2$s) and (%3$s.id > %4$s.id)))',
+            $leftSortAt,
+            $rightSortAt,
+            $leftAlias,
+            $rightAlias,
+        );
+    }
+
     protected static function applyAssignedToMeFilter(Builder $query): Builder
     {
         $currentUserId = auth()->user()?->id;
@@ -720,6 +804,20 @@ class DialogResource extends Resource
         });
     }
 
+    protected static function applyContactLabelSort(Builder $query, string $direction): Builder
+    {
+        $direction = strtolower($direction) === 'desc' ? 'desc' : 'asc';
+
+        return $query
+            ->leftJoin('contacts as contact_sort', 'contact_sort.id', '=', 'dialogs.contact_id')
+            ->leftJoin('contact_identities as dialog_identity_sort', 'dialog_identity_sort.id', '=', 'dialogs.current_contact_identity_id')
+            ->select('dialogs.*')
+            ->orderByRaw(
+                "lower(coalesce(nullif(trim(coalesce(contact_sort.first_name, '') || ' ' || coalesce(contact_sort.last_name, '')), ''), nullif(contact_sort.name, ''), nullif(dialog_identity_sort.display_name, ''), nullif(dialog_identity_sort.external_username, ''), nullif(dialog_identity_sort.external_user_id, ''), '')) {$direction}"
+            )
+            ->orderBy('dialogs.id', $direction);
+    }
+
     protected static function resolveUsernameSearch(string $search): ?string
     {
         if (! str_starts_with($search, '@')) {
@@ -772,6 +870,24 @@ class DialogResource extends Resource
             'dialogs.id',
             $scope,
         );
+    }
+
+    protected static function addInboxStatusProjection(Builder $query): Builder
+    {
+        return $query->addSelect([
+            'latest_inbound_user_message_id' => static::buildLatestMessageIdSubquery(
+                fn (Builder $query): Builder => $query->where('message_kind', Message::KIND_INBOUND_USER),
+            ),
+            'latest_inbound_user_message_sort_at' => static::buildLatestMessageSortAtSubquery(
+                fn (Builder $query): Builder => $query->where('message_kind', Message::KIND_INBOUND_USER),
+            ),
+            'latest_outbound_manual_reply_message_id' => static::buildLatestMessageIdSubquery(
+                fn (Builder $query): Builder => $query->where('message_kind', Message::KIND_OUTBOUND_MANUAL_REPLY),
+            ),
+            'latest_outbound_manual_reply_message_sort_at' => static::buildLatestMessageSortAtSubquery(
+                fn (Builder $query): Builder => $query->where('message_kind', Message::KIND_OUTBOUND_MANUAL_REPLY),
+            ),
+        ]);
     }
 
     protected static function messageChronology(): MessageChronology
@@ -888,7 +1004,7 @@ class DialogResource extends Resource
 
     protected static function resolveContactLabel(Dialog $dialog): string
     {
-        if (! $dialog->contact instanceof \App\Models\Contact) {
+        if (! $dialog->contact instanceof Contact) {
             return 'Контакт не найден';
         }
 

@@ -25,7 +25,7 @@ Ctrl+Shift+P → Dev Containers: Reopen in Container
 После старта `entrypoint.sh` выполняет:
 
 1. `composer install`
-2. `npm install`
+2. проверяет и при необходимости обновляет Node-зависимости
 3. генерирует `APP_KEY`
 4. `php artisan migrate`
 5. `php artisan db:seed --class=AdminUserSeeder` (если задан `ADMIN_USER_SEEDER_PASSWORD` в `.env`)
@@ -152,18 +152,24 @@ composer dev
 
 Этот script поднимает:
 
-1. `php artisan serve`
-2. `php artisan queue:listen --tries=1`
-3. `php artisan pail --timeout=0`
-4. `npm run dev`
+1. проверку актуальности Node-зависимостей
+2. `php artisan serve --host=0.0.0.0`
+3. `php artisan schedule:work`
+4. queue workers для `bot-replies`, `bitrix-live` и `default`
+5. `php artisan pail --timeout=0`
+6. `npm run build -- --watch`
 
 Если нужен ручной запуск по процессам:
 
 ```bash
-php artisan serve
-php artisan queue:listen --tries=1
+sh scripts/ensure-node-deps.sh
+php artisan serve --host=0.0.0.0
+php artisan schedule:work
+sh scripts/dev-queue-worker.sh bot-replies 0
+sh scripts/dev-queue-worker.sh bitrix-live 1
+sh scripts/dev-queue-worker.sh default 1
 php artisan pail --timeout=0
-npm run dev
+npm run build -- --watch
 ```
 
 ## Быстрый локальный smoke

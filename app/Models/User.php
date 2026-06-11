@@ -174,6 +174,24 @@ class User extends Authenticatable implements FilamentUser, HasName
         return $this->hasRolePermission('dialogs.edit');
     }
 
+    public function canViewAnalytics(): bool
+    {
+        return $this->hasRolePermission('analytics.view');
+    }
+
+    public function canDebugAnalytics(): bool
+    {
+        return $this->hasRolePermission('analytics.debug');
+    }
+
+    public function canCleanupAiRequestRawBodies(): bool
+    {
+        return $this->is_active && in_array($this->resolvedRole(), [
+            self::ROLE_SUPERADMIN,
+            self::ROLE_ADMIN,
+        ], true);
+    }
+
     public function canBeAssignedToContacts(): bool
     {
         return $this->canViewWorkspaces();

@@ -23,11 +23,11 @@ class ResumeContactDataCollectionAction
         $contact = $this->resolveRootContactAction->handle($contact);
 
         if ($contact->data_collection_status === Contact::DATA_COLLECTION_STATUS_ACTIVE) {
-            throw new RuntimeException('Анкета уже находится в процессе.');
+            throw new RuntimeException('Сбор данных уже находится в процессе.');
         }
 
         if (! $contact->phoneNumbers()->exists()) {
-            throw new RuntimeException('Для возобновления анкеты у контакта должен быть телефон.');
+            throw new RuntimeException('Для возобновления сбора данных у контакта должен быть телефон.');
         }
 
         $nextField = $this->resolveNextDataCollectionFieldAction->handle($contact);
@@ -39,7 +39,7 @@ class ResumeContactDataCollectionAction
         $sourceMessage = $this->resolveResumeSourceMessage($contact);
 
         if (! $sourceMessage instanceof Message) {
-            throw new RuntimeException('Не удалось определить сообщение для возобновления анкеты.');
+            throw new RuntimeException('Не удалось определить сообщение для возобновления сбора данных.');
         }
 
         $contact->startDataCollection($nextField);

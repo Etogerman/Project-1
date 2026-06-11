@@ -5,12 +5,16 @@ namespace App\Filament\Resources\Contacts\Pages;
 use App\Filament\Resources\Contacts\ContactResource;
 use App\Filament\Resources\Contacts\Pages\Concerns\InteractsWithContactWorkspace;
 use App\Models\Contact;
+use App\Models\Dialog;
+use App\Models\FieldDictionaryField;
 use App\Services\Contacts\AddContactTimelineCommentAction;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
 use Filament\Support\Enums\Width;
 use Illuminate\Contracts\Support\Htmlable;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Livewire\Attributes\Url;
 use Throwable;
 
 class ViewContact extends ViewRecord
@@ -33,11 +37,27 @@ class ViewContact extends ViewRecord
 
     protected Width|string|null $maxContentWidth = Width::Full;
 
+    #[Url(as: 'tab', history: true, except: self::TAB_GENERAL)]
     public string $activeTab = self::TAB_GENERAL;
 
     public int $historyVisibleCount = 20;
 
     public string $historyCommentBody = '';
+
+    /**
+     * @var array<string, string>|null
+     */
+    protected ?array $contactFieldLabels = null;
+
+    /**
+     * @var array<string, array<string, string>>
+     */
+    protected array $contactOptionLabels = [];
+
+    /**
+     * @var array<string, array<string, string>>
+     */
+    protected array $dialogOptionLabels = [];
 
     public function mount(int|string $record): void
     {
@@ -45,6 +65,13 @@ class ViewContact extends ViewRecord
 
         $this->activeTab = $this->normalizeTab((string) request()->query('tab', self::TAB_GENERAL));
         $this->historyVisibleCount = 20;
+
+        $mountedRecord = $this->resolveWorkspaceContact();
+
+        if ($mountedRecord instanceof Contact) {
+            $this->fillProfileEditingState($mountedRecord);
+            $this->inlineProfileDirty = false;
+        }
     }
 
     public function loadMoreHistory(): void
@@ -107,6 +134,11 @@ class ViewContact extends ViewRecord
         $this->activeTab = $this->normalizeTab($value);
     }
 
+    public function selectTab(string $tab): void
+    {
+        $this->activeTab = $this->normalizeTab($tab);
+    }
+
     public function getTitle(): string|Htmlable
     {
         return 'Контакт';
@@ -147,53 +179,65 @@ class ViewContact extends ViewRecord
 
     protected function resolveRecord(int|string $key): Model
     {
-        return ContactResource::getTableRecordQuery(excludeMerged: false)->findOrFail($key);
+        return $this->getPageRecordQuery()->findOrFail($key);
     }
 
     protected function getViewData(): array
     {
         $record = $this->getRecord();
+        $isGeneralTab = $this->activeTab === self::TAB_GENERAL;
+        $isDialogsTab = $this->activeTab === self::TAB_DIALOGS;
+        $isBitrix24Tab = $this->activeTab === self::TAB_BITRIX24;
+        $isDiagnosticsTab = $this->activeTab === self::TAB_DIAGNOSTICS;
+        $isHistoryTab = $this->activeTab === self::TAB_HISTORY;
         $profileViewData = ContactResource::buildContactProfileViewData($record);
-        $dialogsViewData = ContactResource::buildDialogsViewData($record);
-        $ownershipControls = ContactResource::buildOwnershipControlsViewData($record);
-        $collectorStatus = ContactResource::buildCollectorStatusViewData($record);
-        $tagsViewData = ContactResource::buildTagsViewData($record);
-        $phoneNumbersViewData = ContactResource::buildPhoneNumbersViewData($record);
-        $showDedupStatus = ContactResource::shouldShowDedupStatusSection($record);
-        $diagnosticsViewData = $this->activeTab === self::TAB_DIAGNOSTICS
+        $dialogsViewData = $isDialogsTab
+            ? ContactResource::buildDialogsViewData($record)
+            : ['dialogs' => []];
+        $ownershipControls = $isGeneralTab
+            ? ContactResource::buildOwnershipControlsViewData($record)
+            : [];
+        $tagsViewData = $isGeneralTab
+            ? ContactResource::buildTagsViewData($record)
+            : [
+                'tags' => [],
+                'canManageTags' => false,
+                'availableTags' => [],
+            ];
+        $phoneNumbersViewData = $isGeneralTab
+            ? ContactResource::buildPhoneNumbersViewData($record)
+            : [
+                'phoneNumbers' => [],
+                'canEditPhones' => false,
+                'canDeletePhones' => false,
+            ];
+        $phoneNumbersViewData['sectionTitle'] = $this->contactFieldLabel('phones', 'Телефоны');
+        $showDedupStatus = $isGeneralTab && ContactResource::shouldShowDedupStatusSection($record);
+        $diagnosticsViewData = $isDiagnosticsTab
             ? ContactResource::buildDiagnosticsViewData($record)
             : null;
         $canAddHistoryComment = $this->canCurrentEmployeeAddContactHistoryComments();
 
         return [
             'activeTab' => $this->activeTab,
-            'contactHeader' => $this->buildHeaderViewData($record, $profileViewData, $dialogsViewData),
+            'contactHeader' => $this->buildHeaderViewData($record, $profileViewData),
+            'contactStats' => $isGeneralTab ? $this->buildStatsViewData($record) : [],
             'tabs' => $this->buildTabsViewData(),
             'showFieldKeys' => false,
-            'profileRows' => $this->buildProfileRows($record, (bool) ($profileViewData['canEditProfile'] ?? false)),
-            'locationRows' => $this->buildLocationRows($record, (bool) ($profileViewData['canEditProfile'] ?? false)),
-            'workRows' => $this->buildWorkRows($record, $ownershipControls, $tagsViewData, $phoneNumbersViewData),
-            'questionnaireRows' => $this->buildQuestionnaireRows($record),
-            'bitrixSections' => $this->buildBitrixSections($record),
+            'profileRows' => $isGeneralTab ? $this->buildProfileRows($record, (bool) ($profileViewData['canEditProfile'] ?? false), $profileViewData) : [],
+            'locationRows' => $isGeneralTab ? $this->buildLocationRows($record, (bool) ($profileViewData['canEditProfile'] ?? false), $profileViewData) : [],
+            'workRows' => $isGeneralTab ? $this->buildWorkRows($record, $ownershipControls, $tagsViewData, $phoneNumbersViewData) : [],
+            'bitrixSections' => $isBitrix24Tab ? $this->buildBitrixSections($record) : [],
             'profileViewData' => $profileViewData,
             'ownershipControls' => $ownershipControls,
-            'collectorStatus' => $collectorStatus,
             'dedupStatusViewData' => $showDedupStatus
                 ? ContactResource::buildDedupStatusViewData($record)
                 : null,
             'diagnosticsViewData' => $diagnosticsViewData,
-            'questionnaireAction' => $collectorStatus['canResume'] && $collectorStatus['canResumeAction']
-                ? $this->makeAction(
-                    method: 'resumeMountedContactDataCollection',
-                    target: 'resumeMountedContactDataCollection',
-                    label: 'Возобновить анкету',
-                    icon: 'heroicon-m-play'
-                )
-                : null,
             'tagsViewData' => $tagsViewData,
             'phoneNumbersViewData' => $phoneNumbersViewData,
             'dialogsViewData' => $dialogsViewData,
-            'historyViewData' => $this->activeTab === self::TAB_HISTORY
+            'historyViewData' => $isHistoryTab
                 ? ContactResource::buildHistoryTimelineViewData($record, $this->historyVisibleCount)
                 : [
                     'items' => [],
@@ -216,7 +260,7 @@ class ViewContact extends ViewRecord
 
     protected function syncWorkspaceContact(Contact $contact): void
     {
-        $freshContact = ContactResource::getTableRecordQuery(excludeMerged: false)->findOrFail($contact->getKey());
+        $freshContact = $this->getPageRecordQuery()->findOrFail($contact->getKey());
 
         if ((int) $this->getRecord()->getKey() !== (int) $freshContact->getKey()) {
             $this->redirect(ContactResource::getUrl('view', ['record' => $freshContact, 'tab' => $this->activeTab]));
@@ -227,6 +271,19 @@ class ViewContact extends ViewRecord
         $this->record = $freshContact;
     }
 
+    /**
+     * @return Builder<Contact>
+     */
+    protected function getPageRecordQuery(): Builder
+    {
+        return Contact::query()
+            ->with([
+                'assignedUser',
+                'mergedInto',
+            ])
+            ->withCount('mergedChildren');
+    }
+
     protected function clearWorkspaceContactAfterDelete(): void
     {
         $this->redirect(ContactResource::getUrl('index'));
@@ -235,19 +292,30 @@ class ViewContact extends ViewRecord
     /**
      * @return array{
      *     backUrl:string,
+     *     id:int,
+     *     initial:string,
+     *     meta:string,
      *     title:string,
      *     mergedRootLabel:?string,
      *     mergedRootUrl:?string,
      *     canEditProfile:bool
      * }
      */
-    protected function buildHeaderViewData(Contact $record, array $profileViewData, array $dialogsViewData): array
+    protected function buildHeaderViewData(Contact $record, array $profileViewData): array
     {
         $record->loadMissing('mergedInto');
         $mergedInto = $record->mergedInto;
 
         return [
             'backUrl' => ContactResource::getUrl('index'),
+            'id' => (int) $record->id,
+            'initial' => $this->resolveAvatarInitial($record),
+            'meta' => sprintf(
+                'ID %d · Создан %s · Обновлён %s',
+                (int) $record->id,
+                $this->formatDate($record->created_at),
+                $this->formatDate($record->updated_at),
+            ),
             'title' => $this->resolveHeadingLabel($record),
             'mergedRootLabel' => $mergedInto instanceof Contact
                 ? sprintf('#%d %s', $mergedInto->id, $mergedInto->display_name)
@@ -257,6 +325,76 @@ class ViewContact extends ViewRecord
                 : null,
             'canEditProfile' => (bool) ($profileViewData['canEditProfile'] ?? false),
         ];
+    }
+
+    /**
+     * @return list<array{label:string,value:string,meta:string}>
+     */
+    protected function buildStatsViewData(Contact $record): array
+    {
+        $dialogCount = $record->dialogs()->count();
+        $workingDialogCount = $record->dialogs()
+            ->whereIn('stage', Dialog::workingStages())
+            ->count();
+        $closedDialogCount = $record->dialogs()
+            ->where('bitrix24_live_status', Dialog::BITRIX24_LIVE_STATUS_CLOSED)
+            ->count();
+        $latestDialog = $record->dialogs()
+            ->orderByDesc('last_message_at')
+            ->orderByDesc('id')
+            ->first();
+
+        $lastContactValue = $latestDialog instanceof Dialog
+            ? $this->formatDateTime($latestDialog->last_message_at)
+            : '—';
+        $lastContactMeta = $latestDialog instanceof Dialog
+            ? trim(sprintf(
+                '%s · %s',
+                $this->dialogOptionLabel('stage', $latestDialog->stage, Dialog::stageLabel($latestDialog->stage)),
+                $latestDialog->last_inbound_at !== null ? 'входящее' : 'нет входящих'
+            ))
+            : 'Диалогов пока нет';
+
+        return [
+            [
+                'label' => 'Диалоги',
+                'value' => (string) $dialogCount,
+                'meta' => sprintf(
+                    '%s · %s',
+                    $this->pluralizeRussian($workingDialogCount, 'рабочий', 'рабочих', 'рабочих'),
+                    $this->pluralizeRussian($closedDialogCount, 'закрытый', 'закрытых', 'закрытых'),
+                ),
+            ],
+            [
+                'label' => 'Последний контакт',
+                'value' => $lastContactValue,
+                'meta' => $lastContactMeta,
+            ],
+            [
+                'label' => 'Bitrix24',
+                'value' => $this->formatBitrixSyncStatus($record->bitrix24_sync_status),
+                'meta' => filled($record->bitrix24_contact_id)
+                    ? 'Контакт #'.$record->bitrix24_contact_id
+                    : 'Нет связанного контакта',
+            ],
+        ];
+    }
+
+    protected function pluralizeRussian(int $count, string $one, string $few, string $many): string
+    {
+        $absolute = abs($count);
+        $lastTwo = $absolute % 100;
+        $last = $absolute % 10;
+
+        $word = ($lastTwo >= 11 && $lastTwo <= 14)
+            ? $many
+            : match (true) {
+                $last === 1 => $one,
+                $last >= 2 && $last <= 4 => $few,
+                default => $many,
+            };
+
+        return $count.' '.$word;
     }
 
     /**
@@ -284,7 +422,7 @@ class ViewContact extends ViewRecord
     /**
      * @return list<array{label:string,key:string,value:string}>
      */
-    protected function buildProfileRows(Contact $record, bool $canEditProfile): array
+    protected function buildProfileRows(Contact $record, bool $canEditProfile, array $profileViewData): array
     {
         $profileAction = $canEditProfile
             ? $this->makeAction(
@@ -295,21 +433,22 @@ class ViewContact extends ViewRecord
             : null;
 
         return [
-            $this->makeRow('Имя', 'first_name', $record->first_name ?? '—', $profileAction),
-            $this->makeRow('Откуда знаем имя?', 'first_name_source', $this->resolveFirstNameSourceValue($record)),
-            $this->makeRow('Фамилия', 'last_name', $record->last_name ?? '—', $profileAction),
-            $this->makeRow('Пол', 'gender', Contact::formatGender($record->gender), $profileAction),
+            $this->makeRow($this->contactFieldLabel('first_name', 'Имя'), 'first_name', $record->first_name ?? '—', $profileAction, edit: $this->makeInlineEdit('editingFirstName', 'text', $canEditProfile)),
+            $this->makeRow($this->contactFieldLabel('first_name_source', 'Откуда знаем'), 'first_name_source', $this->resolveFirstNameSourceValue($record)),
+            $this->makeRow($this->contactFieldLabel('last_name', 'Фамилия'), 'last_name', $record->last_name ?? '—', $profileAction, edit: $this->makeInlineEdit('editingLastName', 'text', $canEditProfile)),
+            $this->makeRow($this->contactFieldLabel('first_name_resolution_method', 'Обработали'), 'first_name_resolution_method', $this->resolveFirstNameResolutionMethodValue($record)),
+            $this->makeRow($this->contactFieldLabel('gender', 'Пол'), 'gender', $this->resolveGenderValue($record), $profileAction, edit: $this->makeInlineEdit('editingGender', 'select', $canEditProfile, $profileViewData['genderOptions'] ?? [])),
+            $this->makeRow($this->contactFieldLabel('gender_source', 'Откуда знаем'), 'gender_source', $this->contactOptionLabel('gender_source', $record->gender_source, Contact::formatGenderSource($record->gender_source))),
+            $this->makeRow($this->contactFieldLabel('birth_date', 'Дата рождения'), 'birth_date', $this->formatDate($record->birth_date), $profileAction, edit: $this->makeInlineEdit('editingBirthDate', 'date', $canEditProfile)),
             $this->makeRow('Возраст', 'effective_age_years', $record->effective_age_years !== null ? (string) $record->effective_age_years : '—'),
-            $this->makeRow('Возраст из БД', 'age_years', $record->age_years !== null ? (string) $record->age_years : '—', $profileAction),
-            $this->makeRow('Возрастной диапазон', 'age_range', Contact::formatAgeRange($record->age_range), $profileAction),
-            $this->makeRow('Дата рождения', 'birth_date', $this->formatDate($record->birth_date), $profileAction),
+            $this->makeRow($this->contactFieldLabel('age_range', 'Возрастной диапазон'), 'age_range', $this->contactOptionLabel('age_range', $record->age_range, Contact::formatAgeRange($record->age_range)), $profileAction, edit: $this->makeInlineEdit('editingAgeRange', 'select', $canEditProfile, $profileViewData['ageRangeOptions'] ?? []), wide: true),
         ];
     }
 
     /**
      * @return list<array{label:string,key:string,value:string}>
      */
-    protected function buildLocationRows(Contact $record, bool $canEditProfile): array
+    protected function buildLocationRows(Contact $record, bool $canEditProfile, array $profileViewData): array
     {
         $locationAction = $canEditProfile
             ? $this->makeAction(
@@ -320,15 +459,15 @@ class ViewContact extends ViewRecord
             : null;
 
         return [
-            $this->makeRow('Страна', 'country', $record->country ?? '—', $locationAction),
-            $this->makeRow('Город', 'city', $record->city ?? '—', $locationAction),
-            $this->makeRow('Регион', 'region', $record->region ?? '—', $locationAction),
-            $this->makeRow('Статус региона', 'region_status', Contact::formatRegionStatus($record->region_status)),
-            $this->makeRow('Источник региона', 'region_source', $this->formatRegionSource($record->region_source)),
+            $this->makeRow($this->contactFieldLabel('country', 'Страна'), 'country', $record->country ?? '—', $locationAction, edit: $this->makeInlineEdit('editingCountry', 'text', $canEditProfile)),
+            $this->makeRow($this->contactFieldLabel('city', 'Город'), 'city', $record->city ?? '—', $locationAction, edit: $this->makeInlineEdit('editingCity', 'text', $canEditProfile)),
+            $this->makeRow($this->contactFieldLabel('region', 'Регион'), 'region', $record->region ?? '—', $locationAction, edit: $this->makeInlineEdit('editingRegion', 'select', $canEditProfile, $profileViewData['regionOptions'] ?? [])),
+            $this->makeRow($this->contactFieldLabel('region_status', 'Статус региона'), 'region_status', Contact::formatRegionStatus($record->region_status)),
+            $this->makeRow($this->contactFieldLabel('region_source', 'Источник региона'), 'region_source', $this->formatRegionSource($record->region_source)),
             $this->makeRow('Кандидаты региона', 'pending_region_candidates', $this->formatArrayValue($record->pending_region_candidates)),
-            $this->makeRow('Расстояние до Москвы', 'distance_to_moscow_km', $record->distance_to_moscow_km !== null ? $record->distance_to_moscow_km.' км' : '—'),
-            $this->makeRow('Статус расчёта', 'distance_to_moscow_status', Contact::formatDistanceToMoscowStatus($record->distance_to_moscow_status)),
-            $this->makeRow('Расстояние рассчитано', 'distance_to_moscow_calculated_at', $this->formatDateTime($record->distance_to_moscow_calculated_at)),
+            $this->makeRow($this->contactFieldLabel('distance_to_moscow_km', 'Расстояние до Москвы'), 'distance_to_moscow_km', $record->distance_to_moscow_km !== null ? $record->distance_to_moscow_km.' км' : '—'),
+            $this->makeRow($this->contactFieldLabel('distance_to_moscow_status', 'Статус расчёта'), 'distance_to_moscow_status', Contact::formatDistanceToMoscowStatus($record->distance_to_moscow_status)),
+            $this->makeRow($this->contactFieldLabel('distance_to_moscow_calculated_at', 'Расстояние рассчитано'), 'distance_to_moscow_calculated_at', $this->formatDateTime($record->distance_to_moscow_calculated_at)),
         ];
     }
 
@@ -337,18 +476,6 @@ class ViewContact extends ViewRecord
      */
     protected function buildWorkRows(Contact $record, array $ownershipControls, array $tagsViewData, array $phoneNumbersViewData): array
     {
-        $tagItems = $this->buildTagItems(
-            $tagsViewData['tags'] ?? [],
-            (bool) ($tagsViewData['canManageTags'] ?? false),
-        );
-        $phoneItems = $this->buildPhoneItems(
-            $phoneNumbersViewData['phoneNumbers'] ?? [],
-            (bool) ($phoneNumbersViewData['canEditPhones'] ?? false),
-            (bool) ($phoneNumbersViewData['canDeletePhones'] ?? false),
-        );
-        $primaryPhone = collect($phoneNumbersViewData['phoneNumbers'] ?? [])
-            ->firstWhere('is_primary', true) ?? ($phoneNumbersViewData['phoneNumbers'][0] ?? null);
-
         return [
             $this->makeRow(
                 'Ответственный',
@@ -368,57 +495,42 @@ class ViewContact extends ViewRecord
                 (string) ($ownershipControls['autoReplyStatusLabel'] ?? ($record->isAutoReplyEnabled() ? 'Включены' : 'Отключены')),
                 $this->buildAutoReplyAction($ownershipControls),
             ),
-            $this->makeRow('ID', 'id', (string) $record->id),
-            $this->makeRow('Создан', 'created_at', $this->formatDateTime($record->created_at)),
-            $this->makeRow('Обновлён', 'updated_at', $this->formatDateTime($record->updated_at)),
             $this->makeRow(
-                'Теги контакта',
-                '',
-                $this->formatTagSummary($tagsViewData['tags'] ?? []),
-                ($tagsViewData['canManageTags'] ?? false)
-                    ? $this->makeAction(
-                        method: 'openAddTagDialog',
-                        target: 'openAddTagDialog,saveMountedContactTag',
-                        label: 'Добавить тег'
-                    )
-                    : null,
-                $tagItems,
+                'Категория автоответа',
+                'auto_reply_category',
+                filled($record->auto_reply_category) ? (string) $record->auto_reply_category : '—',
             ),
             $this->makeRow(
-                'Телефоны',
-                '',
-                $this->formatPhoneSummary($phoneNumbersViewData['phoneNumbers'] ?? []),
-                is_array($primaryPhone) && ($phoneNumbersViewData['canEditPhones'] ?? false)
-                    ? $this->makeAction(
-                        method: sprintf('openEditPhoneDialog(%d)', (int) $primaryPhone['id']),
-                        target: 'openEditPhoneDialog,saveMountedContactPhone',
-                        label: 'Изменить основной номер'
-                    )
-                    : null,
-                $phoneItems,
+                'Заблокирован клиентом',
+                'bot_subscription_status',
+                $record->dialogs()
+                    ->where('bot_subscription_status', Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER)
+                    ->exists() ? 'Да' : 'Нет',
             ),
         ];
     }
 
-    /**
-     * @return list<array{label:string,key:string,value:string}>
-     */
-    protected function buildQuestionnaireRows(Contact $record): array
+    protected function contactFieldLabel(string $fieldKey, string $fallback): string
     {
-        return [
-            $this->makeRow('Статус анкеты', 'data_collection_status', ContactResource::formatDataCollectionStatus($record->data_collection_status)),
-            $this->makeRow('Текущий шаг', 'data_collection_current_field', ContactResource::formatDataCollectionField($record->data_collection_current_field)),
-            $this->makeRow('Последний заданный шаг', 'data_collection_last_prompted_field', ContactResource::formatDataCollectionField($record->data_collection_last_prompted_field)),
-            $this->makeRow('Анкета начата', 'data_collection_started_at', $this->formatDateTime($record->data_collection_started_at)),
-            $this->makeRow('Текущий шаг начат', 'data_collection_current_field_started_at', $this->formatDateTime($record->data_collection_current_field_started_at)),
-            $this->makeRow('Анкета завершена', 'data_collection_completed_at', $this->formatDateTime($record->data_collection_completed_at)),
-            $this->makeRow('Попыток', 'data_collection_attempts_count', (string) ((int) $record->data_collection_attempts_count)),
-        ];
+        $this->contactFieldLabels ??= FieldDictionaryField::labelsFor(FieldDictionaryField::ENTITY_CONTACT);
+
+        return $this->contactFieldLabels[$fieldKey] ?? $fallback;
     }
 
-    /**
-     * @return list<array{label:string,key:string,value:string}>
-     */
+    protected function contactOptionLabel(string $fieldKey, mixed $value, string $fallback): string
+    {
+        $this->contactOptionLabels[$fieldKey] ??= FieldDictionaryField::optionLabelsFor(FieldDictionaryField::ENTITY_CONTACT, $fieldKey);
+
+        return FieldDictionaryField::optionLabelFrom($this->contactOptionLabels[$fieldKey], $value, $fallback);
+    }
+
+    protected function dialogOptionLabel(string $fieldKey, mixed $value, string $fallback): string
+    {
+        $this->dialogOptionLabels[$fieldKey] ??= FieldDictionaryField::optionLabelsFor(FieldDictionaryField::ENTITY_DIALOG, $fieldKey);
+
+        return FieldDictionaryField::optionLabelFrom($this->dialogOptionLabels[$fieldKey], $value, $fallback);
+    }
+
     /**
      * @return list<array{title:string,subtitle:string,rows:list<array{label:string,key:string,value:string}>}>
      */
@@ -497,14 +609,34 @@ class ViewContact extends ViewRecord
         string $value,
         ?array $action = null,
         array $items = [],
-    ): array
-    {
+        ?array $edit = null,
+        bool $wide = false,
+    ): array {
         return [
             'label' => $label,
             'key' => $key,
             'value' => $value !== '' ? $value : '—',
             'action' => $action,
             'items' => $items,
+            'edit' => $edit,
+            'wide' => $wide,
+        ];
+    }
+
+    /**
+     * @param  array<string, string>  $options
+     * @return ?array{model:string,type:string,options:array<string, string>}
+     */
+    protected function makeInlineEdit(string $model, string $type, bool $enabled, array $options = []): ?array
+    {
+        if (! $enabled) {
+            return null;
+        }
+
+        return [
+            'model' => $model,
+            'type' => $type,
+            'options' => $options,
         ];
     }
 
@@ -571,6 +703,14 @@ class ViewContact extends ViewRecord
         return 'Контакт #'.$record->id;
     }
 
+    protected function resolveAvatarInitial(Contact $record): string
+    {
+        $label = $this->resolveHeadingLabel($record);
+        $firstCharacter = mb_substr(trim($label), 0, 1);
+
+        return $firstCharacter !== '' ? mb_strtoupper($firstCharacter) : 'A';
+    }
+
     protected function resolveFirstNameSourceValue(Contact $record): string
     {
         if (! filled($record->first_name)) {
@@ -583,7 +723,31 @@ class ViewContact extends ViewRecord
             return 'Источник не определён';
         }
 
-        return $label;
+        return $this->contactOptionLabel('first_name_source', $record->first_name_source, $label);
+    }
+
+    protected function resolveFirstNameResolutionMethodValue(Contact $record): string
+    {
+        if (! filled($record->first_name)) {
+            return '—';
+        }
+
+        $label = Contact::formatFirstNameResolutionMethod($record->first_name_resolution_method);
+
+        if ($label === null) {
+            return 'Не указано';
+        }
+
+        return $this->contactOptionLabel('first_name_resolution_method', $record->first_name_resolution_method, $label);
+    }
+
+    protected function resolveGenderValue(Contact $record): string
+    {
+        if ($record->gender === 'unknown') {
+            return '—';
+        }
+
+        return $this->contactOptionLabel('gender', $record->gender, Contact::formatGender($record->gender));
     }
 
     protected function formatDate(mixed $value): string
@@ -625,7 +789,8 @@ class ViewContact extends ViewRecord
     protected function formatRegionSource(?string $value): string
     {
         return match ($value) {
-            Contact::REGION_SOURCE_AI => 'AI',
+            Contact::REGION_SOURCE_AI => 'ИИ',
+            Contact::REGION_SOURCE_DICTIONARY => 'Справочник',
             Contact::REGION_SOURCE_CONFIRMED_BY_CONTACT => 'Подтверждён клиентом',
             Contact::REGION_SOURCE_MANUAL => 'Указан вручную',
             default => '—',

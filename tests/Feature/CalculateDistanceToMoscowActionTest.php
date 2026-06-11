@@ -19,7 +19,7 @@ class CalculateDistanceToMoscowActionTest extends TestCase
         Http::fake();
 
         $contact = Contact::factory()->make([
-            'country' => 'Россия',
+            'country' => 'RU',
             'city' => 'Москва',
         ]);
 

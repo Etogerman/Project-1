@@ -17,10 +17,8 @@ if [ ! -d vendor ]; then
     composer install --no-interaction --prefer-dist
 fi
 
-# Install Node dependencies if node_modules/ is missing
-if [ ! -d node_modules ]; then
-    npm install
-fi
+# Install or refresh Node dependencies when node_modules/ is missing or stale
+sh scripts/ensure-node-deps.sh
 
 # Generate app key if not set
 if grep -q '^APP_KEY=$' .env; then

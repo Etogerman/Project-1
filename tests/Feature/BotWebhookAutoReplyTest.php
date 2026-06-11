@@ -458,6 +458,49 @@ class BotWebhookAutoReplyTest extends TestCase
         $this->assertDatabaseCount('messages', 1);
     }
 
+    public function test_text_message_checks_priority_scenario_before_regular_flow(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+
+        $dispatcher = Mockery::mock(DispatchStoredInboundScenarioAction::class);
+        $dispatcher->shouldReceive('shouldBlockVipIbizaParameterStartBecauseBusyState')
+            ->once()
+            ->ordered()
+            ->andReturn(false);
+        $dispatcher->shouldReceive('startPriorityScenario')
+            ->once()
+            ->ordered()
+            ->andReturn(true);
+        $dispatcher->shouldNotReceive('continueActiveRun');
+        $dispatcher->shouldNotReceive('startMatchingScenario');
+        $this->app->instance(DispatchStoredInboundScenarioAction::class, $dispatcher);
+
+        $response = $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $this->telegramPayload(
+            messageId: 9001,
+            text: 'удалить',
+        ));
+
+        $response->assertOk()->assertExactJson([
+            'ok' => true,
+        ]);
+
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        Queue::assertNotPushed(ProcessDataCollectionResponseJob::class);
+        Queue::assertNotPushed(ProcessPhoneCaptureFollowUpJob::class);
+        $this->assertDatabaseCount('messages', 1);
+    }
+
     public function test_max_bot_started_webhook_queues_only_auto_reply_for_contact_in_active_data_collection(): void
     {
         Queue::fake();
@@ -683,7 +726,7 @@ class BotWebhookAutoReplyTest extends TestCase
 
         Http::assertSentCount(1);
         Http::assertSent(fn ($request): bool => $request->url() === 'https://platform-api.max.ru/messages?chat_id=700'
-            && $request['text'] === 'У тебя уже есть активная анкета. Сначала заверши её.');
+            && $request['text'] === 'У тебя уже идёт сбор данных. Сначала заверши его.');
 
         Queue::assertNotPushed(ProcessScenarioInboundJob::class);
         Queue::assertNotPushed(ProcessScenarioStartJob::class);
@@ -696,7 +739,7 @@ class BotWebhookAutoReplyTest extends TestCase
             'direction' => Message::DIRECTION_OUTBOUND,
             'message_kind' => Message::KIND_OUTBOUND_AUTO_REPLY,
             'reply_to_message_id' => $storedMessage->id,
-            'text' => 'У тебя уже есть активная анкета. Сначала заверши её.',
+            'text' => 'У тебя уже идёт сбор данных. Сначала заверши его.',
         ]);
     }
 
@@ -841,7 +884,7 @@ class BotWebhookAutoReplyTest extends TestCase
 
         Http::assertSentCount(1);
         Http::assertSent(fn ($request): bool => $request->url() === 'https://platform-api.max.ru/messages?chat_id=700'
-            && $request['text'] === 'У тебя уже есть активная анкета. Сначала заверши её.');
+            && $request['text'] === 'У тебя уже идёт сбор данных. Сначала заверши его.');
 
         Queue::assertNotPushed(ProcessDataCollectionResponseJob::class);
         Queue::assertNotPushed(ProcessScenarioInboundJob::class);
@@ -854,7 +897,7 @@ class BotWebhookAutoReplyTest extends TestCase
             'direction' => Message::DIRECTION_OUTBOUND,
             'message_kind' => Message::KIND_OUTBOUND_AUTO_REPLY,
             'reply_to_message_id' => $storedMessage->id,
-            'text' => 'У тебя уже есть активная анкета. Сначала заверши её.',
+            'text' => 'У тебя уже идёт сбор данных. Сначала заверши его.',
         ]);
         $this->assertDatabaseMissing('channel_activity_logs', [
             'channel_id' => $channel->id,
@@ -1773,7 +1816,7 @@ class BotWebhookAutoReplyTest extends TestCase
         Http::assertSentCount(1);
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && $request['chat_id'] === '300'
-            && $request['text'] === 'У тебя уже есть активная анкета. Сначала заверши её.');
+            && $request['text'] === 'У тебя уже идёт сбор данных. Сначала заверши его.');
 
         Queue::assertNotPushed(ProcessScenarioInboundJob::class);
         Queue::assertNotPushed(ProcessScenarioStartJob::class);
@@ -1786,7 +1829,7 @@ class BotWebhookAutoReplyTest extends TestCase
             'direction' => Message::DIRECTION_OUTBOUND,
             'message_kind' => Message::KIND_OUTBOUND_AUTO_REPLY,
             'reply_to_message_id' => $storedMessage->id,
-            'text' => 'У тебя уже есть активная анкета. Сначала заверши её.',
+            'text' => 'У тебя уже идёт сбор данных. Сначала заверши его.',
         ]);
     }
 
@@ -2082,7 +2125,7 @@ class BotWebhookAutoReplyTest extends TestCase
             'direction' => Message::DIRECTION_OUTBOUND,
             'message_kind' => Message::KIND_OUTBOUND_AUTO_REPLY,
             'reply_to_message_id' => $storedMessage->id,
-            'text' => 'У тебя уже есть активная анкета. Сначала заверши её.',
+            'text' => 'У тебя уже идёт сбор данных. Сначала заверши его.',
         ]);
     }
 
@@ -2177,7 +2220,7 @@ class BotWebhookAutoReplyTest extends TestCase
         Http::assertSentCount(1);
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
             && $request['chat_id'] === '300'
-            && $request['text'] === 'У тебя уже есть активная анкета. Сначала заверши её.');
+            && $request['text'] === 'У тебя уже идёт сбор данных. Сначала заверши его.');
 
         Queue::assertNotPushed(ProcessDataCollectionResponseJob::class);
         Queue::assertNotPushed(ProcessScenarioInboundJob::class);
@@ -2190,7 +2233,7 @@ class BotWebhookAutoReplyTest extends TestCase
             'direction' => Message::DIRECTION_OUTBOUND,
             'message_kind' => Message::KIND_OUTBOUND_AUTO_REPLY,
             'reply_to_message_id' => $storedMessage->id,
-            'text' => 'У тебя уже есть активная анкета. Сначала заверши её.',
+            'text' => 'У тебя уже идёт сбор данных. Сначала заверши его.',
         ]);
         $this->assertDatabaseMissing('channel_activity_logs', [
             'channel_id' => $channel->id,

@@ -1,33 +1,21 @@
 <x-filament-panels::page>
     <div data-role="contact-view-page" class="ac-contact-page">
-        <section data-role="contact-page-header" class="ac-surface ac-surface--hero">
-            <div class="ac-surface__header ac-surface__header--centered">
-                <div class="ac-surface__title-group">
-                    <p class="ac-surface__eyebrow">
-                        Карточка контакта
-                    </p>
-                    <h2 class="ac-surface__title ac-surface__title--hero">
-                        {{ $contactHeader['title'] }}
-                    </h2>
+        <section data-role="contact-page-header" class="ac-contact-hero">
+            <div class="ac-contact-hero__identity">
+                <div class="ac-contact-hero__avatar" aria-hidden="true">
+                    {{ $contactHeader['initial'] }}
                 </div>
 
-                <div class="ac-button-group ac-button-group--end">
-                    <a href="{{ $contactHeader['backUrl'] }}" class="ac-button ac-button--secondary">
-                        Назад к контактам
-                    </a>
-
-                    @if ($contactHeader['canEditProfile'])
-                        <button
-                            type="button"
-                            wire:click="openEditProfileDialog"
-                            wire:loading.attr="disabled"
-                            wire:target="openEditProfileDialog,saveMountedContactProfile"
-                            class="ac-button ac-button--warning"
-                        >
-                            Редактировать
-                        </button>
-                    @endif
+                <div class="ac-contact-hero__title-group">
+                    <h1 class="ac-contact-hero__title">{{ $contactHeader['title'] }}</h1>
+                    <p class="ac-contact-hero__meta">{{ $contactHeader['meta'] }}</p>
                 </div>
+            </div>
+
+            <div class="ac-contact-hero__actions">
+                <button type="button" class="ac-icon-button" aria-label="Дополнительные действия">
+                    <span aria-hidden="true">...</span>
+                </button>
             </div>
         </section>
 
@@ -35,6 +23,7 @@
             @foreach ($tabs as $tab)
                 <a
                     href="{{ $tab['url'] }}"
+                    wire:click.prevent="selectTab('{{ $tab['key'] }}')"
                     data-role="contact-tab-{{ $tab['key'] }}"
                     data-active="{{ $tab['isActive'] ? 'true' : 'false' }}"
                     @class([
@@ -60,6 +49,16 @@
         @endif
 
         @if ($activeTab === 'general')
+            <section data-role="contact-stats" class="ac-contact-stats" aria-label="Сводка по контакту">
+                @foreach ($contactStats as $stat)
+                    <article class="ac-contact-stats__item">
+                        <p class="ac-contact-stats__label">{{ $stat['label'] }}</p>
+                        <p class="ac-contact-stats__value">{{ $stat['value'] }}</p>
+                        <p class="ac-contact-stats__meta">{{ $stat['meta'] }}</p>
+                    </article>
+                @endforeach
+            </section>
+
             @if (is_array($dedupStatusViewData ?? null))
                 <div data-role="contact-dedup-section" class="ac-contact-page__full-width">
                     <div class="ac-surface__header ac-surface__header--centered">
@@ -82,55 +81,77 @@
                     ])
 
                     @include('filament.contacts.partials.contact-flat-section', [
+                        'dataRole' => 'contact-section-location',
+                        'title' => 'Локация',
+                        'rows' => $locationRows,
+                        'showFieldKeys' => $showFieldKeys,
+                    ])
+                </div>
+
+                <div class="ac-contact-page__column">
+                    @include('filament.contacts.partials.phone-numbers', array_merge($phoneNumbersViewData, ['renderSurface' => true]))
+                    @include('filament.contacts.partials.contact-tags', array_merge($tagsViewData, ['renderSurface' => true]))
+
+                    @include('filament.contacts.partials.contact-flat-section', [
                         'dataRole' => 'contact-section-work',
                         'title' => 'Работа с контактом',
                         'rows' => $workRows,
                         'showFieldKeys' => $showFieldKeys,
                     ])
                 </div>
-
-                <div class="ac-contact-page__column">
-                    @include('filament.contacts.partials.contact-flat-section', [
-                        'dataRole' => 'contact-section-location',
-                        'title' => 'Локация',
-                        'rows' => $locationRows,
-                        'showFieldKeys' => $showFieldKeys,
-                    ])
-
-                    @include('filament.contacts.partials.contact-flat-section', [
-                        'dataRole' => 'contact-section-questionnaire',
-                        'title' => 'Анкета',
-                        'rows' => $questionnaireRows,
-                        'showFieldKeys' => $showFieldKeys,
-                        'sectionAction' => $questionnaireAction,
-                    ])
-
-                    @if (filled($ownershipControls['deleteBlockedReason'] ?? null))
-                        <div data-role="contact-delete-blocked-reason" class="ac-note-box ac-note-box--danger">
-                            <p class="ac-copy"><strong>Удаление недоступно.</strong> {{ $ownershipControls['deleteBlockedReason'] }}</p>
-                        </div>
-                    @elseif ($ownershipControls['canDeleteContact'] ?? false)
-                        <div class="ac-actions">
-                            <button
-                                data-role="contact-open-delete-dialog"
-                                type="button"
-                                wire:click="openDeleteContactDialog"
-                                wire:loading.attr="disabled"
-                                wire:target="openDeleteContactDialog,deleteMountedContact"
-                                class="ac-button ac-button--danger-soft"
-                            >
-                                <span wire:loading.remove wire:target="openDeleteContactDialog,deleteMountedContact">Удалить клиента</span>
-                                <span wire:loading wire:target="openDeleteContactDialog,deleteMountedContact">Открываем...</span>
-                            </button>
-                        </div>
-                    @endif
-                </div>
             </div>
+
+            @if (filled($ownershipControls['deleteBlockedReason'] ?? null))
+                <div data-role="contact-delete-blocked-reason" class="ac-note-box ac-note-box--danger">
+                    <p class="ac-copy"><strong>Удаление недоступно.</strong> {{ $ownershipControls['deleteBlockedReason'] }}</p>
+                </div>
+            @elseif ($ownershipControls['canDeleteContact'] ?? false)
+                <div class="ac-contact-danger-zone">
+                    <span class="ac-contact-danger-zone__text">Опасная операция</span>
+                    <button
+                        data-role="contact-open-delete-dialog"
+                        type="button"
+                        wire:click="openDeleteContactDialog"
+                        wire:loading.attr="disabled"
+                        wire:target="openDeleteContactDialog,deleteMountedContact"
+                        class="ac-button ac-button--danger-soft"
+                    >
+                        <span wire:loading.remove wire:target="openDeleteContactDialog,deleteMountedContact">Удалить клиента</span>
+                        <span wire:loading wire:target="openDeleteContactDialog,deleteMountedContact">Открываем...</span>
+                    </button>
+                </div>
+            @endif
 
             @include('filament.contacts.partials.contact-profile-edit-dialog', $profileViewData)
             @include('filament.contacts.partials.ownership-controls', array_merge($ownershipControls, ['renderSurface' => false]))
-            @include('filament.contacts.partials.contact-tags', array_merge($tagsViewData, ['renderSurface' => false]))
-            @include('filament.contacts.partials.phone-numbers', array_merge($phoneNumbersViewData, ['renderSurface' => false]))
+
+            @if (($contactHeader['canEditProfile'] ?? false) && $this->inlineProfileDirty && ! $this->showEditProfileDialog)
+                <div data-role="contact-inline-savebar" class="ac-savebar is-visible">
+                    <span class="ac-savebar__status">Есть несохранённые изменения</span>
+
+                    <div class="ac-savebar__actions">
+                        <button
+                            type="button"
+                            wire:click="resetInlineContactProfile"
+                            wire:loading.attr="disabled"
+                            wire:target="resetInlineContactProfile,saveInlineContactProfile"
+                            class="ac-button ac-button--secondary"
+                        >
+                            Отмена
+                        </button>
+                        <button
+                            type="button"
+                            wire:click="saveInlineContactProfile"
+                            wire:loading.attr="disabled"
+                            wire:target="saveInlineContactProfile"
+                            class="ac-button ac-button--success"
+                        >
+                            <span wire:loading.remove wire:target="saveInlineContactProfile">Сохранить</span>
+                            <span wire:loading wire:target="saveInlineContactProfile">Сохраняем...</span>
+                        </button>
+                    </div>
+                </div>
+            @endif
         @elseif ($activeTab === 'dialogs')
             <div data-role="contact-dialogs-tab" class="ac-contact-page__full-width">
                 @include('filament.contacts.partials.contact-dialogs', $dialogsViewData)
@@ -182,6 +203,14 @@
                     'title' => 'Identity',
                     'subtitle' => 'Текущая identity контакта для активного dialog route.',
                     'rows' => $diagnosticsViewData['identityRows'],
+                    'showFieldKeys' => $showFieldKeys,
+                ])
+
+                @include('filament.contacts.partials.contact-diagnostics-section', [
+                    'dataRole' => 'contact-diagnostics-technical-contact',
+                    'title' => 'Технические поля контакта',
+                    'subtitle' => 'Служебные значения, которые не показываются в основной карточке.',
+                    'rows' => $diagnosticsViewData['technicalContactRows'],
                     'showFieldKeys' => $showFieldKeys,
                 ])
 

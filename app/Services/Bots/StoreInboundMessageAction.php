@@ -4,6 +4,7 @@ namespace App\Services\Bots;
 
 use App\Data\Bots\IncomingBotMessage;
 use App\Data\Bots\StoredInboundMessageResult;
+use App\Data\Contacts\FirstNameResolutionWriteContext;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactDuplicateReview;
@@ -116,6 +117,10 @@ class StoreInboundMessageAction
                     $message->contactName,
                     Contact::FIRST_NAME_SOURCE_AUTO,
                     ApplyContactFirstNameAction::REASON_AUTO_INBOUND,
+                    Contact::FIRST_NAME_RESOLUTION_METHOD_MESSENGER_PROFILE,
+                    new FirstNameResolutionWriteContext(
+                        channelId: $channel->id,
+                    ),
                 );
             }
 

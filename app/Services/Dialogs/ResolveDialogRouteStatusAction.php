@@ -114,6 +114,7 @@ class ResolveDialogRouteStatusAction
             if (
                 ($channelState['connection_status'] ?? null) !== Channel::CONNECTION_STATUS_CONNECTED
                 || ($channelState['webhook_status'] ?? null) !== Channel::WEBHOOK_STATUS_INSTALLED
+                || ($channelState['connection_error_message'] ?? null) === Channel::CONNECTION_ERROR_STALE
             ) {
                 return $this->make(
                     DialogRouteStatusData::CODE_CHANNEL_NOT_CONNECTED,

@@ -5,6 +5,7 @@ namespace App\Services\Contacts;
 use App\Data\Contacts\ResolvedContactAggregateResult;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
+use App\Models\ContactQuestionnaireRun;
 use App\Models\Dialog;
 use App\Models\Message;
 
@@ -18,6 +19,7 @@ class BuildContactAggregateDeleteSummaryAction
      *     contacts_count:int,
      *     dialogs_count:int,
      *     messages_count:int,
+     *     questionnaire_runs_count:int,
      *     phones_count:int,
      *     identities_count:int,
      *     had_merge_history:bool
@@ -34,6 +36,9 @@ class BuildContactAggregateDeleteSummaryAction
                 ->whereIn('contact_id', $resolvedAggregate->aggregateContactIds)
                 ->count(),
             'messages_count' => Message::query()
+                ->whereIn('contact_id', $resolvedAggregate->aggregateContactIds)
+                ->count(),
+            'questionnaire_runs_count' => ContactQuestionnaireRun::query()
                 ->whereIn('contact_id', $resolvedAggregate->aggregateContactIds)
                 ->count(),
             'phones_count' => ContactPhoneNumber::query()

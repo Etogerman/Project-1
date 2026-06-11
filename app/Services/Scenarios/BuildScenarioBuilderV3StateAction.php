@@ -3,6 +3,7 @@
 namespace App\Services\Scenarios;
 
 use App\Models\Channel;
+use App\Models\FieldDictionaryField;
 use App\Models\Scenario;
 use App\Models\ScenarioBuilderBlock;
 use App\Models\ScenarioBuilderCondition;
@@ -10,6 +11,7 @@ use App\Models\ScenarioBuilderEdge;
 use App\Models\ScenarioV3OutboundMessage;
 use App\Models\ScenarioV3ScheduledTransition;
 use App\Models\ScenarioVersion;
+use App\Models\Tag;
 use App\Models\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
@@ -17,6 +19,26 @@ use Illuminate\Support\Facades\DB;
 class BuildScenarioBuilderV3StateAction
 {
     public const SCHEMA_VERSION = 3;
+
+    private const GEO_CITY_OUTPUT_NOT_FOUND = 'geo_not_found';
+
+    private const GEO_CITY_OUTPUT_MANUAL_REQUIRED = 'geo_manual_required';
+
+    private const GEO_CITY_LEGACY_MANUAL_REQUIRED_OUTPUTS = [
+        'geo_manual_required',
+        'geo_ambiguous',
+        'geo_below_threshold',
+        'geo_inactive',
+    ];
+
+    private const GEO_CITY_LEGACY_NOT_FOUND_OUTPUTS = [
+        'geo_failed',
+    ];
+
+    private const VARIABLES_LEGACY_OUTPUTS = [
+        'variables_done',
+        'variables_failed',
+    ];
 
     private const DEFAULT_SHEET_ID = 'main';
 
@@ -50,11 +72,14 @@ class BuildScenarioBuilderV3StateAction
             'builder' => $builder,
             'catalogs' => [
                 'channels' => $this->channelsCatalog($user),
+                'tags' => $this->tagsCatalog(),
+                'field_dictionary' => FieldDictionaryField::constructorCatalog(),
                 'module_types' => ['start_condition', 'message', 'buttons'],
             ],
             'permissions' => [
                 'can_update' => $user instanceof User && $user->hasRolePermission('scenarios.edit') && $user->can('update', $scenario),
                 'can_publish' => $user instanceof User && $user->hasRolePermission('scenarios.edit') && $user->can('update', $scenario),
+                'can_create_tags' => $user instanceof User && $user->hasRolePermission('tags.edit'),
             ],
             'server' => $this->serverClock(),
             'warnings' => [],
@@ -124,6 +149,24 @@ class BuildScenarioBuilderV3StateAction
     }
 
     /**
+     * @return list<array{id: int, name: string, color: string}>
+     */
+    private function tagsCatalog(): array
+    {
+        return Tag::query()
+            ->active()
+            ->orderBy('name')
+            ->get()
+            ->map(fn (Tag $tag): array => [
+                'id' => (int) $tag->id,
+                'name' => (string) $tag->name,
+                'color' => (string) $tag->color,
+            ])
+            ->values()
+            ->all();
+    }
+
+    /**
      * @return array{block_ids: list<int>, edge_ids: list<int>}
      */
     public function visibleScopeFor(ScenarioVersion $version): array
@@ -158,6 +201,7 @@ class BuildScenarioBuilderV3StateAction
         $builderProjection = is_array($schemaPayload['builder_v3'] ?? null) ? $schemaPayload['builder_v3'] : [];
         $visibleScope = $this->visibleScopeFor($version);
         $sheets = $this->normalizeSheets(data_get($builderProjection, 'sheets'));
+        $meta = is_array($builderProjection['meta'] ?? null) ? $builderProjection['meta'] : [];
 
         $blocks = $version->builderBlocks()
             ->with(['channels', 'conditions', 'outgoingEdges'])
@@ -184,6 +228,10 @@ class BuildScenarioBuilderV3StateAction
             'revision' => $this->revisionFor($version),
             'active_sheet_id' => (string) (data_get($builderProjection, 'active_sheet_id') ?: self::DEFAULT_SHEET_ID),
             'sheets' => $sheets,
+            'meta' => [
+                ...$meta,
+                'next_sheet_number' => $this->nextSheetNumber($meta['next_sheet_number'] ?? null, $sheets),
+            ],
             'blocks' => $blocks,
             'edges' => $edges,
             'visible_scope' => $visibleScope,
@@ -204,6 +252,7 @@ class BuildScenarioBuilderV3StateAction
             'revision' => $version instanceof ScenarioVersion ? $this->revisionFor($version) : 'v3:empty',
             'active_sheet_id' => self::DEFAULT_SHEET_ID,
             'sheets' => $this->normalizeSheets(null),
+            'meta' => ['next_sheet_number' => 1],
             'blocks' => [],
             'edges' => [],
             'visible_scope' => [
@@ -234,18 +283,53 @@ class BuildScenarioBuilderV3StateAction
 
         return collect($sheets)
             ->filter(fn (mixed $sheet): bool => is_array($sheet))
-            ->map(fn (array $sheet): array => [
-                'id' => (string) ($sheet['id'] ?? self::DEFAULT_SHEET_ID),
-                'name' => (string) ($sheet['name'] ?? self::DEFAULT_SHEET_NAME),
-                'color' => (string) ($sheet['color'] ?? 'none'),
-                'view' => [
-                    'tx' => (float) data_get($sheet, 'view.tx', 0),
-                    'ty' => (float) data_get($sheet, 'view.ty', 0),
-                    'zoom' => (float) data_get($sheet, 'view.zoom', 1),
-                ],
-            ])
+            ->map(function (array $sheet): array {
+                $normalized = [
+                    'id' => (string) ($sheet['id'] ?? self::DEFAULT_SHEET_ID),
+                    'name' => (string) ($sheet['name'] ?? self::DEFAULT_SHEET_NAME),
+                    'color' => (string) ($sheet['color'] ?? 'none'),
+                    'view' => [
+                        'tx' => (float) data_get($sheet, 'view.tx', 0),
+                        'ty' => (float) data_get($sheet, 'view.ty', 0),
+                        'zoom' => (float) data_get($sheet, 'view.zoom', 1),
+                    ],
+                ];
+
+                if (is_array($sheet['import_source'] ?? null)) {
+                    $normalized['import_source'] = $sheet['import_source'];
+                }
+
+                return $normalized;
+            })
             ->values()
             ->all() ?: $this->normalizeSheets(null);
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $sheets
+     */
+    private function nextSheetNumber(mixed $storedValue, array $sheets): int
+    {
+        $stored = is_int($storedValue) && $storedValue > 0 ? $storedValue : null;
+
+        if ($stored === null) {
+            $string = trim((string) $storedValue);
+            $stored = $string !== '' && ctype_digit($string) ? (int) $string : 1;
+        }
+
+        $nextFromSheets = collect($sheets)
+            ->map(function (array $sheet): int {
+                $id = (string) ($sheet['id'] ?? '');
+
+                if (! preg_match('/^sheet_(\d+)$/', $id, $matches)) {
+                    return 0;
+                }
+
+                return (int) $matches[1];
+            })
+            ->max() + 1;
+
+        return max(1, $stored, $nextFromSheets);
     }
 
     /**
@@ -254,7 +338,7 @@ class BuildScenarioBuilderV3StateAction
     private function blockToBuilderState(ScenarioBuilderBlock $block): array
     {
         $settingsPayload = $this->settingsPayloadForBlock($block);
-        $displayId = $this->displayIdForBlock($block, $settingsPayload);
+        $displayId = $this->displayNumberForBlock($settingsPayload) ?? $this->displayIdForBlock($block, $settingsPayload);
 
         return [
             'id' => (int) $block->id,
@@ -291,8 +375,27 @@ class BuildScenarioBuilderV3StateAction
             'collapsed' => false,
         ];
         $settingsPayload['ui']['card_id'] = $this->displayIdForBlock($block, $settingsPayload);
+
+        $displayNumber = $this->displayNumberForBlock($settingsPayload);
+
+        if ($displayNumber !== null) {
+            $settingsPayload['ui']['display_number'] = $displayNumber;
+        } else {
+            unset($settingsPayload['ui']['display_number']);
+        }
+
         $settingsPayload['modules'] = $this->modulesWithCanonicalStartCondition($block, $settingsPayload['modules'] ?? []);
         $settingsPayload['outputs'] = is_array($settingsPayload['outputs'] ?? null) ? array_values($settingsPayload['outputs']) : [];
+
+        if ($this->hasResolveGeoCityAction($settingsPayload['modules'])) {
+            $settingsPayload['outputs'] = $this->geoCityCanonicalOutputs($settingsPayload['modules']);
+        } elseif ($this->hasVariablesAction($settingsPayload['modules'])) {
+            $settingsPayload['outputs'] = $this->withoutLegacyVariableOutputs($settingsPayload['outputs']);
+        }
+
+        if ($this->hasAiModule($settingsPayload['modules'])) {
+            $settingsPayload['outputs'] = $this->withAiFailedOutput($settingsPayload['outputs']);
+        }
 
         return $settingsPayload;
     }
@@ -305,6 +408,26 @@ class BuildScenarioBuilderV3StateAction
         $cardId = trim((string) data_get($settingsPayload, 'ui.card_id', ''));
 
         return $cardId !== '' ? $cardId : (string) $block->id;
+    }
+
+    /**
+     * @param  array<string, mixed>  $settingsPayload
+     */
+    private function displayNumberForBlock(array $settingsPayload): ?string
+    {
+        $value = data_get($settingsPayload, 'ui.display_number');
+
+        if (is_int($value) && $value > 0) {
+            return (string) $value;
+        }
+
+        $string = trim((string) $value);
+
+        if ($string === '' || ! ctype_digit($string) || (int) $string < 1) {
+            return null;
+        }
+
+        return (string) ((int) $string);
     }
 
     /**
@@ -423,6 +546,22 @@ class BuildScenarioBuilderV3StateAction
     {
         $conditionPayload = is_array($edge->condition_payload) ? $edge->condition_payload : [];
         $fromOutputId = $conditionPayload['from_output_id'] ?? null;
+        $displayOutputId = $this->displayOutputIdForEdge($edge, is_string($fromOutputId) ? $fromOutputId : null);
+
+        if ($displayOutputId !== $fromOutputId) {
+            $conditionPayload['from_output_id'] = $displayOutputId;
+
+            if ($displayOutputId === null && in_array($fromOutputId, self::VARIABLES_LEGACY_OUTPUTS, true)) {
+                $conditionPayload['mode'] = 'automatic';
+                $conditionPayload['label'] = in_array((string) ($conditionPayload['label'] ?? ''), ['Готово', 'Ошибка'], true)
+                    ? 'Дальше'
+                    : (filled($conditionPayload['label'] ?? null) ? (string) $conditionPayload['label'] : 'Дальше');
+            } else {
+                $conditionPayload['label'] = $displayOutputId === self::GEO_CITY_OUTPUT_MANUAL_REQUIRED
+                    ? 'Нужно уточнить'
+                    : 'Город не найден';
+            }
+        }
 
         return [
             'id' => (int) $edge->id,
@@ -430,7 +569,7 @@ class BuildScenarioBuilderV3StateAction
             'source' => [
                 'block_id' => (int) $edge->from_scenario_builder_block_id,
                 'client_key' => 'block_'.$edge->from_scenario_builder_block_id,
-                'output_id' => is_string($fromOutputId) && $fromOutputId !== '' ? $fromOutputId : null,
+                'output_id' => is_string($displayOutputId) && $displayOutputId !== '' ? $displayOutputId : null,
             ],
             'target' => [
                 'block_id' => $edge->to_scenario_builder_block_id !== null ? (int) $edge->to_scenario_builder_block_id : null,
@@ -438,6 +577,175 @@ class BuildScenarioBuilderV3StateAction
             ],
             'condition_payload' => $conditionPayload,
         ];
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $modules
+     */
+    private function hasResolveGeoCityAction(array $modules): bool
+    {
+        foreach ($modules as $module) {
+            if (($module['type'] ?? null) !== 'action') {
+                continue;
+            }
+
+            $actions = data_get($module, 'payload.actions', []);
+
+            if (! is_array($actions)) {
+                continue;
+            }
+
+            foreach ($actions as $action) {
+                if (is_array($action) && ($action['type'] ?? null) === 'resolve_geo_city') {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $modules
+     */
+    private function hasVariablesAction(array $modules): bool
+    {
+        foreach ($modules as $module) {
+            if (($module['type'] ?? null) !== 'action') {
+                continue;
+            }
+
+            $actions = data_get($module, 'payload.actions', []);
+
+            if (! is_array($actions)) {
+                continue;
+            }
+
+            foreach ($actions as $action) {
+                if (is_array($action) && ($action['type'] ?? null) === 'variables') {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $modules
+     */
+    private function hasAiModule(array $modules): bool
+    {
+        foreach ($modules as $module) {
+            if (($module['type'] ?? null) === 'ai') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function displayOutputIdForEdge(ScenarioBuilderEdge $edge, ?string $outputId): ?string
+    {
+        if ($outputId === null) {
+            return $outputId;
+        }
+
+        $sourceBlock = $edge->fromBuilderBlock;
+        $settingsPayload = $sourceBlock instanceof ScenarioBuilderBlock && is_array($sourceBlock->settings_payload)
+            ? $sourceBlock->settings_payload
+            : [];
+        $modules = is_array($settingsPayload['modules'] ?? null) ? $settingsPayload['modules'] : [];
+
+        if (! $this->hasResolveGeoCityAction($modules)) {
+            return $this->hasVariablesAction($modules) && in_array($outputId, self::VARIABLES_LEGACY_OUTPUTS, true)
+                ? null
+                : $outputId;
+        }
+
+        if (in_array($outputId, self::GEO_CITY_LEGACY_MANUAL_REQUIRED_OUTPUTS, true)) {
+            return self::GEO_CITY_OUTPUT_MANUAL_REQUIRED;
+        }
+
+        return in_array($outputId, self::GEO_CITY_LEGACY_NOT_FOUND_OUTPUTS, true)
+            ? self::GEO_CITY_OUTPUT_NOT_FOUND
+            : $outputId;
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $modules
+     * @return list<array<string, mixed>>
+     */
+    private function geoCityCanonicalOutputs(array $modules): array
+    {
+        $moduleId = 'mod_action';
+
+        foreach ($modules as $module) {
+            if (($module['type'] ?? null) === 'action' && $this->hasResolveGeoCityAction([$module])) {
+                $moduleId = (string) ($module['id'] ?? $moduleId);
+                break;
+            }
+        }
+
+        return [
+            [
+                'id' => 'geo_found',
+                'label' => 'Город найден',
+                'source' => 'action',
+                'module_id' => $moduleId,
+                'action_result_id' => 'geo_found',
+            ],
+            [
+                'id' => 'geo_manual_required',
+                'label' => 'Нужно уточнить',
+                'source' => 'action',
+                'module_id' => $moduleId,
+                'action_result_id' => 'geo_manual_required',
+            ],
+            [
+                'id' => 'geo_not_found',
+                'label' => 'Город не найден',
+                'source' => 'action',
+                'module_id' => $moduleId,
+                'action_result_id' => 'geo_not_found',
+            ],
+        ];
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function withoutLegacyVariableOutputs(array $outputs): array
+    {
+        return collect($outputs)
+            ->filter(fn (mixed $output): bool => is_array($output)
+                && ! in_array((string) ($output['id'] ?? ''), self::VARIABLES_LEGACY_OUTPUTS, true))
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $outputs
+     * @return list<array<string, mixed>>
+     */
+    private function withAiFailedOutput(array $outputs): array
+    {
+        $outputs = collect($outputs)
+            ->reject(fn (array $output): bool => ($output['id'] ?? null) === 'ai_failed')
+            ->values()
+            ->all();
+
+        $outputs[] = [
+            'id' => 'ai_failed',
+            'label' => 'Ошибка ИИ',
+            'source' => 'ai',
+            'module_id' => 'mod_ai',
+            'ai_variant_id' => 'ai_failed',
+            'ai_choice_id' => null,
+            'system' => true,
+        ];
+
+        return $outputs;
     }
 
     /**

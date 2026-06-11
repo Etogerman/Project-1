@@ -13,6 +13,7 @@ use App\Models\ScenarioBuilderCondition;
 use App\Models\ScenarioVersion;
 use App\Models\Tag;
 use App\Models\User;
+use App\Services\Scenarios\CreateNextScenarioDraftAction;
 use App\Services\Scenarios\CreateScenarioAction;
 use App\Services\Scenarios\ScenarioRegistry;
 use Filament\Facades\Filament;
@@ -404,14 +405,9 @@ JSON,
 
         Livewire::actingAs($admin)
             ->test(ManageScenarios::class)
-            ->callTableAction('publishDraft', $scenario)
-            ->assertHasNoTableActionErrors();
-
-        $scenario->refresh();
-        $scenario->load(['draftVersion', 'publishedVersion']);
-
-        $this->assertNull($scenario->draftVersion);
-        $this->assertEquals($expectedPublishedSchema, $scenario->publishedVersion?->schema_payload);
+            ->assertTableActionVisible('openConstructor', $scenario)
+            ->assertTableActionHidden('publishDraft', $scenario)
+            ->assertTableActionHidden('edit', $scenario);
     }
 
     public function test_admin_can_use_constructor_for_green_start_block(): void
@@ -994,8 +990,14 @@ JSON,
 
         Livewire::actingAs($admin)
             ->test(ManageScenarios::class)
-            ->callTableAction('publishDraft', $scenario)
-            ->assertHasNoTableActionErrors();
+            ->assertTableActionVisible('openConstructor', $scenario)
+            ->assertTableActionHidden('publishDraft', $scenario)
+            ->assertTableActionHidden('edit', $scenario);
+
+        $draftVersion = $scenario->fresh()->draftVersion()->firstOrFail();
+        $draftVersion->forceFill([
+            'status' => ScenarioVersion::STATUS_PUBLISHED,
+        ])->save();
 
         $scenario->refresh();
         $scenario->load('publishedVersion');
@@ -1005,10 +1007,7 @@ JSON,
             ->where('scenario_version_id', $scenario->publishedVersion?->id)
             ->firstOrFail();
 
-        Livewire::actingAs($admin)
-            ->test(ManageScenarios::class)
-            ->callTableAction('createNextDraft', $scenario)
-            ->assertHasNoTableActionErrors();
+        app(CreateNextScenarioDraftAction::class)->handle($scenario->fresh());
 
         $scenario->refresh();
         $scenario->load('draftVersion');
@@ -1024,6 +1023,59 @@ JSON,
         $this->assertSame($publishedBlock->channels->pluck('id')->all(), $draftBlock->channels->pluck('id')->all());
         $this->assertSame(['copy_start_1', 'copy_start_2'], $draftBlock->conditions->pluck('value')->all());
         $this->assertSame('welcome', $draftBlock->outgoingEdges->first()?->to_runtime_block_id);
+    }
+
+    public function test_v3_scenario_row_opens_constructor_and_hides_legacy_publish_and_edit(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_registry_row',
+            'name' => 'V3 реестр',
+            'is_active' => true,
+        ]);
+
+        $scenario->draftVersion()->firstOrFail()->forceFill([
+            'schema_payload' => [
+                'version' => 3,
+                'builder_v3' => [
+                    'schema_version' => 3,
+                ],
+            ],
+        ])->save();
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->assertTableActionVisible('openConstructor', $scenario)
+            ->assertTableActionHasIcon('openConstructor', Heroicon::OutlinedAdjustmentsHorizontal, $scenario)
+            ->assertTableActionHidden('publishDraft', $scenario)
+            ->assertTableActionHidden('createNextDraft', $scenario)
+            ->assertTableActionHidden('edit', $scenario);
+
+        $publishedOnlyScenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_registry_published_row',
+            'name' => 'V3 опубликован',
+            'is_active' => true,
+        ]);
+
+        $publishedOnlyScenario->draftVersion()->firstOrFail()->forceFill([
+            'status' => ScenarioVersion::STATUS_PUBLISHED,
+            'schema_payload' => [
+                'version' => 3,
+                'builder_v3_runtime' => [
+                    'schema_version' => 3,
+                ],
+            ],
+        ])->save();
+
+        Livewire::actingAs($admin)
+            ->test(ManageScenarios::class)
+            ->assertTableActionVisible('openConstructor', $publishedOnlyScenario)
+            ->assertTableActionHidden('publishDraft', $publishedOnlyScenario)
+            ->assertTableActionHidden('createNextDraft', $publishedOnlyScenario)
+            ->assertTableActionHidden('edit', $publishedOnlyScenario);
     }
 
     public function test_green_start_block_rejects_empty_and_duplicate_triggers(): void

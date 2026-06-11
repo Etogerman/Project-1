@@ -1,5 +1,24 @@
 <section
     data-role="conversation-reply-form"
+    x-data="{
+        storageKey: 'conversation-reply-textarea-height',
+        restoreTextareaHeight() {
+            const textarea = this.$root.querySelector('[data-role=conversation-reply-textarea]');
+            const height = window.sessionStorage.getItem(this.storageKey);
+
+            if (! textarea || ! height) {
+                return;
+            }
+
+            textarea.style.height = height;
+            textarea.dataset.manualResized = '1';
+            textarea.style.overflowY = 'auto';
+        },
+        rememberTextareaHeight(textarea) {
+            window.sessionStorage.setItem(this.storageKey, textarea.style.height || `${textarea.offsetHeight}px`);
+        },
+    }"
+    x-init="$nextTick(() => restoreTextareaHeight())"
     @class([
         'ac-surface',
         'ac-surface--emphasis',
@@ -59,9 +78,12 @@
             data-role="conversation-reply-textarea"
             wire:model.defer="{{ $replyTextModel }}"
             onkeydown="if (event.key === 'Enter' && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey && !event.isComposing) { event.preventDefault(); this.closest('[data-role=conversation-reply-form]').querySelector('[data-role=conversation-reply-submit]').click(); }"
-            oninput="const minHeight = 44; const maxHeight = 160; this.style.height = minHeight + 'px'; const nextHeight = Math.max(minHeight, Math.min(this.scrollHeight, maxHeight)); this.style.height = nextHeight + 'px'; this.style.overflowY = this.scrollHeight > maxHeight ? 'auto' : 'hidden';"
+            onpointerdown="const rect = this.getBoundingClientRect(); this.dataset.manualResizePending = event.clientX >= rect.right - 20 && event.clientY >= rect.bottom - 20 ? '1' : '';"
+            onpointerup="if (this.dataset.manualResizePending === '1') { this.dataset.manualResized = '1'; this.style.overflowY = 'auto'; this.dispatchEvent(new CustomEvent('reply-textarea-manual-resized', { bubbles: true })); } this.dataset.manualResizePending = '';"
+            oninput="const minHeight = 40; const maxAutoHeight = 180; if (this.dataset.manualResized === '1') { this.style.overflowY = 'auto'; return; } this.style.height = Math.max(this.offsetHeight, minHeight) + 'px'; if (this.scrollHeight > this.clientHeight) { this.style.height = Math.min(this.scrollHeight, maxAutoHeight) + 'px'; } this.style.overflowY = this.scrollHeight > this.clientHeight ? 'auto' : 'hidden';"
+            x-on:reply-textarea-manual-resized="rememberTextareaHeight($event.target)"
             aria-label="Текст ответа"
-            rows="2"
+            rows="1"
             maxlength="2000"
             placeholder="Введите текст ответа клиенту"
             @disabled(! $canReply)
