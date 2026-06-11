@@ -100,6 +100,7 @@ const EDGE_CONTACT_CONDITION_FIELD_OPTIONS = [
     ...EDGE_CONTACT_FIELD_OPTIONS,
     ['first_name_source', 'Откуда знаем имя', 'any_text'],
 ];
+const ACTION_TYPE_CHANGE_FIELD = 'change_field';
 const ACTION_TYPE_WRITE_CONTACT_FIELD = 'write_contact_field';
 const ACTION_TYPE_CHECK_DATA = 'check_data';
 const ACTION_TYPE_EDIT_MESSAGE = 'edit_message';
@@ -150,13 +151,20 @@ const ACTION_TARGET_SCOPE_OPTIONS = [
     ['dialog', 'Диалог'],
 ];
 const ACTION_VALUE_SOURCE_OPTIONS = [
-    ['static_value', 'Заданное значение'],
-    ['ai_data', 'Переменная или результат ИИ'],
+    ['manual', 'Ввести вручную'],
+    ['start_parameter', 'Параметр запуска'],
+    ['ai_result', 'Результат ИИ'],
+];
+const LEGACY_WRITE_CONTACT_FIELD_SOURCE_OPTIONS = [
+    ['ai_data', 'Результат ИИ'],
+    ['static_value', 'Ввести вручную'],
 ];
 const VARIABLE_SET_VALUE_SOURCE_OPTIONS = [
-    ['static_value', 'Заданное значение'],
-    ['current_message', 'Весь текст сообщения'],
+    ['static_value', 'Ввести вручную'],
     ['start_param', 'Параметр запуска'],
+];
+const VARIABLE_SET_LEGACY_VALUE_SOURCE_OPTIONS = [
+    ['current_message', 'Текст сообщения'],
 ];
 const MESSAGE_VARIABLE_TEXT_OPERATORS = [
     ['eq', '='],
@@ -199,6 +207,16 @@ const CONTACT_RUNTIME_WRITABLE_FIELD_KEYS = new Set([
     'age_years',
     'age_range',
 ]);
+const ACTION_CONTACT_WRITABLE_FIELD_KEYS = new Set([
+    'first_name',
+    'last_name',
+    'country',
+    'region',
+    'city',
+    'gender',
+    'age_years',
+    'age_range',
+]);
 const MAX_TRANSITION_ACTIONS_PER_EDGE = 5;
 const TRANSITION_ACTION_TYPE_WRITE_FIELD = 'write_field';
 const TRANSITION_ACTION_VALUE_SOURCE_STATIC = 'static';
@@ -226,6 +244,11 @@ const CONTACT_RUNTIME_CONDITION_FIELD_KEYS = new Set([
     'gender',
     'age_years',
     'age_range',
+    'region_status',
+    'region_source',
+    'distance_to_moscow_km',
+    'distance_to_moscow_status',
+    'distance_to_moscow_calculated_at',
 ]);
 const START_EXPRESSION_CONTACT_FIELD_KEYS = new Set([
     'id',
@@ -3380,16 +3403,10 @@ export default function App({
                         title="Открыть список листов"
                         onClick={() => setIsSheetListOpen(true)}
                     >
-                        Листы{hiddenSheetCount > 0 ? ` +${hiddenSheetCount}` : ''}
-                    </button>
-                    <button
-                        type="button"
-                        className="is-danger"
-                        title={activeSheet.id === MAIN_SHEET.id ? 'Главный лист удалить нельзя' : 'Удалить лист'}
-                        disabled={activeSheet.id === MAIN_SHEET.id}
-                        onClick={() => openDeleteSheet(activeSheet)}
-                    >
-                        <TrashIcon />
+                        <GearIcon />
+                        {hiddenSheetCount > 0 ? (
+                            <span>{hiddenSheetCount}</span>
+                        ) : null}
                     </button>
                 </div>
             </div>
@@ -3565,6 +3582,9 @@ export default function App({
                                         <path d="M 0 0 L 10 5 L 0 10 z" />
                                     </marker>
                                     <marker id="ac-v3-arrow-ai" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                        <path d="M 0 0 L 10 5 L 0 10 z" />
+                                    </marker>
+                                    <marker id="ac-v3-arrow-action" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
                                         <path d="M 0 0 L 10 5 L 0 10 z" />
                                     </marker>
                                     <marker id="ac-v3-arrow-selected" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
@@ -4679,14 +4699,18 @@ function ScenarioNode({
                             type="button"
                             className={[
                                 connectedOutputIds.has(output.id ?? 'default') ? 'is-connected' : '',
-                                output.kind === 'default' ? 'is-default-output' : 'is-button-output',
+                                output.kind === 'default'
+                                    ? 'is-default-output'
+                                    : (output.kind === 'action' ? 'is-action-output' : 'is-button-output'),
                                 output.legacy ? 'is-legacy-output' : '',
                             ].filter(Boolean).join(' ')}
                             title={output.hint || (output.kind === 'default'
                                 ? 'Связать автопереход с блоком'
                                 : (output.legacy
                                     ? 'Старый выход: можно удалить существующую стрелку, новые стрелки не создаются'
-                                    : (output.kind === 'ai' ? 'Связать результат ИИ с блоком' : 'Связать кнопку с блоком')))}
+                                    : (output.kind === 'ai'
+                                        ? 'Связать результат ИИ с блоком'
+                                        : (output.kind === 'action' ? 'Связать результат действия с блоком' : 'Связать кнопку с блоком'))))}
                             onPointerDown={(event) => onStartConnection(event, block, output)}
                             onClick={(event) => event.stopPropagation()}
                         >
@@ -4743,8 +4767,8 @@ function EdgePath({
     const routePoints = edgeRoutePoints(source, target, waypoints);
     const d = edgeRoutePath(routePoints);
     const labelPoint = edgeRouteLabelPoint(routePoints, source, target);
-    const isButton = isButtonEdge(edge);
-    const visualKind = edgeVisualKind(edge);
+    const isButton = isButtonEdge(edge, sourceBlock);
+    const visualKind = edgeVisualKind(edge, sourceBlock);
     const edgeClassName = [
         selected ? 'is-selected' : '',
         `is-${visualKind}-edge`,
@@ -5275,30 +5299,48 @@ function shiftAnchorOutside(anchor, distance) {
     };
 }
 
-function isButtonEdge(edge) {
+function isButtonEdge(edge, sourceBlock = null) {
     return Boolean(edge?.source?.output_id ?? edge?.condition_payload?.from_output_id)
         && ! isAiEdge(edge)
-        && ! isActionResultEdge(edge);
+        && ! isActionResultEdge(edge, sourceBlock);
 }
 
 function isAiEdge(edge) {
     return edge?.condition_payload?.mode === 'ai_analysis';
 }
 
-function isActionResultEdge(edge) {
-    return edge?.condition_payload?.mode === 'action_result';
+function isActionResultEdge(edge, sourceBlock = null) {
+    if (edge?.condition_payload?.mode === 'action_result') {
+        return true;
+    }
+
+    const outputId = edge?.source?.output_id ?? edge?.condition_payload?.from_output_id;
+
+    if (! outputId || ! sourceBlock) {
+        return false;
+    }
+
+    const output = blockOutputs(sourceBlock).find((candidate) => candidate.id === outputId) ?? null;
+
+    return output?.kind === 'action';
 }
 
-function isDefaultEdge(edge) {
-    return ! isButtonEdge(edge);
+function isDefaultEdge(edge, sourceBlock = null) {
+    return ! isButtonEdge(edge, sourceBlock)
+        && ! isAiEdge(edge)
+        && ! isActionResultEdge(edge, sourceBlock);
 }
 
-function edgeVisualKind(edge) {
+function edgeVisualKind(edge, sourceBlock = null) {
     if (isAiEdge(edge)) {
         return 'ai';
     }
 
-    if (isButtonEdge(edge)) {
+    if (isActionResultEdge(edge, sourceBlock)) {
+        return 'action';
+    }
+
+    if (isButtonEdge(edge, sourceBlock)) {
         return 'button';
     }
 
@@ -5314,6 +5356,10 @@ function edgeVisualTitle(kind) {
         return 'Связь от ИИ-анализа';
     }
 
+    if (kind === 'action') {
+        return 'Связь от результата действия';
+    }
+
     if (kind === 'auto') {
         return 'Автоматическая связь';
     }
@@ -5322,7 +5368,7 @@ function edgeVisualTitle(kind) {
 }
 
 function defaultEdgeForBlock(block, edges) {
-    return edges.find((edge) => edge.source?.client_key === block.client_key && isDefaultEdge(edge)) ?? null;
+    return edges.find((edge) => edge.source?.client_key === block.client_key && isDefaultEdge(edge, block)) ?? null;
 }
 
 function edgeLabel(edge, isButton = isButtonEdge(edge)) {
@@ -6820,7 +6866,7 @@ function MessageFields({ message, blockKey, onUpdateModulePayload }) {
             {isVariableHelpOpen ? (
                 <VariableHelpPopover
                     title="Переменные сообщения"
-                    ariaLabel="Переменные сообщения"
+                    ariaLabel="Подстановки сообщения"
                     onClose={() => setIsVariableHelpOpen(false)}
                     onInsert={insertToken}
                 />
@@ -6843,13 +6889,13 @@ function MessageFields({ message, blockKey, onUpdateModulePayload }) {
                     })}
                 >
                     <option value="static">Один текст</option>
-                    <option value="by_dialog_variable">Текст по переменной</option>
+                    <option value="by_dialog_variable">Текст по полю диалога</option>
                 </select>
             </label>
             {textMode === 'by_dialog_variable' ? (
                 <div className="ac-v3-builder__action-list">
                     <label>
-                        <span>Переменная</span>
+                        <span>Поле диалога</span>
                         <input
                             value={payload.variable_key ?? ''}
                             placeholder="счетчик"
@@ -6989,12 +7035,17 @@ function ActionFields({ action, blocks = [], tags = [], blockKey, onUpdateModule
                                 value={item.type}
                                 onChange={(event) => updateItem(index, normalizeActionItemForType({ ...item, type: event.target.value }))}
                             >
-                                <option value="write_contact_field">Изменить данные</option>
+                                {item.type === ACTION_TYPE_VARIABLES ? (
+                                    <option value="variables">Изменить поле</option>
+                                ) : item.type === ACTION_TYPE_WRITE_CONTACT_FIELD ? (
+                                    <option value="write_contact_field">Изменить поле</option>
+                                ) : (
+                                    <option value="change_field">Изменить поле</option>
+                                )}
                                 <option value="check_data">Проверить данные</option>
                                 <option value="edit_message">Изменить сообщение</option>
                                 <option value="calculate_distance_to_moscow">Рассчитать расстояние до Москвы</option>
                                 <option value="resolve_geo_city">Распознать географию</option>
-                                <option value="variables">Изменить переменные</option>
                                 <option value="simulate_start_parameter">Имитировать старт с параметром</option>
                                 <option value="tag_effects">Изменить теги</option>
                                 <option value="bitrix24_sync">Bitrix24</option>
@@ -7027,6 +7078,7 @@ function ActionFields({ action, blocks = [], tags = [], blockKey, onUpdateModule
                     ) : item.type === ACTION_TYPE_VARIABLES ? (
                         <VariablesActionFields
                             item={item}
+                            dialogFieldKeys={dialogFieldKeys}
                             onChange={(patch) => updateItem(index, normalizeActionItemForType({
                                 ...item,
                                 ...patch,
@@ -7140,84 +7192,23 @@ function ActionFields({ action, blocks = [], tags = [], blockKey, onUpdateModule
                                 />
                             </label>
                         </>
+                    ) : item.type === ACTION_TYPE_WRITE_CONTACT_FIELD ? (
+                        <LegacyWriteContactFieldActionFields
+                            item={item}
+                            aiSourceBlocks={aiSourceBlocks}
+                            dialogFieldKeys={dialogFieldKeys}
+                            onChange={(patch) => updateItem(index, normalizeActionItemForType({
+                                ...item,
+                                ...patch,
+                            }))}
+                        />
                     ) : (
-                        <>
-                            <label>
-                                <span>Где изменить</span>
-                                <select
-                                    value={item.target_scope}
-                                    onChange={(event) => {
-                                        const targetScope = event.target.value;
-
-                                        updateChangeDataItem(index, {
-                                            target_scope: targetScope,
-                                            target_field: targetScope === 'contact' ? defaultWritableContactFieldKey() : 'field',
-                                        });
-                                    }}
-                                >
-                                    {ACTION_TARGET_SCOPE_OPTIONS.map(([value, label]) => (
-                                        <option key={value} value={value}>{label}</option>
-                                    ))}
-                                </select>
-                            </label>
-                            {item.target_scope === 'contact' ? (
-                                <label>
-                                    <span>Поле контакта</span>
-                                    <select
-                                        value={item.target_field}
-                                        onChange={(event) => updateChangeDataItem(index, { target_field: event.target.value })}
-                                    >
-                                        {contactActionFieldOptions(item.target_field).map((option) => (
-                                            <option key={option.key} value={option.key} disabled={option.disabled}>
-                                                {option.label}{option.disabled ? ' · только отображение' : ''}
-                                            </option>
-                                        ))}
-                                    </select>
-                                </label>
-                            ) : (
-                                <label>
-                                    <span>Поле диалога</span>
-                                    <DialogFieldKeyInput
-                                        value={item.target_field}
-                                        placeholder="name_attempts"
-                                        onChange={(fieldKey) => updateChangeDataItem(index, { target_field: normalizeDialogFieldKey(fieldKey) })}
-                                        suggestions={dialogFieldKeys}
-                                        purpose="action"
-                                    />
-                                </label>
-                            )}
-                            <label>
-                                <span>Что записать</span>
-                                <select
-                                    value={item.source_type}
-                                    onChange={(event) => updateChangeDataItem(index, { source_type: event.target.value })}
-                                >
-                                    {ACTION_VALUE_SOURCE_OPTIONS.map(([value, label]) => (
-                                        <option key={value} value={value}>{label}</option>
-                                    ))}
-                                </select>
-                            </label>
-                            {item.source_type === 'static_value' ? (
-                                <ActionStaticValueField
-                                    item={item}
-                                    onChange={(value) => updateChangeDataItem(index, { static_value: value })}
-                                />
-                            ) : (
-                                <label>
-                                    <span>Данные из переменной</span>
-                                    <input
-                                        value={item.source_field_key}
-                                        placeholder="first_name"
-                                        onChange={(event) => updateChangeDataItem(index, {
-                                            source_type: 'ai_data',
-                                            source_block_client_key: '',
-                                            source_block_id: '',
-                                            source_field_key: normalizeAiExtractFieldKey(event.target.value),
-                                        })}
-                                    />
-                                </label>
-                            )}
-                        </>
+                        <ChangeFieldActionFields
+                            item={item}
+                            aiSourceBlocks={aiSourceBlocks}
+                            dialogFieldKeys={dialogFieldKeys}
+                            onChange={(patch) => updateChangeDataItem(index, patch)}
+                        />
                     )}
                 </div>
             ))}
@@ -7232,6 +7223,7 @@ function CalculatorFields({ action, blockKey, onUpdateModulePayload }) {
     return (
         <VariablesActionFields
             item={item}
+            dialogFieldKeys={[]}
             onChange={(patch) => onUpdateModulePayload(blockKey, 'action', {
                 actions: [
                     ...regularItems,
@@ -7262,6 +7254,19 @@ function SimulateStartParameterActionFields({ item, dialogFieldKeys = [], onChan
                     purpose="action"
                 />
             </label>
+            <label className="ac-v3-builder__check ac-v3-builder__simulate-start-clear-check">
+                <input
+                    type="checkbox"
+                    checked={Boolean(item.clear_source_field_after_reroute)}
+                    onChange={(event) => onChange({
+                        clear_source_field_after_reroute: event.target.checked,
+                    })}
+                />
+                <span>Очистить поле после успешного перехода</span>
+            </label>
+            <p className="ac-v3-builder__field-hint">
+                Поле очистится только если стартовый блок найден и переход выполнен.
+            </p>
         </>
     );
 }
@@ -7339,6 +7344,247 @@ function Bitrix24SyncActionFields({ item, onChange }) {
                     i
                 </button>
             </div>
+        </>
+    );
+}
+
+function LegacyWriteContactFieldActionFields({ item, aiSourceBlocks, dialogFieldKeys, onChange }) {
+    const selectedBlock = aiSourceBlocks.find((block) => block.client_key === item.source_block_client_key) ?? null;
+    const selectedAiModule = selectedBlock ? findModule(selectedBlock.settings_payload, 'ai') : null;
+    const fieldOptions = selectedAiModule ? aiExtractFieldDefinitions(selectedAiModule) : [];
+
+    function updateTargetScope(targetScope) {
+        onChange({
+            target_scope: targetScope,
+            target_field: targetScope === 'contact' ? defaultRuntimeWritableContactFieldKey() : 'field',
+        });
+    }
+
+    function updateSourceType(sourceType) {
+        onChange({
+            source_type: sourceType,
+            source_block_client_key: sourceType === 'ai_data' ? item.source_block_client_key : '',
+            source_block_id: '',
+            source_field_key: sourceType === 'ai_data' ? item.source_field_key : '',
+            static_value: sourceType === 'static_value' ? item.static_value : '',
+        });
+    }
+
+    function updateSourceBlock(sourceBlockClientKey) {
+        const block = aiSourceBlocks.find((candidate) => candidate.client_key === sourceBlockClientKey) ?? null;
+        const aiModule = block ? findModule(block.settings_payload, 'ai') : null;
+        const firstField = aiModule ? aiExtractFieldDefinitions(aiModule)[0]?.key ?? '' : '';
+
+        onChange({
+            source_block_client_key: sourceBlockClientKey,
+            source_block_id: '',
+            source_field_key: firstField,
+        });
+    }
+
+    return (
+        <>
+            <label>
+                <span>Где изменить</span>
+                <select value={item.target_scope} onChange={(event) => updateTargetScope(event.target.value)}>
+                    {ACTION_TARGET_SCOPE_OPTIONS.map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                    ))}
+                </select>
+            </label>
+            {item.target_scope === 'contact' ? (
+                <label>
+                    <span>Поле контакта</span>
+                    <select value={item.target_field} onChange={(event) => onChange({ target_field: event.target.value })}>
+                        {contactLegacyWriteFieldOptions(item.target_field).map((option) => (
+                            <option key={option.key} value={option.key} disabled={option.disabled}>
+                                {option.label}{option.disabled ? ' · недоступно' : ''}
+                            </option>
+                        ))}
+                    </select>
+                </label>
+            ) : (
+                <label>
+                    <span>Поле диалога</span>
+                    <DialogFieldKeyInput
+                        value={item.target_field}
+                        placeholder="start_param"
+                        onChange={(fieldKey) => onChange({ target_field: normalizeDialogFieldKey(fieldKey) })}
+                        suggestions={dialogFieldKeys}
+                        purpose="action"
+                    />
+                </label>
+            )}
+            <label>
+                <span>Откуда взять значение</span>
+                <select value={item.source_type} onChange={(event) => updateSourceType(event.target.value)}>
+                    {LEGACY_WRITE_CONTACT_FIELD_SOURCE_OPTIONS.map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                    ))}
+                </select>
+            </label>
+            {item.source_type === 'static_value' ? (
+                <ActionStaticValueField
+                    item={item}
+                    onChange={(value) => onChange({ static_value: value })}
+                />
+            ) : (
+                <>
+                    <label>
+                        <span>ИИ-блок</span>
+                        <select
+                            value={item.source_block_client_key}
+                            onChange={(event) => updateSourceBlock(event.target.value)}
+                        >
+                            <option value="">Выберите блок</option>
+                            {aiSourceBlocks.map((block) => (
+                                <option key={block.client_key} value={block.client_key}>
+                                    {block.title || 'ИИ-анализ'}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+                    <label>
+                        <span>Поле результата</span>
+                        <select
+                            value={item.source_field_key}
+                            onChange={(event) => onChange({ source_field_key: event.target.value })}
+                            disabled={fieldOptions.length === 0}
+                        >
+                            {fieldOptions.length === 0 ? (
+                                <option value={item.source_field_key}>Нет полей ИИ</option>
+                            ) : fieldOptions.map((field) => (
+                                <option key={field.key} value={field.key}>
+                                    {field.label || field.key}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+                </>
+            )}
+        </>
+    );
+}
+
+function ChangeFieldActionFields({ item, aiSourceBlocks, dialogFieldKeys, onChange }) {
+    const selectedBlock = aiSourceBlocks.find((block) => block.client_key === item.source_block_client_key) ?? null;
+    const selectedAiModule = selectedBlock ? findModule(selectedBlock.settings_payload, 'ai') : null;
+    const fieldOptions = selectedAiModule ? aiExtractFieldDefinitions(selectedAiModule) : [];
+
+    function updateTargetScope(targetScope) {
+        onChange({
+            target_scope: targetScope,
+            target_field: targetScope === 'contact' ? defaultWritableContactFieldKey() : 'field',
+        });
+    }
+
+    function updateValueSource(valueSource) {
+        onChange({
+            value_source: valueSource,
+            source_block_client_key: valueSource === 'ai_result' ? item.source_block_client_key : '',
+            source_block_id: '',
+            source_field_key: valueSource === 'ai_result' ? item.source_field_key : '',
+        });
+    }
+
+    function updateSourceBlock(sourceBlockClientKey) {
+        const block = aiSourceBlocks.find((candidate) => candidate.client_key === sourceBlockClientKey) ?? null;
+        const aiModule = block ? findModule(block.settings_payload, 'ai') : null;
+        const firstField = aiModule ? aiExtractFieldDefinitions(aiModule)[0]?.key ?? '' : '';
+
+        onChange({
+            source_block_client_key: sourceBlockClientKey,
+            source_block_id: '',
+            source_field_key: firstField,
+        });
+    }
+
+    return (
+        <>
+            <label>
+                <span>Где изменить</span>
+                <select value={item.target_scope} onChange={(event) => updateTargetScope(event.target.value)}>
+                    {ACTION_TARGET_SCOPE_OPTIONS.map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                    ))}
+                </select>
+            </label>
+            {item.target_scope === 'contact' ? (
+                <label>
+                    <span>Поле контакта</span>
+                    <select value={item.target_field} onChange={(event) => onChange({ target_field: event.target.value })}>
+                        {contactActionFieldOptions(item.target_field).map((option) => (
+                            <option key={option.key} value={option.key} disabled={option.disabled}>
+                                {option.label}{option.disabled ? ' · недоступно' : ''}
+                            </option>
+                        ))}
+                    </select>
+                </label>
+            ) : (
+                <label>
+                    <span>Поле диалога</span>
+                    <DialogFieldKeyInput
+                        value={item.target_field}
+                        placeholder="start_param"
+                        onChange={(fieldKey) => onChange({ target_field: normalizeDialogFieldKey(fieldKey) })}
+                        suggestions={dialogFieldKeys}
+                        purpose="action"
+                    />
+                </label>
+            )}
+            <label>
+                <span>Как изменить</span>
+                <select value={item.value_source} onChange={(event) => updateValueSource(event.target.value)}>
+                    {ACTION_VALUE_SOURCE_OPTIONS.map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                    ))}
+                </select>
+            </label>
+            {item.value_source === 'manual' ? (
+                <ActionManualValueField
+                    item={item}
+                    onChange={(value) => onChange({ manual_value: value })}
+                />
+            ) : null}
+            {item.value_source === 'ai_result' ? (
+                <>
+                    <label>
+                        <span>ИИ-блок</span>
+                        <select
+                            value={item.source_block_client_key}
+                            onChange={(event) => updateSourceBlock(event.target.value)}
+                        >
+                            <option value="">Выберите блок</option>
+                            {aiSourceBlocks.map((block) => (
+                                <option key={block.client_key} value={block.client_key}>
+                                    {block.title || 'ИИ-анализ'}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+                    <label>
+                        <span>Поле результата</span>
+                        <select
+                            value={item.source_field_key}
+                            onChange={(event) => onChange({ source_field_key: event.target.value })}
+                            disabled={fieldOptions.length === 0}
+                        >
+                            {fieldOptions.length === 0 ? (
+                                <option value={item.source_field_key}>Нет полей ИИ</option>
+                            ) : fieldOptions.map((field) => (
+                                <option key={field.key} value={field.key}>
+                                    {field.label || field.key}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+                </>
+            ) : null}
+            {item.value_source === 'start_parameter' ? (
+                <p className="ac-v3-builder__field-hint">
+                    Будет использован параметр запуска текущего сценария.
+                </p>
+            ) : null}
         </>
     );
 }
@@ -7436,7 +7682,7 @@ function GeoCityAiFieldSelect({ label, value, fieldOptions, onChange }) {
     );
 }
 
-function VariablesActionFields({ item, onChange }) {
+function VariablesActionFields({ item, dialogFieldKeys = [], onChange }) {
     const operations = normalizeVariableOperations(item.operations);
 
     function updateOperation(index, patch) {
@@ -7466,20 +7712,25 @@ function VariablesActionFields({ item, onChange }) {
     return (
         <div className="ac-v3-builder__action-list">
             <div className="ac-v3-builder__ai-outputs-head">
-                <span>Переменные диалога</span>
+                <span>Изменение полей диалога</span>
                 <button type="button" onClick={addOperation}>Добавить</button>
             </div>
             {operations.map((operation, index) => (
                 <div key={index} className="ac-v3-builder__action-row">
                     <label>
-                        <span>Переменная</span>
-                        <input
+                        <span>Поле диалога</span>
+                        <DialogFieldKeyInput
                             value={operation.field_key}
                             placeholder="счетчик"
-                            onChange={(event) => updateOperation(index, {
-                                field_key: normalizeDialogFieldKey(event.target.value),
+                            onChange={(fieldKey) => updateOperation(index, {
+                                field_key: normalizeDialogFieldKey(fieldKey),
                             })}
+                            suggestions={dialogFieldKeys}
+                            purpose="action"
                         />
+                        <span className="ac-v3-builder__field-hint">
+                            Это сохранённое поле диалога. В тексте и условиях используйте его как {'{{dialog.счетчик}}'}.
+                        </span>
                     </label>
                     <label>
                         <span>Что сделать</span>
@@ -7487,9 +7738,9 @@ function VariablesActionFields({ item, onChange }) {
                             value={operation.operation}
                             onChange={(event) => updateOperation(index, { operation: event.target.value })}
                         >
-                            <option value="set">Приравнять</option>
-                            <option value="increment">Увеличить</option>
-                            <option value="clear">Очистить</option>
+                            <option value="set">Изменить значение</option>
+                            <option value="increment">Увеличить число</option>
+                            <option value="clear">Очистить поле</option>
                         </select>
                     </label>
                     {operation.operation === 'increment' ? (
@@ -7503,16 +7754,19 @@ function VariablesActionFields({ item, onChange }) {
                                 value={operation.amount}
                                 onChange={(event) => updateOperation(index, { amount: event.target.value })}
                             />
+                            <span className="ac-v3-builder__field-hint">
+                                Для счётчика выберите нужное поле диалога и оставьте значение 1.
+                            </span>
                         </label>
                     ) : operation.operation === 'set' ? (
                         <>
                             <label>
-                                <span>Источник</span>
+                                <span>Откуда взять значение</span>
                                 <select
                                     value={operation.value_source}
                                     onChange={(event) => updateOperation(index, { value_source: event.target.value })}
                                 >
-                                    {VARIABLE_SET_VALUE_SOURCE_OPTIONS.map(([value, label]) => (
+                                    {variableSetValueSourceOptions(operation.value_source).map(([value, label]) => (
                                         <option key={value} value={value}>{label}</option>
                                     ))}
                                 </select>
@@ -7565,6 +7819,35 @@ function ActionStaticValueField({ item, onChange }) {
             <input
                 value={item.static_value}
                 placeholder="Текст"
+                onChange={(event) => onChange(event.target.value)}
+            />
+        </label>
+    );
+}
+
+function ActionManualValueField({ item, onChange }) {
+    const options = actionManualValueOptions(item);
+
+    if (options.length > 0) {
+        return (
+            <label>
+                <span>Новое значение</span>
+                <select value={item.manual_value} onChange={(event) => onChange(event.target.value)}>
+                    <option value="">Пусто</option>
+                    {options.map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                    ))}
+                </select>
+            </label>
+        );
+    }
+
+    return (
+        <label>
+            <span>Новое значение</span>
+            <input
+                value={item.manual_value}
+                placeholder="Оставьте пустым, чтобы очистить"
                 onChange={(event) => onChange(event.target.value)}
             />
         </label>
@@ -8180,6 +8463,25 @@ function contactActionFieldOptions(currentFieldKey = '') {
     const options = currentFieldDictionary().contact.map((field) => ({
         key: field.key,
         label: field.label,
+        disabled: ! ACTION_CONTACT_WRITABLE_FIELD_KEYS.has(field.key),
+    }));
+
+    if (currentKey && ! options.some((option) => option.key === currentKey)) {
+        options.unshift({
+            key: currentKey,
+            label: `${currentKey} · ${FIELD_DICTIONARY_MISSING_LABEL}`,
+            disabled: true,
+        });
+    }
+
+    return options;
+}
+
+function contactLegacyWriteFieldOptions(currentFieldKey = '') {
+    const currentKey = normalizeDictionaryFieldKey(currentFieldKey);
+    const options = currentFieldDictionary().contact.map((field) => ({
+        key: field.key,
+        label: field.label,
         disabled: ! CONTACT_RUNTIME_WRITABLE_FIELD_KEYS.has(field.key),
     }));
 
@@ -8220,7 +8522,15 @@ function defaultTransitionContactFieldKey() {
 }
 
 function defaultWritableContactFieldKey() {
-    return contactCaptureFields()[0]?.[0] ?? 'first_name';
+    return currentFieldDictionary().contact
+        .find((field) => ACTION_CONTACT_WRITABLE_FIELD_KEYS.has(field.key))
+        ?.key ?? 'first_name';
+}
+
+function defaultRuntimeWritableContactFieldKey() {
+    return currentFieldDictionary().contact
+        .find((field) => CONTACT_RUNTIME_WRITABLE_FIELD_KEYS.has(field.key))
+        ?.key ?? 'first_name';
 }
 
 function aiPromptVariableGroups() {
@@ -8525,8 +8835,8 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
     const source = blocks.find((block) => block.client_key === edge.source?.client_key);
     const target = blocks.find((block) => block.client_key === edge.target?.client_key);
     const isAi = isAiEdge(edge);
-    const isActionResult = isActionResultEdge(edge);
-    const isButton = isButtonEdge(edge);
+    const isActionResult = isActionResultEdge(edge, source);
+    const isButton = isButtonEdge(edge, source);
     const payload = edge.condition_payload ?? {};
     const edgeMode = isAi ? 'ai_analysis' : (isActionResult ? 'action_result' : (isButton ? 'button' : (payload.mode === 'automatic' ? 'automatic' : 'wait_reply')));
     const match = payload.match ?? {};
@@ -9276,7 +9586,7 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                                     <div className="ac-v3-builder__action-row" key={`${index}-${item.target_scope}-${item.target_field}`}>
                                         <label>
                                             <span>Действие</span>
-                                            <input readOnly value="Изменить данные" />
+                                            <input readOnly value="Изменить поле" />
                                         </label>
                                         <label>
                                             <span>Сущность</span>
@@ -9406,29 +9716,8 @@ function sheetsFrom(builder) {
 
 function visibleSheetsForTabs(sheets, activeSheetId) {
     const source = Array.isArray(sheets) && sheets.length > 0 ? sheets : [MAIN_SHEET];
-    const byId = new Map(source.map((sheet) => [String(sheet.id), sheet]));
-    const result = [];
 
-    const add = (sheet) => {
-        if (! sheet || result.some((item) => item.id === sheet.id)) {
-            return;
-        }
-
-        result.push(sheet);
-    };
-
-    add(byId.get(MAIN_SHEET.id) ?? source[0]);
-    add(byId.get(String(activeSheetId ?? '')));
-
-    for (const sheet of source) {
-        if (result.length >= MAX_VISIBLE_SHEET_TABS) {
-            break;
-        }
-
-        add(sheet);
-    }
-
-    return result;
+    return source.slice(0, MAX_VISIBLE_SHEET_TABS);
 }
 
 function activeSheetIdFrom(builder) {
@@ -10324,9 +10613,24 @@ function actionItemSummary(item) {
     }
 
     if (item.type === ACTION_TYPE_VARIABLES) {
-        const count = normalizeVariableOperations(item.operations).length;
+        const operations = normalizeVariableOperations(item.operations);
+        const count = operations.length;
 
-        return `Переменные → ${count} ${pluralActions(count)}`;
+        if (count === 1) {
+            const operation = operations[0];
+
+            if (operation.operation === 'increment') {
+                return `Диалог → ${operation.field_key || 'поле'} +${operation.amount || 1}`;
+            }
+
+            if (operation.operation === 'clear') {
+                return `Диалог → ${operation.field_key || 'поле'} очистить`;
+            }
+
+            return `Диалог → ${operation.field_key || 'поле'}`;
+        }
+
+        return `Диалог → ${count} изменений`;
     }
 
     if (item.type === ACTION_TYPE_SIMULATE_START_PARAMETER) {
@@ -10347,6 +10651,15 @@ function actionItemSummary(item) {
     }
 
     if (item.type === ACTION_TYPE_WRITE_CONTACT_FIELD) {
+        const scope = ACTION_TARGET_SCOPE_OPTIONS.find(([value]) => value === item.target_scope)?.[1] ?? 'Данные';
+        const field = item.target_scope === 'contact'
+            ? dictionaryFieldLabel(FIELD_DICTIONARY_ENTITY_CONTACT, item.target_field, item.target_field)
+            : dictionaryFieldLabel(FIELD_DICTIONARY_ENTITY_DIALOG, item.target_field, item.target_field);
+
+        return `${scope} → ${field}`;
+    }
+
+    if (item.type === ACTION_TYPE_CHANGE_FIELD) {
         const scope = ACTION_TARGET_SCOPE_OPTIONS.find(([value]) => value === item.target_scope)?.[1] ?? 'Данные';
         const field = item.target_scope === 'contact'
             ? dictionaryFieldLabel(FIELD_DICTIONARY_ENTITY_CONTACT, item.target_field, item.target_field)
@@ -10519,6 +10832,16 @@ function normalizeBitrix24SyncOperation(operation) {
         : 'contact_sync';
 }
 
+function variableSetValueSourceOptions(valueSource) {
+    return valueSource === 'current_message'
+        ? [...VARIABLE_SET_VALUE_SOURCE_OPTIONS, ...VARIABLE_SET_LEGACY_VALUE_SOURCE_OPTIONS]
+        : VARIABLE_SET_VALUE_SOURCE_OPTIONS;
+}
+
+function isVariableSetValueSource(valueSource) {
+    return variableSetValueSourceOptions(valueSource).some(([value]) => value === valueSource);
+}
+
 function normalizeVariableOperation(operation) {
     const type = ['set', 'increment', 'clear'].includes(operation.operation)
         ? operation.operation
@@ -10545,7 +10868,7 @@ function normalizeVariableOperation(operation) {
     return {
         operation: 'set',
         field_key: fieldKey,
-        value_source: VARIABLE_SET_VALUE_SOURCE_OPTIONS.some(([value]) => value === operation.value_source)
+        value_source: isVariableSetValueSource(operation.value_source)
             ? operation.value_source
             : 'static_value',
         value: String(operation.value ?? ''),
@@ -10585,30 +10908,26 @@ function actionItems(actionModule) {
             || item.type === ACTION_TYPE_SIMULATE_START_PARAMETER
             || item.type === ACTION_TYPE_TAG_EFFECTS
             || item.type === ACTION_TYPE_BITRIX24_SYNC
+            || item.type === ACTION_TYPE_CHANGE_FIELD
             || item.target_field !== ''
         ));
 
     return normalizedItems.length > 0 ? normalizedItems : [defaultActionItem()];
 }
 
-function normalizeActionItemForType(item) {
-    const type = item.type === ACTION_TYPE_CHECK_DATA
-        ? ACTION_TYPE_CHECK_DATA
-        : (item.type === ACTION_TYPE_EDIT_MESSAGE
-            ? ACTION_TYPE_EDIT_MESSAGE
-            : (item.type === ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW
-                ? ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW
-                    : (isGeoCityResultActionType(item.type)
-                        ? item.type
-                        : (item.type === ACTION_TYPE_VARIABLES
-                            ? ACTION_TYPE_VARIABLES
-                            : (item.type === ACTION_TYPE_SIMULATE_START_PARAMETER
-                                ? ACTION_TYPE_SIMULATE_START_PARAMETER
-                                : (item.type === ACTION_TYPE_TAG_EFFECTS
-                                    ? ACTION_TYPE_TAG_EFFECTS
-                                    : (item.type === ACTION_TYPE_BITRIX24_SYNC
-                                        ? ACTION_TYPE_BITRIX24_SYNC
-                                        : ACTION_TYPE_WRITE_CONTACT_FIELD)))))));
+export function normalizeActionItemForType(item) {
+    const knownType = [
+        ACTION_TYPE_CHECK_DATA,
+        ACTION_TYPE_EDIT_MESSAGE,
+        ACTION_TYPE_CALCULATE_DISTANCE_TO_MOSCOW,
+        ACTION_TYPE_VARIABLES,
+        ACTION_TYPE_SIMULATE_START_PARAMETER,
+        ACTION_TYPE_TAG_EFFECTS,
+        ACTION_TYPE_BITRIX24_SYNC,
+        ACTION_TYPE_WRITE_CONTACT_FIELD,
+        ACTION_TYPE_CHANGE_FIELD,
+    ].includes(item.type) || isGeoCityResultActionType(item.type);
+    const type = knownType ? item.type : ACTION_TYPE_CHANGE_FIELD;
 
     if (type === ACTION_TYPE_EDIT_MESSAGE) {
         const operation = item.operation === ACTION_EDIT_MESSAGE_OPERATION_DELETE_MESSAGE
@@ -10663,6 +10982,7 @@ function normalizeActionItemForType(item) {
             type,
             source_scope: 'dialog',
             source_field_key: normalizeDialogFieldKey(item.source_field_key || 'start_param'),
+            clear_source_field_after_reroute: Boolean(item.clear_source_field_after_reroute),
         };
     }
 
@@ -10699,31 +11019,56 @@ function normalizeActionItemForType(item) {
         return { type, source };
     }
 
+    if (type === ACTION_TYPE_WRITE_CONTACT_FIELD) {
+        const targetScope = ACTION_TARGET_SCOPE_OPTIONS.some(([value]) => value === item.target_scope)
+            ? item.target_scope
+            : 'contact';
+        const requestedTargetField = normalizeDictionaryFieldKey(item.target_field);
+        const targetField = targetScope === 'contact'
+            ? (CONTACT_RUNTIME_WRITABLE_FIELD_KEYS.has(requestedTargetField) ? requestedTargetField : defaultRuntimeWritableContactFieldKey())
+            : normalizeDialogFieldKey(item.target_field || 'field');
+        const sourceType = item.source_type === 'static_value' ? 'static_value' : 'ai_data';
+
+        return {
+            type,
+            source_type: sourceType,
+            source_block_client_key: sourceType === 'ai_data' ? String(item.source_block_client_key ?? '') : '',
+            source_block_id: sourceType === 'ai_data' ? String(item.source_block_id ?? '') : '',
+            source_field_key: sourceType === 'ai_data'
+                ? normalizeAiExtractFieldKey(item.source_field_key ?? item.target_variable_key ?? '')
+                : '',
+            static_value: sourceType === 'static_value' ? String(item.static_value ?? item.manual_value ?? '') : '',
+            target_scope: targetScope,
+            target_field: targetField,
+        };
+    }
+
     const targetScope = ACTION_TARGET_SCOPE_OPTIONS.some(([value]) => value === item.target_scope)
         ? item.target_scope
         : 'contact';
+    const requestedTargetField = normalizeDictionaryFieldKey(item.target_field);
     const targetField = targetScope === 'contact'
-        ? (normalizeDictionaryFieldKey(item.target_field) || defaultWritableContactFieldKey())
+        ? (ACTION_CONTACT_WRITABLE_FIELD_KEYS.has(requestedTargetField) ? requestedTargetField : defaultWritableContactFieldKey())
         : normalizeDialogFieldKey(item.target_field || 'field');
-    const sourceType = ACTION_VALUE_SOURCE_OPTIONS.some(([value]) => value === item.source_type)
-        ? item.source_type
-        : 'ai_data';
+    const valueSource = ACTION_VALUE_SOURCE_OPTIONS.some(([value]) => value === item.value_source)
+        ? item.value_source
+        : (item.source_type === 'ai_data' ? 'ai_result' : 'manual');
     const normalized = {
         type,
         target_scope: targetScope,
         target_field: targetField,
-        source_type: sourceType,
+        value_source: valueSource,
         source_block_client_key: String(item.source_block_client_key ?? ''),
         source_block_id: String(item.source_block_id ?? ''),
         source_field_key: normalizeAiExtractFieldKey(item.source_field_key ?? item.target_variable_key ?? ''),
-        static_value: String(item.static_value ?? ''),
+        manual_value: String(item.manual_value ?? item.static_value ?? ''),
     };
 
-    if (sourceType === 'static_value') {
-        const options = actionStaticValueOptions(normalized);
+    if (valueSource === 'manual') {
+        const options = actionManualValueOptions(normalized);
 
-        if (options.length > 0 && ! options.some(([value]) => value === normalized.static_value)) {
-            normalized.static_value = options[0][0];
+        if (options.length > 0 && normalized.manual_value !== '' && ! options.some(([value]) => value === normalized.manual_value)) {
+            normalized.manual_value = options[0][0];
         }
     }
 
@@ -10732,14 +11077,14 @@ function normalizeActionItemForType(item) {
 
 function defaultActionItem() {
     return {
-        type: ACTION_TYPE_WRITE_CONTACT_FIELD,
+        type: ACTION_TYPE_CHANGE_FIELD,
         target_scope: 'contact',
         target_field: 'first_name',
-        source_type: 'static_value',
+        value_source: 'manual',
         source_block_client_key: '',
         source_block_id: '',
         source_field_key: '',
-        static_value: '',
+        manual_value: '',
     };
 }
 
@@ -10801,6 +11146,15 @@ function actionStaticValueOptions(item) {
         : FIELD_DICTIONARY_ENTITY_CONTACT;
 
     return dictionaryFieldValueOptions(entity, item.target_field, item.static_value)
+        .map((option) => [option.value, option.label]);
+}
+
+function actionManualValueOptions(item) {
+    const entity = item.target_scope === 'dialog'
+        ? FIELD_DICTIONARY_ENTITY_DIALOG
+        : FIELD_DICTIONARY_ENTITY_CONTACT;
+
+    return dictionaryFieldValueOptions(entity, item.target_field, item.manual_value)
         .map((option) => [option.value, option.label]);
 }
 

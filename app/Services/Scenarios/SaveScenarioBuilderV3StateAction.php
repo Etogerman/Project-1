@@ -260,11 +260,16 @@ class SaveScenarioBuilderV3StateAction
             $actions = is_array(data_get($module, 'payload.actions')) ? data_get($module, 'payload.actions') : [];
 
             foreach ($actions as $actionIndex => $action) {
-                if (
-                    ! is_array($action)
-                    || ($action['type'] ?? null) !== 'resolve_geo_city'
-                    || ($action['source'] ?? null) !== 'ai_data'
-                ) {
+                if (! is_array($action)) {
+                    continue;
+                }
+
+                $isGeoAiSource = ($action['type'] ?? null) === 'resolve_geo_city'
+                    && ($action['source'] ?? null) === 'ai_data';
+                $isChangeFieldAiSource = ($action['type'] ?? null) === 'change_field'
+                    && ($action['value_source'] ?? null) === 'ai_result';
+
+                if (! $isGeoAiSource && ! $isChangeFieldAiSource) {
                     continue;
                 }
 

@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Filament\Resources\FieldDictionaryFields\Pages\ManageFieldDictionaryFields;
+use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\FieldDictionaryField;
 use App\Models\User;
@@ -42,6 +43,11 @@ class FilamentFieldDictionaryFieldsResourceTest extends TestCase
             ->where('field_key', 'phones')
             ->firstOrFail();
 
+        $phone = FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_CONTACT)
+            ->where('field_key', 'phone')
+            ->firstOrFail();
+
         $emails = FieldDictionaryField::query()
             ->where('entity', FieldDictionaryField::ENTITY_CONTACT)
             ->where('field_key', 'emails')
@@ -55,6 +61,31 @@ class FilamentFieldDictionaryFieldsResourceTest extends TestCase
         $genderSource = FieldDictionaryField::query()
             ->where('entity', FieldDictionaryField::ENTITY_CONTACT)
             ->where('field_key', 'gender_source')
+            ->firstOrFail();
+
+        $regionSource = FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_CONTACT)
+            ->where('field_key', 'region_source')
+            ->firstOrFail();
+
+        $regionStatus = FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_CONTACT)
+            ->where('field_key', 'region_status')
+            ->firstOrFail();
+
+        $distanceToMoscow = FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_CONTACT)
+            ->where('field_key', 'distance_to_moscow_km')
+            ->firstOrFail();
+
+        $distanceToMoscowStatus = FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_CONTACT)
+            ->where('field_key', 'distance_to_moscow_status')
+            ->firstOrFail();
+
+        $distanceToMoscowCalculatedAt = FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_CONTACT)
+            ->where('field_key', 'distance_to_moscow_calculated_at')
             ->firstOrFail();
 
         $dialogStage = FieldDictionaryField::query()
@@ -71,6 +102,9 @@ class FilamentFieldDictionaryFieldsResourceTest extends TestCase
         $this->assertSame(FieldDictionaryField::TYPE_SELECT, $gender->type);
         $this->assertSame('gender_source', $gender->source_field_key);
         $this->assertSame(FieldDictionaryField::TYPE_TEXT, $country->type);
+        $this->assertSame('region_source', $country->source_field_key);
+        $this->assertSame(FieldDictionaryField::TYPE_PHONE, $phone->type);
+        $this->assertFalse($phone->is_multiple);
         $this->assertSame(FieldDictionaryField::TYPE_PHONE, $phones->type);
         $this->assertTrue($phones->is_multiple);
         $this->assertSame(FieldDictionaryField::TYPE_EMAIL, $emails->type);
@@ -78,6 +112,18 @@ class FilamentFieldDictionaryFieldsResourceTest extends TestCase
         $this->assertSame(FieldDictionaryField::TYPE_SELECT, $ageRange->type);
         $this->assertContains('30_39', collect($ageRange->options)->pluck('value')->all());
         $this->assertContains('scenario', collect($genderSource->options)->pluck('value')->all());
+        $this->assertSame(FieldDictionaryField::TYPE_SELECT, $regionSource->type);
+        $this->assertContains(Contact::REGION_SOURCE_CONFIRMED_BY_CONTACT, collect($regionSource->options)->pluck('value')->all());
+        $this->assertSame(FieldDictionaryField::TYPE_SELECT, $regionStatus->type);
+        $this->assertContains(Contact::REGION_STATUS_AMBIGUOUS, collect($regionStatus->options)->pluck('value')->all());
+        $this->assertSame(FieldDictionaryField::TYPE_NUMBER, $distanceToMoscow->type);
+        $this->assertSame(FieldDictionaryField::TYPE_SELECT, $distanceToMoscowStatus->type);
+        $this->assertContains(Contact::DISTANCE_TO_MOSCOW_STATUS_PENDING, collect($distanceToMoscowStatus->options)->pluck('value')->all());
+        $this->assertSame(FieldDictionaryField::TYPE_DATE, $distanceToMoscowCalculatedAt->type);
+        $this->assertFalse(FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_CONTACT)
+            ->where('field_key', 'location_source')
+            ->exists());
         $this->assertContains(Dialog::STAGE_TRANSFERRED_TO_MPP, collect($dialogStage->options)->pluck('value')->all());
         $this->assertTrue($dialogCurrentBlock->is_system);
         $this->assertSame(FieldDictionaryField::TYPE_TEXT, $dialogCurrentBlock->type);

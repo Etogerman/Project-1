@@ -462,12 +462,12 @@ class ViewContact extends ViewRecord
             $this->makeRow($this->contactFieldLabel('country', 'Страна'), 'country', $record->country ?? '—', $locationAction, edit: $this->makeInlineEdit('editingCountry', 'text', $canEditProfile)),
             $this->makeRow($this->contactFieldLabel('city', 'Город'), 'city', $record->city ?? '—', $locationAction, edit: $this->makeInlineEdit('editingCity', 'text', $canEditProfile)),
             $this->makeRow($this->contactFieldLabel('region', 'Регион'), 'region', $record->region ?? '—', $locationAction, edit: $this->makeInlineEdit('editingRegion', 'select', $canEditProfile, $profileViewData['regionOptions'] ?? [])),
-            $this->makeRow('Статус региона', 'region_status', Contact::formatRegionStatus($record->region_status)),
-            $this->makeRow($this->contactFieldLabel('location_source', 'Источник региона'), 'region_source', $this->formatRegionSource($record->region_source)),
+            $this->makeRow($this->contactFieldLabel('region_status', 'Статус региона'), 'region_status', Contact::formatRegionStatus($record->region_status)),
+            $this->makeRow($this->contactFieldLabel('region_source', 'Источник региона'), 'region_source', $this->formatRegionSource($record->region_source)),
             $this->makeRow('Кандидаты региона', 'pending_region_candidates', $this->formatArrayValue($record->pending_region_candidates)),
-            $this->makeRow('Расстояние до Москвы', 'distance_to_moscow_km', $record->distance_to_moscow_km !== null ? $record->distance_to_moscow_km.' км' : '—'),
-            $this->makeRow('Статус расчёта', 'distance_to_moscow_status', Contact::formatDistanceToMoscowStatus($record->distance_to_moscow_status)),
-            $this->makeRow('Расстояние рассчитано', 'distance_to_moscow_calculated_at', $this->formatDateTime($record->distance_to_moscow_calculated_at)),
+            $this->makeRow($this->contactFieldLabel('distance_to_moscow_km', 'Расстояние до Москвы'), 'distance_to_moscow_km', $record->distance_to_moscow_km !== null ? $record->distance_to_moscow_km.' км' : '—'),
+            $this->makeRow($this->contactFieldLabel('distance_to_moscow_status', 'Статус расчёта'), 'distance_to_moscow_status', Contact::formatDistanceToMoscowStatus($record->distance_to_moscow_status)),
+            $this->makeRow($this->contactFieldLabel('distance_to_moscow_calculated_at', 'Расстояние рассчитано'), 'distance_to_moscow_calculated_at', $this->formatDateTime($record->distance_to_moscow_calculated_at)),
         ];
     }
 

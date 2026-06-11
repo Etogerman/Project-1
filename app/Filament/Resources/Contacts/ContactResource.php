@@ -387,10 +387,7 @@ class ContactResource extends Resource
                     ->placeholder('—')
                     ->state(fn (Contact $record) => static::resolveLatestConversationMessageSortAt($record))
                     ->dateTime('d.m.Y H:i')
-                    ->sortable(query: fn (Builder $query, string $direction): Builder => $query
-                        ->orderBy('latest_message_sort_at', $direction)
-                        ->orderBy('latest_message_id', $direction)
-                        ->orderBy('contacts.id', $direction)),
+                    ->sortable(query: fn (Builder $query, string $direction): Builder => static::applyLatestMessageActivitySort($query, $direction)),
                 TextColumn::make('dedup_status')
                     ->label('Проверка дубля')
                     ->state(fn (Contact $record): string => static::formatDedupStatus($record))
@@ -491,7 +488,8 @@ class ContactResource extends Resource
             ->columnManager()
             ->deferColumnManager(false)
             ->reorderableColumns()
-            ->defaultSort('latest_message_sort_at', 'desc')
+            ->defaultSort(fn (Builder $query, string $direction): Builder => static::applyLatestMessageActivitySort($query, $direction), 'desc')
+            ->persistSortInSession()
             ->emptyStateHeading('Контактов ещё нет')
             ->emptyStateDescription('Контакты появятся после первых входящих сообщений от внешней аудитории.')
             ->recordActionsColumnLabel('Кнопки')
@@ -618,6 +616,17 @@ class ContactResource extends Resource
         }
 
         return $record->getAttribute('latest_message_sort_at');
+    }
+
+    protected static function applyLatestMessageActivitySort(Builder $query, string $direction): Builder
+    {
+        $direction = $direction === 'asc' ? 'asc' : 'desc';
+        $nullsOrder = $direction === 'asc' ? 'FIRST' : 'LAST';
+
+        return $query
+            ->orderByRaw("latest_message_sort_at {$direction} NULLS {$nullsOrder}")
+            ->orderBy('latest_message_id', $direction)
+            ->orderBy('contacts.id', $direction);
     }
 
     /**

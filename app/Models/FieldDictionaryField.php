@@ -327,10 +327,11 @@ class FieldDictionaryField extends Model
                 ['value' => 'ai_analysis', 'label' => 'ИИ-анализ', 'is_system' => true],
             ]),
             self::definition(self::ENTITY_CONTACT, 'gender_source', 'Откуда знаем пол', self::TYPE_SELECT, 32, self::sourceOptions()),
-            self::definition(self::ENTITY_CONTACT, 'location_source', 'Откуда знаем локацию', self::TYPE_SELECT, 72, self::sourceOptions()),
+            self::definition(self::ENTITY_CONTACT, 'region_source', 'Источник региона', self::TYPE_SELECT, 62, self::regionSourceOptions()),
             self::definition(self::ENTITY_CONTACT, 'id', 'ID', self::TYPE_NUMBER, 1),
             self::definition(self::ENTITY_CONTACT, 'first_name', 'Имя', self::TYPE_TEXT, 10, [], 'first_name_source'),
             self::definition(self::ENTITY_CONTACT, 'last_name', 'Фамилия', self::TYPE_TEXT, 20),
+            self::definition(self::ENTITY_CONTACT, 'phone', 'Основной телефон', self::TYPE_PHONE, 24),
             self::definition(self::ENTITY_CONTACT, 'phones', 'Телефоны', self::TYPE_PHONE, 25, isMultiple: true),
             self::definition(self::ENTITY_CONTACT, 'emails', 'Email', self::TYPE_EMAIL, 26, isMultiple: true),
             self::definition(self::ENTITY_CONTACT, 'gender', 'Пол', self::TYPE_SELECT, 30, [
@@ -347,9 +348,13 @@ class FieldDictionaryField extends Model
                 ['value' => '30_39', 'label' => '30 - 39 лет', 'is_system' => true],
                 ['value' => 'over_40', 'label' => 'Больше 40 лет', 'is_system' => true],
             ]),
-            self::definition(self::ENTITY_CONTACT, 'country', 'Страна', self::TYPE_TEXT, 50, [], 'location_source'),
-            self::definition(self::ENTITY_CONTACT, 'region', 'Регион', self::TYPE_TEXT, 60, [], 'location_source'),
-            self::definition(self::ENTITY_CONTACT, 'city', 'Город', self::TYPE_TEXT, 70, [], 'location_source'),
+            self::definition(self::ENTITY_CONTACT, 'country', 'Страна', self::TYPE_TEXT, 50, [], 'region_source'),
+            self::definition(self::ENTITY_CONTACT, 'region', 'Регион', self::TYPE_TEXT, 60, [], 'region_source'),
+            self::definition(self::ENTITY_CONTACT, 'region_status', 'Статус региона', self::TYPE_SELECT, 61, self::optionsFrom(Contact::regionStatusOptions())),
+            self::definition(self::ENTITY_CONTACT, 'city', 'Город', self::TYPE_TEXT, 70, [], 'region_source'),
+            self::definition(self::ENTITY_CONTACT, 'distance_to_moscow_km', 'Расстояние до Москвы, км', self::TYPE_NUMBER, 80),
+            self::definition(self::ENTITY_CONTACT, 'distance_to_moscow_status', 'Статус расчёта расстояния', self::TYPE_SELECT, 82, self::optionsFrom(Contact::distanceToMoscowStatusOptions())),
+            self::definition(self::ENTITY_CONTACT, 'distance_to_moscow_calculated_at', 'Расстояние рассчитано', self::TYPE_DATE, 84),
             self::definition(self::ENTITY_CONTACT, 'created_at', 'Создан', self::TYPE_DATE, 900),
             self::definition(self::ENTITY_CONTACT, 'updated_at', 'Обновлён', self::TYPE_DATE, 910),
         ];
@@ -397,6 +402,35 @@ class FieldDictionaryField extends Model
             ['value' => 'dictionary', 'label' => 'Справочник', 'is_system' => true],
             ['value' => 'ai', 'label' => 'ИИ', 'is_system' => true],
         ];
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    protected static function regionSourceOptions(): array
+    {
+        return [
+            ['value' => Contact::REGION_SOURCE_AI, 'label' => 'ИИ', 'is_system' => true],
+            ['value' => Contact::REGION_SOURCE_DICTIONARY, 'label' => 'Справочник', 'is_system' => true],
+            ['value' => Contact::REGION_SOURCE_CONFIRMED_BY_CONTACT, 'label' => 'Подтверждён клиентом', 'is_system' => true],
+            ['value' => Contact::REGION_SOURCE_MANUAL, 'label' => 'Указан вручную', 'is_system' => true],
+        ];
+    }
+
+    /**
+     * @param  array<string, string>  $options
+     * @return list<array<string, mixed>>
+     */
+    protected static function optionsFrom(array $options): array
+    {
+        return collect($options)
+            ->map(fn (string $label, string $value): array => [
+                'value' => $value,
+                'label' => $label,
+                'is_system' => true,
+            ])
+            ->values()
+            ->all();
     }
 
     /**

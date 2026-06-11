@@ -30,6 +30,7 @@ class ScenarioEdgeExpressionCondition
         'age_range',
         'region_status',
         'region_source',
+        'location_source',
         'distance_to_moscow_km',
         'distance_to_moscow_status',
         'distance_to_moscow_calculated_at',
@@ -225,6 +226,10 @@ class ScenarioEdgeExpressionCondition
                     $phone->phone_raw,
                 ])
                 ->first(fn (mixed $value): bool => trim((string) $value) !== '');
+        }
+
+        if ($field === 'location_source') {
+            $field = 'region_source';
         }
 
         return $contact->{$field} ?? null;
