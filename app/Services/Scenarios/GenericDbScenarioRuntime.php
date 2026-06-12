@@ -169,74 +169,6 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         ResolveGeoCityAction::STATUS_INACTIVE,
     ];
 
-    private const V3_CONTACT_CAPTURE_FIELDS = [
-        'phone',
-        'first_name',
-        'last_name',
-        'country',
-        'region',
-        'city',
-        'gender',
-        'age_years',
-        'age_range',
-        'region_status',
-        'region_source',
-        'location_source',
-        'distance_to_moscow_km',
-        'distance_to_moscow_status',
-        'distance_to_moscow_calculated_at',
-    ];
-
-    private const V3_CONTACT_CAPTURE_DATA_TYPES = [
-        'phone' => 'phone',
-        'first_name' => 'any_text',
-        'last_name' => 'any_text',
-        'country' => 'any_text',
-        'region' => 'any_text',
-        'city' => 'any_text',
-        'gender' => 'any_text',
-        'age_years' => 'number',
-        'age_range' => 'any_text',
-    ];
-
-    private const V3_CHANGE_FIELD_CONTACT_FIELDS = [
-        'first_name',
-        'last_name',
-        'country',
-        'region',
-        'city',
-        'gender',
-        'age_years',
-        'age_range',
-    ];
-
-    private const V3_CONTACT_TRANSITION_WRITE_FIELDS = [
-        'first_name',
-        'last_name',
-        'country',
-        'region',
-        'city',
-        'gender',
-        'gender_source',
-        'age_years',
-        'age_range',
-        'first_name_source',
-        'first_name_resolution_method',
-    ];
-
-    private const V3_CONTACT_FIELD_CONDITION_FIELDS = [
-        'phone',
-        'first_name',
-        'first_name_source',
-        'last_name',
-        'country',
-        'region',
-        'city',
-        'gender',
-        'age_years',
-        'age_range',
-    ];
-
     private ?int $matchedBuilderStartMessageId = null;
 
     private ?string $matchedBuilderRuntimeBlockId = null;
@@ -1988,7 +1920,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             return $fieldsPayload[$fieldKey] ?? null;
         }
 
-        if (! $message->contact instanceof Contact || ! in_array($fieldKey, self::V3_CONTACT_FIELD_CONDITION_FIELDS, true)) {
+        if (! $message->contact instanceof Contact || ! in_array($fieldKey, EngineFieldRegistry::CONTACT_FIELD_CONDITION_FIELDS, true)) {
             return null;
         }
 
@@ -2006,9 +1938,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 ->all();
         }
 
-        if ($fieldKey === 'location_source') {
-            $fieldKey = 'region_source';
-        }
+        $fieldKey = EngineFieldRegistry::resolveReadAlias(EngineFieldRegistry::ENTITY_CONTACT, $fieldKey);
 
         return $contact->{$fieldKey} ?? null;
     }
@@ -2384,7 +2314,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
     private function applyV3TransitionContactField(Message $message, string $fieldKey, string $value): bool
     {
-        if (! $message->contact instanceof Contact || ! in_array($fieldKey, self::V3_CONTACT_TRANSITION_WRITE_FIELDS, true)) {
+        if (! $message->contact instanceof Contact || ! in_array($fieldKey, EngineFieldRegistry::CONTACT_TRANSITION_WRITE_FIELDS, true)) {
             return false;
         }
 
@@ -2446,7 +2376,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         $fieldKey = trim((string) ($capture['field_key'] ?? ''));
         $value = trim((string) ($capturedValue['value'] ?? ''));
 
-        if (! in_array($fieldKey, self::V3_CONTACT_CAPTURE_FIELDS, true) || $value === '') {
+        if (! in_array($fieldKey, EngineFieldRegistry::CONTACT_CAPTURE_FIELDS, true) || $value === '') {
             return false;
         }
 
@@ -4097,11 +4027,11 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             return $this->applyV3WriteDialogFieldAction($message, $targetField, $stringValue);
         }
 
-        if (! in_array($targetField, self::V3_CONTACT_CAPTURE_FIELDS, true)) {
+        if (! in_array($targetField, EngineFieldRegistry::CONTACT_CAPTURE_FIELDS, true)) {
             return false;
         }
 
-        $dataType = self::V3_CONTACT_CAPTURE_DATA_TYPES[$targetField] ?? 'any_text';
+        $dataType = EngineFieldRegistry::CONTACT_CAPTURE_DATA_TYPES[$targetField] ?? 'any_text';
 
         return $this->applyV3TransitionCaptureToContact($message, [
             'field_key' => $targetField,
@@ -4815,7 +4745,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         array $action,
         array $statePayload,
     ): bool {
-        if (! $message->contact instanceof Contact || ! in_array($fieldKey, self::V3_CHANGE_FIELD_CONTACT_FIELDS, true)) {
+        if (! $message->contact instanceof Contact || ! in_array($fieldKey, EngineFieldRegistry::CONTACT_CHANGE_FIELD_FIELDS, true)) {
             return false;
         }
 
@@ -6343,28 +6273,7 @@ TEXT;
 
     private function v3AiAnalysisContactPromptVariable(Message $message, string $field): ?string
     {
-        $allowedFields = [
-            'phone',
-            'first_name',
-            'first_name_source',
-            'last_name',
-            'country',
-            'region',
-            'city',
-            'gender',
-            'gender_source',
-            'birth_date',
-            'age_years',
-            'age_range',
-            'region_status',
-            'region_source',
-            'location_source',
-            'distance_to_moscow_km',
-            'distance_to_moscow_status',
-            'distance_to_moscow_calculated_at',
-        ];
-
-        if (! in_array($field, $allowedFields, true)) {
+        if (! in_array($field, EngineFieldRegistry::CONTACT_PROMPT_VARIABLE_FIELDS, true)) {
             return null;
         }
 
@@ -6384,9 +6293,7 @@ TEXT;
             return $phone === null ? null : trim((string) $phone);
         }
 
-        if ($field === 'location_source') {
-            $field = 'region_source';
-        }
+        $field = EngineFieldRegistry::resolveReadAlias(EngineFieldRegistry::ENTITY_CONTACT, $field);
 
         $value = $contact->getAttribute($field);
 
