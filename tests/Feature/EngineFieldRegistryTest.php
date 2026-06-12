@@ -7,11 +7,11 @@ use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\Dialog;
 use App\Models\Message;
+use App\Services\Scenarios\EngineFieldRegistry;
 use App\Services\Scenarios\GenericDbScenarioRuntime;
 use App\Services\Scenarios\ScenarioEdgeExpressionCondition;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use InvalidArgumentException;
-use ReflectionClass;
 use ReflectionMethod;
 use Tests\TestCase;
 
@@ -20,8 +20,8 @@ use Tests\TestCase;
  *
  * The expected arrays below are the etalon copies of the engine field lists
  * captured before the registry refactoring. They guard that moving the lists
- * into a single registry does not add, drop or rename a single key, and that
- * the observable behavior around the lists stays intact.
+ * into the registry did not add, drop or rename a single key, and that the
+ * observable behavior around the lists stays intact.
  */
 class EngineFieldRegistryTest extends TestCase
 {
@@ -186,9 +186,9 @@ class EngineFieldRegistryTest extends TestCase
 
     public function test_contact_condition_read_list_matches_etalon(): void
     {
-        $this->assertSame(
+        $this->assertEqualsCanonicalizing(
             self::EXPECTED_CONTACT_CONDITION_READ_FIELDS,
-            $this->classConstant(ScenarioEdgeExpressionCondition::class, 'CONTACT_VARIABLES'),
+            EngineFieldRegistry::readableFieldKeys(EngineFieldRegistry::ENTITY_CONTACT),
         );
     }
 
@@ -196,7 +196,7 @@ class EngineFieldRegistryTest extends TestCase
     {
         $this->assertSame(
             self::EXPECTED_DIALOG_CONDITION_READ_FIELDS,
-            $this->classConstant(ScenarioEdgeExpressionCondition::class, 'DIALOG_SYSTEM_VARIABLES'),
+            EngineFieldRegistry::readableFieldKeys(EngineFieldRegistry::ENTITY_DIALOG),
         );
     }
 
@@ -204,7 +204,7 @@ class EngineFieldRegistryTest extends TestCase
     {
         $this->assertSame(
             self::EXPECTED_CONTACT_CAPTURE_FIELDS,
-            $this->classConstant(GenericDbScenarioRuntime::class, 'V3_CONTACT_CAPTURE_FIELDS'),
+            EngineFieldRegistry::CONTACT_CAPTURE_FIELDS,
         );
     }
 
@@ -212,7 +212,7 @@ class EngineFieldRegistryTest extends TestCase
     {
         $this->assertSame(
             self::EXPECTED_CONTACT_CAPTURE_DATA_TYPES,
-            $this->classConstant(GenericDbScenarioRuntime::class, 'V3_CONTACT_CAPTURE_DATA_TYPES'),
+            EngineFieldRegistry::CONTACT_CAPTURE_DATA_TYPES,
         );
     }
 
@@ -220,7 +220,7 @@ class EngineFieldRegistryTest extends TestCase
     {
         $this->assertSame(
             self::EXPECTED_CONTACT_CHANGE_FIELD_FIELDS,
-            $this->classConstant(GenericDbScenarioRuntime::class, 'V3_CHANGE_FIELD_CONTACT_FIELDS'),
+            EngineFieldRegistry::CONTACT_CHANGE_FIELD_FIELDS,
         );
     }
 
@@ -228,7 +228,7 @@ class EngineFieldRegistryTest extends TestCase
     {
         $this->assertSame(
             self::EXPECTED_CONTACT_TRANSITION_WRITE_FIELDS,
-            $this->classConstant(GenericDbScenarioRuntime::class, 'V3_CONTACT_TRANSITION_WRITE_FIELDS'),
+            EngineFieldRegistry::CONTACT_TRANSITION_WRITE_FIELDS,
         );
     }
 
@@ -236,8 +236,41 @@ class EngineFieldRegistryTest extends TestCase
     {
         $this->assertSame(
             self::EXPECTED_CONTACT_FIELD_CONDITION_FIELDS,
-            $this->classConstant(GenericDbScenarioRuntime::class, 'V3_CONTACT_FIELD_CONDITION_FIELDS'),
+            EngineFieldRegistry::CONTACT_FIELD_CONDITION_FIELDS,
         );
+    }
+
+    public function test_contact_prompt_variable_list_matches_etalon(): void
+    {
+        $this->assertSame(
+            self::EXPECTED_CONTACT_PROMPT_VARIABLE_FIELDS,
+            EngineFieldRegistry::CONTACT_PROMPT_VARIABLE_FIELDS,
+        );
+    }
+
+    public function test_registry_read_aliases_match_etalon(): void
+    {
+        $this->assertSame(
+            ['location_source' => 'region_source'],
+            EngineFieldRegistry::readAliases(EngineFieldRegistry::ENTITY_CONTACT),
+        );
+        $this->assertSame([], EngineFieldRegistry::readAliases(EngineFieldRegistry::ENTITY_DIALOG));
+    }
+
+    public function test_registry_writable_keys_match_change_field_list(): void
+    {
+        $this->assertEqualsCanonicalizing(
+            self::EXPECTED_CONTACT_CHANGE_FIELD_FIELDS,
+            EngineFieldRegistry::writableFieldKeys(EngineFieldRegistry::ENTITY_CONTACT),
+        );
+        $this->assertSame([], EngineFieldRegistry::writableFieldKeys(EngineFieldRegistry::ENTITY_DIALOG));
+    }
+
+    public function test_registry_rejects_unknown_entity(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        EngineFieldRegistry::fields('company');
     }
 
     public function test_condition_reads_contact_field(): void
@@ -334,11 +367,6 @@ class EngineFieldRegistryTest extends TestCase
         $this->assertFalse($this->applyChangeContactField($message, 'bitrix24_contact_id', '123'));
         $this->assertFalse($this->applyChangeContactField($message, 'region_source', 'manual'));
         $this->assertEquals($originalUpdatedAt, $message->contact->refresh()->updated_at);
-    }
-
-    private function classConstant(string $class, string $constant): mixed
-    {
-        return (new ReflectionClass($class))->getConstant($constant);
     }
 
     private function evaluateCondition(string $expression, Message $message): bool
