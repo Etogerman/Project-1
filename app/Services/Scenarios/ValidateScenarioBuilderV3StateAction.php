@@ -114,6 +114,10 @@ class ValidateScenarioBuilderV3StateAction
 
     private const MAX_TAG_EFFECT_IDS = 20;
 
+    private const MAX_TAG_CONDITION_IDS = 20;
+
+    private const TAG_CONDITION_MODES = ['has_all', 'has_any', 'has_none'];
+
     private const BITRIX24_SYNC_OPERATIONS = [
         'contact_sync',
         'deal_sync',
@@ -444,6 +448,10 @@ class ValidateScenarioBuilderV3StateAction
             'variable' => (string) ($payload['variable'] ?? ''),
             'exclude' => (string) ($payload['exclude'] ?? ''),
             'expression' => $this->normalizeStartExpression($payload['expression'] ?? '', $blockIndex, $moduleIndex),
+            'tag_condition' => $this->normalizeTagCondition(
+                $payload['tag_condition'] ?? [],
+                "builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.tag_condition",
+            ),
             'contact_phone_condition' => $this->normalizeContactPhoneCondition(
                 $payload['contact_phone_condition'] ?? '',
                 $blockIndex,
@@ -1539,6 +1547,10 @@ class ValidateScenarioBuilderV3StateAction
             'dialog_phone_condition' => $this->normalizeEdgeDialogPhoneCondition($payload['dialog_phone_condition'] ?? '', $edgeIndex),
             'expression' => $this->normalizeEdgeExpression($payload['expression'] ?? '', $edgeIndex),
             'field_condition' => $this->normalizeEdgeFieldCondition($payload['field_condition'] ?? [], $edgeIndex),
+            'tag_condition' => $this->normalizeTagCondition(
+                $payload['tag_condition'] ?? [],
+                "builder.edges.$edgeIndex.condition_payload.tag_condition",
+            ),
             'match' => $this->normalizeEdgeMatch($payload['match'] ?? [], $edgeIndex),
             'input_capture' => $this->normalizeEdgeInputCapture($payload['input_capture'] ?? [], $edgeIndex),
             'transition_actions' => $this->normalizeEdgeTransitionActions($payload['transition_actions'] ?? [], $edgeIndex),
@@ -1797,6 +1809,69 @@ class ValidateScenarioBuilderV3StateAction
             'operator' => $operator,
             'value' => $value,
         ];
+    }
+
+    /**
+     * @return array{enabled: bool, mode: string, tag_ids: list<int>}
+     */
+    private function normalizeTagCondition(mixed $condition, string $path): array
+    {
+        $condition = is_array($condition) ? $condition : [];
+        $enabled = (bool) ($condition['enabled'] ?? false);
+        $mode = trim((string) ($condition['mode'] ?? 'has_all'));
+        $tagIds = $this->normalizeTagConditionIds($condition['tag_ids'] ?? [], "$path.tag_ids");
+
+        if (! in_array($mode, self::TAG_CONDITION_MODES, true)) {
+            $this->fail("$path.mode", 'Некорректное условие по меткам.');
+        }
+
+        if ($enabled && $tagIds === []) {
+            $this->fail("$path.tag_ids", 'Некорректное условие по меткам.');
+        }
+
+        if ($enabled && Tag::query()->active()->whereKey($tagIds)->count() !== count($tagIds)) {
+            $this->fail("$path.tag_ids", 'Некорректное условие по меткам.');
+        }
+
+        return [
+            'enabled' => $enabled,
+            'mode' => $mode,
+            'tag_ids' => $tagIds,
+        ];
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function normalizeTagConditionIds(mixed $ids, string $path): array
+    {
+        if ($ids === null) {
+            return [];
+        }
+
+        if (! is_array($ids) || ! array_is_list($ids)) {
+            $this->fail($path, 'Некорректное условие по меткам.');
+        }
+
+        if (count($ids) > self::MAX_TAG_CONDITION_IDS) {
+            $this->fail($path, 'Некорректное условие по меткам.');
+        }
+
+        return collect($ids)
+            ->map(function (mixed $id, int $index) use ($path): int {
+                if (is_string($id)) {
+                    $id = trim($id);
+                }
+
+                if (! is_numeric($id) || (int) $id < 1 || (string) (int) $id !== (string) $id) {
+                    $this->fail("$path.$index", 'Некорректное условие по меткам.');
+                }
+
+                return (int) $id;
+            })
+            ->unique()
+            ->values()
+            ->all();
     }
 
     /**

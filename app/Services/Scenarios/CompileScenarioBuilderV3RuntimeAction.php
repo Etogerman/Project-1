@@ -632,6 +632,7 @@ class CompileScenarioBuilderV3RuntimeAction
                     'expression' => app(ScenarioEdgeExpressionCondition::class)->normalize(
                         data_get($start, 'payload.expression', ''),
                     ),
+                    'tag_condition' => $this->compileTagCondition(data_get($start, 'payload.tag_condition', [])),
                     'priority' => (int) data_get($start, 'payload.priority', 10),
                 ];
             })
@@ -710,6 +711,7 @@ class CompileScenarioBuilderV3RuntimeAction
             ),
             'expression' => trim((string) ($conditionPayload['expression'] ?? '')),
             'field_condition' => $this->compileEdgeFieldCondition($conditionPayload),
+            'tag_condition' => $this->compileTagCondition($conditionPayload['tag_condition'] ?? []),
             'match' => $this->compileEdgeMatch($conditionPayload),
             'transition_actions' => $this->compileEdgeTransitionActions($conditionPayload),
             'delay' => $delay,
@@ -793,6 +795,23 @@ class CompileScenarioBuilderV3RuntimeAction
             'field_key' => (string) ($condition['field_key'] ?? ''),
             'operator' => (string) ($condition['operator'] ?? 'filled'),
             'value' => (string) ($condition['value'] ?? ''),
+        ];
+    }
+
+    /**
+     * @return array{enabled: bool, mode: string, tag_ids: list<int>}
+     */
+    private function compileTagCondition(mixed $condition): array
+    {
+        $condition = is_array($condition) ? $condition : [];
+        $mode = in_array((string) ($condition['mode'] ?? 'has_all'), ['has_all', 'has_any', 'has_none'], true)
+            ? (string) ($condition['mode'] ?? 'has_all')
+            : 'has_all';
+
+        return [
+            'enabled' => (bool) ($condition['enabled'] ?? false),
+            'mode' => $mode,
+            'tag_ids' => $this->compileIntegerList($condition['tag_ids'] ?? []),
         ];
     }
 
