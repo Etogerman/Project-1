@@ -179,6 +179,11 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
     private int $v3SimulateStartDepth = 0;
 
+    /**
+     * @var array<string, array<int, list<int>>>
+     */
+    private array $v3RootContactTagIdsByMessage = [];
+
     private int $v3ScenarioMessageDeferralDepth = 0;
 
     /**
@@ -1778,6 +1783,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 && $this->v3EdgeAllowsContactPhone($message, $edge)
                 && $this->v3EdgeAllowsDialogPhone($message, $edge)
                 && $this->v3EdgeAllowsFieldCondition($message, $edge)
+                && $this->v3EdgeAllowsTagCondition($message, $edge)
                 && (
                     ($edge['mode'] ?? null) !== 'wait_reply'
                     || $this->messageMatchesV3WaitReplyEdge($message, $edge, $block)
@@ -1907,6 +1913,85 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             'not_equals' => ! $this->v3FieldConditionEquals($actualValue, $expectedValue),
             default => $this->v3FieldConditionFilled($actualValue),
         };
+    }
+
+    /**
+     * @param  array<string, mixed>  $edge
+     */
+    private function v3EdgeAllowsTagCondition(Message $message, array $edge): bool
+    {
+        $condition = is_array($edge['tag_condition'] ?? null) ? $edge['tag_condition'] : [];
+
+        return $this->v3AllowsTagCondition($message, $condition);
+    }
+
+    /**
+     * @param  array<string, mixed>  $condition
+     */
+    private function v3AllowsTagCondition(Message $message, array $condition): bool
+    {
+        if ((bool) ($condition['enabled'] ?? false) !== true) {
+            return true;
+        }
+
+        $tagIds = $this->v3TagEffectIds($condition['tag_ids'] ?? []);
+
+        if ($tagIds === [] || ! $message->contact instanceof Contact) {
+            return false;
+        }
+
+        $contactTagIds = $this->v3RootContactTagIds($message);
+        $mode = (string) ($condition['mode'] ?? 'has_all');
+
+        return match ($mode) {
+            'has_any' => array_intersect($tagIds, $contactTagIds) !== [],
+            'has_none' => array_intersect($tagIds, $contactTagIds) === [],
+            default => count(array_intersect($tagIds, $contactTagIds)) === count($tagIds),
+        };
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function v3RootContactTagIds(Message $message): array
+    {
+        if (! $message->contact instanceof Contact) {
+            return [];
+        }
+
+        $contact = $this->resolveRootContactAction->handle($message->contact);
+        $messageKey = $this->v3MessageCacheKey($message);
+        $contactId = (int) $contact->id;
+
+        if (! array_key_exists($messageKey, $this->v3RootContactTagIdsByMessage)) {
+            $this->v3RootContactTagIdsByMessage[$messageKey] = [];
+        }
+
+        if (! array_key_exists($contactId, $this->v3RootContactTagIdsByMessage[$messageKey])) {
+            $this->v3RootContactTagIdsByMessage[$messageKey][$contactId] = $contact->tags()
+                ->pluck('tags.id')
+                ->map(fn (mixed $id): int => (int) $id)
+                ->all();
+        }
+
+        return $this->v3RootContactTagIdsByMessage[$messageKey][$contactId];
+    }
+
+    private function forgetV3RootContactTagIds(Message $message, Contact $contact): void
+    {
+        $messageKey = $this->v3MessageCacheKey($message);
+        $contactId = (int) $contact->id;
+
+        unset($this->v3RootContactTagIdsByMessage[$messageKey][$contactId]);
+
+        if (($this->v3RootContactTagIdsByMessage[$messageKey] ?? []) === []) {
+            unset($this->v3RootContactTagIdsByMessage[$messageKey]);
+        }
+    }
+
+    private function v3MessageCacheKey(Message $message): string
+    {
+        return (string) ($message->id ?: 'new').':'.spl_object_id($message);
     }
 
     private function v3FieldConditionValue(Message $message, string $fieldScope, string $fieldKey): mixed
@@ -2790,6 +2875,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 ! $this->v3EdgeAllowsContactPhone($message, $edge)
                 || ! $this->v3EdgeAllowsDialogPhone($message, $edge)
                 || ! $this->v3EdgeAllowsFieldCondition($message, $edge)
+                || ! $this->v3EdgeAllowsTagCondition($message, $edge)
                 || ! $this->v3EdgeAllowsExpression($message, $edge)
             ) {
                 continue;
@@ -2937,6 +3023,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 ! $this->v3EdgeAllowsContactPhone($message, $edge)
                 || ! $this->v3EdgeAllowsDialogPhone($message, $edge)
                 || ! $this->v3EdgeAllowsFieldCondition($message, $edge)
+                || ! $this->v3EdgeAllowsTagCondition($message, $edge)
                 || ! $this->v3EdgeAllowsExpression($message, $edge)
             ) {
                 continue;
@@ -3437,7 +3524,8 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         }
 
         try {
-            $this->applyScenarioTagEffectsAction->handle($message->contact, $tagActions);
+            $contact = $this->applyScenarioTagEffectsAction->handle($message->contact, $tagActions);
+            $this->forgetV3RootContactTagIds($message, $contact);
         } catch (Throwable $exception) {
             Log::warning('scenario.v3_tag_effects_failed', [
                 'scenario_code' => $this->code(),
@@ -3949,6 +4037,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 ! $this->v3EdgeAllowsContactPhone($message, $edge)
                 || ! $this->v3EdgeAllowsDialogPhone($message, $edge)
                 || ! $this->v3EdgeAllowsFieldCondition($message, $edge)
+                || ! $this->v3EdgeAllowsTagCondition($message, $edge)
                 || ! $this->v3EdgeAllowsExpression($message, $edge)
             ) {
                 continue;
@@ -6949,6 +7038,10 @@ TEXT;
                 continue;
             }
 
+            if (! $this->v3EntrypointAllowsTagCondition($message, $entrypoint)) {
+                continue;
+            }
+
             $blockId = trim((string) ($entrypoint['block_id'] ?? ''));
             $resolvedBlockId = $this->v3RuntimeBlockId($runtime, $blockId);
 
@@ -6983,6 +7076,16 @@ TEXT;
 
             return false;
         }
+    }
+
+    /**
+     * @param  array<string, mixed>  $entrypoint
+     */
+    private function v3EntrypointAllowsTagCondition(Message $message, array $entrypoint): bool
+    {
+        $condition = is_array($entrypoint['tag_condition'] ?? null) ? $entrypoint['tag_condition'] : [];
+
+        return $this->v3AllowsTagCondition($message, $condition);
     }
 
     /**
@@ -8660,7 +8763,8 @@ TEXT;
             throw new RuntimeException("Scenario [{$this->code()}] action block requires a contact context.");
         }
 
-        $this->applyScenarioTagEffectsAction->handle($message->contact, $actions);
+        $contact = $this->applyScenarioTagEffectsAction->handle($message->contact, $actions);
+        $this->forgetV3RootContactTagIds($message, $contact);
 
         return $statePayload;
     }

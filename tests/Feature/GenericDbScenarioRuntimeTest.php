@@ -4949,6 +4949,223 @@ class GenericDbScenarioRuntimeTest extends TestCase
             && $request['text'] === 'Обычный лид');
     }
 
+    public function test_v3_wait_reply_uses_root_contact_tag_condition(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9287]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9288]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        $rootContact = Contact::factory()->create();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel, [
+            'merged_into_contact_id' => $rootContact->id,
+            'merged_at' => now(),
+        ]);
+        $vipTag = Tag::factory()->create(['name' => 'VIP V3']);
+        $this->attachContactTags($rootContact, $vipTag);
+
+        $scenario = $this->createPublishedScenario('v3_wait_reply_tag_condition', $this->v3WaitReplyRuntimeSchema($channel->id, [
+            $this->v3WaitReplyEdge(
+                id: '20',
+                edgeKey: 'edge_vip',
+                targetBlockId: 'vip',
+                priority: 20,
+                tagCondition: [
+                    'enabled' => true,
+                    'mode' => 'has_all',
+                    'tag_ids' => [$vipTag->id],
+                ],
+            ),
+            $this->v3WaitReplyEdge(
+                id: '10',
+                edgeKey: 'edge_fallback',
+                targetBlockId: 'fallback',
+                priority: 10,
+            ),
+        ], [
+            'vip' => 'VIP ветка',
+            'fallback' => 'Обычная ветка',
+        ]));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'любой ответ');
+
+        $run->refresh();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('vip', $run->current_step);
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && $request['text'] === 'VIP ветка');
+    }
+
+    public function test_v3_wait_reply_uses_has_none_tag_condition(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9289]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9290]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $blockedTag = Tag::factory()->create(['name' => 'Стоп V3']);
+
+        $scenario = $this->createPublishedScenario('v3_wait_reply_tag_condition_none', $this->v3WaitReplyRuntimeSchema($channel->id, [
+            $this->v3WaitReplyEdge(
+                id: '20',
+                edgeKey: 'edge_not_blocked',
+                targetBlockId: 'not_blocked',
+                priority: 20,
+                tagCondition: [
+                    'enabled' => true,
+                    'mode' => 'has_none',
+                    'tag_ids' => [$blockedTag->id],
+                ],
+            ),
+            $this->v3WaitReplyEdge(
+                id: '10',
+                edgeKey: 'edge_fallback',
+                targetBlockId: 'fallback',
+                priority: 10,
+            ),
+        ], [
+            'not_blocked' => 'Стоп-метки нет',
+            'fallback' => 'Обычная ветка',
+        ]));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'любой ответ');
+
+        $run->refresh();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('not_blocked', $run->current_step);
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && $request['text'] === 'Стоп-метки нет');
+    }
+
+    public function test_v3_wait_reply_uses_has_any_tag_condition(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9291]])
+                ->push(['ok' => true, 'result' => ['message_id' => 9292]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $vipTag = Tag::factory()->create(['name' => 'VIP any V3']);
+        $warmTag = Tag::factory()->create(['name' => 'Прогретый any V3']);
+        $this->attachContactTags($contact, $warmTag);
+
+        $scenario = $this->createPublishedScenario('v3_wait_reply_tag_condition_any', $this->v3WaitReplyRuntimeSchema($channel->id, [
+            $this->v3WaitReplyEdge(
+                id: '20',
+                edgeKey: 'edge_any_tag',
+                targetBlockId: 'any_tag',
+                priority: 20,
+                tagCondition: [
+                    'enabled' => true,
+                    'mode' => 'has_any',
+                    'tag_ids' => [$vipTag->id, $warmTag->id],
+                ],
+            ),
+            $this->v3WaitReplyEdge(
+                id: '10',
+                edgeKey: 'edge_fallback',
+                targetBlockId: 'fallback',
+                priority: 10,
+            ),
+        ], [
+            'any_tag' => 'Есть одна из меток',
+            'fallback' => 'Обычная ветка',
+        ]));
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->processScenarioTextReply($channel, $contact, $identity, $dialog, $run, 'любой ответ');
+
+        $run->refresh();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('any_tag', $run->current_step);
+
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
+            && $request['chat_id'] === $dialog->external_chat_id
+            && $request['text'] === 'Есть одна из меток');
+    }
+
     public function test_v3_wait_reply_uses_first_name_source_contact_field_condition(): void
     {
         Http::fake([
@@ -8753,6 +8970,48 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertFalse($runtime->shouldStart($otherMessage));
     }
 
+    public function test_published_builder_start_condition_filters_by_root_contact_tags(): void
+    {
+        $channel = $this->createTelegramChannel();
+        $rootContact = Contact::factory()->create();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel, [
+            'merged_into_contact_id' => $rootContact->id,
+            'merged_at' => now(),
+        ]);
+        $vipTag = Tag::factory()->create(['name' => 'Старт VIP V3']);
+
+        $scenario = $this->createPublishedScenario(
+            'builder_start_tag_condition',
+            $this->v3StartExpressionRuntimeSchema($channel->id, '', tagCondition: [
+                'enabled' => true,
+                'mode' => 'has_all',
+                'tag_ids' => [$vipTag->id],
+            ]),
+        );
+
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => '/start gate',
+            'message_parameter' => 'gate',
+        ]);
+
+        $runtime = app(ScenarioRegistry::class)->makeRuntime($scenario->code);
+
+        $this->assertNotNull($runtime);
+        $this->assertFalse($runtime->shouldStart($message));
+
+        $this->attachContactTags($rootContact, $vipTag);
+
+        $this->assertTrue($runtime->shouldStart($message->fresh(['contact', 'dialog'])));
+    }
+
     public function test_published_builder_start_condition_broken_expression_is_skipped_without_crash(): void
     {
         Log::spy();
@@ -10959,6 +11218,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         int $channelId,
         string $expression,
         string $contactPhoneCondition = '',
+        array $tagCondition = [],
     ): array {
         return [
             'version' => 3,
@@ -10975,6 +11235,11 @@ class GenericDbScenarioRuntimeTest extends TestCase
                         'contact_phone_condition' => $contactPhoneCondition,
                         'dialog_phone_condition' => '',
                         'expression' => $expression,
+                        'tag_condition' => array_replace([
+                            'enabled' => false,
+                            'mode' => 'has_all',
+                            'tag_ids' => [],
+                        ], $tagCondition),
                         'priority' => 10,
                     ],
                 ],
@@ -12803,6 +13068,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         string $contactPhoneCondition = '',
         string $dialogPhoneCondition = '',
         array $fieldCondition = [],
+        array $tagCondition = [],
         string $expression = '',
         array $transitionActions = [],
     ): array {
@@ -12822,6 +13088,11 @@ class GenericDbScenarioRuntimeTest extends TestCase
                 'operator' => 'filled',
                 'value' => '',
             ], $fieldCondition),
+            'tag_condition' => array_replace([
+                'enabled' => false,
+                'mode' => 'has_all',
+                'tag_ids' => [],
+            ], $tagCondition),
             'source_block_id' => 'start',
             'target_block_id' => $targetBlockId,
             'from_output_id' => null,
