@@ -149,7 +149,7 @@ class BuildScenarioBuilderV3StateAction
     }
 
     /**
-     * @return list<array{id: int, name: string, color: string}>
+     * @return list<array{id: int, name: string, color: string, is_active: bool}>
      */
     private function tagsCatalog(): array
     {
@@ -161,6 +161,7 @@ class BuildScenarioBuilderV3StateAction
                 'id' => (int) $tag->id,
                 'name' => (string) $tag->name,
                 'color' => (string) $tag->color,
+                'is_active' => (bool) $tag->is_active,
             ])
             ->values()
             ->all();

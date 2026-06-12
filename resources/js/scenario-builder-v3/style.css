@@ -3003,6 +3003,16 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
     color: var(--text-3);
 }
 
+.ac-v3-builder__tag-condition {
+    display: grid;
+    gap: 8px;
+}
+
+.ac-v3-builder__multi-select {
+    min-height: 96px;
+    padding: 8px;
+}
+
 .ac-v3-builder__bitrix-help {
     position: relative;
     display: flex;
