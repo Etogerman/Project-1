@@ -72,7 +72,7 @@ return new class extends Migration
 
         Schema::create('geo_resolution_events', function (Blueprint $table): void {
             $table->id();
-            $table->foreignId('contact_id')->nullable()->constrained('contacts')->nullOnDelete();
+            $table->foreignId('contact_id')->constrained('contacts')->cascadeOnDelete();
             $table->foreignId('dialog_id')->nullable()->constrained('dialogs')->nullOnDelete();
             $table->foreignId('message_id')->nullable()->constrained('messages')->nullOnDelete();
             $table->string('status');
