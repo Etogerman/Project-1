@@ -101,14 +101,15 @@ scope с drift относительно `origin/main`.
 
 1. push отдельной ветки
 2. открытие отдельного draft PR в `staging`
-3. GitHub checks внутри PR в `staging`
-4. внутренний review внутри PR в `staging`
-5. перевод staging PR в `Ready for review` только по отдельному выбору пользователя
-6. merge staging PR только по отдельному выбору пользователя
-7. staging deploy и staging smoke
-8. отдельный PR в `main` из проверенного diff
-9. GitHub checks и внутренний review уже в PR в `main`
-10. merge в `main` только по отдельному выбору пользователя
+3. контрольная точка: агент сообщает ссылку на PR, целевую ветку и статус
+4. GitHub checks и review внутри PR проверяет пользователь самостоятельно или с помощью Copilot / другого ревьюера
+5. агент проверяет CI или выполняет внутренний review только по отдельной команде пользователя
+6. перевод staging PR в `Ready for review` только по отдельному выбору пользователя
+7. merge staging PR только по отдельному выбору пользователя
+8. staging deploy и staging smoke
+9. отдельный PR в `main` из проверенного diff
+10. GitHub checks и review в PR в `main` проверяет пользователь самостоятельно или с помощью Copilot / другого ревьюера
+11. merge в `main` только по отдельному выбору пользователя
 
 Правило оформления:
 
@@ -199,12 +200,12 @@ scope с drift относительно `origin/main`.
 - отдельный commit
 - отдельный push
 - отдельный draft PR
-- GitHub checks
-- внутренний review
+- пользовательская проверка GitHub checks и review самостоятельно или с помощью Copilot / другого ревьюера
 
 Только потом:
 
 - `Ready for review`
+- внутренний review агентом, если пользователь отдельно поручил его выполнить
 - merge
 - deploy
 - post-deploy smoke-check
