@@ -2,7 +2,9 @@
 
 namespace Tests\Feature;
 
+use App\Services\AI\AiProviderRequestException;
 use App\Services\AI\GeminiApiService;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use InvalidArgumentException;
 use RuntimeException;
@@ -94,6 +96,26 @@ class GeminiApiServiceTest extends TestCase
         app(GeminiApiService::class)->generateStructured('system', 'user', [
             'type' => 'object',
         ]);
+    }
+
+    public function test_service_wraps_network_failure_as_temporary_provider_exception(): void
+    {
+        config()->set('bots.gemini.api_key', 'gemini-key');
+
+        Http::fake(fn () => throw new ConnectionException('Connection timed out.'));
+
+        try {
+            app(GeminiApiService::class)->generateStructured('system', 'user', [
+                'type' => 'object',
+            ]);
+
+            $this->fail('Expected Gemini provider exception.');
+        } catch (AiProviderRequestException $exception) {
+            $this->assertNull($exception->httpStatus);
+            $this->assertTrue($exception->isTemporary());
+            $this->assertStringContainsString('before HTTP response', $exception->getMessage());
+            $this->assertStringContainsString('Connection timed out.', $exception->getMessage());
+        }
     }
 
     public function test_service_throws_on_invalid_json_payload(): void
