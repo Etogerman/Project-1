@@ -85,6 +85,11 @@ const EDGE_FIELD_CONDITION_OPERATOR_OPTIONS = [
     ['equals', 'Равно'],
     ['not_equals', 'Не равно'],
 ];
+const TAG_CONDITION_MODE_OPTIONS = [
+    ['has_all', 'Есть все выбранные метки'],
+    ['has_any', 'Есть любая из выбранных меток'],
+    ['has_none', 'Нет выбранных меток'],
+];
 const EDGE_CONTACT_FIELD_OPTIONS = [
     ['phone', 'Телефон', 'phone'],
     ['first_name', 'Имя', 'any_text'],
@@ -3669,6 +3674,7 @@ export default function App({
                             <EdgePanel
                                 edge={selectedEdge}
                                 blocks={blocks}
+                                tags={tags}
                                 onCollapse={collapsePanel}
                                 onClose={closePanelSelection}
                                 onRemove={() => removeEdge(selectedEdge.client_key)}
@@ -5429,6 +5435,12 @@ function edgeAutoLabel(edge) {
         parts.push(fieldConditionLabel);
     }
 
+    const tagConditionLabel = edgeTagConditionLabel(payload.tag_condition ?? {});
+
+    if (tagConditionLabel) {
+        parts.push(tagConditionLabel);
+    }
+
     if (payload.contact_phone_condition) {
         parts.push(`Телефон контакта: ${optionLabel(PHONE_CONDITION_OPTIONS, payload.contact_phone_condition)}`);
     }
@@ -5485,6 +5497,19 @@ function edgeFieldConditionLabel(fieldCondition) {
     const value = hasValue ? edgeFieldConditionValueLabel(fieldCondition, scope, field[0]) : '';
 
     return `${fieldLabel}: ${operator}${value ? ` ${value}` : ''}`;
+}
+
+function edgeTagConditionLabel(tagCondition) {
+    const normalized = normalizeTagCondition(tagCondition);
+
+    if (! normalized.enabled) {
+        return '';
+    }
+
+    const modeLabel = optionLabel(TAG_CONDITION_MODE_OPTIONS, normalized.mode);
+    const count = normalized.tag_ids.length;
+
+    return `Метки: ${modeLabel}${count > 0 ? ` (${count})` : ''}`;
 }
 
 function edgeFieldConditionValueLabel(fieldCondition, scope, fieldKey) {
@@ -6007,6 +6032,7 @@ function BlockPanel({
                                         start={start}
                                         channels={channels}
                                         startChannels={startChannels}
+                                        tags={tags}
                                         blockKey={block.client_key}
                                         onUpdateModulePayload={onUpdateModulePayload}
                                         onUpdateStartChannels={onUpdateStartChannels}
@@ -7271,6 +7297,95 @@ function SimulateStartParameterActionFields({ item, dialogFieldKeys = [], onChan
     );
 }
 
+function normalizeTagCondition(condition = {}) {
+    const mode = TAG_CONDITION_MODE_OPTIONS.some(([value]) => value === condition?.mode)
+        ? condition.mode
+        : 'has_all';
+
+    return {
+        enabled: condition?.enabled === true,
+        mode,
+        tag_ids: normalizeIntegerList(condition?.tag_ids),
+    };
+}
+
+function TagConditionFields({ condition, tags = [], onChange }) {
+    const normalized = normalizeTagCondition(condition);
+    const knownTagIds = new Set(tags.map((tag) => Number(tag.id)));
+    const missingSelectedTags = normalized.tag_ids
+        .filter((tagId) => ! knownTagIds.has(Number(tagId)))
+        .map((tagId) => ({
+            id: tagId,
+            name: `Тег #${tagId} · недоступен`,
+            color: 'gray',
+            is_active: false,
+        }));
+    const tagOptions = [...missingSelectedTags, ...tags];
+
+    function selectedIdsFromEvent(event) {
+        return Array.from(event.target.selectedOptions)
+            .map((option) => Number(option.value))
+            .filter((id) => id > 0);
+    }
+
+    return (
+        <div className="ac-v3-builder__tag-condition">
+            <label className="ac-v3-builder__check">
+                <input
+                    type="checkbox"
+                    checked={normalized.enabled}
+                    onChange={(event) => onChange({
+                        ...normalized,
+                        enabled: event.target.checked,
+                    })}
+                />
+                <span>Условие по меткам</span>
+            </label>
+            {normalized.enabled ? (
+                <>
+                    <label>
+                        <span>Проверка</span>
+                        <select
+                            value={normalized.mode}
+                            onChange={(event) => onChange({
+                                ...normalized,
+                                mode: event.target.value,
+                            })}
+                        >
+                            {TAG_CONDITION_MODE_OPTIONS.map(([value, label]) => (
+                                <option key={value} value={value}>{label}</option>
+                            ))}
+                        </select>
+                    </label>
+                    <label>
+                        <span>Метки</span>
+                        <select
+                            multiple
+                            value={normalized.tag_ids.map(String)}
+                            className="ac-v3-builder__multi-select"
+                            onChange={(event) => onChange({
+                                ...normalized,
+                                tag_ids: selectedIdsFromEvent(event),
+                            })}
+                        >
+                            {tagOptions.map((tag) => (
+                                <option key={tag.id} value={tag.id}>
+                                    {tag.name}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+                    {missingSelectedTags.length > 0 ? (
+                        <p className="ac-v3-builder__field-hint">
+                            В условии есть недоступная или неактивная метка. Замените её перед сохранением.
+                        </p>
+                    ) : null}
+                </>
+            ) : null}
+        </div>
+    );
+}
+
 function TagEffectsActionFields({ item, tags = [], onChange }) {
     const assignTagIds = normalizeIntegerList(item.assign_tag_ids);
     const removeTagIds = normalizeIntegerList(item.remove_tag_ids);
@@ -7959,6 +8074,7 @@ function StartConditionFields({
     start,
     channels,
     startChannels,
+    tags = [],
     blockKey,
     onUpdateModulePayload,
     onUpdateStartChannels,
@@ -7990,6 +8106,15 @@ function StartConditionFields({
         onUpdateModulePayload(blockKey, 'start_condition', { expression: nextExpression });
         window.requestAnimationFrame(() => {
             expressionTextareaRef.current?.focus();
+        });
+    }
+
+    function updateTagCondition(patch) {
+        onUpdateModulePayload(blockKey, 'start_condition', {
+            tag_condition: normalizeTagCondition({
+                ...(start?.payload?.tag_condition ?? {}),
+                ...patch,
+            }),
         });
     }
 
@@ -8049,6 +8174,11 @@ function StartConditionFields({
                     onInsert={insertStartExpressionToken}
                 />
             ) : null}
+            <TagConditionFields
+                condition={start?.payload?.tag_condition}
+                tags={tags}
+                onChange={updateTagCondition}
+            />
             <label className="ac-v3-builder__field-row">
                 <span>Приоритет</span>
                 <input
@@ -8828,7 +8958,7 @@ function contactConditionField(fieldKey) {
     return fields.find(([value]) => value === fieldKey) ?? fields[0] ?? EDGE_CONTACT_CONDITION_FIELD_OPTIONS[0];
 }
 
-function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateConditionPayload, onResetWaypoints, onCopyEdgeId, onRefreshDiagnostics, timezone, timezoneLabel, dialogFieldKeys }) {
+function EdgePanel({ edge, blocks, tags = [], onCollapse, onClose, onRemove, onUpdateConditionPayload, onResetWaypoints, onCopyEdgeId, onRefreshDiagnostics, timezone, timezoneLabel, dialogFieldKeys }) {
     const [isExpressionHelpOpen, setIsExpressionHelpOpen] = useState(false);
     const expressionHelpButtonRef = useRef(null);
     const expressionTextareaRef = useRef(null);
@@ -8957,6 +9087,16 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                 ...(current.field_condition ?? {}),
                 ...patch,
             },
+        }));
+    }
+
+    function updateTagCondition(patch) {
+        onUpdateConditionPayload((current) => ({
+            ...current,
+            tag_condition: normalizeTagCondition({
+                ...(current.tag_condition ?? {}),
+                ...patch,
+            }),
         }));
     }
 
@@ -9257,6 +9397,11 @@ function EdgePanel({ edge, blocks, onCollapse, onClose, onRemove, onUpdateCondit
                         ) : null}
                     </>
                 ) : null}
+                <TagConditionFields
+                    condition={payload.tag_condition}
+                    tags={tags}
+                    onChange={updateTagCondition}
+                />
                 {isAi ? (
                     <>
                         <span>Результат ИИ</span>
@@ -10056,6 +10201,7 @@ function stateWithCatalogTag(state, tag) {
         id: tagId,
         name: String(tag.name ?? ''),
         color: String(tag.color ?? 'gray'),
+        is_active: tag.is_active !== false,
     };
     const tags = [
         ...(state.catalogs.tags ?? []).filter((item) => Number(item.id) !== tagId),
@@ -10431,6 +10577,11 @@ function moduleTemplate(type, channels, blocks = [], currentBlockKey = null) {
                 variable: '',
                 exclude: '',
                 expression: '',
+                tag_condition: {
+                    enabled: false,
+                    mode: 'has_all',
+                    tag_ids: [],
+                },
                 contact_phone_condition: '',
                 dialog_phone_condition: '',
                 priority: 10,
@@ -11344,6 +11495,11 @@ function edgePayload(outputId, label, kind = null) {
         contact_phone_condition: '',
         dialog_phone_condition: '',
         expression: '',
+        tag_condition: {
+            enabled: false,
+            mode: 'has_all',
+            tag_ids: [],
+        },
         field_condition: {
             enabled: false,
             field_scope: 'dialog',

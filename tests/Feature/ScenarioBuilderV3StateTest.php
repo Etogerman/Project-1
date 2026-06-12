@@ -4202,6 +4202,137 @@ class ScenarioBuilderV3StateTest extends TestCase
         );
     }
 
+    public function test_publish_keeps_tag_conditions_in_start_and_edge_runtime_snapshot(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['name' => 'Telegram Tag Conditions']);
+        $tag = Tag::factory()->create(['name' => 'VIP условие']);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_tag_conditions',
+            'name' => 'V3 Tag Conditions',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $startSettings = $this->startSettings('/start', [$channel->id]);
+        $startSettings['modules'][0]['payload']['tag_condition'] = [
+            'enabled' => true,
+            'mode' => 'has_all',
+            'tag_ids' => [$tag->id],
+        ];
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_start',
+                'type' => 'state',
+                'title' => 'Старт',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $startSettings,
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_next',
+                'type' => 'state',
+                'title' => 'Следующий',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Дальше'),
+            ],
+        ];
+        $edgePayload = $this->edgePayload(null, 'Дальше');
+        $edgePayload['mode'] = 'automatic';
+        $edgePayload['tag_condition'] = [
+            'enabled' => true,
+            'mode' => 'has_none',
+            'tag_ids' => [$tag->id],
+        ];
+        $edges = [[
+            'id' => null,
+            'client_key' => 'tmp_edge',
+            'source' => ['block_id' => null, 'client_key' => 'tmp_start', 'output_id' => null],
+            'target' => ['block_id' => null, 'client_key' => 'tmp_next'],
+            'condition_payload' => $edgePayload,
+        ]];
+
+        $saved = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
+            ->assertOk()
+            ->assertJsonPath('builder.blocks.0.settings_payload.modules.0.payload.tag_condition.enabled', true)
+            ->assertJsonPath('builder.blocks.0.settings_payload.modules.0.payload.tag_condition.mode', 'has_all')
+            ->assertJsonPath('builder.blocks.0.settings_payload.modules.0.payload.tag_condition.tag_ids.0', $tag->id)
+            ->assertJsonPath('builder.edges.0.condition_payload.tag_condition.enabled', true)
+            ->assertJsonPath('builder.edges.0.condition_payload.tag_condition.mode', 'has_none')
+            ->assertJsonPath('builder.edges.0.condition_payload.tag_condition.tag_ids.0', $tag->id)
+            ->json();
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $saved['scenario']['draft_version_id'],
+                'base_revision' => $saved['builder']['revision'],
+            ])
+            ->assertOk();
+
+        $scenario->refresh()->load('publishedVersion');
+
+        $this->assertTrue(
+            (bool) data_get($scenario->publishedVersion?->schema_payload, 'builder_v3_runtime.entrypoints.0.tag_condition.enabled'),
+        );
+        $this->assertSame(
+            'has_all',
+            data_get($scenario->publishedVersion?->schema_payload, 'builder_v3_runtime.entrypoints.0.tag_condition.mode'),
+        );
+        $this->assertSame(
+            [$tag->id],
+            data_get($scenario->publishedVersion?->schema_payload, 'builder_v3_runtime.entrypoints.0.tag_condition.tag_ids'),
+        );
+        $this->assertTrue(
+            (bool) data_get($scenario->publishedVersion?->schema_payload, 'builder_v3_runtime.edges.0.tag_condition.enabled'),
+        );
+        $this->assertSame(
+            'has_none',
+            data_get($scenario->publishedVersion?->schema_payload, 'builder_v3_runtime.edges.0.tag_condition.mode'),
+        );
+        $this->assertSame(
+            [$tag->id],
+            data_get($scenario->publishedVersion?->schema_payload, 'builder_v3_runtime.edges.0.tag_condition.tag_ids'),
+        );
+    }
+
+    public function test_put_state_rejects_enabled_tag_condition_with_inactive_tag(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['name' => 'Telegram Inactive Tag']);
+        $inactiveTag = Tag::factory()->create([
+            'name' => 'Неактивная метка',
+            'is_active' => false,
+        ]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_inactive_tag_condition',
+            'name' => 'V3 Inactive Tag Condition',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $startSettings = $this->startSettings('/start', [$channel->id]);
+        $startSettings['modules'][0]['payload']['tag_condition'] = [
+            'enabled' => true,
+            'mode' => 'has_all',
+            'tag_ids' => [$inactiveTag->id],
+        ];
+        $payload = $this->payloadFromState($state, [
+            [
+                'id' => null,
+                'client_key' => 'tmp_start',
+                'type' => 'state',
+                'title' => 'Старт',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $startSettings,
+            ],
+        ]);
+
+        $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $payload)
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors([
+                'builder.blocks.0.settings_payload.modules.0.payload.tag_condition.tag_ids',
+            ]);
+    }
+
     public function test_publish_keeps_bitrix24_sync_action_without_outputs_in_runtime_snapshot(): void
     {
         $admin = $this->adminUser();
@@ -5572,6 +5703,11 @@ class ScenarioBuilderV3StateTest extends TestCase
                 'field_key' => '',
                 'operator' => 'filled',
                 'value' => '',
+            ],
+            'tag_condition' => [
+                'enabled' => false,
+                'mode' => 'has_all',
+                'tag_ids' => [],
             ],
             'match' => [
                 'type' => $isButton ? 'exact_text' : 'any_inbound',
