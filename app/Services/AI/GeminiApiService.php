@@ -316,7 +316,7 @@ class GeminiApiService
 
     protected function logStructuredFailure(
         string $model,
-        int $httpStatus,
+        ?int $httpStatus,
         string $systemPrompt,
         string $userPrompt,
         string $rawBody,
