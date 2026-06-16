@@ -22,6 +22,7 @@ use App\Models\User;
 use App\Services\Bots\ContactIdentityAvatarStorage;
 use App\Services\Dialogs\BuildDialogMessageSnapshotPayloadAction;
 use App\Services\Dialogs\LoadDialogMessagesPageAction;
+use App\Services\Dialogs\SyncSystemDialogCardViewAction;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
@@ -105,13 +106,8 @@ class FilamentDialogsResourceTest extends TestCase
             ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
             ->assertSee('Поля диалога')
             ->assertSee('data-role="dialog-fields-section"', false)
-            ->assertSee('data-role="dialog-field-row"', false)
+            ->assertSee('data-role="dialog-side-field-row"', false)
             ->assertSee('data-field-key="client_city"', false)
-            ->assertSee('data-field-value-type="scalar"', false)
-            ->assertSee('data-role="dialog-field-value"', false)
-            ->assertSee('data-role="dialog-field-edit"', false)
-            ->assertSee('data-role="dialog-field-edit-input"', false)
-            ->assertSee('data-role="dialog-field-save"', false)
             ->assertDontSee('data-role="dialog-field-copy-key"', false)
             ->assertDontSee('Копировать ключ')
             ->assertSee('Город клиента')
@@ -177,7 +173,7 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('Поля диалога')
             ->assertSee('data-role="dialog-fields-empty"', false)
             ->assertSee('Поля диалога пока не заполнены')
-            ->assertDontSee('data-role="dialog-field-row"', false)
+            ->assertDontSee('data-field-key="_v3"', false)
             ->assertDontSee('_v3')
             ->assertDontSee('transition_counts');
     }
@@ -235,7 +231,7 @@ class FilamentDialogsResourceTest extends TestCase
         $this->actingAs($admin)
             ->get(DialogResource::getUrl('view', ['record' => $dialog]))
             ->assertOk()
-            ->assertSee('data-role="dialog-system-fields-section"', false)
+            ->assertSee('data-role="dialog-general-tab"', false)
             ->assertSee('data-role="dialog-stage-strip"', false)
             ->assertDontSee('data-field-key="stage"', false)
             ->assertSee('data-field-key="current_block_id"', false)
@@ -244,13 +240,11 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('#12 · Старт: анкета')
             ->assertSee('v'.$publishedVersion->id)
             ->assertSee('Телефон канала')
+            ->assertSee('Последнее сообщение')
             ->assertSee('Последнее входящее')
             ->assertSee('Последнее исходящее')
-            ->assertSee('Последний текст диалога')
-            ->assertSee('Входящий текст клиента')
-            ->assertSee('Ответ оператора')
-            ->assertSee('data-role="dialog-contact-label"', false)
-            ->assertSee('data-role="dialog-channel-label"', false)
+            ->assertSee('data-field-key="contact_id"', false)
+            ->assertSee('data-field-key="channel_id"', false)
             ->assertDontSee('Аватарка');
     }
 
@@ -1040,6 +1034,7 @@ class FilamentDialogsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->call('selectTab', SyncSystemDialogCardViewAction::TAB_DIAGNOSTICS)
             ->assertSeeHtml('data-role="dialog-peer-sync-status"')
             ->assertSee('Завершена')
             ->assertSee('23.04.2026 13:15')
@@ -1109,7 +1104,7 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('Статус')
             ->assertSee('Требует ответа')
             ->assertSee('Не требует ответа')
-            ->assertSee('data-role="dialog-system-fields-section"', escape: false)
+            ->assertSee('data-role="dialog-general-tab"', escape: false)
             ->assertSee('data-field-key="status"', escape: false)
             ->assertSee('data-role="dialog-inbox-status-toggle"', escape: false)
             ->assertSee('data-role="dialog-inbox-status-current"', escape: false)
@@ -1145,7 +1140,7 @@ class FilamentDialogsResourceTest extends TestCase
         $this->actingAs($admin)
             ->get(DialogResource::getUrl('view', ['record' => $dialog]))
             ->assertOk()
-            ->assertSee('data-role="dialog-system-fields-section"', escape: false)
+            ->assertSee('data-role="dialog-general-tab"', escape: false)
             ->assertSee('data-field-key="assigned_user_id"', escape: false)
             ->assertSee('data-role="dialog-assignee-toggle"', escape: false)
             ->assertSee('data-role="dialog-assignee-current"', escape: false)
@@ -1387,8 +1382,8 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('Клиент диалога')
             ->assertSee('Канал обращения')
             ->assertSee('МПП из справочника')
-            ->assertSee('data-role="dialog-contact-label"', false)
-            ->assertSee('data-role="dialog-channel-label"', false)
+            ->assertSee('data-field-key="contact_id"', false)
+            ->assertSee('data-field-key="channel_id"', false)
             ->assertDontSee('Имя из мессенджера')
             ->assertDontSee('<p class="ac-surface__subtitle">', false)
             ->assertSee('Telegram Клиент');

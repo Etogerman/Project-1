@@ -64,6 +64,13 @@ class ScenarioBuilderV3StateTest extends TestCase
             ->where('field_key', 'gender')
             ->firstOrFail()
             ->update(['name' => 'Пол клиента']);
+        FieldDictionaryField::query()->create([
+            'entity' => FieldDictionaryField::ENTITY_DIALOG,
+            'field_key' => 'asked_name_count',
+            'name' => 'Сколько раз спросили имя',
+            'type' => FieldDictionaryField::TYPE_NUMBER,
+            'sort_order' => 1000,
+        ]);
 
         $state = $this->actingAs($admin)
             ->getJson($this->stateUrl($scenario))
@@ -74,13 +81,35 @@ class ScenarioBuilderV3StateTest extends TestCase
         $dialogFields = collect($state['catalogs']['field_dictionary']['dialog'] ?? []);
         $gender = $contactFields->firstWhere('key', 'gender');
         $ageYears = $contactFields->firstWhere('key', 'age_years');
+        $emails = $contactFields->firstWhere('key', 'emails');
         $stage = $dialogFields->firstWhere('key', 'stage');
+        $askedNameCount = $dialogFields->firstWhere('key', 'asked_name_count');
+        $currentBlockId = $dialogFields->firstWhere('key', 'current_block_id');
+        $phone = $contactFields->firstWhere('key', 'phone');
+        $phones = $contactFields->firstWhere('key', 'phones');
 
         $this->assertSame('Пол клиента', $gender['label'] ?? null);
         $this->assertSame(FieldDictionaryField::TYPE_SELECT, $gender['type'] ?? null);
         $this->assertSame('male', $gender['options'][0]['value'] ?? null);
+        $this->assertSame(FieldDictionaryField::CONDITION_VISIBILITY_MAIN, $gender['condition_visibility'] ?? null);
+        $this->assertTrue($gender['condition_supported'] ?? false);
+        $this->assertTrue($gender['field_condition_supported'] ?? false);
+        $this->assertTrue($gender['write_supported'] ?? false);
         $this->assertSame('age_years', $ageYears['key'] ?? null);
+        $this->assertSame(FieldDictionaryField::CONDITION_VISIBILITY_MAIN, $emails['condition_visibility'] ?? null);
+        $this->assertTrue($emails['condition_supported'] ?? false);
+        $this->assertFalse($emails['write_supported'] ?? true);
+        $this->assertTrue($emails['prompt_variable_supported'] ?? false);
+        $this->assertTrue($phone['prompt_variable_supported'] ?? false);
+        $this->assertFalse($phones['prompt_variable_supported'] ?? true);
         $this->assertSame(FieldDictionaryField::TYPE_SELECT, $stage['type'] ?? null);
+        $this->assertFalse($stage['prompt_variable_supported'] ?? true);
+        $this->assertSame(FieldDictionaryField::HINT_GROUP_DIALOG, $askedNameCount['hint_group'] ?? null);
+        $this->assertTrue($askedNameCount['condition_supported'] ?? false);
+        $this->assertTrue($askedNameCount['write_supported'] ?? false);
+        $this->assertTrue($askedNameCount['prompt_variable_supported'] ?? false);
+        $this->assertSame(FieldDictionaryField::CONDITION_VISIBILITY_DISPLAY_ONLY, $currentBlockId['condition_visibility'] ?? null);
+        $this->assertFalse($currentBlockId['field_condition_supported'] ?? true);
     }
 
     public function test_get_state_adapts_existing_start_block_without_writing_database(): void
@@ -162,6 +191,91 @@ class ScenarioBuilderV3StateTest extends TestCase
             'title' => 'Приветствие',
             'position_x' => 120,
             'position_y' => 160,
+        ]);
+    }
+
+    public function test_put_state_creates_missing_dialog_fields_in_dictionary(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_create_dialog_fields',
+            'name' => 'V3 Create Dialog Fields',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_start',
+                'type' => 'state',
+                'title' => 'Старт',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Старт {{dialog.счетчик}}'),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_action',
+                'type' => 'state',
+                'title' => 'Изменить поле',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->changeFieldActionSettings([
+                    'target_scope' => 'dialog',
+                    'target_field' => 'новое_поле_диалога',
+                    'value_source' => 'manual',
+                    'manual_value' => 'значение',
+                ]),
+            ],
+        ];
+        $edgePayload = $this->edgePayload(null, 'Дальше');
+        $edgePayload['expression'] = '{{dialog.счетчик}} == "1"';
+        $edgePayload['field_condition'] = [
+            'enabled' => true,
+            'field_scope' => 'dialog',
+            'field_key' => 'сколько_раз_спросили_имя',
+            'operator' => 'filled',
+            'value' => '',
+        ];
+        $edgePayload['input_capture'] = [
+            'enabled' => true,
+            'field_scope' => 'dialog',
+            'field_key' => 'номер_попытки',
+            'data_type' => 'number',
+        ];
+        $edges = [[
+            'id' => null,
+            'client_key' => 'tmp_edge',
+            'source' => ['block_id' => null, 'client_key' => 'tmp_start', 'output_id' => null],
+            'target' => ['block_id' => null, 'client_key' => 'tmp_action'],
+            'condition_payload' => $edgePayload,
+        ]];
+
+        $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
+            ->assertOk();
+
+        $this->assertDatabaseHas('field_dictionary_fields', [
+            'entity' => FieldDictionaryField::ENTITY_DIALOG,
+            'field_key' => 'новое_поле_диалога',
+            'name' => 'Новое поле диалога',
+            'type' => FieldDictionaryField::TYPE_TEXT,
+            'is_system' => false,
+            'condition_visibility' => FieldDictionaryField::CONDITION_VISIBILITY_MAIN,
+            'write_access' => FieldDictionaryField::WRITE_ACCESS_WRITABLE,
+            'hint_group' => FieldDictionaryField::HINT_GROUP_DIALOG,
+        ]);
+        $this->assertDatabaseHas('field_dictionary_fields', [
+            'entity' => FieldDictionaryField::ENTITY_DIALOG,
+            'field_key' => 'сколько_раз_спросили_имя',
+            'type' => FieldDictionaryField::TYPE_TEXT,
+        ]);
+        $this->assertDatabaseHas('field_dictionary_fields', [
+            'entity' => FieldDictionaryField::ENTITY_DIALOG,
+            'field_key' => 'номер_попытки',
+            'type' => FieldDictionaryField::TYPE_NUMBER,
+        ]);
+        $this->assertDatabaseHas('field_dictionary_fields', [
+            'entity' => FieldDictionaryField::ENTITY_DIALOG,
+            'field_key' => 'счетчик',
+            'type' => FieldDictionaryField::TYPE_TEXT,
         ]);
     }
 
@@ -1047,6 +1161,54 @@ class ScenarioBuilderV3StateTest extends TestCase
         );
     }
 
+    public function test_put_state_rejects_display_only_dialog_field_condition(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['is_active' => true]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_display_only_dialog_field_condition',
+            'name' => 'V3 Display Only Dialog Field Condition',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_source',
+                'type' => 'state',
+                'title' => 'Источник',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->startSettings('/start', [(int) $channel->id]),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_target',
+                'type' => 'state',
+                'title' => 'Цель',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Следующий блок'),
+            ],
+        ];
+        $edgePayload = $this->edgePayload(null, 'Дальше');
+        $edgePayload['field_condition'] = [
+            'enabled' => true,
+            'field_scope' => 'dialog',
+            'field_key' => 'current_block_id',
+            'operator' => 'filled',
+            'value' => '',
+        ];
+        $edges = [[
+            'id' => null,
+            'client_key' => 'tmp_edge',
+            'source' => ['block_id' => null, 'client_key' => 'tmp_source', 'output_id' => null],
+            'target' => ['block_id' => null, 'client_key' => 'tmp_target'],
+            'condition_payload' => $edgePayload,
+        ]];
+
+        $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
+            ->assertStatus(422);
+    }
+
     public function test_publish_keeps_ai_first_name_analysis_outputs_in_runtime_snapshot(): void
     {
         $admin = $this->adminUser();
@@ -1303,9 +1465,16 @@ class ScenarioBuilderV3StateTest extends TestCase
                 'settings_payload' => $this->actionSettings('phone', 'phone'),
             ],
         ];
+        $edges = [[
+            'id' => null,
+            'client_key' => 'tmp_edge',
+            'source' => ['block_id' => null, 'client_key' => 'tmp_start', 'output_id' => null],
+            'target' => ['block_id' => null, 'client_key' => 'tmp_action'],
+            'condition_payload' => $this->edgePayload(null, 'Дальше'),
+        ]];
 
         $saved = $this->actingAs($admin)
-            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks))
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
             ->assertOk()
             ->assertJsonPath('builder.blocks.1.settings_payload.modules.0.payload.actions.0.type', 'write_contact_field')
             ->assertJsonPath('builder.blocks.1.settings_payload.modules.0.payload.actions.0.target_field', 'phone')
@@ -1361,6 +1530,98 @@ class ScenarioBuilderV3StateTest extends TestCase
                     'value_source' => 'ai_result',
                     'source_block_client_key' => 'tmp_start',
                     'source_field_key' => 'first_name',
+                ]),
+            ],
+        ];
+        $payload = $this->edgePayload(null, 'Дальше');
+        $edges = [[
+            'id' => null,
+            'client_key' => 'tmp_edge',
+            'source' => ['block_id' => null, 'client_key' => 'tmp_start', 'output_id' => null],
+            'target' => ['block_id' => null, 'client_key' => 'tmp_action'],
+            'condition_payload' => $payload,
+        ]];
+
+        $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
+            ->assertStatus(422);
+    }
+
+    public function test_state_rejects_change_field_for_contact_field_without_write_support(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['name' => 'Telegram Change Field Read Only']);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_change_field_read_only_contact',
+            'name' => 'V3 Change Field Read Only Contact',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_start',
+                'type' => 'state',
+                'title' => 'Старт',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->startSettings('/start', [$channel->id]),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_action',
+                'type' => 'state',
+                'title' => 'Изменить поле',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->changeFieldActionSettings([
+                    'target_scope' => 'contact',
+                    'target_field' => 'phone',
+                    'value_source' => 'manual',
+                    'manual_value' => '+79990000000',
+                ]),
+            ],
+        ];
+        $payload = $this->edgePayload(null, 'Дальше');
+        $edges = [[
+            'id' => null,
+            'client_key' => 'tmp_edge',
+            'source' => ['block_id' => null, 'client_key' => 'tmp_start', 'output_id' => null],
+            'target' => ['block_id' => null, 'client_key' => 'tmp_action'],
+            'condition_payload' => $payload,
+        ]];
+
+        $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
+            ->assertStatus(422);
+    }
+
+    public function test_state_rejects_change_field_for_system_dialog_field_without_write_support(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['name' => 'Telegram Change Field Dialog System']);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_change_field_system_dialog',
+            'name' => 'V3 Change Field System Dialog',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_start',
+                'type' => 'state',
+                'title' => 'Старт',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->startSettings('/start', [$channel->id]),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_action',
+                'type' => 'state',
+                'title' => 'Изменить поле',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->changeFieldActionSettings([
+                    'target_scope' => 'dialog',
+                    'target_field' => 'id',
+                    'value_source' => 'manual',
+                    'manual_value' => '123',
                 ]),
             ],
         ];

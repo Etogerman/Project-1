@@ -8,6 +8,7 @@ use App\Filament\Resources\Contacts\Pages\ViewContact;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactDuplicateReview;
+use App\Models\ContactEmail;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
 use App\Models\ContactStartTag;
@@ -245,6 +246,17 @@ class ContactResource extends Resource
                             ->hiddenLabel()
                             ->view('filament.contacts.partials.phone-numbers')
                             ->viewData(fn (Contact $record): array => static::buildPhoneNumbersViewData($record))
+                            ->columnSpanFull(),
+                    ])
+                    ->columns(1)
+                    ->columnSpanFull(),
+                Section::make('Email')
+                    ->extraAttributes(['class' => 'ac-contact-modal-section ac-contact-modal-section--secondary ac-contact-modal-section--emails'])
+                    ->schema([
+                        ViewEntry::make('contact_emails')
+                            ->hiddenLabel()
+                            ->view('filament.contacts.partials.contact-emails')
+                            ->viewData(fn (Contact $record): array => static::buildContactEmailsViewData($record))
                             ->columnSpanFull(),
                     ])
                     ->columns(1)
@@ -1647,6 +1659,33 @@ class ContactResource extends Resource
                 ->all(),
             'canEditPhones' => static::canCurrentUserEditExistingContactPhones(),
             'canDeletePhones' => static::canCurrentUserDeleteExistingContactPhones(),
+        ];
+    }
+
+    /**
+     * @return array{
+     *     emails: array<int, array{id:int,email:string,source:string,is_primary:bool}>,
+     *     canEditEmails: bool,
+     *     canDeleteEmails: bool
+     * }
+     */
+    public static function buildContactEmailsViewData(Contact $record): array
+    {
+        $emails = $record->relationLoaded('emails')
+            ? $record->emails
+            : $record->emails()->get();
+
+        return [
+            'emails' => $emails
+                ->map(fn (ContactEmail $email): array => [
+                    'id' => $email->id,
+                    'email' => $email->email_raw,
+                    'source' => ContactEmail::sourceLabel($email->source),
+                    'is_primary' => $email->is_primary,
+                ])
+                ->all(),
+            'canEditEmails' => static::canCurrentUserEditExistingContactPhones(),
+            'canDeleteEmails' => static::canCurrentUserDeleteExistingContactPhones(),
         ];
     }
 

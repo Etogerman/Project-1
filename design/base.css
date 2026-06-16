@@ -524,12 +524,12 @@
 .ac-btn--success {
   background: var(--ac-success);
   border-color: var(--ac-success);
-  color: #fff;
+  color: var(--ac-text-inverse);
 }
 .ac-btn--success:hover {
   background: var(--ac-success);
   border-color: var(--ac-success);
-  color: #fff;
+  color: var(--ac-text-inverse);
   filter: brightness(1.08);
 }
 .ac-btn--success:active {
@@ -537,8 +537,6 @@
   border-color: var(--ac-success);
   filter: brightness(0.94);
 }
-[data-theme="dark"] .ac-btn--success { color: #0F172A; }
-[data-theme="dark"] .ac-btn--success:hover { color: #0F172A; }
 
 .ac-btn__icon { width: 14px; height: 14px; flex-shrink: 0; }
 

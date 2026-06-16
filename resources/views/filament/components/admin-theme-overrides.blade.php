@@ -151,6 +151,159 @@
         --ac-shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.06);
     }
 
+    .ac-tabs {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        border-bottom: 1px solid var(--ac-border);
+        margin-top: var(--ac-sp-1);
+        margin-bottom: var(--ac-sp-5);
+        overflow-x: auto;
+        scrollbar-width: none;
+    }
+
+    .ac-tabs::-webkit-scrollbar {
+        display: none;
+    }
+
+    .ac-tab {
+        appearance: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        position: relative;
+        border: 0;
+        border-radius: var(--ac-radius-2) var(--ac-radius-2) 0 0;
+        background: transparent;
+        padding: 8px 12px 10px;
+        color: var(--ac-text-2);
+        font-size: var(--ac-fs-13);
+        font-weight: var(--ac-fw-medium);
+        white-space: nowrap;
+        cursor: pointer;
+        transition: color 100ms ease, background 100ms ease;
+    }
+
+    .ac-tab:hover {
+        background: var(--ac-surface-2);
+        color: var(--ac-text);
+    }
+
+    .ac-tab.is-active {
+        color: var(--ac-text);
+        font-weight: var(--ac-fw-semi);
+    }
+
+    .ac-tab.is-active::after {
+        content: "";
+        position: absolute;
+        right: 0;
+        bottom: -1px;
+        left: 0;
+        height: 2px;
+        border-radius: 2px 2px 0 0;
+        background: var(--ac-accent);
+    }
+
+    .ac-btn {
+        appearance: none;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        height: 30px;
+        border: 1px solid var(--ac-border-input);
+        border-radius: var(--ac-radius-2);
+        background: var(--ac-surface);
+        padding: 0 12px;
+        color: var(--ac-text);
+        font-size: var(--ac-fs-13);
+        font-weight: var(--ac-fw-medium);
+        line-height: 1;
+        text-decoration: none;
+        white-space: nowrap;
+        cursor: pointer;
+        transition: background 100ms ease, border-color 100ms ease, color 100ms ease;
+    }
+
+    .ac-btn:hover {
+        border-color: var(--ac-border-strong);
+        background: var(--ac-surface-2);
+        color: var(--ac-text);
+        text-decoration: none;
+    }
+
+    .ac-btn:focus-visible {
+        outline: none;
+        box-shadow: 0 0 0 3px var(--ac-accent-ring);
+    }
+
+    .ac-btn:active {
+        background: var(--ac-surface-3);
+    }
+
+    .ac-btn[disabled] {
+        pointer-events: none;
+        cursor: not-allowed;
+        opacity: .5;
+    }
+
+    .ac-btn--sm {
+        height: 26px;
+        padding: 0 10px;
+        font-size: var(--ac-fs-12);
+    }
+
+    .ac-btn--lg {
+        height: 36px;
+        padding: 0 16px;
+    }
+
+    .ac-btn--primary {
+        border-color: var(--ac-accent);
+        background: var(--ac-accent);
+        color: var(--ac-text-inverse);
+    }
+
+    .ac-btn--primary:hover,
+    .ac-btn--primary:focus-visible {
+        border-color: var(--ac-accent-hover);
+        background: var(--ac-accent-hover);
+        color: var(--ac-text-inverse);
+    }
+
+    .ac-btn--primary:active {
+        border-color: var(--ac-accent-active);
+        background: var(--ac-accent-active);
+    }
+
+    .ac-btn--danger {
+        border-color: var(--ac-border-input);
+        background: var(--ac-surface);
+        color: var(--ac-danger);
+    }
+
+    .ac-btn--danger:hover,
+    .ac-btn--danger:focus-visible {
+        border-color: var(--ac-danger);
+        background: var(--ac-danger-soft);
+        color: var(--ac-danger-hover);
+    }
+
+    .ac-btn--success {
+        border-color: var(--ac-success);
+        background: var(--ac-success);
+        color: var(--ac-text-inverse);
+    }
+
+    .ac-btn--success:hover,
+    .ac-btn--success:focus-visible {
+        border-color: var(--ac-success);
+        background: var(--ac-success);
+        color: var(--ac-text-inverse);
+        filter: brightness(1.08);
+    }
+
     .fi-main.fi-admin-content-wide {
         width: min(90%, 2200px);
         max-width: none;
@@ -198,6 +351,17 @@
 
     .fi-topbar .fi-topbar-start .fi-logo {
         display: none;
+    }
+
+    .fi-topbar .fi-topbar-start {
+        gap: 0.65rem;
+    }
+
+    .fi-topbar .fi-topbar-collapse-sidebar-btn-ctn {
+        order: 2;
+        flex: 0 0 2rem;
+        width: 2rem;
+        margin-inline: 0;
     }
 
     .fi-main-sidebar {
@@ -331,13 +495,31 @@
     }
 
     .ac-admin-topbar-start {
-        display: flex;
+        display: contents;
+    }
+
+    .ac-admin-brand {
+        display: inline-flex;
+        order: 1;
+        flex: 0 0 auto;
         align-items: center;
-        min-width: 0;
+        color: var(--ac-text);
+        font-size: 1rem;
+        font-weight: 800;
+        line-height: 1;
+        text-decoration: none;
+        white-space: nowrap;
+    }
+
+    .ac-admin-brand:hover,
+    .ac-admin-brand:focus-visible {
+        color: var(--ac-text);
+        text-decoration: none;
     }
 
     .ac-admin-breadcrumbs {
         display: inline-flex;
+        order: 3;
         align-items: center;
         min-width: 0;
         gap: 0.35rem;
@@ -3398,6 +3580,54 @@
         align-content: start;
     }
 
+    .ac-dialog-side-stack {
+        display: grid;
+        gap: 0.9rem;
+        min-width: 0;
+    }
+
+    .ac-dialog-side-tabs {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.4rem;
+        padding: 0.55rem;
+        border: 1px solid color-mix(in srgb, var(--ac-border) 88%, transparent);
+        border-radius: var(--ac-radius-lg);
+        background: var(--ac-surface);
+        box-shadow: var(--ac-shadow-sm);
+    }
+
+    .ac-dialog-side-tabs__link {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 2rem;
+        padding: 0.4rem 0.55rem;
+        border: 1px solid color-mix(in srgb, var(--ac-border) 86%, transparent);
+        border-radius: var(--ac-radius-pill);
+        background: var(--ac-surface-muted);
+        color: var(--ac-text-muted);
+        font-size: 0.78rem;
+        font-weight: 700;
+        line-height: 1;
+        text-align: center;
+        text-decoration: none;
+        transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
+    }
+
+    .ac-dialog-side-tabs__link:hover {
+        border-color: color-mix(in srgb, var(--ac-primary) 28%, var(--ac-border));
+        background: var(--ac-primary-soft);
+        color: var(--ac-primary);
+    }
+
+    .ac-dialog-side-tabs__link.is-active {
+        border-color: color-mix(in srgb, var(--ac-primary) 44%, transparent);
+        background: var(--ac-primary-soft);
+        color: var(--ac-primary);
+        box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ac-primary) 14%, transparent);
+    }
+
     .ac-dialog-chat-panel .ac-thread {
         flex: 1 1 auto;
         height: calc(var(--ac-dialog-chat-panel-height, 44rem) - 12.25rem);
@@ -3442,6 +3672,24 @@
         gap: 0.7rem;
         padding: 0.45rem 0;
         border-bottom: 1px dashed var(--ac-border);
+    }
+
+    .ac-dialog-side-list .ac-meta.is-copyable {
+        cursor: pointer;
+        border-radius: 0.65rem;
+        transition:
+            background-color 160ms ease,
+            border-color 160ms ease;
+    }
+
+    .ac-dialog-side-list .ac-meta.is-copyable:hover,
+    .ac-dialog-side-list .ac-meta.is-copyable:focus-visible {
+        background: color-mix(in srgb, var(--ac-accent) 8%, transparent);
+        outline: none;
+    }
+
+    .ac-dialog-side-list .ac-meta.is-copied {
+        background: color-mix(in srgb, var(--ac-success) 13%, transparent);
     }
 
     .ac-dialog-side-list .ac-meta:last-child {
@@ -8399,6 +8647,10 @@
         border-right: 0;
     }
 
+    .ac-contact-form-row--wide {
+        grid-column: 1 / -1;
+    }
+
     .ac-contact-form-row:hover {
         background: var(--ac-surface-muted);
     }
@@ -8419,6 +8671,10 @@
         align-items: center;
     }
 
+    .ac-contact-form-row__value-shell--with-actions {
+        gap: 0.5rem;
+    }
+
     .ac-contact-form-row__value {
         min-height: 1.5rem;
         padding: 0.14rem 0.35rem;
@@ -8434,6 +8690,13 @@
     .ac-contact-form-row__items,
     .ac-icon-button--field {
         display: none;
+    }
+
+    .ac-contact-form-row__inline-actions {
+        display: inline-flex;
+        flex: 0 0 auto;
+        align-items: center;
+        gap: 0.55rem;
     }
 
     .ac-inline-profile-field {
@@ -8535,6 +8798,7 @@
     .ac-tag-row {
         display: flex;
         align-items: center;
+        min-width: 0;
         min-height: 2.75rem;
         gap: 0.45rem;
         padding: 0.35rem 0.85rem;
@@ -8553,11 +8817,15 @@
     }
 
     .ac-phone-row__number {
+        flex: 1 1 auto;
         min-width: 0;
+        overflow: hidden;
         color: var(--ac-text);
         font-size: 0.84rem;
         font-weight: 700;
         line-height: 1.25;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     .ac-phone-row__primary {
@@ -8591,7 +8859,7 @@
         flex: 0 0 auto;
         gap: 0.5rem;
         margin-inline-start: auto;
-        opacity: 0;
+        opacity: 0.72;
         transition: opacity 140ms ease;
     }
 
@@ -10062,6 +10330,7 @@
         ];
         let sortFallbackListenerReady = false;
         let rowNavigationFallbackReady = false;
+        let dialogSideFieldCopyListenerReady = false;
         let viewSwitchLoadingListenerReady = false;
         let viewSwitchLoadingResetTimer = null;
 
@@ -10085,6 +10354,94 @@
             document.querySelectorAll('[data-ac-dialogs-view-link].is-loading').forEach((link) => {
                 link.classList.remove('is-loading');
                 link.removeAttribute('aria-busy');
+            });
+        };
+
+        const copyTextToClipboard = async (text) => {
+            if (window.navigator?.clipboard?.writeText) {
+                try {
+                    await window.navigator.clipboard.writeText(text);
+
+                    return true;
+                } catch (error) {
+                    // Some embedded browser shells expose the API but reject writes.
+                }
+            }
+
+            const input = document.createElement('textarea');
+            input.value = text;
+            input.setAttribute('readonly', '');
+            input.style.position = 'fixed';
+            input.style.opacity = '0';
+            input.style.pointerEvents = 'none';
+            document.body.appendChild(input);
+            input.focus();
+            input.select();
+
+            let copied = false;
+
+            try {
+                copied = document.execCommand('copy');
+            } finally {
+                input.remove();
+            }
+
+            return copied;
+        };
+
+        const markDialogSideFieldCopied = (row) => {
+            row.classList.add('is-copied');
+            row.dataset.copyState = 'copied';
+            window.clearTimeout(Number(row.dataset.copyTimer || 0));
+            row.dataset.copyTimer = String(window.setTimeout(() => {
+                row.classList.remove('is-copied');
+                delete row.dataset.copyState;
+                delete row.dataset.copyTimer;
+            }, 1200));
+        };
+
+        const copyDialogSideFieldValue = async (row) => {
+            const value = String(row?.dataset?.copyValue || '').trim();
+
+            if (value === '' || value === '—') {
+                return;
+            }
+
+            if (await copyTextToClipboard(value)) {
+                markDialogSideFieldCopied(row);
+            }
+        };
+
+        const installDialogSideFieldCopyListener = () => {
+            if (dialogSideFieldCopyListenerReady) {
+                return;
+            }
+
+            dialogSideFieldCopyListenerReady = true;
+
+            document.addEventListener('click', (event) => {
+                const row = event.target?.closest?.('[data-role="dialog-side-field-row"].is-copyable');
+
+                if (! row) {
+                    return;
+                }
+
+                void copyDialogSideFieldValue(row);
+            });
+
+            document.addEventListener('keydown', (event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') {
+                    return;
+                }
+
+                const row = event.target?.closest?.('[data-role="dialog-side-field-row"].is-copyable');
+
+                if (! row) {
+                    return;
+                }
+
+                event.preventDefault();
+                void copyDialogSideFieldValue(row);
             });
         };
 
@@ -11087,6 +11444,7 @@
 
         installSortFallbackListener();
         installRowNavigationFallbackListener();
+        installDialogSideFieldCopyListener();
         installViewSwitchLoadingListener();
 
         let initQueued = false;

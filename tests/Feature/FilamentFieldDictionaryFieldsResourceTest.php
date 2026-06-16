@@ -6,9 +6,12 @@ use App\Filament\Resources\FieldDictionaryFields\Pages\ManageFieldDictionaryFiel
 use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\FieldDictionaryField;
+use App\Models\Scenario;
+use App\Models\ScenarioVersion;
 use App\Models\User;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
@@ -87,6 +90,22 @@ class FilamentFieldDictionaryFieldsResourceTest extends TestCase
             ->where('entity', FieldDictionaryField::ENTITY_CONTACT)
             ->where('field_key', 'distance_to_moscow_calculated_at')
             ->firstOrFail();
+        $effectiveAgeYears = FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_CONTACT)
+            ->where('field_key', 'effective_age_years')
+            ->firstOrFail();
+        $pendingRegionCandidates = FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_CONTACT)
+            ->where('field_key', 'pending_region_candidates')
+            ->firstOrFail();
+        $autoReplyCategory = FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_CONTACT)
+            ->where('field_key', 'auto_reply_category')
+            ->firstOrFail();
+        $hasBlockedBotDialog = FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_CONTACT)
+            ->where('field_key', 'has_blocked_bot_dialog')
+            ->firstOrFail();
 
         $dialogStage = FieldDictionaryField::query()
             ->where('entity', FieldDictionaryField::ENTITY_DIALOG)
@@ -97,22 +116,42 @@ class FilamentFieldDictionaryFieldsResourceTest extends TestCase
             ->where('entity', FieldDictionaryField::ENTITY_DIALOG)
             ->where('field_key', 'current_block_id')
             ->firstOrFail();
+        $questionnaireStatus = FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_CONTACT)
+            ->where('field_key', 'data_collection_status')
+            ->firstOrFail();
+        $bitrixContactId = FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_CONTACT)
+            ->where('field_key', 'bitrix24_contact_id')
+            ->firstOrFail();
+        $dialogSubscription = FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_DIALOG)
+            ->where('field_key', 'bot_subscription_status')
+            ->firstOrFail();
 
         $this->assertTrue($gender->is_system);
         $this->assertSame(FieldDictionaryField::TYPE_SELECT, $gender->type);
         $this->assertSame('gender_source', $gender->source_field_key);
+        $this->assertSame(FieldDictionaryField::CONDITION_VISIBILITY_MAIN, $gender->condition_visibility);
+        $this->assertSame(FieldDictionaryField::WRITE_ACCESS_WRITABLE, $gender->write_access);
+        $this->assertSame(FieldDictionaryField::HINT_GROUP_CONTACT, $gender->hint_group);
         $this->assertSame(FieldDictionaryField::TYPE_TEXT, $country->type);
         $this->assertSame('region_source', $country->source_field_key);
         $this->assertSame(FieldDictionaryField::TYPE_PHONE, $phone->type);
         $this->assertFalse($phone->is_multiple);
+        $this->assertSame(FieldDictionaryField::WRITE_ACCESS_READ_ONLY, $phone->write_access);
         $this->assertSame(FieldDictionaryField::TYPE_PHONE, $phones->type);
         $this->assertTrue($phones->is_multiple);
         $this->assertSame(FieldDictionaryField::TYPE_EMAIL, $emails->type);
         $this->assertTrue($emails->is_multiple);
+        $this->assertSame(FieldDictionaryField::CONDITION_VISIBILITY_MAIN, $emails->condition_visibility);
+        $this->assertSame(FieldDictionaryField::WRITE_ACCESS_READ_ONLY, $emails->write_access);
+        $this->assertSame(FieldDictionaryField::HINT_GROUP_CONTACT, $emails->hint_group);
         $this->assertSame(FieldDictionaryField::TYPE_SELECT, $ageRange->type);
         $this->assertContains('30_39', collect($ageRange->options)->pluck('value')->all());
         $this->assertContains('scenario', collect($genderSource->options)->pluck('value')->all());
         $this->assertSame(FieldDictionaryField::TYPE_SELECT, $regionSource->type);
+        $this->assertSame(FieldDictionaryField::HINT_GROUP_GEO, $regionSource->hint_group);
         $this->assertContains(Contact::REGION_SOURCE_CONFIRMED_BY_CONTACT, collect($regionSource->options)->pluck('value')->all());
         $this->assertSame(FieldDictionaryField::TYPE_SELECT, $regionStatus->type);
         $this->assertContains(Contact::REGION_STATUS_AMBIGUOUS, collect($regionStatus->options)->pluck('value')->all());
@@ -120,6 +159,16 @@ class FilamentFieldDictionaryFieldsResourceTest extends TestCase
         $this->assertSame(FieldDictionaryField::TYPE_SELECT, $distanceToMoscowStatus->type);
         $this->assertContains(Contact::DISTANCE_TO_MOSCOW_STATUS_PENDING, collect($distanceToMoscowStatus->options)->pluck('value')->all());
         $this->assertSame(FieldDictionaryField::TYPE_DATE, $distanceToMoscowCalculatedAt->type);
+        $this->assertSame(FieldDictionaryField::TYPE_NUMBER, $effectiveAgeYears->type);
+        $this->assertSame(FieldDictionaryField::CONDITION_VISIBILITY_DISPLAY_ONLY, $effectiveAgeYears->condition_visibility);
+        $this->assertSame(FieldDictionaryField::WRITE_ACCESS_READ_ONLY, $effectiveAgeYears->write_access);
+        $this->assertSame(FieldDictionaryField::TYPE_TEXT, $pendingRegionCandidates->type);
+        $this->assertSame(FieldDictionaryField::CONDITION_VISIBILITY_DISPLAY_ONLY, $pendingRegionCandidates->condition_visibility);
+        $this->assertSame(FieldDictionaryField::HINT_GROUP_GEO, $pendingRegionCandidates->hint_group);
+        $this->assertSame(FieldDictionaryField::TYPE_TEXT, $autoReplyCategory->type);
+        $this->assertSame(FieldDictionaryField::CONDITION_VISIBILITY_DISPLAY_ONLY, $autoReplyCategory->condition_visibility);
+        $this->assertSame(FieldDictionaryField::TYPE_BOOLEAN, $hasBlockedBotDialog->type);
+        $this->assertSame(FieldDictionaryField::CONDITION_VISIBILITY_DISPLAY_ONLY, $hasBlockedBotDialog->condition_visibility);
         $this->assertFalse(FieldDictionaryField::query()
             ->where('entity', FieldDictionaryField::ENTITY_CONTACT)
             ->where('field_key', 'location_source')
@@ -128,6 +177,12 @@ class FilamentFieldDictionaryFieldsResourceTest extends TestCase
         $this->assertTrue($dialogCurrentBlock->is_system);
         $this->assertSame(FieldDictionaryField::TYPE_TEXT, $dialogCurrentBlock->type);
         $this->assertFalse($dialogCurrentBlock->is_multiple);
+        $this->assertSame(FieldDictionaryField::CONDITION_VISIBILITY_DISPLAY_ONLY, $dialogCurrentBlock->condition_visibility);
+        $this->assertSame(FieldDictionaryField::HINT_GROUP_SYSTEM, $dialogCurrentBlock->hint_group);
+        $this->assertSame(FieldDictionaryField::HINT_GROUP_QUESTIONNAIRE, $questionnaireStatus->hint_group);
+        $this->assertSame(FieldDictionaryField::HINT_GROUP_BITRIX24, $bitrixContactId->hint_group);
+        $this->assertSame(FieldDictionaryField::TYPE_SELECT, $dialogSubscription->type);
+        $this->assertSame(FieldDictionaryField::HINT_GROUP_DIALOG, $dialogSubscription->hint_group);
     }
 
     public function test_field_dictionary_label_helpers_return_dictionary_value_or_caller_fallback(): void
@@ -184,6 +239,60 @@ class FilamentFieldDictionaryFieldsResourceTest extends TestCase
             ->assertSee($field->name);
 
         $this->assertTrue(Gate::forUser($admin)->allows('viewAny', FieldDictionaryField::class));
+    }
+
+    public function test_admin_can_filter_field_dictionary_rows(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $geoField = FieldDictionaryField::query()->create([
+            'entity' => FieldDictionaryField::ENTITY_DIALOG,
+            'field_key' => 'local_filter_geo_city',
+            'name' => 'Город для фильтра',
+            'type' => FieldDictionaryField::TYPE_TEXT,
+            'hint_group' => FieldDictionaryField::HINT_GROUP_GEO,
+            'sort_order' => 5000,
+        ]);
+
+        $dialogField = FieldDictionaryField::query()->create([
+            'entity' => FieldDictionaryField::ENTITY_DIALOG,
+            'field_key' => 'local_filter_dialog_counter',
+            'name' => 'Счётчик для фильтра',
+            'type' => FieldDictionaryField::TYPE_NUMBER,
+            'hint_group' => FieldDictionaryField::HINT_GROUP_DIALOG,
+            'sort_order' => 5010,
+        ]);
+
+        $component = Livewire::actingAs($admin)
+            ->test(ManageFieldDictionaryFields::class)
+            ->call('selectEntity', FieldDictionaryField::ENTITY_DIALOG)
+            ->call('selectHintGroup', FieldDictionaryField::HINT_GROUP_GEO);
+
+        $visibleRows = $component->instance()->visibleFieldRows();
+
+        $this->assertArrayHasKey($geoField->id, $visibleRows);
+        $this->assertArrayNotHasKey($dialogField->id, $visibleRows);
+
+        $component
+            ->set('search', 'Счётчик для фильтра')
+            ->call('selectHintGroup', 'all');
+
+        $visibleRows = $component->instance()->visibleFieldRows();
+
+        $this->assertArrayHasKey($dialogField->id, $visibleRows);
+        $this->assertArrayNotHasKey($geoField->id, $visibleRows);
+
+        $component->call('resetFilters');
+
+        $visibleRows = $component->instance()->visibleFieldRows();
+
+        $this->assertArrayHasKey($geoField->id, $visibleRows);
+        $this->assertArrayHasKey($dialogField->id, $visibleRows);
+        $component->assertSet('search', '');
+        $component->assertSet('activeHintGroup', 'all');
     }
 
     public function test_employee_cannot_open_field_dictionary(): void
@@ -250,6 +359,9 @@ class FilamentFieldDictionaryFieldsResourceTest extends TestCase
         $this->assertValidationFails(fn (): bool => $field->fresh()->update(['type' => FieldDictionaryField::TYPE_TEXT]));
         $this->assertValidationFails(fn (): bool => $field->fresh()->update(['source_field_key' => null]));
         $this->assertValidationFails(fn (): bool => $field->fresh()->update(['is_multiple' => true]));
+        $this->assertValidationFails(fn (): bool => $field->fresh()->update(['condition_visibility' => FieldDictionaryField::CONDITION_VISIBILITY_DISPLAY_ONLY]));
+        $this->assertValidationFails(fn (): bool => $field->fresh()->update(['write_access' => FieldDictionaryField::WRITE_ACCESS_READ_ONLY]));
+        $this->assertValidationFails(fn (): bool => $field->fresh()->update(['hint_group' => FieldDictionaryField::HINT_GROUP_SYSTEM]));
     }
 
     public function test_system_select_options_allow_labels_and_new_values_only(): void
@@ -361,11 +473,143 @@ class FilamentFieldDictionaryFieldsResourceTest extends TestCase
         $this->assertTrue($field->fresh()->delete());
     }
 
-    private function assertValidationFails(callable $callback): void
+    public function test_user_field_used_by_published_scenario_cannot_be_deleted_but_draft_usage_does_not_block(): void
+    {
+        $publishedField = FieldDictionaryField::query()->create([
+            'entity' => FieldDictionaryField::ENTITY_DIALOG,
+            'field_key' => 'published_counter',
+            'name' => 'Опубликованный счётчик',
+            'type' => FieldDictionaryField::TYPE_NUMBER,
+            'sort_order' => 1000,
+        ]);
+
+        $draftOnlyField = FieldDictionaryField::query()->create([
+            'entity' => FieldDictionaryField::ENTITY_DIALOG,
+            'field_key' => 'draft_counter',
+            'name' => 'Черновой счётчик',
+            'type' => FieldDictionaryField::TYPE_NUMBER,
+            'sort_order' => 1010,
+        ]);
+
+        $scenario = Scenario::query()->create([
+            'code' => 'field_delete_guard',
+            'name' => 'Защита удаления поля',
+            'is_active' => true,
+        ]);
+
+        ScenarioVersion::query()->create([
+            'scenario_id' => $scenario->id,
+            'version_number' => 1,
+            'status' => ScenarioVersion::STATUS_PUBLISHED,
+            'schema_payload' => [
+                'builder_v3_runtime' => [
+                    'blocks' => [
+                        'start' => [
+                            'type' => 'message',
+                            'message' => [
+                                'text' => 'Счётчик {{ dialog.published_counter|0 }}',
+                            ],
+                            'automatic_edges' => [[
+                                'field_condition' => [
+                                    'enabled' => true,
+                                    'field_scope' => 'dialog',
+                                    'field_key' => 'published_counter',
+                                    'operator' => '>',
+                                    'value' => '0',
+                                ],
+                            ]],
+                        ],
+                    ],
+                ],
+            ],
+        ]);
+
+        ScenarioVersion::query()->create([
+            'scenario_id' => $scenario->id,
+            'version_number' => 2,
+            'status' => ScenarioVersion::STATUS_DRAFT,
+            'schema_payload' => [
+                'builder_v3_runtime' => [
+                    'blocks' => [
+                        'draft' => [
+                            'type' => 'action',
+                            'actions' => [[
+                                'type' => 'variables',
+                                'operations' => [[
+                                    'type' => 'increment',
+                                    'field_key' => 'draft_counter',
+                                    'amount' => 1,
+                                ]],
+                            ]],
+                        ],
+                    ],
+                ],
+            ],
+        ]);
+
+        $this->assertValidationFails(
+            fn (): bool => $publishedField->fresh()->delete(),
+            'Нельзя удалить поле, пока оно используется в опубликованном сценарии.',
+        );
+
+        $this->assertTrue($draftOnlyField->fresh()->delete());
+    }
+
+    public function test_user_dialog_field_defaults_to_constructor_access(): void
+    {
+        $field = FieldDictionaryField::query()->create([
+            'entity' => FieldDictionaryField::ENTITY_DIALOG,
+            'field_key' => 'asked_name_count',
+            'name' => 'Сколько раз спросили имя',
+            'type' => FieldDictionaryField::TYPE_NUMBER,
+            'sort_order' => 1000,
+        ]);
+
+        $this->assertFalse($field->is_system);
+        $this->assertSame(FieldDictionaryField::CONDITION_VISIBILITY_MAIN, $field->condition_visibility);
+        $this->assertSame(FieldDictionaryField::WRITE_ACCESS_WRITABLE, $field->write_access);
+        $this->assertSame(FieldDictionaryField::HINT_GROUP_DIALOG, $field->hint_group);
+    }
+
+    public function test_user_contact_field_stays_display_only_and_read_only(): void
+    {
+        $field = FieldDictionaryField::query()->create([
+            'entity' => FieldDictionaryField::ENTITY_CONTACT,
+            'field_key' => 'custom_contact_note',
+            'name' => 'Комментарий контакта',
+            'type' => FieldDictionaryField::TYPE_TEXT,
+            'condition_visibility' => FieldDictionaryField::CONDITION_VISIBILITY_MAIN,
+            'write_access' => FieldDictionaryField::WRITE_ACCESS_WRITABLE,
+            'hint_group' => FieldDictionaryField::HINT_GROUP_GEO,
+            'sort_order' => 1000,
+        ]);
+
+        $this->assertFalse($field->is_system);
+        $this->assertSame(FieldDictionaryField::CONDITION_VISIBILITY_DISPLAY_ONLY, $field->condition_visibility);
+        $this->assertSame(FieldDictionaryField::WRITE_ACCESS_READ_ONLY, $field->write_access);
+        $this->assertSame(FieldDictionaryField::HINT_GROUP_CONTACT, $field->hint_group);
+
+        $field->update([
+            'condition_visibility' => FieldDictionaryField::CONDITION_VISIBILITY_MAIN,
+            'write_access' => FieldDictionaryField::WRITE_ACCESS_WRITABLE,
+            'hint_group' => FieldDictionaryField::HINT_GROUP_SYSTEM,
+        ]);
+        $field->refresh();
+
+        $this->assertSame(FieldDictionaryField::CONDITION_VISIBILITY_DISPLAY_ONLY, $field->condition_visibility);
+        $this->assertSame(FieldDictionaryField::WRITE_ACCESS_READ_ONLY, $field->write_access);
+        $this->assertSame(FieldDictionaryField::HINT_GROUP_CONTACT, $field->hint_group);
+    }
+
+    private function assertValidationFails(callable $callback, ?string $expectedMessage = null): void
     {
         try {
             $callback();
-        } catch (ValidationException) {
+        } catch (ValidationException $exception) {
+            if ($expectedMessage !== null) {
+                $this->assertStringContainsString($expectedMessage, implode(' ', Arr::flatten($exception->errors())));
+            }
+
             $this->assertTrue(true);
 
             return;
