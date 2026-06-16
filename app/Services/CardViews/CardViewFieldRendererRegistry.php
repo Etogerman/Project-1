@@ -14,6 +14,14 @@ class CardViewFieldRendererRegistry
 
     public const CONTACT_TAG_LIST = 'contact_tag_list';
 
+    public const CONTACT_DIALOGS = 'contact_dialogs';
+
+    public const CONTACT_HISTORY = 'contact_history';
+
+    public const CONTACT_DEDUP = 'contact_dedup';
+
+    public const CONTACT_DIAGNOSTICS = 'contact_diagnostics';
+
     public const DIALOG_PEER_SYNC = 'dialog_peer_sync';
 
     /**
@@ -33,6 +41,22 @@ class CardViewFieldRendererRegistry
             FieldDictionaryField::CARD_DISPLAY_TAG_LIST => [
                 'renderer_key' => self::CONTACT_TAG_LIST,
                 'legacy_block_key' => SyncSystemContactCardViewAction::BLOCK_CONTACT_TAGS,
+            ],
+            FieldDictionaryField::CARD_DISPLAY_CONTACT_DIALOGS => [
+                'renderer_key' => self::CONTACT_DIALOGS,
+                'legacy_block_key' => SyncSystemContactCardViewAction::BLOCK_CONTACT_DIALOGS,
+            ],
+            FieldDictionaryField::CARD_DISPLAY_CONTACT_HISTORY => [
+                'renderer_key' => self::CONTACT_HISTORY,
+                'legacy_block_key' => SyncSystemContactCardViewAction::BLOCK_CONTACT_HISTORY,
+            ],
+            FieldDictionaryField::CARD_DISPLAY_CONTACT_DEDUP => [
+                'renderer_key' => self::CONTACT_DEDUP,
+                'legacy_block_key' => SyncSystemContactCardViewAction::BLOCK_CONTACT_DEDUP,
+            ],
+            FieldDictionaryField::CARD_DISPLAY_CONTACT_DIAGNOSTICS => [
+                'renderer_key' => self::CONTACT_DIAGNOSTICS,
+                'legacy_block_key' => SyncSystemContactCardViewAction::BLOCK_CONTACT_DIAGNOSTICS,
             ],
         ];
     }

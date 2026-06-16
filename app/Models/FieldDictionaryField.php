@@ -64,6 +64,14 @@ class FieldDictionaryField extends Model
 
     public const CARD_DISPLAY_TAG_LIST = 'tag_list';
 
+    public const CARD_DISPLAY_CONTACT_DIALOGS = 'contact_dialogs';
+
+    public const CARD_DISPLAY_CONTACT_HISTORY = 'contact_history';
+
+    public const CARD_DISPLAY_CONTACT_DEDUP = 'contact_dedup';
+
+    public const CARD_DISPLAY_CONTACT_DIAGNOSTICS = 'contact_diagnostics';
+
     public const CARD_DISPLAY_DIALOG_PEER_SYNC = 'dialog_peer_sync';
 
     /**
@@ -232,6 +240,10 @@ class FieldDictionaryField extends Model
             self::CARD_DISPLAY_PHONE_LIST => 'Список телефонов',
             self::CARD_DISPLAY_EMAIL_LIST => 'Список email',
             self::CARD_DISPLAY_TAG_LIST => 'Список тегов',
+            self::CARD_DISPLAY_CONTACT_DIALOGS => 'Диалоги контакта',
+            self::CARD_DISPLAY_CONTACT_HISTORY => 'История контакта',
+            self::CARD_DISPLAY_CONTACT_DEDUP => 'Склейки контакта',
+            self::CARD_DISPLAY_CONTACT_DIAGNOSTICS => 'Диагностика контакта',
             self::CARD_DISPLAY_DIALOG_PEER_SYNC => 'Загрузка истории диалога',
         ];
     }
@@ -648,7 +660,11 @@ class FieldDictionaryField extends Model
             self::definition(self::ENTITY_CONTACT, 'auto_reply_category', 'Категория автоответа', self::TYPE_TEXT, 132, conditionVisibility: self::CONDITION_VISIBILITY_DISPLAY_ONLY),
             self::definition(self::ENTITY_CONTACT, 'has_blocked_bot_dialog', 'Заблокирован клиентом', self::TYPE_BOOLEAN, 134, conditionVisibility: self::CONDITION_VISIBILITY_DISPLAY_ONLY),
             self::definition(self::ENTITY_CONTACT, 'tags', 'Теги', self::TYPE_TEXT, 136, isMultiple: true, conditionVisibility: self::CONDITION_VISIBILITY_DISPLAY_ONLY, cardDisplayType: self::CARD_DISPLAY_TAG_LIST),
+            self::definition(self::ENTITY_CONTACT, 'contact_dialogs', 'Диалоги', self::TYPE_TEXT, 137, isMultiple: true, conditionVisibility: self::CONDITION_VISIBILITY_DISPLAY_ONLY, writeAccess: self::WRITE_ACCESS_READ_ONLY, cardDisplayType: self::CARD_DISPLAY_CONTACT_DIALOGS),
+            self::definition(self::ENTITY_CONTACT, 'contact_history', 'История', self::TYPE_TEXT, 138, isMultiple: true, conditionVisibility: self::CONDITION_VISIBILITY_DISPLAY_ONLY, writeAccess: self::WRITE_ACCESS_READ_ONLY, cardDisplayType: self::CARD_DISPLAY_CONTACT_HISTORY),
+            self::definition(self::ENTITY_CONTACT, 'contact_dedup', 'Склейки', self::TYPE_TEXT, 139, isMultiple: true, conditionVisibility: self::CONDITION_VISIBILITY_DISPLAY_ONLY, writeAccess: self::WRITE_ACCESS_READ_ONLY, cardDisplayType: self::CARD_DISPLAY_CONTACT_DEDUP),
             self::definition(self::ENTITY_CONTACT, 'assigned_user_id', 'Ответственный', self::TYPE_NUMBER, 140),
+            self::definition(self::ENTITY_CONTACT, 'contact_diagnostics', 'Диагностика', self::TYPE_TEXT, 142, isMultiple: true, conditionVisibility: self::CONDITION_VISIBILITY_DISPLAY_ONLY, writeAccess: self::WRITE_ACCESS_READ_ONLY, hintGroup: self::HINT_GROUP_SYSTEM, cardDisplayType: self::CARD_DISPLAY_CONTACT_DIAGNOSTICS),
             self::definition(self::ENTITY_CONTACT, 'duplicate_review_status', 'Статус проверки дубля', self::TYPE_SELECT, 600, [
                 ['value' => Contact::DUPLICATE_REVIEW_STATUS_NONE, 'label' => 'Нет проверки', 'is_system' => true],
                 ['value' => Contact::DUPLICATE_REVIEW_STATUS_PENDING, 'label' => 'Нужна проверка', 'is_system' => true],

@@ -274,65 +274,6 @@ class SyncSystemDialogCardViewAction
     }
 
     /**
-     * @param  array<string, array{name:string,sort_order:int,blocks:list<string>}>  $sections
-     */
-    private function syncBlockTab(CardView $view, string $tabKey, string $name, int $sortOrder, array $sections): void
-    {
-        $tab = CardViewTab::query()->updateOrCreate(
-            [
-                'card_view_id' => $view->id,
-                'tab_key' => $tabKey,
-            ],
-            [
-                'name' => $name,
-                'sort_order' => $sortOrder,
-                'is_visible' => true,
-                'is_system' => true,
-            ],
-        );
-
-        $this->deleteStaleSystemSections($tab, array_keys($sections));
-
-        foreach ($sections as $sectionKey => $sectionDefinition) {
-            $section = CardViewSection::query()->updateOrCreate(
-                [
-                    'card_view_tab_id' => $tab->id,
-                    'section_key' => $sectionKey,
-                ],
-                [
-                    'name' => $sectionDefinition['name'],
-                    'sort_order' => $sectionDefinition['sort_order'],
-                    'is_visible' => true,
-                    'is_collapsed_by_default' => false,
-                    'is_system' => true,
-                ],
-            );
-
-            CardViewItem::query()
-                ->where('card_view_section_id', $section->id)
-                ->where('is_system', true)
-                ->whereNotIn('item_key', $sectionDefinition['blocks'])
-                ->delete();
-
-            foreach ($sectionDefinition['blocks'] as $index => $blockKey) {
-                CardViewItem::query()->updateOrCreate(
-                    [
-                        'card_view_section_id' => $section->id,
-                        'item_key' => $blockKey,
-                    ],
-                    [
-                        'item_type' => CardViewItem::TYPE_BLOCK,
-                        'field_dictionary_field_id' => null,
-                        'sort_order' => ($index + 1) * 10,
-                        'is_visible' => true,
-                        'is_system' => true,
-                    ],
-                );
-            }
-        }
-    }
-
-    /**
      * @param  list<string>  $sectionKeys
      */
     private function deleteStaleSystemSections(CardViewTab $tab, array $sectionKeys): void

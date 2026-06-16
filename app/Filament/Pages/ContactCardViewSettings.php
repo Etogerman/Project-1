@@ -12,11 +12,9 @@ use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\FieldDictionaryField;
 use App\Models\User;
-use App\Services\Contacts\ContactCardViewBlockRegistry;
 use App\Services\Contacts\EnsureEditableContactCardViewAction;
 use App\Services\Contacts\ResetEditableContactCardViewAction;
 use App\Services\Contacts\SyncSystemContactCardViewAction;
-use App\Services\Dialogs\DialogCardViewBlockRegistry;
 use App\Services\Dialogs\EnsureEditableDialogCardViewAction;
 use App\Services\Dialogs\ResetEditableDialogCardViewAction;
 use App\Services\Dialogs\SyncSystemDialogCardViewAction;
@@ -37,6 +35,10 @@ class ContactCardViewSettings extends Page
         SyncSystemContactCardViewAction::BLOCK_CONTACT_PHONES => 'phones',
         SyncSystemContactCardViewAction::BLOCK_CONTACT_EMAILS => 'emails',
         SyncSystemContactCardViewAction::BLOCK_CONTACT_TAGS => 'tags',
+        SyncSystemContactCardViewAction::BLOCK_CONTACT_DIALOGS => 'contact_dialogs',
+        SyncSystemContactCardViewAction::BLOCK_CONTACT_HISTORY => 'contact_history',
+        SyncSystemContactCardViewAction::BLOCK_CONTACT_DEDUP => 'contact_dedup',
+        SyncSystemContactCardViewAction::BLOCK_CONTACT_DIAGNOSTICS => 'contact_diagnostics',
     ];
 
     private const DIALOG_LEGACY_BLOCK_FIELD_MAP = [
@@ -105,13 +107,6 @@ class ContactCardViewSettings extends Page
 
     public string $fieldItemSearch = '';
 
-    /**
-     * @var array<string, mixed>
-     */
-    public array $newBlockItem = [
-        'block_key' => '',
-    ];
-
     public ?string $movingItemKey = null;
 
     public string $moveTargetSectionPath = '';
@@ -178,7 +173,6 @@ class ContactCardViewSettings extends Page
         $this->selectedSectionKey = null;
         $this->newFieldItem = ['field_id' => ''];
         $this->fieldItemSearch = '';
-        $this->newBlockItem = ['block_key' => ''];
         $this->resetMoveState();
         $this->reloadRows();
     }
@@ -576,60 +570,6 @@ class ContactCardViewSettings extends Page
         }
     }
 
-    public function addBlockItem(): void
-    {
-        if (! filled($this->selectedTabKey) || ! filled($this->selectedSectionKey)) {
-            return;
-        }
-
-        try {
-            if (! $this->canAddBlockItems()) {
-                throw ValidationException::withMessages([
-                    'block_key' => 'Виды карточек настраиваются через поля справочника.',
-                ]);
-            }
-
-            $blockKey = (string) ($this->newBlockItem['block_key'] ?? '');
-
-            if (! $this->blockRegistry()->contains($blockKey)) {
-                throw ValidationException::withMessages([
-                    'block_key' => 'Выберите готовый блок из списка.',
-                ]);
-            }
-
-            $section = $this->editableSection((string) $this->selectedTabKey, (string) $this->selectedSectionKey);
-            $existingItem = $this->findItemInView($section, $blockKey);
-
-            if ($existingItem instanceof CardViewItem) {
-                $existingItem->fill([
-                    'card_view_section_id' => $section->id,
-                    'item_type' => CardViewItem::TYPE_BLOCK,
-                    'field_dictionary_field_id' => null,
-                    'sort_order' => $this->nextItemSortOrder($section),
-                    'is_visible' => true,
-                ])->save();
-            } else {
-                CardViewItem::query()->create([
-                    'card_view_section_id' => $section->id,
-                    'item_key' => $blockKey,
-                    'item_type' => CardViewItem::TYPE_BLOCK,
-                    'field_dictionary_field_id' => null,
-                    'sort_order' => $this->nextItemSortOrder($section),
-                    'is_visible' => true,
-                    'is_system' => false,
-                ]);
-            }
-
-            $this->newBlockItem = ['block_key' => ''];
-            $this->reloadRows();
-            $this->notifySuccess($existingItem instanceof CardViewItem ? 'Блок перенесён' : 'Блок добавлен');
-        } catch (ValidationException $exception) {
-            $this->notifyValidationError($exception);
-        } catch (Throwable $throwable) {
-            $this->notifyError('Не удалось добавить блок', $throwable);
-        }
-    }
-
     public function restoreStandardView(): void
     {
         try {
@@ -695,18 +635,13 @@ class ContactCardViewSettings extends Page
         }
 
         $selectedSection = $selectedTab?->sections->firstWhere('section_key', $this->selectedSectionKey);
-        $blockRegistry = $this->blockRegistry();
         $items = $selectedSection?->items->values() ?? collect();
 
         $this->itemRows = $items
             ->mapWithKeys(fn (CardViewItem $item, int $index): array => [
                 (string) $item->item_key => [
                     'item_key' => (string) $item->item_key,
-                    'item_type' => (string) $item->item_type,
-                    'item_type_label' => $item->item_type === CardViewItem::TYPE_BLOCK ? 'Блок' : 'Поле',
-                    'name' => $item->item_type === CardViewItem::TYPE_BLOCK
-                        ? $blockRegistry->label((string) $item->item_key)
-                        : (string) ($item->field?->name ?? $item->item_key),
+                    'name' => (string) ($item->field?->name ?? $item->item_key),
                     'sort_order' => (int) $item->sort_order,
                     'is_visible' => (bool) $item->is_visible,
                     'is_system' => $this->isProtectedItem($item),
@@ -783,14 +718,6 @@ class ContactCardViewSettings extends Page
     /**
      * @return array<string, string>
      */
-    public function blockOptions(): array
-    {
-        return $this->blockRegistry()->options();
-    }
-
-    /**
-     * @return array<string, string>
-     */
     public function moveSectionOptions(): array
     {
         $view = $this->activeView();
@@ -817,11 +744,6 @@ class ContactCardViewSettings extends Page
         }
 
         return $options;
-    }
-
-    public function canAddBlockItems(): bool
-    {
-        return false;
     }
 
     /**
@@ -1116,13 +1038,6 @@ class ContactCardViewSettings extends Page
         return $this->entity === CardView::ENTITY_DIALOG
             ? SyncSystemDialogCardViewAction::EDITABLE_VIEW_KEY
             : SyncSystemContactCardViewAction::EDITABLE_VIEW_KEY;
-    }
-
-    private function blockRegistry(): ContactCardViewBlockRegistry|DialogCardViewBlockRegistry
-    {
-        return $this->entity === CardView::ENTITY_DIALOG
-            ? app(DialogCardViewBlockRegistry::class)
-            : app(ContactCardViewBlockRegistry::class);
     }
 
     private function defaultSelectedTabKey(): ?string

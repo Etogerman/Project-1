@@ -236,7 +236,10 @@
         }
 
         .cv-input--order {
-            width: 74px;
+            width: 58px;
+            padding-left: 6px;
+            padding-right: 6px;
+            text-align: center;
         }
 
         .cv-check {
@@ -286,7 +289,7 @@
         }
 
         .cv-table-row--fields-only {
-            grid-template-columns: minmax(0, 1fr) 76px 34px;
+            grid-template-columns: minmax(0, 1fr) 76px 72px;
         }
 
         .cv-table-row:first-child {
@@ -385,6 +388,11 @@
             margin-left: 2px;
         }
 
+        .cv-table-row--fields-only .cv-table-cell:last-child {
+            display: flex;
+            justify-content: center;
+        }
+
         .cv-tooltip {
             position: relative;
             cursor: inherit;
@@ -440,6 +448,7 @@
 
         .cv-add-row .cv-input--order {
             flex: 0 0 82px;
+            width: 82px;
         }
 
         .cv-add-row .ac-btn {
@@ -830,26 +839,15 @@
                 <div class="cv-panel__body">
                     @if ($itemRows !== [])
                         @php($moveSectionOptions = $this->moveSectionOptions())
-                        @php($showItemTypeColumn = $this->canAddBlockItems())
                         <div class="cv-table">
-                            <div @class([
-                                'cv-table-row',
-                                'cv-table-row--head',
-                                'cv-table-row--fields-only' => ! $showItemTypeColumn,
-                            ])>
+                            <div class="cv-table-row cv-table-row--head cv-table-row--fields-only">
                                 <div>Элемент</div>
-                                @if ($showItemTypeColumn)
-                                <div>Признаки</div>
-                                @endif
                                 <div>Порядок</div>
                                 <div>Видимость</div>
                             </div>
                             @foreach ($itemRows as $itemKey => $item)
                                 <div
-                                    @class([
-                                        'cv-table-row',
-                                        'cv-table-row--fields-only' => ! $showItemTypeColumn,
-                                    ])
+                                    class="cv-table-row cv-table-row--fields-only"
                                     wire:key="card-view-item-{{ $selectedSectionKey }}-{{ $itemKey }}"
                                 >
                                     <div class="cv-table-cell cv-table-name">
@@ -868,16 +866,6 @@
                                             @endunless
                                         </div>
                                     </div>
-                                    @if ($showItemTypeColumn)
-                                        <div class="cv-table-cell cv-table-cell--type">
-                                            @if (($item['item_type'] ?? 'field') !== 'field')
-                                                <span class="cv-badge">{{ $item['item_type_label'] }}</span>
-                                            @endif
-                                            @if ($item['is_system'])
-                                                <span class="cv-badge">Системный</span>
-                                            @endif
-                                        </div>
-                                    @endif
                                     <div class="cv-table-cell">
                                         <input class="cv-input cv-input--order" type="number" wire:model.defer="itemRows.{{ $itemKey }}.sort_order">
                                     </div>
@@ -980,27 +968,6 @@
                                     Добавить поле
                                 </button>
                             </div>
-                            @if ($this->canAddBlockItems())
-                                <details class="cv-add-advanced">
-                                    <summary>Системные блоки карточки</summary>
-                                    <div class="cv-add-advanced__body">
-                                        <p class="cv-add-advanced__hint">
-                                            Блок — готовая область карточки, которую нельзя собрать одним полем: телефоны, email, теги, диалоги или история.
-                                        </p>
-                                        <div class="cv-add-row">
-                                            <select class="cv-select" wire:model.defer="newBlockItem.block_key" aria-label="Системный блок карточки">
-                                                <option value="">Выберите системный блок</option>
-                                                @foreach ($this->blockOptions() as $blockKey => $label)
-                                                    <option value="{{ $blockKey }}">{{ $label }}</option>
-                                                @endforeach
-                                            </select>
-                                            <button class="ac-btn ac-btn--primary ac-btn--sm" type="button" wire:click="addBlockItem">
-                                                Добавить блок
-                                            </button>
-                                        </div>
-                                    </div>
-                                </details>
-                            @endif
                         </div>
                     @endif
                 </div>

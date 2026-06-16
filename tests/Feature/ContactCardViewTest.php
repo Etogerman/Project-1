@@ -76,7 +76,15 @@ class ContactCardViewTest extends TestCase
 
         $contactFieldIds = FieldDictionaryField::query()
             ->where('entity', FieldDictionaryField::ENTITY_CONTACT)
-            ->whereIn('field_key', ['phones', 'emails', 'tags'])
+            ->whereIn('field_key', [
+                'phones',
+                'emails',
+                'tags',
+                'contact_dialogs',
+                'contact_history',
+                'contact_dedup',
+                'contact_diagnostics',
+            ])
             ->pluck('id', 'field_key');
 
         $generalComplexFields = collect(['contact_phones', 'contact_emails', 'contact_tags'])
@@ -110,7 +118,7 @@ class ContactCardViewTest extends TestCase
             ->all();
 
         $this->assertSame([
-            [SyncSystemContactCardViewAction::BLOCK_CONTACT_DIALOGS, CardViewItem::TYPE_BLOCK, null],
+            ['contact_dialogs', CardViewItem::TYPE_FIELD, $contactFieldIds['contact_dialogs']],
         ], $dialogBlocks);
 
         $historyTab = $view->tabs->firstWhere('tab_key', 'history');
@@ -124,7 +132,7 @@ class ContactCardViewTest extends TestCase
             ->all();
 
         $this->assertSame([
-            [SyncSystemContactCardViewAction::BLOCK_CONTACT_HISTORY, CardViewItem::TYPE_BLOCK, null],
+            ['contact_history', CardViewItem::TYPE_FIELD, $contactFieldIds['contact_history']],
         ], $historyBlocks);
 
         $dedupTab = $view->tabs->firstWhere('tab_key', 'dedup');
@@ -138,7 +146,7 @@ class ContactCardViewTest extends TestCase
             ->all();
 
         $this->assertSame([
-            [SyncSystemContactCardViewAction::BLOCK_CONTACT_DEDUP, CardViewItem::TYPE_BLOCK, null],
+            ['contact_dedup', CardViewItem::TYPE_FIELD, $contactFieldIds['contact_dedup']],
         ], $dedupBlocks);
 
         $diagnosticsTab = $view->tabs->firstWhere('tab_key', 'diagnostics');
@@ -152,7 +160,7 @@ class ContactCardViewTest extends TestCase
             ->all();
 
         $this->assertSame([
-            [SyncSystemContactCardViewAction::BLOCK_CONTACT_DIAGNOSTICS, CardViewItem::TYPE_BLOCK, null],
+            ['contact_diagnostics', CardViewItem::TYPE_FIELD, $contactFieldIds['contact_diagnostics']],
         ], $diagnosticsBlocks);
 
         $bitrixTab = $view->tabs->firstWhere('tab_key', 'bitrix24');
@@ -418,7 +426,16 @@ class ContactCardViewTest extends TestCase
         $registry = app(CardViewFieldRendererRegistry::class);
         $fields = FieldDictionaryField::query()
             ->where('entity', FieldDictionaryField::ENTITY_CONTACT)
-            ->whereIn('field_key', ['first_name', 'phones', 'emails', 'tags'])
+            ->whereIn('field_key', [
+                'first_name',
+                'phones',
+                'emails',
+                'tags',
+                'contact_dialogs',
+                'contact_history',
+                'contact_dedup',
+                'contact_diagnostics',
+            ])
             ->get()
             ->keyBy('field_key');
 
@@ -433,6 +450,18 @@ class ContactCardViewTest extends TestCase
 
         $this->assertSame(CardViewFieldRendererRegistry::CONTACT_TAG_LIST, $registry->rendererKeyForField($fields['tags']));
         $this->assertSame(SyncSystemContactCardViewAction::BLOCK_CONTACT_TAGS, $registry->legacyBlockKeyForField($fields['tags']));
+
+        $this->assertSame(CardViewFieldRendererRegistry::CONTACT_DIALOGS, $registry->rendererKeyForField($fields['contact_dialogs']));
+        $this->assertSame(SyncSystemContactCardViewAction::BLOCK_CONTACT_DIALOGS, $registry->legacyBlockKeyForField($fields['contact_dialogs']));
+
+        $this->assertSame(CardViewFieldRendererRegistry::CONTACT_HISTORY, $registry->rendererKeyForField($fields['contact_history']));
+        $this->assertSame(SyncSystemContactCardViewAction::BLOCK_CONTACT_HISTORY, $registry->legacyBlockKeyForField($fields['contact_history']));
+
+        $this->assertSame(CardViewFieldRendererRegistry::CONTACT_DEDUP, $registry->rendererKeyForField($fields['contact_dedup']));
+        $this->assertSame(SyncSystemContactCardViewAction::BLOCK_CONTACT_DEDUP, $registry->legacyBlockKeyForField($fields['contact_dedup']));
+
+        $this->assertSame(CardViewFieldRendererRegistry::CONTACT_DIAGNOSTICS, $registry->rendererKeyForField($fields['contact_diagnostics']));
+        $this->assertSame(SyncSystemContactCardViewAction::BLOCK_CONTACT_DIAGNOSTICS, $registry->legacyBlockKeyForField($fields['contact_diagnostics']));
     }
 
     public function test_contact_card_layout_exposes_internal_renderer_for_complex_fields(): void
@@ -448,6 +477,14 @@ class ContactCardViewTest extends TestCase
         $this->assertSame(SyncSystemContactCardViewAction::BLOCK_CONTACT_EMAILS, $itemsByKey['emails']['renderer_block_key']);
         $this->assertSame(SyncSystemContactCardViewAction::BLOCK_CONTACT_TAGS, $itemsByKey['tags']['renderer_block_key']);
         $this->assertSame('', $itemsByKey['first_name']['renderer_block_key']);
+
+        $dialogLayout = app(BuildContactCardViewLayoutAction::class)->itemsForTab(SyncSystemContactCardViewAction::TAB_DIALOGS);
+        $this->assertIsArray($dialogLayout);
+        $dialogItemsByKey = collect($dialogLayout['sections'])
+            ->flatMap(fn (array $section): array => $section['items'])
+            ->keyBy('item_key');
+
+        $this->assertSame(SyncSystemContactCardViewAction::BLOCK_CONTACT_DIALOGS, $dialogItemsByKey['contact_dialogs']['renderer_block_key']);
     }
 
     public function test_admin_can_create_and_delete_custom_card_view_tab_and_section(): void
@@ -845,7 +882,7 @@ class ContactCardViewTest extends TestCase
             ->assertSet('activeTab', ViewContact::TAB_GENERAL);
     }
 
-    public function test_contact_general_tab_uses_blocks_from_card_view(): void
+    public function test_contact_general_tab_uses_complex_fields_from_card_view(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -919,7 +956,7 @@ class ContactCardViewTest extends TestCase
             ->assertDontSee('Склейки и дубли');
     }
 
-    public function test_contact_dialogs_tab_uses_block_from_card_view(): void
+    public function test_contact_dialogs_tab_uses_complex_field_from_card_view(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -945,7 +982,7 @@ class ContactCardViewTest extends TestCase
             ->assertDontSee('Диалоги ещё не появились.');
     }
 
-    public function test_contact_history_tab_uses_block_from_card_view(): void
+    public function test_contact_history_tab_uses_complex_field_from_card_view(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -969,7 +1006,7 @@ class ContactCardViewTest extends TestCase
             ->assertDontSee('История событий контакта');
     }
 
-    public function test_contact_dedup_tab_uses_block_from_card_view(): void
+    public function test_contact_dedup_tab_uses_complex_field_from_card_view(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -1005,7 +1042,7 @@ class ContactCardViewTest extends TestCase
             ->assertDontSee('Совпадение телефона');
     }
 
-    public function test_contact_diagnostics_tab_uses_block_from_card_view(): void
+    public function test_contact_diagnostics_tab_uses_complex_field_from_card_view(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,

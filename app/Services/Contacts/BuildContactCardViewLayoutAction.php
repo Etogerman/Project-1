@@ -284,6 +284,8 @@ class BuildContactCardViewLayoutAction
      */
     private function blockTab(string $tabKey): ?array
     {
+        $rendererRegistry = app(CardViewFieldRendererRegistry::class);
+
         $view = CardView::query()
             ->where('entity', CardView::ENTITY_CONTACT)
             ->where('context', CardView::CONTEXT_CARD)
@@ -294,8 +296,7 @@ class BuildContactCardViewLayoutAction
                     ->with([
                         'visibleSections' => fn ($sectionQuery) => $sectionQuery
                             ->with([
-                                'visibleItems' => fn ($itemQuery) => $itemQuery
-                                    ->where('item_type', CardViewItem::TYPE_BLOCK),
+                                'visibleItems' => fn ($itemQuery) => $itemQuery->with('field'),
                             ]),
                     ]),
             ])
@@ -312,9 +313,15 @@ class BuildContactCardViewLayoutAction
         }
 
         $sections = $tab->visibleSections
-            ->map(function (CardViewSection $section): array {
+            ->map(function (CardViewSection $section) use ($rendererRegistry): array {
                 $blocks = $section->visibleItems
-                    ->map(fn (CardViewItem $item): string => (string) $item->item_key)
+                    ->map(function (CardViewItem $item) use ($rendererRegistry): string {
+                        if ($item->item_type === CardViewItem::TYPE_BLOCK) {
+                            return (string) $item->item_key;
+                        }
+
+                        return $rendererRegistry->legacyBlockKeyForField($item->field) ?? '';
+                    })
                     ->filter(fn (string $blockKey): bool => $blockKey !== '')
                     ->values()
                     ->all();
