@@ -21,6 +21,10 @@ return new class extends Migration
             $table->integer('sort_order')->default(100);
             $table->boolean('is_multiple')->default(false);
             $table->boolean('is_system')->default(false);
+            $table->string('condition_visibility', 32)->default('display_only');
+            $table->string('write_access', 32)->default('read_only');
+            $table->string('hint_group', 32)->default('system');
+            $table->string('card_display_type', 32)->default('value');
             $table->timestampsTz();
 
             $table->unique(['entity', 'field_key']);

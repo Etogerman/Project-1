@@ -16,6 +16,7 @@ use App\Models\BotConstructorExecutionBlockRun;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactDuplicateReview;
+use App\Models\ContactEmail;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
 use App\Models\ContactQuestionnaireAnswer;
@@ -205,6 +206,7 @@ class FilamentContactsResourceTest extends TestCase
             ->assertSee('Битрикс24')
             ->assertSee('История')
             ->assertSee('Диагностика')
+            ->assertSee('Склейки')
             ->assertSee('Данные клиента')
             ->assertSee('Откуда знаем имя')
             ->assertSee('Клиент подтвердил')
@@ -220,7 +222,7 @@ class FilamentContactsResourceTest extends TestCase
             ->assertDontSee('pending_region_candidates')
             ->assertDontSee('data_collection_current_field_started_at')
             ->assertDontSee('Имя в мессенджере')
-            ->assertSee('Дедупликация')
+            ->assertDontSee('Дедупликация')
             ->assertDontSee('Диагностика webhook')
             ->assertDontSee('Профиль')
             ->assertDontSee('Служебные данные');
@@ -303,6 +305,23 @@ class FilamentContactsResourceTest extends TestCase
 
         $this->assertSame([], $messageQueries->all(), $messageQueries->implode(PHP_EOL));
         $this->assertLessThanOrEqual(8, $dialogQueries->count(), $dialogQueries->implode(PHP_EOL));
+    }
+
+    public function test_contact_view_hides_dedup_tab_for_clean_contact(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'duplicate_review_status' => Contact::DUPLICATE_REVIEW_STATUS_NONE,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->assertDontSee('Склейки')
+            ->set('activeTab', ViewContact::TAB_DEDUP)
+            ->assertSet('activeTab', ViewContact::TAB_GENERAL);
     }
 
     public function test_contacts_table_shows_first_name_source_indicator_next_to_display_name(): void
@@ -1125,6 +1144,8 @@ class FilamentContactsResourceTest extends TestCase
             ->assertSee('Теги')
             ->call('openAddTagDialog')
             ->assertSet('showAddTagDialog', true)
+            ->assertSee('data-role="contact-tag-inline-add"', false)
+            ->assertDontSee('data-role="contact-tag-dialog-backdrop"', false)
             ->assertSee('VIP сегмент')
             ->assertDontSee('Скрытый тег')
             ->set('selectedTagId', (string) $assignableTag->id)
@@ -1238,6 +1259,7 @@ class FilamentContactsResourceTest extends TestCase
             ->assertSee('Теги')
             ->assertSee('Изменить ответственного')
             ->assertSee('Редактировать')
+            ->assertDontSee('Дополнительные действия')
             ->assertDontSee('data-role="contact-edit-phone"', false)
             ->assertDontSee('data-role="contact-delete-phone"', false)
             ->assertDontSee('data-role="contact-open-tag-dialog"', false)
@@ -1560,7 +1582,9 @@ class FilamentContactsResourceTest extends TestCase
         Livewire::actingAs($admin)
 
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
-            ->assertSee('Дедупликация')
+            ->assertSee('Склейки')
+            ->set('activeTab', ViewContact::TAB_DEDUP)
+            ->assertSee('Склейки')
             ->assertSee('Нужна проверка')
             ->assertSee('Открытые проверки: 1')
             ->assertSee('Телефон найден у другого root-контакта')
@@ -1596,6 +1620,7 @@ class FilamentContactsResourceTest extends TestCase
         Livewire::actingAs($admin)
 
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->set('activeTab', ViewContact::TAB_DEDUP)
             ->assertSee('Открытые проверки: 1')
             ->assertSee('Один platform user ID привязан к нескольким root-контактам')
             ->assertSee('telegram:cross-user-600')
@@ -1628,6 +1653,7 @@ class FilamentContactsResourceTest extends TestCase
         Livewire::actingAs($admin)
 
             ->test(ViewContact::class, ['record' => $anchorContact->getRouteKey()])
+            ->set('activeTab', ViewContact::TAB_DEDUP)
             ->assertSee('Разобрать')
             ->assertSee('Оставить отдельным root')
             ->call('openResolveCrossChannelIdentityReviewDialog', $review->id)
@@ -1668,6 +1694,7 @@ class FilamentContactsResourceTest extends TestCase
         Livewire::actingAs($admin)
 
             ->test(ViewContact::class, ['record' => $anchorContact->getRouteKey()])
+            ->set('activeTab', ViewContact::TAB_DEDUP)
             ->call('dismissMountedCrossChannelIdentityReview', $review->id);
 
         $review->refresh();
@@ -1704,6 +1731,7 @@ class FilamentContactsResourceTest extends TestCase
         Livewire::actingAs($admin)
 
             ->test(ViewContact::class, ['record' => $candidateRoot->getRouteKey()])
+            ->set('activeTab', ViewContact::TAB_DEDUP)
             ->assertSee('Открытые проверки: 1')
             ->assertSee('telegram:cross-user-603')
             ->assertSee('Разобрать')
@@ -1736,6 +1764,7 @@ class FilamentContactsResourceTest extends TestCase
             'Сбор данных',
             'Работа с контактом',
             'Телефоны',
+            'Email',
             'Подробности',
             'Диагностика webhook',
         ], array_map(
@@ -1752,6 +1781,7 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertFalse($sectionsByHeading['Сбор данных']->isCollapsible());
         $this->assertFalse($sectionsByHeading['Работа с контактом']->isCollapsible());
         $this->assertFalse($sectionsByHeading['Телефоны']->isCollapsible());
+        $this->assertFalse($sectionsByHeading['Email']->isCollapsible());
         $this->assertFalse($sectionsByHeading['Диалоги']->isCollapsible());
 
         $this->assertTrue($sectionsByHeading['Подробности']->isCollapsible());
@@ -1855,6 +1885,8 @@ class FilamentContactsResourceTest extends TestCase
             ->assertSee('Теги')
             ->call('openAddTagDialog')
             ->assertSet('showAddTagDialog', true)
+            ->assertSee('data-role="contact-tag-inline-add"', false)
+            ->assertDontSee('data-role="contact-tag-dialog-backdrop"', false)
             ->assertSee('VIP сегмент')
             ->assertDontSee('Скрытый тег')
             ->set('selectedTagId', (string) $assignableTag->id)
@@ -2576,11 +2608,8 @@ class FilamentContactsResourceTest extends TestCase
         Livewire::actingAs($admin)
 
             ->test(ViewContact::class, ['record' => $root->getRouteKey()])
-            ->assertSee('Дедупликация')
-            ->assertSee('Склеено дублей')
-            ->assertSee('Последние склейки')
-            ->assertSee('Совпадение телефона')
-            ->assertSee('+79991234567')
+            ->assertSee('Склейки')
+            ->assertDontSee('Склеено дублей')
             ->assertSee('Удалить клиента')
             ->call('openDeleteContactDialog')
             ->assertSee('Удалить клиента целиком?')
@@ -2643,6 +2672,33 @@ class FilamentContactsResourceTest extends TestCase
             ->assertSee('Удалить');
     }
 
+    public function test_contact_modal_displays_saved_emails(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create();
+
+        ContactEmail::factory()->create([
+            'contact_id' => $contact->id,
+            'email_raw' => 'Client@Example.com',
+            'email_normalized' => 'client@example.com',
+            'source' => ContactEmail::SOURCE_MANUAL,
+            'is_primary' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->assertSee('Email')
+            ->assertSee('Client@Example.com')
+            ->assertSee('Основной')
+            ->assertSee('Добавить')
+            ->assertSee('Изменить')
+            ->assertSee('Удалить');
+    }
+
     public function test_contact_view_uses_field_dictionary_labels(): void
     {
         $admin = User::factory()->create([
@@ -2681,7 +2737,6 @@ class FilamentContactsResourceTest extends TestCase
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->assertSee('Имя клиента')
             ->assertSee('Город клиента')
-            ->assertSee('Номера связи')
             ->assertSee('+7 999 123 45 67');
     }
 
@@ -2842,6 +2897,8 @@ class FilamentContactsResourceTest extends TestCase
 
             ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
             ->call('openEditPhoneDialog', $phoneNumber->id)
+            ->assertSee('data-role="contact-phone-inline-edit"', false)
+            ->assertDontSee('data-role="contact-phone-edit-dialog-backdrop"', false)
             ->set('editingPhoneRaw', '+7 999 555 55 55')
             ->call('saveMountedContactPhone')
             ->assertHasNoErrors()
@@ -2851,6 +2908,97 @@ class FilamentContactsResourceTest extends TestCase
 
         $this->assertSame('+7 999 555 55 55', $phoneNumber->phone_raw);
         $this->assertSame('+79995555555', $phoneNumber->phone_normalized);
+    }
+
+    public function test_admin_can_add_email_from_contact_modal(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create();
+
+        Livewire::actingAs($admin)
+
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->call('openAddEmailDialog')
+            ->set('editingEmailRaw', ' Client@Example.com ')
+            ->call('saveMountedContactEmail')
+            ->assertHasNoErrors()
+            ->assertSee('Client@Example.com');
+
+        $this->assertDatabaseHas('contact_emails', [
+            'contact_id' => $contact->id,
+            'email_raw' => 'Client@Example.com',
+            'email_normalized' => 'client@example.com',
+            'source' => ContactEmail::SOURCE_MANUAL,
+            'is_primary' => true,
+        ]);
+    }
+
+    public function test_admin_can_edit_saved_email_from_contact_modal(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create();
+        $email = ContactEmail::factory()->create([
+            'contact_id' => $contact->id,
+            'email_raw' => 'old@example.com',
+            'email_normalized' => 'old@example.com',
+            'is_primary' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->call('openEditEmailDialog', $email->id)
+            ->assertSee('data-role="contact-email-inline-edit"', false)
+            ->assertDontSee('data-role="contact-email-edit-dialog-backdrop"', false)
+            ->set('editingEmailRaw', 'New@Example.com')
+            ->call('saveMountedContactEmail')
+            ->assertHasNoErrors()
+            ->assertSee('New@Example.com');
+
+        $email->refresh();
+
+        $this->assertSame('New@Example.com', $email->email_raw);
+        $this->assertSame('new@example.com', $email->email_normalized);
+    }
+
+    public function test_admin_cannot_edit_email_to_duplicate_value_for_same_contact(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create();
+        $editableEmail = ContactEmail::factory()->create([
+            'contact_id' => $contact->id,
+            'email_raw' => 'old@example.com',
+            'email_normalized' => 'old@example.com',
+            'is_primary' => true,
+        ]);
+        ContactEmail::factory()->create([
+            'contact_id' => $contact->id,
+            'email_raw' => 'duplicate@example.com',
+            'email_normalized' => 'duplicate@example.com',
+            'is_primary' => false,
+        ]);
+
+        Livewire::actingAs($admin)
+
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->call('openEditEmailDialog', $editableEmail->id)
+            ->set('editingEmailRaw', 'Duplicate@Example.com')
+            ->call('saveMountedContactEmail')
+            ->assertHasErrors(['editingEmailRaw']);
+
+        $editableEmail->refresh();
+
+        $this->assertSame('old@example.com', $editableEmail->email_raw);
+        $this->assertSame('old@example.com', $editableEmail->email_normalized);
     }
 
     public function test_employee_can_edit_saved_phone_number_from_contact_modal(): void
@@ -2988,6 +3136,43 @@ class FilamentContactsResourceTest extends TestCase
         ]);
         $this->assertDatabaseHas('contact_phone_numbers', [
             'id' => $nextPhone->id,
+            'is_primary' => true,
+        ]);
+    }
+
+    public function test_admin_can_delete_primary_email_from_contact_modal_and_promote_next_email(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create();
+        $primaryEmail = ContactEmail::factory()->create([
+            'contact_id' => $contact->id,
+            'email_raw' => 'first@example.com',
+            'email_normalized' => 'first@example.com',
+            'is_primary' => true,
+        ]);
+        $nextEmail = ContactEmail::factory()->create([
+            'contact_id' => $contact->id,
+            'email_raw' => 'second@example.com',
+            'email_normalized' => 'second@example.com',
+            'is_primary' => false,
+        ]);
+
+        Livewire::actingAs($admin)
+
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->call('openDeleteEmailDialog', $primaryEmail->id)
+            ->call('deleteMountedContactEmail')
+            ->assertSee('second@example.com')
+            ->assertDontSee('first@example.com');
+
+        $this->assertDatabaseMissing('contact_emails', [
+            'id' => $primaryEmail->id,
+        ]);
+        $this->assertDatabaseHas('contact_emails', [
+            'id' => $nextEmail->id,
             'is_primary' => true,
         ]);
     }

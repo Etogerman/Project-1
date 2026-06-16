@@ -3,6 +3,7 @@
 namespace App\Services\Scenarios;
 
 use App\Models\Contact;
+use App\Models\ContactEmail;
 use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
 use App\Models\Message;
@@ -160,6 +161,16 @@ class ScenarioEdgeExpressionCondition
                 ->first(fn (mixed $value): bool => trim((string) $value) !== '');
         }
 
+        if ($field === 'emails') {
+            return $contact->emails()
+                ->get(['email_normalized', 'email_raw'])
+                ->flatMap(fn (ContactEmail $email): array => [
+                    $email->email_normalized,
+                    $email->email_raw,
+                ])
+                ->first(fn (mixed $value): bool => trim((string) $value) !== '');
+        }
+
         $field = EngineFieldRegistry::resolveReadAlias(EngineFieldRegistry::ENTITY_CONTACT, $field);
 
         return $contact->{$field} ?? null;
@@ -188,6 +199,7 @@ class ScenarioEdgeExpressionCondition
     {
         return match ($field) {
             'phone' => $dialog->confirmed_phone_raw ?: $dialog->confirmed_phone_normalized,
+            'external_username' => $dialog->currentContactIdentity?->external_username,
             'last_inbound_message_at' => $dialog->last_inbound_at,
             'last_outbound_message_at' => $dialog->last_outbound_at,
             default => $dialog->{$field} ?? null,

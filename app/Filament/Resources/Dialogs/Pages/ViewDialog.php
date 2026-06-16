@@ -18,14 +18,18 @@ use App\Models\ScenarioVersion;
 use App\Models\User;
 use App\Services\Bots\ContactIdentityAvatarStorage;
 use App\Services\Bots\SendManualDialogReplyAction;
+use App\Services\CardViews\CardViewFieldRendererRegistry;
 use App\Services\Contacts\ResolveContactDisplayNameAction;
 use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\Contacts\SetContactAssigneeAction;
 use App\Services\Dialogs\BuildConversationFeedViewDataAction;
+use App\Services\Dialogs\BuildDialogCardViewLayoutAction;
+use App\Services\Dialogs\DialogCardViewBlockRegistry;
 use App\Services\Dialogs\LoadDialogMessagesPageAction;
 use App\Services\Dialogs\ResolveDialogInboxStatusAction;
 use App\Services\Dialogs\ResolveDialogRouteStatusAction;
 use App\Services\Dialogs\ResolveDialogStageAction;
+use App\Services\Dialogs\SyncSystemDialogCardViewAction;
 use App\Services\Dialogs\UpdateDialogInboxStatusAction;
 use App\Services\Dialogs\UpdateDialogStageAction;
 use Filament\Notifications\Notification;
@@ -35,9 +39,11 @@ use Illuminate\Contracts\Support\Htmlable;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
+use Livewire\Attributes\Url;
 use RuntimeException;
 use Throwable;
 
@@ -95,6 +101,9 @@ class ViewDialog extends ViewRecord
 
     public ?string $dialogsBackUrl = null;
 
+    #[Url(as: 'tab', history: true, except: SyncSystemDialogCardViewAction::TAB_GENERAL)]
+    public string $activeTab = SyncSystemDialogCardViewAction::TAB_GENERAL;
+
     /**
      * @var array<string, string>|null
      */
@@ -105,11 +114,17 @@ class ViewDialog extends ViewRecord
      */
     protected array $dialogOptionLabels = [];
 
+    /**
+     * @var array<string, ?string>
+     */
+    protected array $dialogAvatarUrlCache = [];
+
     public function mount(int|string $record): void
     {
         parent::mount($record);
 
         $this->dialogsBackUrl = $this->resolveDialogsBackUrlFromValue(request()->query('back_to'));
+        $this->activeTab = $this->normalizeCardTab((string) request()->query('tab', SyncSystemDialogCardViewAction::TAB_GENERAL));
 
         $this->initializeConversationHistory();
     }
@@ -244,6 +259,16 @@ class ViewDialog extends ViewRecord
 
         $this->dialogInboxStatusSelection = $status;
         $this->updateDialogInboxStatus();
+    }
+
+    public function updatedActiveTab(string $value): void
+    {
+        $this->activeTab = $this->normalizeCardTab($value);
+    }
+
+    public function selectTab(string $tab): void
+    {
+        $this->activeTab = $this->normalizeCardTab($tab);
     }
 
     public function openDialogAssigneeEditor(): void
@@ -510,6 +535,23 @@ class ViewDialog extends ViewRecord
             'contactSummary' => $this->getContactSummaryViewData(),
             'dialogFields' => $this->getDialogFieldsViewData(),
             'dialogSystemFields' => $this->getDialogSystemFieldsViewData(),
+            'tabs' => $this->buildDialogCardTabs(),
+            'activeTab' => $this->activeTab,
+            'dialogGeneralSections' => $this->activeTab === SyncSystemDialogCardViewAction::TAB_GENERAL
+                ? $this->buildDialogFieldSections(SyncSystemDialogCardViewAction::TAB_GENERAL)
+                : [],
+            'dialogBitrixSections' => $this->activeTab === SyncSystemDialogCardViewAction::TAB_BITRIX24
+                ? $this->buildDialogFieldSections(SyncSystemDialogCardViewAction::TAB_BITRIX24)
+                : [],
+            'dialogSystemFieldSections' => $this->activeTab === SyncSystemDialogCardViewAction::TAB_SYSTEM_FIELDS
+                ? $this->buildDialogFieldSections(SyncSystemDialogCardViewAction::TAB_SYSTEM_FIELDS)
+                : [],
+            'dialogDiagnosticsBlocks' => $this->activeTab === SyncSystemDialogCardViewAction::TAB_DIAGNOSTICS
+                ? $this->buildDialogDiagnosticsBlocks()
+                : [],
+            'dialogCustomSections' => $this->isKnownCardTab($this->activeTab)
+                ? []
+                : $this->buildDialogCustomSections($this->activeTab),
             'dialogFieldLabels' => $this->getDialogFieldLabels(),
             'dialogBreadcrumbs' => $this->getDialogBreadcrumbsViewData(),
             'kanbanBackUrl' => $this->resolveDialogsBackUrl(),
@@ -520,6 +562,373 @@ class ViewDialog extends ViewRecord
             'conversationDisplayModeOptions' => $this->getConversationDisplayModeOptions(),
             'liveRefreshPollIntervalMs' => static::LIVE_REFRESH_INTERVAL_MS,
             'replyComposer' => $this->getReplyComposerViewData(),
+        ];
+    }
+
+    /**
+     * @return list<array{key:string,label:string,url:string,isActive:bool}>
+     */
+    protected function buildDialogCardTabs(): array
+    {
+        try {
+            $layoutTabs = app(BuildDialogCardViewLayoutAction::class)->tabs();
+        } catch (Throwable $throwable) {
+            Log::warning('dialog_card_view_tabs_fallback_used', [
+                'dialog_id' => $this->getRecord()->id,
+                'error' => $throwable->getMessage(),
+            ]);
+
+            $layoutTabs = null;
+        }
+
+        $tabs = $layoutTabs ?? [
+            ['tab_key' => SyncSystemDialogCardViewAction::TAB_GENERAL, 'title' => 'Общее'],
+            ['tab_key' => SyncSystemDialogCardViewAction::TAB_BITRIX24, 'title' => 'Битрикс24'],
+            ['tab_key' => SyncSystemDialogCardViewAction::TAB_SYSTEM_FIELDS, 'title' => 'Системные поля'],
+            ['tab_key' => SyncSystemDialogCardViewAction::TAB_DIAGNOSTICS, 'title' => 'Диагностика'],
+        ];
+
+        return collect($tabs)
+            ->map(function (array $tab): array {
+                $key = (string) ($tab['tab_key'] ?? '');
+
+                return [
+                    'key' => $key,
+                    'label' => (string) ($tab['title'] ?? $key),
+                    'url' => $this->dialogCardTabUrl($key),
+                    'isActive' => $this->activeTab === $key,
+                ];
+            })
+            ->filter(fn (array $tab): bool => $tab['key'] !== '')
+            ->values()
+            ->all();
+    }
+
+    protected function dialogCardTabUrl(string $tabKey): string
+    {
+        $params = ['record' => $this->getRecord()];
+
+        if ($this->dialogsBackUrl !== null) {
+            $params['back_to'] = $this->dialogsBackUrl;
+        }
+
+        if ($tabKey !== SyncSystemDialogCardViewAction::TAB_GENERAL) {
+            $params['tab'] = $tabKey;
+        }
+
+        return DialogResource::getUrl('view', $params);
+    }
+
+    protected function normalizeCardTab(string $tab): string
+    {
+        $tab = trim($tab);
+
+        return $tab !== '' ? $tab : SyncSystemDialogCardViewAction::TAB_GENERAL;
+    }
+
+    protected function isKnownCardTab(string $tab): bool
+    {
+        return in_array($tab, [
+            SyncSystemDialogCardViewAction::TAB_GENERAL,
+            SyncSystemDialogCardViewAction::TAB_BITRIX24,
+            SyncSystemDialogCardViewAction::TAB_SYSTEM_FIELDS,
+            SyncSystemDialogCardViewAction::TAB_DIAGNOSTICS,
+        ], true);
+    }
+
+    /**
+     * @return list<array{section_key:string,title:string,blocks:list<string>}>
+     */
+    protected function buildDialogDiagnosticsBlocks(): array
+    {
+        try {
+            $layout = app(BuildDialogCardViewLayoutAction::class)->diagnostics();
+
+            if (is_array($layout) && ($layout['sections'] ?? []) !== []) {
+                return $layout['sections'];
+            }
+        } catch (Throwable $throwable) {
+            Log::warning('dialog_diagnostics_card_view_fallback_used', [
+                'dialog_id' => $this->getRecord()->id,
+                'error' => $throwable->getMessage(),
+            ]);
+        }
+
+        return $this->fallbackBlockSections(SyncSystemDialogCardViewAction::diagnosticsSections());
+    }
+
+    /**
+     * @return list<array{section_key:string,title:string,rows:list<array<string, mixed>>}>
+     */
+    protected function buildDialogFieldSections(string $tabKey): array
+    {
+        try {
+            $layout = match ($tabKey) {
+                SyncSystemDialogCardViewAction::TAB_GENERAL => app(BuildDialogCardViewLayoutAction::class)->general(),
+                SyncSystemDialogCardViewAction::TAB_BITRIX24 => app(BuildDialogCardViewLayoutAction::class)->bitrix24(),
+                SyncSystemDialogCardViewAction::TAB_SYSTEM_FIELDS => app(BuildDialogCardViewLayoutAction::class)->systemFields(),
+                default => null,
+            };
+
+            if (is_array($layout) && ($layout['sections'] ?? []) !== []) {
+                $sections = $this->buildFieldSectionsFromLayout($layout['sections']);
+
+                return $tabKey === SyncSystemDialogCardViewAction::TAB_GENERAL
+                    ? $this->appendDialogPayloadFieldsSection($sections)
+                    : $sections;
+            }
+        } catch (Throwable $throwable) {
+            Log::warning('dialog_field_card_view_fallback_used', [
+                'dialog_id' => $this->getRecord()->id,
+                'tab' => $tabKey,
+                'error' => $throwable->getMessage(),
+            ]);
+        }
+
+        $fallback = match ($tabKey) {
+            SyncSystemDialogCardViewAction::TAB_GENERAL => SyncSystemDialogCardViewAction::generalFieldSections(),
+            SyncSystemDialogCardViewAction::TAB_BITRIX24 => SyncSystemDialogCardViewAction::bitrix24Sections(),
+            default => SyncSystemDialogCardViewAction::systemFieldSections(),
+        };
+
+        $sections = $this->buildFieldSectionsFromDefinitions($fallback);
+
+        return $tabKey === SyncSystemDialogCardViewAction::TAB_GENERAL
+            ? $this->appendDialogPayloadFieldsSection($sections)
+            : $sections;
+    }
+
+    /**
+     * @param  list<array{section_key:string,title:string,rows:list<array<string, mixed>>}>  $sections
+     * @return list<array{section_key:string,title:string,rows:list<array<string, mixed>>}>
+     */
+    protected function appendDialogPayloadFieldsSection(array $sections): array
+    {
+        $visibleFieldKeys = collect($sections)
+            ->flatMap(fn (array $section) => $section['rows'] ?? [])
+            ->map(fn (array $row): string => (string) ($row['key'] ?? ''))
+            ->filter()
+            ->all();
+
+        $rows = collect($this->getDialogFieldsViewData()['fields'])
+            ->reject(fn (array $field): bool => in_array((string) ($field['key'] ?? ''), $visibleFieldKeys, true))
+            ->map(fn (array $field): array => $this->dialogCardRow(
+                (string) ($field['key'] ?? ''),
+                (string) ($field['label'] ?? ($field['key'] ?? 'Поле')),
+                (string) ($field['value'] ?? '—'),
+            ))
+            ->values()
+            ->all();
+
+        $sections[] = [
+            'section_key' => SyncSystemDialogCardViewAction::BLOCK_DIALOG_FIELDS,
+            'title' => 'Поля диалога',
+            'rows' => $rows,
+        ];
+
+        return $sections;
+    }
+
+    /**
+     * @return list<array{section_key:string,title:string,rows:list<array<string, mixed>>,blocks:list<string>}>
+     */
+    protected function buildDialogCustomSections(string $tabKey): array
+    {
+        try {
+            $layout = app(BuildDialogCardViewLayoutAction::class)->itemsForTab($tabKey);
+        } catch (Throwable $throwable) {
+            Log::warning('dialog_custom_card_view_fallback_used', [
+                'dialog_id' => $this->getRecord()->id,
+                'tab' => $tabKey,
+                'error' => $throwable->getMessage(),
+            ]);
+
+            return [];
+        }
+
+        if (! is_array($layout) || ($layout['sections'] ?? []) === []) {
+            return [];
+        }
+
+        $rowsByKey = $this->buildDialogCardRowsByKey();
+        $blockRegistry = app(DialogCardViewBlockRegistry::class);
+
+        return collect($layout['sections'])
+            ->map(function (array $section) use ($rowsByKey, $blockRegistry): array {
+                $rows = [];
+                $blocks = [];
+
+                foreach (($section['items'] ?? []) as $item) {
+                    $itemKey = (string) ($item['item_key'] ?? '');
+
+                    if ($itemKey === '') {
+                        continue;
+                    }
+
+                    if (($item['item_type'] ?? '') === 'field') {
+                        $rendererBlockKey = (string) ($item['renderer_block_key'] ?? '');
+
+                        if ($rendererBlockKey !== '') {
+                            $blocks[] = $rendererBlockKey;
+
+                            continue;
+                        }
+
+                        if (isset($rowsByKey[$itemKey])) {
+                            $rows[] = $rowsByKey[$itemKey];
+                        }
+
+                        continue;
+                    }
+
+                    if (($item['item_type'] ?? '') === 'block' && $blockRegistry->contains($itemKey)) {
+                        $blocks[] = $itemKey;
+                    }
+                }
+
+                return [
+                    'section_key' => (string) ($section['section_key'] ?? ''),
+                    'title' => (string) ($section['title'] ?? 'Секция'),
+                    'rows' => $rows,
+                    'blocks' => $blocks,
+                ];
+            })
+            ->filter(fn (array $section): bool => $section['rows'] !== [] || $section['blocks'] !== [])
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  list<array{section_key:string,title:string,fields:list<string>}>  $sections
+     * @return list<array{section_key:string,title:string,rows:list<array<string, mixed>>}>
+     */
+    protected function buildFieldSectionsFromLayout(array $sections): array
+    {
+        $rowsByKey = $this->buildDialogCardRowsByKey();
+
+        return collect($sections)
+            ->map(fn (array $section): array => [
+                'section_key' => (string) ($section['section_key'] ?? ''),
+                'title' => (string) ($section['title'] ?? 'Секция'),
+                'rows' => collect($section['fields'] ?? [])
+                    ->map(fn (string $fieldKey): ?array => $rowsByKey[$fieldKey] ?? null)
+                    ->filter()
+                    ->values()
+                    ->all(),
+            ])
+            ->filter(fn (array $section): bool => $section['rows'] !== [])
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  array<string, array{name:string,sort_order:int,fields:list<string>}>  $definitions
+     * @return list<array{section_key:string,title:string,rows:list<array<string, mixed>>}>
+     */
+    protected function buildFieldSectionsFromDefinitions(array $definitions): array
+    {
+        return $this->buildFieldSectionsFromLayout(
+            collect($definitions)
+                ->map(fn (array $definition, string $sectionKey): array => [
+                    'section_key' => $sectionKey,
+                    'title' => $definition['name'],
+                    'fields' => $definition['fields'],
+                ])
+                ->values()
+                ->all(),
+        );
+    }
+
+    /**
+     * @param  array<string, array{name:string,sort_order:int,fields:list<string>}>  $definitions
+     * @return list<array{section_key:string,title:string,blocks:list<string>}>
+     */
+    protected function fallbackBlockSections(array $definitions): array
+    {
+        $fields = FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_DIALOG)
+            ->whereIn('field_key', collect($definitions)->flatMap(fn (array $definition): array => $definition['fields'] ?? [])->all())
+            ->get()
+            ->keyBy('field_key');
+        $rendererRegistry = app(CardViewFieldRendererRegistry::class);
+
+        return collect($definitions)
+            ->map(function (array $definition, string $sectionKey) use ($fields, $rendererRegistry): array {
+                $blocks = collect($definition['fields'] ?? [])
+                    ->map(fn (string $fieldKey): string => $rendererRegistry->legacyBlockKeyForField($fields->get($fieldKey)) ?? '')
+                    ->filter()
+                    ->values()
+                    ->all();
+
+                return [
+                    'section_key' => $sectionKey,
+                    'title' => $definition['name'],
+                    'blocks' => $blocks,
+                ];
+            })
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @return array<string, array<string, mixed>>
+     */
+    protected function buildDialogCardRowsByKey(): array
+    {
+        $dialog = $this->getRecord();
+        $contactSummary = $this->getContactSummaryViewData();
+        $inboxStatus = $this->getDialogInboxStatusViewData();
+        $currentBlock = $this->getCurrentDialogBlockViewData($dialog);
+
+        $rows = [
+            'id' => $this->dialogCardRow('id', 'ID', (string) $dialog->id),
+            'contact_id' => $this->dialogCardRow('contact_id', 'Контакт', $contactSummary['contact_label']),
+            'channel_id' => $this->dialogCardRow('channel_id', 'Канал', $this->formatChannelLabel($dialog->channel, 'Неизвестный канал')),
+            'status' => $this->dialogCardRow('status', 'Статус', $inboxStatus['current_label']),
+            'assigned_user_id' => $this->dialogCardRow('assigned_user_id', 'Ответственный', $contactSummary['assigned_user_label']),
+            'stage' => $this->dialogCardRow('stage', 'Этап', $this->dialogOptionLabel('stage', $this->resolveEffectiveDialogStage($dialog), Dialog::stageLabel($this->resolveEffectiveDialogStage($dialog)))),
+            'current_block_id' => $this->dialogCardRow('current_block_id', 'Текущий блок', $currentBlock['value']),
+            'phone' => $this->dialogCardRow('phone', 'Телефон', $this->formatDialogPhoneLabel($dialog)),
+            'external_username' => $this->dialogCardRow('external_username', 'Юзернейм', $this->formatDialogExternalUsernameLabel($dialog)),
+            'avatar' => $this->dialogCardRow('avatar', 'Аватарка', filled($this->resolveDialogAvatarUrl($dialog)) ? 'Есть' : '—'),
+            'external_chat_id' => $this->dialogCardRow('external_chat_id', 'Внешний ID чата', $dialog->external_chat_id ?: '—'),
+            'bot_subscription_status' => $this->dialogCardRow('bot_subscription_status', 'Подписка на бота', $this->dialogOptionLabel('bot_subscription_status', $dialog->bot_subscription_status, $dialog->bot_subscription_status ?: '—')),
+            'bot_subscription_changed_at' => $this->dialogCardRow('bot_subscription_changed_at', 'Подписка на бота изменена', $this->formatDialogTimestamp($dialog->bot_subscription_changed_at)),
+            'phone_confirmed_at' => $this->dialogCardRow('phone_confirmed_at', 'Телефон подтверждён', $this->formatDialogTimestamp($dialog->phone_confirmed_at)),
+            'phone_confirmed_via' => $this->dialogCardRow('phone_confirmed_via', 'Как подтверждён телефон', $this->dialogOptionLabel('phone_confirmed_via', $dialog->phone_confirmed_via, $dialog->phone_confirmed_via ?: '—')),
+            'bitrix24_live_chat_id' => $this->dialogCardRow('bitrix24_live_chat_id', 'ID чата Битрикс24', $dialog->bitrix24_live_chat_id ?: '—'),
+            'bitrix24_live_status' => $this->dialogCardRow('bitrix24_live_status', 'Статус чата Битрикс24', $this->dialogOptionLabel('bitrix24_live_status', $dialog->bitrix24_live_status, $dialog->bitrix24_live_status ?: '—')),
+            'bitrix24_live_last_exported_at' => $this->dialogCardRow('bitrix24_live_last_exported_at', 'Чат Битрикс24 выгружен', $this->formatDialogTimestamp($dialog->bitrix24_live_last_exported_at)),
+            'bitrix24_live_last_imported_at' => $this->dialogCardRow('bitrix24_live_last_imported_at', 'Чат Битрикс24 загружен', $this->formatDialogTimestamp($dialog->bitrix24_live_last_imported_at)),
+            'last_message_at' => $this->dialogCardRow('last_message_at', 'Последнее сообщение', $this->formatDialogTimestamp($dialog->last_message_at)),
+            'last_inbound_message_at' => $this->dialogCardRow('last_inbound_message_at', 'Последнее входящее', $this->formatDialogTimestamp($dialog->last_inbound_at)),
+            'last_outbound_message_at' => $this->dialogCardRow('last_outbound_message_at', 'Последнее исходящее', $this->formatDialogTimestamp($dialog->last_outbound_at)),
+            'last_message_id' => $this->dialogCardRow('last_message_id', 'ID последнего сообщения', filled($dialog->last_message_id) ? (string) $dialog->last_message_id : '—'),
+            'last_inbound_message_id' => $this->dialogCardRow('last_inbound_message_id', 'Последнее входящее', filled($dialog->last_inbound_message_id) ? (string) $dialog->last_inbound_message_id : '—'),
+            'last_outbound_message_id' => $this->dialogCardRow('last_outbound_message_id', 'Последнее исходящее', filled($dialog->last_outbound_message_id) ? (string) $dialog->last_outbound_message_id : '—'),
+            'created_at' => $this->dialogCardRow('created_at', 'Создан', $this->formatDialogTimestamp($dialog->created_at)),
+            'updated_at' => $this->dialogCardRow('updated_at', 'Обновлён', $this->formatDialogTimestamp($dialog->updated_at)),
+        ];
+
+        foreach ($this->getDialogFieldsViewData()['fields'] as $field) {
+            $fieldKey = (string) ($field['key'] ?? '');
+
+            if ($fieldKey === '') {
+                continue;
+            }
+
+            $rows[$fieldKey] = $this->dialogCardRow($fieldKey, (string) ($field['label'] ?? $fieldKey), (string) ($field['value'] ?? '—'));
+        }
+
+        return $rows;
+    }
+
+    protected function dialogCardRow(string $fieldKey, string $fallbackLabel, string $value): array
+    {
+        return [
+            'key' => $fieldKey,
+            'label' => $this->dialogFieldLabel($fieldKey, $fallbackLabel),
+            'value' => trim($value) !== '' ? $value : '—',
         ];
     }
 
@@ -1782,6 +2191,17 @@ class ViewDialog extends ViewRecord
         return 'Телефон в этом канале не подтвержден';
     }
 
+    protected function formatDialogExternalUsernameLabel(Dialog $dialog): string
+    {
+        $username = trim((string) $dialog->currentContactIdentity?->external_username);
+
+        if ($username === '') {
+            return '—';
+        }
+
+        return '@'.ltrim($username, '@');
+    }
+
     protected function formatDialogMessengerNameLabel(Dialog $dialog): string
     {
         $identity = $dialog->currentContactIdentity;
@@ -1837,11 +2257,17 @@ class ViewDialog extends ViewRecord
             return null;
         }
 
+        $cacheKey = ((string) ($dialog->current_contact_identity_id ?? 'none')).':'.$avatarPath;
+
+        if (array_key_exists($cacheKey, $this->dialogAvatarUrlCache)) {
+            return $this->dialogAvatarUrlCache[$cacheKey];
+        }
+
         try {
             $avatarStorage = app(ContactIdentityAvatarStorage::class);
 
             if ($avatarStorage->exists($avatarPath)) {
-                return $avatarStorage->url($avatarPath);
+                return $this->dialogAvatarUrlCache[$cacheKey] = $avatarStorage->url($avatarPath);
             }
         } catch (Throwable) {
             // Fallback to the legacy disk when object storage is temporarily unavailable.
@@ -1850,10 +2276,10 @@ class ViewDialog extends ViewRecord
         $legacyDisk = Storage::disk('public');
 
         if (! $legacyDisk->exists($avatarPath)) {
-            return null;
+            return $this->dialogAvatarUrlCache[$cacheKey] = null;
         }
 
-        return $legacyDisk->url($avatarPath);
+        return $this->dialogAvatarUrlCache[$cacheKey] = $legacyDisk->url($avatarPath);
     }
 
     protected function formatDialogAvatarFallbackLabel(Dialog $dialog): ?string

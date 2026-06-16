@@ -1,7 +1,7 @@
 @if (($renderSurface ?? true))
     <section data-role="contact-tags" class="ac-contact-form-section ac-contact-tag-section">
         <div class="ac-contact-form-section__header">
-            <h3 class="ac-contact-form-section__title">Теги</h3>
+            <h3 class="ac-contact-form-section__title">{{ $sectionTitle ?? 'Теги' }}</h3>
 
             @if ($canManageTags)
                 <button
@@ -51,76 +51,58 @@
                 @endforeach
             </div>
         @endif
-    </section>
-@endif
 
-@if ($canManageTags && $this->showAddTagDialog)
-    <div data-role="contact-tag-dialog-backdrop" class="ac-modal-backdrop">
-        <div data-role="contact-tag-dialog" class="ac-modal ac-modal--md">
-            <div class="ac-modal__body">
-                <div class="ac-modal__header">
-                    <div>
-                        <h3 class="ac-modal__title">Добавить тег</h3>
-                        <p class="ac-modal__description">
-                            Выберите активный тег из справочника и назначьте его текущему контакту.
-                        </p>
+        @if ($canManageTags && $this->showAddTagDialog)
+            <div class="ac-contact-form-grid">
+                <article data-role="contact-tag-inline-add" class="ac-contact-form-row ac-contact-form-row--wide">
+                    <p class="ac-contact-form-row__label">Тег</p>
+
+                    <div class="ac-contact-form-row__value-shell ac-contact-form-row__value-shell--with-actions">
+                        @if ($availableTags === [])
+                            <span class="ac-contact-form-row__value">
+                                Нет доступных активных тегов
+                            </span>
+                        @else
+                            <select
+                                id="contact-tag-select"
+                                wire:model.defer="selectedTagId"
+                                class="ac-contact-form-row__value ac-inline-profile-field ac-inline-profile-field--select"
+                            >
+                                <option value="">Выберите тег</option>
+                                @foreach ($availableTags as $tagId => $tagLabel)
+                                    <option value="{{ $tagId }}">{{ $tagLabel }}</option>
+                                @endforeach
+                            </select>
+                        @endif
+
+                        @error('selectedTagId')
+                            <p class="ac-contact-form-row__error">{{ $message }}</p>
+                        @enderror
+
+                        <div class="ac-contact-form-row__inline-actions">
+                            <button
+                                type="button"
+                                wire:click="closeAddTagDialog"
+                                class="ac-inline-action"
+                            >
+                                Отмена
+                            </button>
+                            <button
+                                data-role="contact-save-tag-button"
+                                type="button"
+                                wire:click="saveMountedContactTag"
+                                wire:loading.attr="disabled"
+                                wire:target="saveMountedContactTag"
+                                @disabled($availableTags === [])
+                                class="ac-inline-action"
+                            >
+                                <span wire:loading.remove wire:target="saveMountedContactTag">Сохранить</span>
+                                <span wire:loading wire:target="saveMountedContactTag">Сохраняем...</span>
+                            </button>
+                        </div>
                     </div>
-
-                    <button
-                        type="button"
-                        wire:click="closeAddTagDialog"
-                        class="ac-modal__close"
-                    >
-                        Закрыть
-                    </button>
-                </div>
-
-                @if ($availableTags === [])
-                    <div class="ac-note-box ac-note-box--info ac-copy--spaced">
-                        <p class="ac-copy">Нет доступных активных тегов для назначения.</p>
-                    </div>
-                @else
-                    <label for="contact-tag-select" class="ac-field-label">
-                        Тег
-                    </label>
-                    <select
-                        id="contact-tag-select"
-                        wire:model="selectedTagId"
-                        class="ac-select"
-                    >
-                        <option value="">Выберите тег</option>
-                        @foreach ($availableTags as $tagId => $tagLabel)
-                            <option value="{{ $tagId }}">{{ $tagLabel }}</option>
-                        @endforeach
-                    </select>
-
-                    @error('selectedTagId')
-                        <p class="ac-field-error">{{ $message }}</p>
-                    @enderror
-                @endif
-
-                <div class="ac-actions">
-                    <button
-                        type="button"
-                        wire:click="closeAddTagDialog"
-                        class="ac-button ac-button--secondary"
-                    >
-                        Отмена
-                    </button>
-                    <button
-                        data-role="contact-save-tag-button"
-                        type="button"
-                        wire:click="saveMountedContactTag"
-                        wire:loading.attr="disabled"
-                        wire:target="saveMountedContactTag"
-                        @disabled($availableTags === [])
-                        class="ac-button ac-button--success"
-                    >
-                        <span wire:loading.remove wire:target="saveMountedContactTag">Сохранить</span>
-                        <span wire:loading wire:target="saveMountedContactTag">Сохраняем...</span>
-                    </button>
-                </div>
+                </article>
             </div>
-        </div>
-    </div>
+        @endif
+    </section>
 @endif

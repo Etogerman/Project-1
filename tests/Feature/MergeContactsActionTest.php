@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactDuplicateReview;
+use App\Models\ContactEmail;
 use App\Models\ContactIdentity;
 use App\Models\ContactMergeLog;
 use App\Models\ContactPhoneNumber;
@@ -166,6 +167,24 @@ class MergeContactsActionTest extends TestCase
             'phone_normalized' => '+79991112233',
             'is_primary' => false,
         ]);
+        $primaryEmail = ContactEmail::factory()->create([
+            'contact_id' => $primary->id,
+            'email_raw' => 'primary@example.com',
+            'email_normalized' => 'primary@example.com',
+            'is_primary' => true,
+        ]);
+        $secondaryEmail = ContactEmail::factory()->create([
+            'contact_id' => $secondary->id,
+            'email_raw' => 'secondary@example.com',
+            'email_normalized' => 'secondary@example.com',
+            'is_primary' => true,
+        ]);
+        $duplicateEmail = ContactEmail::factory()->create([
+            'contact_id' => $secondary->id,
+            'email_raw' => 'PRIMARY@example.com',
+            'email_normalized' => 'primary@example.com',
+            'is_primary' => false,
+        ]);
         $primaryOnlyTag = Tag::factory()->create([
             'name' => 'Primary only',
             'color' => Tag::COLOR_PRIMARY,
@@ -257,6 +276,9 @@ class MergeContactsActionTest extends TestCase
         $primaryPhone->refresh();
         $triggerPhone->refresh();
         $duplicatePhone->refresh();
+        $primaryEmail->refresh();
+        $secondaryEmail->refresh();
+        $duplicateEmail->refresh();
 
         $this->assertSame('Alice', $primary->first_name);
         $this->assertSame('Ivanova', $primary->last_name);
@@ -309,6 +331,11 @@ class MergeContactsActionTest extends TestCase
         $this->assertSame($secondary->id, $duplicatePhone->contact_id);
         $this->assertSame($primary->id, $primaryPhone->contact_id);
         $this->assertTrue($primaryPhone->is_primary);
+        $this->assertSame($primary->id, $primaryEmail->contact_id);
+        $this->assertTrue($primaryEmail->is_primary);
+        $this->assertSame($primary->id, $secondaryEmail->contact_id);
+        $this->assertFalse($secondaryEmail->is_primary);
+        $this->assertSame($secondary->id, $duplicateEmail->contact_id);
         $this->assertDatabaseCount('contact_tag', 3);
         $this->assertDatabaseHas('contact_tag', [
             'contact_id' => $primary->id,
@@ -375,6 +402,35 @@ class MergeContactsActionTest extends TestCase
         $this->assertTrue($result->wasNoopSameRoot);
         $this->assertNull($result->mergeLogId);
         $this->assertDatabaseCount('contact_merge_logs', 0);
+    }
+
+    public function test_it_promotes_secondary_primary_email_when_primary_has_no_primary_email(): void
+    {
+        $primary = Contact::factory()->create();
+        $secondary = Contact::factory()->create();
+
+        $olderPrimaryEmail = ContactEmail::factory()->create([
+            'contact_id' => $primary->id,
+            'email_raw' => 'older@example.com',
+            'email_normalized' => 'older@example.com',
+            'is_primary' => false,
+        ]);
+        $secondaryPrimaryEmail = ContactEmail::factory()->create([
+            'contact_id' => $secondary->id,
+            'email_raw' => 'secondary-main@example.com',
+            'email_normalized' => 'secondary-main@example.com',
+            'is_primary' => true,
+        ]);
+
+        app(MergeContactsAction::class)->handle($primary, $secondary);
+
+        $olderPrimaryEmail->refresh();
+        $secondaryPrimaryEmail->refresh();
+
+        $this->assertSame($primary->id, $olderPrimaryEmail->contact_id);
+        $this->assertFalse($olderPrimaryEmail->is_primary);
+        $this->assertSame($primary->id, $secondaryPrimaryEmail->contact_id);
+        $this->assertTrue($secondaryPrimaryEmail->is_primary);
     }
 
     public function test_it_copies_first_name_source_when_first_name_is_adopted_from_secondary(): void

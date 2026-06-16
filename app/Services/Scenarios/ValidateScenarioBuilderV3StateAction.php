@@ -12,6 +12,8 @@ use Throwable;
 
 class ValidateScenarioBuilderV3StateAction
 {
+    public function __construct(private readonly FieldDictionaryEngineSupport $fieldDictionaryEngineSupport) {}
+
     private const MAX_BLOCKS = 500;
 
     private const MAX_EDGES = 1000;
@@ -181,19 +183,9 @@ class ValidateScenarioBuilderV3StateAction
         'age_range' => 'any_text',
     ];
 
-    private const CHANGE_FIELD_CONTACT_DATA_TYPES = [
-        'first_name' => 'any_text',
-        'last_name' => 'any_text',
-        'country' => 'any_text',
-        'region' => 'any_text',
-        'city' => 'any_text',
-        'gender' => 'any_text',
-        'age_years' => 'number',
-        'age_range' => 'any_text',
-    ];
-
     private const EDGE_CONTACT_FIELD_CONDITION_DATA_TYPES = [
         'phone' => 'phone',
+        'emails' => 'email',
         'first_name' => 'any_text',
         'last_name' => 'any_text',
         'country' => 'any_text',
@@ -1048,7 +1040,7 @@ class ValidateScenarioBuilderV3StateAction
                     $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.source_scope", 'Unknown start parameter source.');
                 }
 
-                if (! $this->validDialogVariableKey($simulateStartSourceFieldKey)) {
+                if (! $this->fieldDictionaryEngineSupport->supportsDialogFieldCondition($simulateStartSourceFieldKey)) {
                     $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.source_field_key", 'Invalid start parameter field.');
                 }
 
@@ -1112,11 +1104,11 @@ class ValidateScenarioBuilderV3StateAction
                     $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.target_scope", 'Unknown action target.');
                 }
 
-                if ($targetScope === 'contact' && ! array_key_exists($targetField, self::CHANGE_FIELD_CONTACT_DATA_TYPES)) {
+                if ($targetScope === 'contact' && ! $this->fieldDictionaryEngineSupport->supportsContactChangeField($targetField)) {
                     $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.target_field", 'Unknown contact field.');
                 }
 
-                if ($targetScope === 'dialog' && ! $this->validDialogVariableKey($targetField)) {
+                if ($targetScope === 'dialog' && ! $this->fieldDictionaryEngineSupport->supportsDialogChangeField($targetField)) {
                     $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.target_field", 'Invalid dialog field.');
                 }
 
@@ -1180,7 +1172,7 @@ class ValidateScenarioBuilderV3StateAction
                 $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.target_field", 'Unknown contact field.');
             }
 
-            if ($targetScope === 'dialog' && ! $this->validDialogVariableKey($targetField)) {
+            if ($targetScope === 'dialog' && ! $this->fieldDictionaryEngineSupport->supportsDialogChangeField($targetField)) {
                 $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.actions.$actionIndex.target_field", 'Invalid dialog field.');
             }
 
@@ -1261,7 +1253,7 @@ class ValidateScenarioBuilderV3StateAction
                 $this->fail("$path.$index.operation", 'Unknown variable operation.');
             }
 
-            if (! $this->validDialogVariableKey($fieldKey)) {
+            if (! $this->fieldDictionaryEngineSupport->supportsDialogChangeField($fieldKey)) {
                 $this->fail("$path.$index.field_key", 'Invalid dialog variable key.');
             }
 
@@ -1786,11 +1778,11 @@ class ValidateScenarioBuilderV3StateAction
             $this->fail("builder.edges.$edgeIndex.condition_payload.field_condition.operator", 'Unknown field condition operator.');
         }
 
-        if ($fieldScope === 'dialog' && ! $this->validDialogVariableKey($fieldKey)) {
+        if ($fieldScope === 'dialog' && ! $this->fieldDictionaryEngineSupport->supportsDialogFieldCondition($fieldKey)) {
             $this->fail("builder.edges.$edgeIndex.condition_payload.field_condition.field_key", 'Invalid dialog field key.');
         }
 
-        if ($fieldScope === 'contact' && ! array_key_exists($fieldKey, self::EDGE_CONTACT_FIELD_CONDITION_DATA_TYPES)) {
+        if ($fieldScope === 'contact' && ! $this->fieldDictionaryEngineSupport->supportsContactFieldCondition($fieldKey)) {
             $this->fail("builder.edges.$edgeIndex.condition_payload.field_condition.field_key", 'Unknown contact field key.');
         }
 
@@ -1904,7 +1896,7 @@ class ValidateScenarioBuilderV3StateAction
         }
 
         if ($fieldScope === 'dialog') {
-            if (! $this->validDialogVariableKey($fieldKey)) {
+            if (! $this->fieldDictionaryEngineSupport->supportsDialogChangeField($fieldKey)) {
                 $this->fail("builder.edges.$edgeIndex.condition_payload.input_capture.field_key", 'Invalid dialog field key.');
             }
 
@@ -1978,7 +1970,7 @@ class ValidateScenarioBuilderV3StateAction
                 $this->fail("$baseKey.target_field", 'Unknown writable contact field.');
             }
 
-            if ($targetScope === 'dialog' && ! $this->validDialogVariableKey($targetField)) {
+            if ($targetScope === 'dialog' && ! $this->fieldDictionaryEngineSupport->supportsDialogChangeField($targetField)) {
                 $this->fail("$baseKey.target_field", 'Invalid dialog field key.');
             }
 
