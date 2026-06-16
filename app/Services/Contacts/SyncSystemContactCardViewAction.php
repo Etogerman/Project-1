@@ -117,53 +117,53 @@ class SyncSystemContactCardViewAction
     ];
 
     /**
-     * @var array<string, array{name:string,sort_order:int,blocks:list<string>}>
+     * @var array<string, array{name:string,sort_order:int,fields:list<string>}>
      */
     private const DIALOG_SECTIONS = [
         'contact_dialogs' => [
             'name' => 'Диалоги',
             'sort_order' => 10,
-            'blocks' => [
-                self::BLOCK_CONTACT_DIALOGS,
+            'fields' => [
+                'contact_dialogs',
             ],
         ],
     ];
 
     /**
-     * @var array<string, array{name:string,sort_order:int,blocks:list<string>}>
+     * @var array<string, array{name:string,sort_order:int,fields:list<string>}>
      */
     private const HISTORY_SECTIONS = [
         'contact_history' => [
             'name' => 'История',
             'sort_order' => 10,
-            'blocks' => [
-                self::BLOCK_CONTACT_HISTORY,
+            'fields' => [
+                'contact_history',
             ],
         ],
     ];
 
     /**
-     * @var array<string, array{name:string,sort_order:int,blocks:list<string>}>
+     * @var array<string, array{name:string,sort_order:int,fields:list<string>}>
      */
     private const DEDUP_SECTIONS = [
         'contact_dedup' => [
             'name' => 'Склейки',
             'sort_order' => 10,
-            'blocks' => [
-                self::BLOCK_CONTACT_DEDUP,
+            'fields' => [
+                'contact_dedup',
             ],
         ],
     ];
 
     /**
-     * @var array<string, array{name:string,sort_order:int,blocks:list<string>}>
+     * @var array<string, array{name:string,sort_order:int,fields:list<string>}>
      */
     private const DIAGNOSTICS_SECTIONS = [
         'contact_diagnostics' => [
             'name' => 'Диагностика',
             'sort_order' => 10,
-            'blocks' => [
-                self::BLOCK_CONTACT_DIAGNOSTICS,
+            'fields' => [
+                'contact_diagnostics',
             ],
         ],
     ];
@@ -267,12 +267,12 @@ class SyncSystemContactCardViewAction
 
             $this->syncFieldTab($view, self::TAB_GENERAL, 'Общее', 10, self::GENERAL_SECTIONS);
             $this->syncFieldTab($view, self::TAB_GENERAL, 'Общее', 10, self::GENERAL_COMPLEX_FIELD_SECTIONS);
-            $this->syncBlockTab($view, self::TAB_DIALOGS, 'Диалоги', 20, self::DIALOG_SECTIONS);
+            $this->syncFieldTab($view, self::TAB_DIALOGS, 'Диалоги', 20, self::DIALOG_SECTIONS);
             $this->syncFieldTab($view, self::TAB_BITRIX24, 'Битрикс24', 30, self::BITRIX24_SECTIONS);
-            $this->syncBlockTab($view, self::TAB_HISTORY, 'История', 40, self::HISTORY_SECTIONS);
-            $this->syncBlockTab($view, self::TAB_DEDUP, 'Склейки', 50, self::DEDUP_SECTIONS);
+            $this->syncFieldTab($view, self::TAB_HISTORY, 'История', 40, self::HISTORY_SECTIONS);
+            $this->syncFieldTab($view, self::TAB_DEDUP, 'Склейки', 50, self::DEDUP_SECTIONS);
             $this->syncFieldTab($view, self::TAB_SYSTEM_FIELDS, 'Системные поля', 90, self::SYSTEM_FIELD_SECTIONS);
-            $this->syncBlockTab($view, self::TAB_DIAGNOSTICS, 'Диагностика', 100, self::DIAGNOSTICS_SECTIONS);
+            $this->syncFieldTab($view, self::TAB_DIAGNOSTICS, 'Диагностика', 100, self::DIAGNOSTICS_SECTIONS);
 
             return $view->refresh();
         });
@@ -295,7 +295,7 @@ class SyncSystemContactCardViewAction
     }
 
     /**
-     * @return array<string, array{name:string,sort_order:int,blocks:list<string>}>
+     * @return array<string, array{name:string,sort_order:int,fields:list<string>}>
      */
     public static function dialogSections(): array
     {
@@ -303,7 +303,7 @@ class SyncSystemContactCardViewAction
     }
 
     /**
-     * @return array<string, array{name:string,sort_order:int,blocks:list<string>}>
+     * @return array<string, array{name:string,sort_order:int,fields:list<string>}>
      */
     public static function historySections(): array
     {
@@ -311,7 +311,7 @@ class SyncSystemContactCardViewAction
     }
 
     /**
-     * @return array<string, array{name:string,sort_order:int,blocks:list<string>}>
+     * @return array<string, array{name:string,sort_order:int,fields:list<string>}>
      */
     public static function dedupSections(): array
     {
@@ -319,7 +319,7 @@ class SyncSystemContactCardViewAction
     }
 
     /**
-     * @return array<string, array{name:string,sort_order:int,blocks:list<string>}>
+     * @return array<string, array{name:string,sort_order:int,fields:list<string>}>
      */
     public static function diagnosticsSections(): array
     {
@@ -408,60 +408,4 @@ class SyncSystemContactCardViewAction
         }
     }
 
-    /**
-     * @param  array<string, array{name:string,sort_order:int,blocks:list<string>}>  $sections
-     */
-    private function syncBlockTab(CardView $view, string $tabKey, string $name, int $sortOrder, array $sections): void
-    {
-        $tab = CardViewTab::query()->updateOrCreate(
-            [
-                'card_view_id' => $view->id,
-                'tab_key' => $tabKey,
-            ],
-            [
-                'name' => $name,
-                'sort_order' => $sortOrder,
-                'is_visible' => true,
-                'is_system' => true,
-            ],
-        );
-
-        foreach ($sections as $sectionKey => $sectionDefinition) {
-            $section = CardViewSection::query()->updateOrCreate(
-                [
-                    'card_view_tab_id' => $tab->id,
-                    'section_key' => $sectionKey,
-                ],
-                [
-                    'name' => $sectionDefinition['name'],
-                    'sort_order' => $sectionDefinition['sort_order'],
-                    'is_visible' => true,
-                    'is_collapsed_by_default' => false,
-                    'is_system' => true,
-                ],
-            );
-
-            CardViewItem::query()
-                ->where('card_view_section_id', $section->id)
-                ->where('is_system', true)
-                ->whereNotIn('item_key', $sectionDefinition['blocks'])
-                ->delete();
-
-            foreach ($sectionDefinition['blocks'] as $index => $blockKey) {
-                CardViewItem::query()->updateOrCreate(
-                    [
-                        'card_view_section_id' => $section->id,
-                        'item_key' => $blockKey,
-                    ],
-                    [
-                        'item_type' => CardViewItem::TYPE_BLOCK,
-                        'field_dictionary_field_id' => null,
-                        'sort_order' => ($index + 1) * 10,
-                        'is_visible' => true,
-                        'is_system' => true,
-                    ],
-                );
-            }
-        }
-    }
 }
