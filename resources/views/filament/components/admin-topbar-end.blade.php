@@ -652,7 +652,7 @@
             const state = await response.json();
 
             writeCachedState(state);
-            renderState(state);
+            renderState(state, { allowSound: false });
         };
 
         toggle?.addEventListener('click', () => {
@@ -685,7 +685,7 @@
                     const state = await response.json();
 
                     writeCachedState(state);
-                    renderState(state);
+                    renderState(state, { allowSound: false });
                 } catch (error) {
                     statusNode.textContent = 'Режим не сохранён';
                 }
