@@ -1998,12 +1998,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
     private function v3FieldConditionValue(Message $message, string $fieldScope, string $fieldKey): mixed
     {
         if ($fieldScope === 'dialog') {
-            $dialog = $message->dialog instanceof Dialog
-                ? $message->dialog
-                : ($message->dialog_id !== null ? Dialog::query()->find($message->dialog_id) : null);
-            $fieldsPayload = is_array($dialog?->fields_payload) ? $dialog->fields_payload : [];
-
-            return $fieldsPayload[$fieldKey] ?? null;
+            return $this->v3DialogReadableFieldValue($message, $fieldKey);
         }
 
         if (! $message->contact instanceof Contact || ! in_array($fieldKey, EngineFieldRegistry::CONTACT_FIELD_CONDITION_FIELDS, true)) {
@@ -5181,22 +5176,43 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
     private function v3DialogFieldStringValue(Message $message, string $fieldKey): string
     {
+        $value = $this->v3DialogReadableFieldValue($message, $fieldKey);
+
+        return trim((string) ($value ?? ''));
+    }
+
+    private function v3DialogReadableFieldValue(Message $message, string $fieldKey): mixed
+    {
         if (! $this->validV3DialogVariableKey($fieldKey)) {
-            return '';
+            return null;
         }
 
-        $dialog = $message->dialog_id !== null
-            ? Dialog::query()->find($message->dialog_id)
-            : ($message->relationLoaded('dialog') ? $message->dialog : null);
+        $dialog = $message->dialog instanceof Dialog
+            ? $message->dialog
+            : ($message->dialog_id !== null ? Dialog::query()->find($message->dialog_id) : null);
 
         if (! $dialog instanceof Dialog) {
-            return '';
+            return null;
+        }
+
+        if (in_array($fieldKey, EngineFieldRegistry::readableFieldKeys(EngineFieldRegistry::ENTITY_DIALOG), true)) {
+            return $this->v3DialogSystemFieldValue($dialog, $fieldKey);
         }
 
         $fields = is_array($dialog->fields_payload) ? $dialog->fields_payload : [];
-        $value = $fields[$fieldKey] ?? null;
 
-        return trim((string) ($value ?? ''));
+        return $fields[$fieldKey] ?? null;
+    }
+
+    private function v3DialogSystemFieldValue(Dialog $dialog, string $fieldKey): mixed
+    {
+        return match ($fieldKey) {
+            'phone' => $dialog->confirmed_phone_raw ?: $dialog->confirmed_phone_normalized,
+            'external_username' => $dialog->currentContactIdentity?->external_username,
+            'last_inbound_message_at' => $dialog->last_inbound_at,
+            'last_outbound_message_at' => $dialog->last_outbound_at,
+            default => $dialog->{$fieldKey} ?? null,
+        };
     }
 
     private function v3VirtualStartParameterMessage(Message $message, string $parameter): Message
