@@ -65,7 +65,8 @@ class AdminDialogNotificationsTest extends TestCase
             ->assertSee('claimedAt: Date.now()', false)
             ->assertSee('await playSoundForMessage(messageId)', false)
             ->assertSee('Звук заблокирован. Нажмите', false)
-            ->assertSee('renderCachedState({ allowSound: true })', false);
+            ->assertSee('renderCachedState({ allowSound: true })', false)
+            ->assertSee('renderState(state, { allowSound: false })', false);
 
         $this->assertSame(30, substr_count($response->getContent(), 'data-ac-notifications-sound-option'));
     }
