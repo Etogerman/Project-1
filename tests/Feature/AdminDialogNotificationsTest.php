@@ -181,6 +181,90 @@ class AdminDialogNotificationsTest extends TestCase
             ->assertJsonPath('items.0.message_id', $thirdMessage->id);
     }
 
+    public function test_dialog_notifications_apply_scope_before_limiting_candidates(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+        $otherEmployee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+
+        $ownDialog = $this->createDialogWithInboundMessage('Моё старое важное сообщение', assignedUserId: $employee->id);
+
+        for ($i = 1; $i <= 251; $i++) {
+            $this->createDialogWithInboundMessage('Чужое сообщение '.$i, assignedUserId: $otherEmployee->id);
+        }
+
+        $this->actingAs($employee)
+            ->getJson(route('admin.dialog-notifications.show'))
+            ->assertOk()
+            ->assertJsonPath('count', 1)
+            ->assertJsonPath('items.0.dialog_id', $ownDialog->id)
+            ->assertJsonPath('items.0.text', 'Моё старое важное сообщение');
+    }
+
+    public function test_dialog_notifications_count_all_relevant_dialogs_while_limiting_items(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        for ($i = 1; $i <= 12; $i++) {
+            $this->createDialogWithInboundMessage('Диалог '.$i);
+        }
+
+        $this->actingAs($admin)
+            ->getJson(route('admin.dialog-notifications.show'))
+            ->assertOk()
+            ->assertJsonPath('count', 12)
+            ->assertJsonCount(10, 'items');
+    }
+
+    public function test_dialog_notifications_reject_arbitrary_mark_read_message_id(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $message = $this->addInboundMessage(
+            $this->createDialog(),
+            'Реальное уведомление',
+        );
+        $answeredDialog = $this->createDialog();
+        $answeredMessage = $this->addInboundMessage($answeredDialog, 'Уже отвеченное сообщение');
+
+        $this->addMessage($answeredDialog, [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'text' => 'Ответ оператора',
+        ]);
+
+        $this->actingAs($admin)
+            ->postJson(route('admin.dialog-notifications.mark-read'), [
+                'message_id' => $message->id + 100000,
+            ])
+            ->assertOk()
+            ->assertJsonPath('last_read_message_id', 0)
+            ->assertJsonPath('count', 1)
+            ->assertJsonPath('items.0.message_id', $message->id);
+
+        $this->actingAs($admin)
+            ->postJson(route('admin.dialog-notifications.mark-read'), [
+                'message_id' => $answeredMessage->id,
+            ])
+            ->assertOk()
+            ->assertJsonPath('last_read_message_id', 0)
+            ->assertJsonPath('count', 1)
+            ->assertJsonPath('items.0.message_id', $message->id);
+    }
+
     public function test_dialog_notifications_require_dialog_view_permission(): void
     {
         $employee = User::factory()->create([
