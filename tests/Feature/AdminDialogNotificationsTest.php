@@ -285,6 +285,58 @@ class AdminDialogNotificationsTest extends TestCase
             ->assertJsonPath('items', []);
     }
 
+    public function test_dialog_notifications_boundary_condition_does_not_bypass_scope_or_reply_status_for_same_timestamp_messages(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+        $otherEmployee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+        $receivedAt = now()->startOfSecond();
+        $boundaryDialog = $this->createDialogWithInboundMessage(
+            'Уже прочитанное сообщение',
+            assignedUserId: $employee->id,
+            messageOverrides: ['received_at' => $receivedAt],
+        );
+        $foreignDialog = $this->createDialogWithInboundMessage(
+            'Чужое сообщение с тем же временем',
+            assignedUserId: $otherEmployee->id,
+            messageOverrides: ['received_at' => $receivedAt],
+        );
+        $answeredDialog = $this->createDialogWithInboundMessage(
+            'Уже отвеченное сообщение с тем же временем',
+            assignedUserId: $employee->id,
+            messageOverrides: ['received_at' => $receivedAt],
+        );
+
+        $this->addMessage($answeredDialog, [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'text' => 'Ответ оператора',
+            'received_at' => $receivedAt->copy()->addMinute(),
+        ]);
+
+        $this->assertGreaterThan($boundaryDialog->last_inbound_message_id, $foreignDialog->last_inbound_message_id);
+        $this->assertGreaterThan($boundaryDialog->last_inbound_message_id, $answeredDialog->last_inbound_message_id);
+
+        $employee->putTablePreference(BuildDialogNotificationStateAction::PREFERENCE_KEY, [
+            'scope' => BuildDialogNotificationStateAction::SCOPE_MINE_UNASSIGNED,
+            'last_read_message_id' => $boundaryDialog->last_inbound_message_id,
+            'last_read_message_sort_at' => $receivedAt->format('Y-m-d H:i:s'),
+        ]);
+
+        $this->actingAs($employee)
+            ->getJson(route('admin.dialog-notifications.show'))
+            ->assertOk()
+            ->assertJsonPath('count', 0)
+            ->assertJsonPath('items', []);
+    }
+
     public function test_dialog_notifications_apply_scope_before_limiting_candidates(): void
     {
         $employee = User::factory()->create([
