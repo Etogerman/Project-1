@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Admin\ScenarioBuilderV3StateController;
+use App\Http\Controllers\Admin\DialogNotificationsController;
 use App\Http\Controllers\Bitrix24AdminOAuthController;
 use App\Http\Controllers\Bitrix24CallbackController;
 use App\Http\Controllers\Bitrix24ProbeController;
@@ -42,6 +43,20 @@ Route::get('/admin/bitrix24/oauth/start', [Bitrix24AdminOAuthController::class, 
 
 Route::get('/admin/bitrix24/oauth/callback', [Bitrix24AdminOAuthController::class, 'callback'])
     ->name('admin.bitrix24.oauth.callback');
+
+Route::middleware('auth')
+    ->prefix('/admin/dialog-notifications')
+    ->name('admin.dialog-notifications.')
+    ->group(function (): void {
+        Route::get('/', [DialogNotificationsController::class, 'show'])
+            ->name('show');
+
+        Route::patch('/preferences', [DialogNotificationsController::class, 'update'])
+            ->name('preferences.update');
+
+        Route::post('/mark-read', [DialogNotificationsController::class, 'markRead'])
+            ->name('mark-read');
+    });
 
 Route::middleware('auth')
     ->prefix('/admin/scenario-constructor/{scenario}/v3')

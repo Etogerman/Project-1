@@ -25,7 +25,7 @@ class MessageChronology
     ): array {
         return [
             'sql' => sprintf(
-                '(%1$s > %2$s) or ((%1$s = %2$s) and (%3$s > %4$s))',
+                '((%1$s > %2$s) or ((%1$s = %2$s) and (%3$s > %4$s)))',
                 $leftSortAt['sql'],
                 $rightSortAt['sql'],
                 $leftId['sql'],
