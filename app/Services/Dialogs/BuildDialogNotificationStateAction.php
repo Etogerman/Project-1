@@ -9,6 +9,7 @@ use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\User;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Str;
 
@@ -24,10 +25,8 @@ class BuildDialogNotificationStateAction
 
     private const ITEM_LIMIT = 10;
 
-    private const CANDIDATE_LIMIT = 250;
-
     public function __construct(
-        private readonly ResolveDialogInboxStatusAction $resolveDialogInboxStatusAction,
+        private readonly MessageChronology $messageChronology,
     ) {}
 
     /**
@@ -48,7 +47,9 @@ class BuildDialogNotificationStateAction
             ]);
         }
 
-        $items = $this->notificationItems($user, $scope, $lastReadMessageId);
+        $notificationQuery = $this->notificationDialogQuery($user, $scope, $lastReadMessageId);
+        $count = (clone $notificationQuery)->count();
+        $items = $this->notificationItems($notificationQuery);
         $latestNotificationMessageId = (int) ($items[0]['message_id'] ?? 0);
 
         return [
@@ -58,7 +59,7 @@ class BuildDialogNotificationStateAction
             'last_read_message_id' => $lastReadMessageId,
             'latest_scoped_inbound_message_id' => $latestScopedInboundMessageId,
             'latest_notification_message_id' => $latestNotificationMessageId,
-            'count' => count($items),
+            'count' => $count,
             'items' => $items,
         ];
     }
@@ -84,9 +85,15 @@ class BuildDialogNotificationStateAction
     public function markRead(User $user, ?int $messageId = null): array
     {
         $preference = $this->resolvePreference($user);
-        $targetMessageId = $messageId !== null && $messageId > 0
-            ? $messageId
-            : $this->latestScopedInboundMessageId($user, $preference['scope']);
+        $targetMessageId = $preference['last_read_message_id'];
+
+        if ($messageId !== null && $messageId > 0) {
+            if ($this->notificationMessageExists($user, $preference['scope'], $preference['last_read_message_id'], $messageId)) {
+                $targetMessageId = $messageId;
+            }
+        } else {
+            $targetMessageId = $this->latestScopedInboundMessageId($user, $preference['scope']);
+        }
 
         if ($targetMessageId > $preference['last_read_message_id']) {
             $this->persistPreference($user, [
@@ -101,81 +108,184 @@ class BuildDialogNotificationStateAction
     /**
      * @return array<int, array<string, mixed>>
      */
-    private function notificationItems(User $user, string $scope, int $lastReadMessageId): array
+    private function notificationItems(Builder $notificationQuery): array
     {
-        $items = [];
-        $seenDialogIds = [];
-
-        foreach ($this->candidateMessages($lastReadMessageId) as $message) {
-            $dialog = $message->dialog;
-
-            if (! $dialog instanceof Dialog || isset($seenDialogIds[$dialog->id])) {
-                continue;
-            }
-
-            if (! $this->dialogMatchesScope($dialog, $user, $scope)) {
-                continue;
-            }
-
-            if ($this->resolveDialogInboxStatusAction->handle($dialog)->code !== DialogInboxStatusData::CODE_REQUIRES_REPLY) {
-                continue;
-            }
-
-            $seenDialogIds[$dialog->id] = true;
-            $items[] = $this->formatItem($message, $dialog);
-
-            if (count($items) >= self::ITEM_LIMIT) {
-                break;
-            }
-        }
-
-        return $items;
-    }
-
-    /**
-     * @return EloquentCollection<int, Message>
-     */
-    private function candidateMessages(int $lastReadMessageId = 0): EloquentCollection
-    {
-        return Message::query()
-            ->with(['dialog.contact.assignedUser', 'dialog.channel', 'channel'])
-            ->whereNotNull('dialog_id')
-            ->where('id', '>', $lastReadMessageId)
-            ->where('direction', Message::DIRECTION_INBOUND)
-            ->where('message_kind', Message::KIND_INBOUND_USER)
-            ->orderByDesc('id')
-            ->limit(self::CANDIDATE_LIMIT)
+        $dialogs = $this->orderedByLatestInbound(
+            $this->withLatestInboundProjection($notificationQuery),
+        )
+            ->limit(self::ITEM_LIMIT)
             ->get();
+
+        $messages = $this->messagesById(
+            $dialogs
+                ->pluck('latest_inbound_user_message_id')
+                ->map(fn (mixed $id): int => (int) $id)
+                ->filter()
+                ->all(),
+        );
+
+        return $dialogs
+            ->map(function (Dialog $dialog) use ($messages): ?array {
+                $messageId = (int) $dialog->getAttribute('latest_inbound_user_message_id');
+                $message = $messages->get($messageId);
+
+                if (! $message instanceof Message) {
+                    return null;
+                }
+
+                return $this->formatItem($message, $dialog);
+            })
+            ->filter()
+            ->values()
+            ->all();
     }
 
     private function latestScopedInboundMessageId(User $user, string $scope): int
     {
-        foreach ($this->candidateMessages() as $message) {
-            $dialog = $message->dialog;
+        $latestInboundUserMessageId = $this->latestInboundUserMessageIdFragment();
 
-            if ($dialog instanceof Dialog && $this->dialogMatchesScope($dialog, $user, $scope)) {
-                return (int) $message->id;
-            }
-        }
+        $dialog = $this->orderedByLatestInbound(
+            $this->withLatestInboundProjection($this->scopedDialogQuery($user, $scope)),
+        )
+            ->whereRaw(
+                $latestInboundUserMessageId['sql'].' is not null',
+                $latestInboundUserMessageId['bindings'],
+            )
+            ->first();
 
-        return 0;
+        return (int) ($dialog?->getAttribute('latest_inbound_user_message_id') ?? 0);
     }
 
-    private function dialogMatchesScope(Dialog $dialog, User $user, string $scope): bool
+    private function notificationMessageExists(User $user, string $scope, int $lastReadMessageId, int $messageId): bool
     {
-        $contact = $dialog->contact;
+        $latestInboundUserMessageId = $this->latestInboundUserMessageIdFragment();
 
-        if (! $contact instanceof Contact || filled($contact->merged_into_contact_id)) {
-            return false;
+        return $this->notificationDialogQuery($user, $scope, $lastReadMessageId)
+            ->whereRaw(
+                $latestInboundUserMessageId['sql'].' = ?',
+                [
+                    ...$latestInboundUserMessageId['bindings'],
+                    $messageId,
+                ],
+            )
+            ->exists();
+    }
+
+    private function notificationDialogQuery(User $user, string $scope, int $lastReadMessageId): Builder
+    {
+        $query = $this->scopedDialogQuery($user, $scope);
+
+        DialogResource::applyInboxStatusFilter($query, DialogInboxStatusData::CODE_REQUIRES_REPLY);
+
+        if ($lastReadMessageId > 0) {
+            $latestInboundUserMessageId = $this->latestInboundUserMessageIdFragment();
+
+            $query->whereRaw(
+                $latestInboundUserMessageId['sql'].' > ?',
+                [
+                    ...$latestInboundUserMessageId['bindings'],
+                    $lastReadMessageId,
+                ],
+            );
         }
 
-        $assignedUserId = $contact->assigned_user_id;
+        return $query;
+    }
 
-        return match ($scope) {
-            self::SCOPE_MINE => (int) $assignedUserId === (int) $user->id,
-            self::SCOPE_ALL => true,
-            default => $assignedUserId === null || (int) $assignedUserId === (int) $user->id,
-        };
+    private function scopedDialogQuery(User $user, string $scope): Builder
+    {
+        return $this->applyDialogScope(
+            Dialog::query()->with(['contact.assignedUser', 'channel']),
+            $user,
+            $scope,
+        );
+    }
+
+    private function applyDialogScope(Builder $query, User $user, string $scope): Builder
+    {
+        return $query->whereHas('contact', function (Builder $query) use ($user, $scope): void {
+            $query->whereNull('merged_into_contact_id');
+
+            if ($scope === self::SCOPE_MINE) {
+                $query->where('assigned_user_id', $user->id);
+
+                return;
+            }
+
+            if ($scope !== self::SCOPE_ALL) {
+                $query->where(function (Builder $query) use ($user): void {
+                    $query
+                        ->whereNull('assigned_user_id')
+                        ->orWhere('assigned_user_id', $user->id);
+                });
+            }
+        });
+    }
+
+    private function withLatestInboundProjection(Builder $query): Builder
+    {
+        $latestInboundUserMessageId = $this->latestInboundUserMessageIdFragment();
+        $latestInboundUserMessageSortAt = $this->latestInboundUserMessageSortAtFragment();
+
+        return $query
+            ->select('dialogs.*')
+            ->selectRaw(
+                $latestInboundUserMessageId['sql'].' as latest_inbound_user_message_id',
+                $latestInboundUserMessageId['bindings'],
+            )
+            ->selectRaw(
+                $latestInboundUserMessageSortAt['sql'].' as latest_inbound_user_message_sort_at',
+                $latestInboundUserMessageSortAt['bindings'],
+            );
+    }
+
+    private function orderedByLatestInbound(Builder $query): Builder
+    {
+        $latestInboundUserMessageId = $this->latestInboundUserMessageIdFragment();
+        $latestInboundUserMessageSortAt = $this->latestInboundUserMessageSortAtFragment();
+
+        return $query
+            ->orderByRaw(
+                $latestInboundUserMessageSortAt['sql'].' desc',
+                $latestInboundUserMessageSortAt['bindings'],
+            )
+            ->orderByRaw(
+                $latestInboundUserMessageId['sql'].' desc',
+                $latestInboundUserMessageId['bindings'],
+            );
+    }
+
+    /**
+     * @param  array<int, int>  $messageIds
+     * @return EloquentCollection<int, Message>
+     */
+    private function messagesById(array $messageIds): EloquentCollection
+    {
+        if ($messageIds === []) {
+            return new EloquentCollection;
+        }
+
+        return Message::query()
+            ->with('channel')
+            ->whereKey($messageIds)
+            ->get()
+            ->keyBy('id');
+    }
+
+    /**
+     * @return array{sql:string,bindings:list<mixed>}
+     */
+    private function latestInboundUserMessageIdFragment(): array
+    {
+        return $this->messageChronology->latestDialogMessageIdFragment(Message::KIND_INBOUND_USER);
+    }
+
+    /**
+     * @return array{sql:string,bindings:list<mixed>}
+     */
+    private function latestInboundUserMessageSortAtFragment(): array
+    {
+        return $this->messageChronology->latestDialogMessageSortAtFragment(Message::KIND_INBOUND_USER);
     }
 
     /**
