@@ -10966,10 +10966,16 @@
             const selectionColumn = columns.find((column) => column.isSelection);
             const selectionVisible = selectionColumn ? Boolean(state.visible[selectionColumn.id]) : true;
             const tableContainer = table.closest('.fi-ta-ctn');
+            const recordCheckboxes = Array.from(table.querySelectorAll('.fi-ta-record-checkbox'));
+            const hasCheckedVisibleRecords = recordCheckboxes.some((checkbox) => checkbox.checked);
+            const shouldShowSelectionIndicator = selectionVisible
+                && recordCheckboxes.length > 0
+                && hasCheckedVisibleRecords;
+
             tableContainer?.classList.toggle('ac-dialogs-selection-hidden', !selectionVisible);
             tableContainer?.querySelectorAll('.fi-ta-selection-indicator').forEach((node) => {
-                node.hidden = !selectionVisible;
-                node.style.display = selectionVisible ? '' : 'none';
+                node.hidden = !shouldShowSelectionIndicator;
+                node.style.display = shouldShowSelectionIndicator ? '' : 'none';
             });
             setLastVisibleBoundary(table, columns, state);
             updateScrollState(scroll);
