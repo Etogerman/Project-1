@@ -682,7 +682,7 @@ class FieldDictionaryField extends Model
                         $attributes['is_multiple'] = (bool) ($definition['is_multiple'] ?? false);
                     }
 
-                    $field->forceFill($attributes)->save();
+                    $field->forceFill(self::filterDefinitionForCurrentSchema($attributes))->save();
                 }
             });
         } finally {
@@ -989,7 +989,10 @@ class FieldDictionaryField extends Model
             $this->write_access = self::legacyWriteAccessFromScenario($this->scenario_write_access, $this->write_access);
         }
         $this->hint_group = trim((string) ($this->hint_group ?? self::defaultHintGroup($this->entity, $this->field_key)));
-        $this->card_display_type = trim((string) ($this->card_display_type ?? self::CARD_DISPLAY_VALUE));
+
+        if (self::supportsCardDisplayType()) {
+            $this->card_display_type = trim((string) ($this->card_display_type ?? self::CARD_DISPLAY_VALUE));
+        }
 
         if ($this->entity === self::ENTITY_CONTACT && ! $this->is_system) {
             $this->condition_visibility = self::CONDITION_VISIBILITY_DISPLAY_ONLY;
@@ -1063,7 +1066,7 @@ class FieldDictionaryField extends Model
                     || $original->value_owner !== $this->value_owner
                 ))
                 || $original->hint_group !== $this->hint_group
-                || $original->card_display_type !== $this->card_display_type
+                || (self::supportsCardDisplayType() && $original->card_display_type !== $this->card_display_type)
             )
         ) {
             throw ValidationException::withMessages([
@@ -1157,7 +1160,7 @@ class FieldDictionaryField extends Model
             ]);
         }
 
-        if (! array_key_exists($this->card_display_type, self::cardDisplayTypeOptions())) {
+        if (self::supportsCardDisplayType() && ! array_key_exists($this->card_display_type, self::cardDisplayTypeOptions())) {
             throw ValidationException::withMessages([
                 'card_display_type' => 'Неизвестный тип отображения поля в карточке.',
             ]);
@@ -1457,6 +1460,10 @@ class FieldDictionaryField extends Model
 
     protected static function filterDefinitionForCurrentSchema(array $definition): array
     {
+        if (! self::supportsCardDisplayType()) {
+            unset($definition['card_display_type']);
+        }
+
         if (self::supportsSeparatedWriteAccess()) {
             return $definition;
         }
@@ -1464,6 +1471,11 @@ class FieldDictionaryField extends Model
         unset($definition['manual_write_access'], $definition['scenario_write_access'], $definition['value_owner']);
 
         return $definition;
+    }
+
+    protected static function supportsCardDisplayType(): bool
+    {
+        return Schema::hasColumn('field_dictionary_fields', 'card_display_type');
     }
 
     protected static function supportsSeparatedWriteAccess(): bool
