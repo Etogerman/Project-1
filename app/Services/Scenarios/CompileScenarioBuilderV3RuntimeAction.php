@@ -109,6 +109,7 @@ class CompileScenarioBuilderV3RuntimeAction
     ): array {
         $settings = $this->settingsPayload($block);
         $message = $this->module($settings, 'message');
+        $start = $this->module($settings, 'start_condition');
         $buttons = $this->module($settings, 'buttons');
         $ai = $this->module($settings, 'ai');
         $action = $this->module($settings, 'action');
@@ -146,6 +147,7 @@ class CompileScenarioBuilderV3RuntimeAction
 
         if (
             $compiled['message'] === null
+            && $start === null
             && $compiled['ai_analysis'] === null
             && $compiled['actions'] === []
             && $compiled['action_result_edges'] === []
