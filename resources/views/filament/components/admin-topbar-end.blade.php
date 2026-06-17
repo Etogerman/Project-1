@@ -346,6 +346,14 @@
             }));
         };
 
+        const claimSoundAttemptForMessage = (messageId) => {
+            window.localStorage.setItem(soundDedupeStorageKey, JSON.stringify({
+                messageId,
+                claimedAt: Date.now(),
+                tabId,
+            }));
+        };
+
         const rememberSoundMessage = (messageId) => {
             if (messageId <= lastSoundMessageId) {
                 return;
@@ -405,14 +413,13 @@
                 return;
             }
 
-            claimSoundForMessage(messageId);
+            claimSoundAttemptForMessage(messageId);
             await sleep(80 + Math.floor(Math.random() * 80));
 
             const state = readSoundDedupeState();
 
             if (Number(state.messageId || 0) === messageId && state.tabId === tabId) {
-                await playSound();
-                rememberSoundMessage(messageId);
+                await playSoundForMessage(messageId);
             }
         };
 

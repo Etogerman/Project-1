@@ -55,6 +55,9 @@ class AdminDialogNotificationsTest extends TestCase
             ->assertSee('ab.dialogNotifications.lastSoundMessage.v1', false)
             ->assertSee('window.AudioContext || window.webkitAudioContext', false)
             ->assertSee('latestNotificationMessageId > lastSoundMessageId', false)
+            ->assertSee('const claimSoundAttemptForMessage', false)
+            ->assertSee('claimedAt: Date.now()', false)
+            ->assertSee('await playSoundForMessage(messageId)', false)
             ->assertSee('Звук заблокирован. Нажмите', false)
             ->assertSee('renderCachedState({ allowSound: true })', false);
 
