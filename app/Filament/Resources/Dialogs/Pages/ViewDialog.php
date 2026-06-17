@@ -110,6 +110,11 @@ class ViewDialog extends ViewRecord
     protected ?array $dialogFieldLabels = null;
 
     /**
+     * @var array<string, true>|null
+     */
+    protected ?array $editableDialogFieldKeys = null;
+
+    /**
      * @var array<string, array<string, string>>
      */
     protected array $dialogOptionLabels = [];
@@ -119,6 +124,13 @@ class ViewDialog extends ViewRecord
      */
     protected array $dialogAvatarUrlCache = [];
 
+    /**
+     * @var array<string, string>
+     */
+    public array $dialogFieldDraftValues = [];
+
+    public bool $dialogFieldDraftDirty = false;
+
     public function mount(int|string $record): void
     {
         parent::mount($record);
@@ -127,6 +139,7 @@ class ViewDialog extends ViewRecord
         $this->activeTab = $this->normalizeCardTab((string) request()->query('tab', SyncSystemDialogCardViewAction::TAB_GENERAL));
 
         $this->initializeConversationHistory();
+        $this->fillDialogFieldDraftValues();
     }
 
     public function getTitle(): string|Htmlable
@@ -466,43 +479,8 @@ class ViewDialog extends ViewRecord
             : '';
 
         try {
-            if (mb_strlen($valueText) > self::DIALOG_FIELD_VALUE_MAX_LENGTH) {
-                throw ValidationException::withMessages([
-                    'dialog_field_value' => 'Значение поля диалога не должно быть длиннее 2000 символов.',
-                ]);
-            }
-
-            DB::transaction(function () use ($fieldKey, $valueText): void {
-                $dialog = Dialog::query()
-                    ->whereKey($this->getRecord()->getKey())
-                    ->lockForUpdate()
-                    ->firstOrFail();
-
-                $fieldsPayload = is_array($dialog->fields_payload) ? $dialog->fields_payload : [];
-
-                if (! $this->canEditDialogFieldValue($fieldKey, $fieldsPayload)) {
-                    throw ValidationException::withMessages([
-                        'dialog_field_key' => 'Это поле диалога нельзя изменить из карточки.',
-                    ]);
-                }
-
-                $fieldsPayload[$fieldKey] = $this->normalizeEditedDialogFieldValue(
-                    $valueText,
-                    $fieldsPayload[$fieldKey] ?? null,
-                );
-
-                $encoded = json_encode($fieldsPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-
-                if ($encoded === false || strlen($encoded) > self::DIALOG_FIELDS_MAX_BYTES) {
-                    throw ValidationException::withMessages([
-                        'dialog_field_value' => 'Поля диалога стали слишком большими для сохранения.',
-                    ]);
-                }
-
-                $dialog->forceFill(['fields_payload' => $fieldsPayload])->save();
-            });
-
-            $this->refreshDialogRecord();
+            $this->persistDialogFieldValues([$fieldKey => $valueText]);
+            $this->fillDialogFieldDraftValues();
 
             Notification::make()
                 ->success()
@@ -522,6 +500,65 @@ class ViewDialog extends ViewRecord
                 ->body($throwable->getMessage())
                 ->send();
         }
+    }
+
+    public function saveDialogFieldDraftValues(): void
+    {
+        try {
+            $changes = $this->changedDialogFieldDraftValues();
+            $assigneeChanged = $this->hasDialogAssigneeDraftChanges();
+
+            if ($changes === [] && ! $assigneeChanged) {
+                $this->dialogFieldDraftDirty = false;
+
+                return;
+            }
+
+            if ($changes !== []) {
+                $this->persistDialogFieldValues($changes);
+            }
+
+            if ($assigneeChanged) {
+                $this->persistDialogAssigneeDraftValue();
+                $this->isDialogAssigneeEditing = false;
+                $this->selectedDialogAssigneeId = '';
+            }
+
+            $this->fillDialogFieldDraftValues();
+
+            Notification::make()
+                ->success()
+                ->title('Изменения сохранены')
+                ->body('Данные диалога обновлены.')
+                ->send();
+        } catch (ValidationException $exception) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось сохранить поля')
+                ->body((string) collect($exception->errors())->flatten()->first())
+                ->send();
+        } catch (Throwable $throwable) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось сохранить поля')
+                ->body($throwable->getMessage())
+                ->send();
+        }
+    }
+
+    public function resetDialogFieldDraftValues(): void
+    {
+        $this->fillDialogFieldDraftValues();
+    }
+
+    public function updatedDialogFieldDraftValues(): void
+    {
+        $this->refreshDialogDraftDirtyState();
+    }
+
+    public function updatedSelectedDialogAssigneeId(): void
+    {
+        $this->refreshDialogDraftDirtyState();
     }
 
     /**
@@ -716,12 +753,16 @@ class ViewDialog extends ViewRecord
                 (string) ($field['key'] ?? ''),
                 (string) ($field['label'] ?? ($field['key'] ?? 'Поле')),
                 (string) ($field['value'] ?? '—'),
+                [
+                    'editable_value' => (string) ($field['editable_value'] ?? ''),
+                    'can_edit' => (bool) ($field['can_edit'] ?? false),
+                ],
             ))
             ->values()
             ->all();
 
         $sections[] = [
-            'section_key' => SyncSystemDialogCardViewAction::BLOCK_DIALOG_FIELDS,
+            'section_key' => SyncSystemDialogCardViewAction::SECTION_DIALOG_FIELDS,
             'title' => 'Поля диалога',
             'rows' => $rows,
         ];
@@ -917,19 +958,30 @@ class ViewDialog extends ViewRecord
                 continue;
             }
 
-            $rows[$fieldKey] = $this->dialogCardRow($fieldKey, (string) ($field['label'] ?? $fieldKey), (string) ($field['value'] ?? '—'));
+            $rows[$fieldKey] = $this->dialogCardRow(
+                $fieldKey,
+                (string) ($field['label'] ?? $fieldKey),
+                (string) ($field['value'] ?? '—'),
+                [
+                    'editable_value' => (string) ($field['editable_value'] ?? ''),
+                    'can_edit' => (bool) ($field['can_edit'] ?? false),
+                ],
+            );
         }
 
         return $rows;
     }
 
-    protected function dialogCardRow(string $fieldKey, string $fallbackLabel, string $value): array
+    /**
+     * @param  array<string, mixed>  $attributes
+     */
+    protected function dialogCardRow(string $fieldKey, string $fallbackLabel, string $value, array $attributes = []): array
     {
         return [
             'key' => $fieldKey,
             'label' => $this->dialogFieldLabel($fieldKey, $fallbackLabel),
             'value' => trim($value) !== '' ? $value : '—',
-        ];
+        ] + $attributes;
     }
 
     protected function initializeConversationHistory(): void
@@ -1223,12 +1275,15 @@ class ViewDialog extends ViewRecord
                 && ! str_starts_with($key, '_'))
             ->map(function (mixed $value, string $key) use ($fieldsPayload): array {
                 $formattedValue = $this->formatDialogFieldValue($value);
+                $editableValue = $this->formatDialogFieldEditableValue($value);
 
                 return [
                     'key' => $key,
                     'label' => $this->dialogFieldLabel($key, $key),
                     'value' => $formattedValue['value'],
-                    'editable_value' => $this->formatDialogFieldEditableValue($value),
+                    'editable_value' => array_key_exists($key, $this->dialogFieldDraftValues)
+                        ? (string) $this->dialogFieldDraftValues[$key]
+                        : $editableValue,
                     'value_type' => $formattedValue['type'],
                     'is_truncated' => $formattedValue['is_truncated'],
                     'can_edit' => $this->canEditDialogFieldValue($key, $fieldsPayload),
@@ -1563,6 +1618,145 @@ class ViewDialog extends ViewRecord
         return FieldDictionaryField::optionLabelFrom($this->dialogOptionLabels[$fieldKey], $value, $fallback);
     }
 
+    protected function fillDialogFieldDraftValues(): void
+    {
+        $this->dialogFieldDraftValues = $this->currentEditableDialogFieldValues();
+        $this->dialogFieldDraftDirty = false;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    protected function currentEditableDialogFieldValues(): array
+    {
+        $fieldsPayload = $this->getRecord()->fields_payload;
+
+        if (! is_array($fieldsPayload)) {
+            return [];
+        }
+
+        return collect($fieldsPayload)
+            ->filter(fn (mixed $value, mixed $key): bool => is_string($key)
+                && $this->canEditDialogFieldValue($key, $fieldsPayload))
+            ->mapWithKeys(fn (mixed $value, string $key): array => [
+                $key => $this->formatDialogFieldEditableValue($value),
+            ])
+            ->all();
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    protected function changedDialogFieldDraftValues(): array
+    {
+        $currentValues = $this->currentEditableDialogFieldValues();
+        $changes = [];
+
+        foreach ($currentValues as $fieldKey => $currentValue) {
+            $draftValue = array_key_exists($fieldKey, $this->dialogFieldDraftValues)
+                ? (string) $this->dialogFieldDraftValues[$fieldKey]
+                : $currentValue;
+
+            if ($draftValue !== $currentValue) {
+                $changes[$fieldKey] = $draftValue;
+            }
+        }
+
+        return $changes;
+    }
+
+    protected function refreshDialogDraftDirtyState(): void
+    {
+        $this->dialogFieldDraftDirty = $this->changedDialogFieldDraftValues() !== []
+            || $this->hasDialogAssigneeDraftChanges();
+    }
+
+    protected function hasDialogAssigneeDraftChanges(): bool
+    {
+        if (! $this->isDialogAssigneeEditing) {
+            return false;
+        }
+
+        $contact = $this->resolveReplyOwnerContact();
+        $currentAssigneeId = $contact instanceof Contact && filled($contact->assigned_user_id)
+            ? (string) $contact->assigned_user_id
+            : '';
+
+        return $this->selectedDialogAssigneeId !== $currentAssigneeId;
+    }
+
+    protected function persistDialogAssigneeDraftValue(): void
+    {
+        if (! $this->canCurrentUserManageDialogContactOwnership()) {
+            throw ValidationException::withMessages([
+                'dialog_assignee' => 'Недостаточно прав для изменения ответственного.',
+            ]);
+        }
+
+        $contact = $this->resolveReplyOwnerContact();
+
+        if (! $contact instanceof Contact) {
+            throw ValidationException::withMessages([
+                'dialog_assignee' => 'У диалога нет связанного контакта.',
+            ]);
+        }
+
+        $employee = $this->resolveCurrentEmployee();
+        $assigneeId = $this->selectedDialogAssigneeId !== ''
+            ? (int) $this->selectedDialogAssigneeId
+            : null;
+
+        app(SetContactAssigneeAction::class)->handle($contact, $employee, $assigneeId);
+
+        $this->refreshDialogRecord();
+    }
+
+    /**
+     * @param  array<string, string>  $values
+     */
+    protected function persistDialogFieldValues(array $values): void
+    {
+        DB::transaction(function () use ($values): void {
+            $dialog = Dialog::query()
+                ->whereKey($this->getRecord()->getKey())
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            $fieldsPayload = is_array($dialog->fields_payload) ? $dialog->fields_payload : [];
+
+            foreach ($values as $fieldKey => $valueText) {
+                if (mb_strlen($valueText) > self::DIALOG_FIELD_VALUE_MAX_LENGTH) {
+                    throw ValidationException::withMessages([
+                        'dialog_field_value' => 'Значение поля диалога не должно быть длиннее 2000 символов.',
+                    ]);
+                }
+
+                if (! $this->canEditDialogFieldValue($fieldKey, $fieldsPayload)) {
+                    throw ValidationException::withMessages([
+                        'dialog_field_key' => 'Это поле диалога нельзя изменить из карточки.',
+                    ]);
+                }
+
+                $fieldsPayload[$fieldKey] = $this->normalizeEditedDialogFieldValue(
+                    $valueText,
+                    $fieldsPayload[$fieldKey] ?? null,
+                );
+            }
+
+            $encoded = json_encode($fieldsPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+            if ($encoded === false || strlen($encoded) > self::DIALOG_FIELDS_MAX_BYTES) {
+                throw ValidationException::withMessages([
+                    'dialog_field_value' => 'Поля диалога стали слишком большими для сохранения.',
+                ]);
+            }
+
+            $dialog->forceFill(['fields_payload' => $fieldsPayload])->save();
+        });
+
+        $this->refreshDialogRecord();
+    }
+
     /**
      * @param  array<string, string>  $fallbackOptions
      * @return array<string, string>
@@ -1585,7 +1779,20 @@ class ViewDialog extends ViewRecord
     {
         return $fieldKey !== ''
             && ! str_starts_with($fieldKey, '_')
-            && array_key_exists($fieldKey, $fieldsPayload);
+            && array_key_exists($fieldKey, $fieldsPayload)
+            && $this->isWritableDialogDictionaryField($fieldKey);
+    }
+
+    protected function isWritableDialogDictionaryField(string $fieldKey): bool
+    {
+        $this->editableDialogFieldKeys ??= FieldDictionaryField::query()
+            ->where('entity', FieldDictionaryField::ENTITY_DIALOG)
+            ->where('manual_write_access', FieldDictionaryField::MANUAL_WRITE_ACCESS_EDITABLE)
+            ->pluck('field_key')
+            ->mapWithKeys(fn (string $key): array => [$key => true])
+            ->all();
+
+        return isset($this->editableDialogFieldKeys[$fieldKey]);
     }
 
     protected function normalizeEditedDialogFieldValue(string $value, mixed $previousValue): mixed

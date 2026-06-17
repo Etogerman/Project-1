@@ -134,18 +134,26 @@ class FilamentFieldDictionaryFieldsResourceTest extends TestCase
         $this->assertSame('gender_source', $gender->source_field_key);
         $this->assertSame(FieldDictionaryField::CONDITION_VISIBILITY_MAIN, $gender->condition_visibility);
         $this->assertSame(FieldDictionaryField::WRITE_ACCESS_WRITABLE, $gender->write_access);
+        $this->assertSame(FieldDictionaryField::MANUAL_WRITE_ACCESS_READONLY, $gender->manual_write_access);
+        $this->assertSame(FieldDictionaryField::SCENARIO_WRITE_ACCESS_ALLOWED, $gender->scenario_write_access);
+        $this->assertSame(FieldDictionaryField::VALUE_OWNER_SYSTEM, $gender->value_owner);
         $this->assertSame(FieldDictionaryField::HINT_GROUP_CONTACT, $gender->hint_group);
         $this->assertSame(FieldDictionaryField::TYPE_TEXT, $country->type);
         $this->assertSame('region_source', $country->source_field_key);
         $this->assertSame(FieldDictionaryField::TYPE_PHONE, $phone->type);
         $this->assertFalse($phone->is_multiple);
         $this->assertSame(FieldDictionaryField::WRITE_ACCESS_READ_ONLY, $phone->write_access);
+        $this->assertSame(FieldDictionaryField::SCENARIO_WRITE_ACCESS_DENIED, $phone->scenario_write_access);
         $this->assertSame(FieldDictionaryField::TYPE_PHONE, $phones->type);
         $this->assertTrue($phones->is_multiple);
+        $this->assertSame(FieldDictionaryField::VALUE_OWNER_COMPUTED, $phones->value_owner);
         $this->assertSame(FieldDictionaryField::TYPE_EMAIL, $emails->type);
         $this->assertTrue($emails->is_multiple);
         $this->assertSame(FieldDictionaryField::CONDITION_VISIBILITY_MAIN, $emails->condition_visibility);
         $this->assertSame(FieldDictionaryField::WRITE_ACCESS_READ_ONLY, $emails->write_access);
+        $this->assertSame(FieldDictionaryField::MANUAL_WRITE_ACCESS_READONLY, $emails->manual_write_access);
+        $this->assertSame(FieldDictionaryField::SCENARIO_WRITE_ACCESS_DENIED, $emails->scenario_write_access);
+        $this->assertSame(FieldDictionaryField::VALUE_OWNER_COMPUTED, $emails->value_owner);
         $this->assertSame(FieldDictionaryField::HINT_GROUP_CONTACT, $emails->hint_group);
         $this->assertSame(FieldDictionaryField::TYPE_SELECT, $ageRange->type);
         $this->assertContains('30_39', collect($ageRange->options)->pluck('value')->all());
@@ -162,6 +170,7 @@ class FilamentFieldDictionaryFieldsResourceTest extends TestCase
         $this->assertSame(FieldDictionaryField::TYPE_NUMBER, $effectiveAgeYears->type);
         $this->assertSame(FieldDictionaryField::CONDITION_VISIBILITY_DISPLAY_ONLY, $effectiveAgeYears->condition_visibility);
         $this->assertSame(FieldDictionaryField::WRITE_ACCESS_READ_ONLY, $effectiveAgeYears->write_access);
+        $this->assertSame(FieldDictionaryField::VALUE_OWNER_COMPUTED, $effectiveAgeYears->value_owner);
         $this->assertSame(FieldDictionaryField::TYPE_TEXT, $pendingRegionCandidates->type);
         $this->assertSame(FieldDictionaryField::CONDITION_VISIBILITY_DISPLAY_ONLY, $pendingRegionCandidates->condition_visibility);
         $this->assertSame(FieldDictionaryField::HINT_GROUP_GEO, $pendingRegionCandidates->hint_group);
@@ -181,8 +190,11 @@ class FilamentFieldDictionaryFieldsResourceTest extends TestCase
         $this->assertSame(FieldDictionaryField::HINT_GROUP_SYSTEM, $dialogCurrentBlock->hint_group);
         $this->assertSame(FieldDictionaryField::HINT_GROUP_QUESTIONNAIRE, $questionnaireStatus->hint_group);
         $this->assertSame(FieldDictionaryField::HINT_GROUP_BITRIX24, $bitrixContactId->hint_group);
+        $this->assertSame(FieldDictionaryField::VALUE_OWNER_INTEGRATION, $bitrixContactId->value_owner);
         $this->assertSame(FieldDictionaryField::TYPE_SELECT, $dialogSubscription->type);
         $this->assertSame(FieldDictionaryField::HINT_GROUP_DIALOG, $dialogSubscription->hint_group);
+        $this->assertSame(FieldDictionaryField::MANUAL_WRITE_ACCESS_READONLY, $dialogSubscription->manual_write_access);
+        $this->assertSame(FieldDictionaryField::SCENARIO_WRITE_ACCESS_DENIED, $dialogSubscription->scenario_write_access);
     }
 
     public function test_field_dictionary_label_helpers_return_dictionary_value_or_caller_fallback(): void
@@ -360,7 +372,11 @@ class FilamentFieldDictionaryFieldsResourceTest extends TestCase
         $this->assertValidationFails(fn (): bool => $field->fresh()->update(['source_field_key' => null]));
         $this->assertValidationFails(fn (): bool => $field->fresh()->update(['is_multiple' => true]));
         $this->assertValidationFails(fn (): bool => $field->fresh()->update(['condition_visibility' => FieldDictionaryField::CONDITION_VISIBILITY_DISPLAY_ONLY]));
-        $this->assertValidationFails(fn (): bool => $field->fresh()->update(['write_access' => FieldDictionaryField::WRITE_ACCESS_READ_ONLY]));
+        $field->fresh()->update(['write_access' => FieldDictionaryField::WRITE_ACCESS_READ_ONLY]);
+        $this->assertSame(FieldDictionaryField::WRITE_ACCESS_WRITABLE, $field->fresh()->write_access);
+        $this->assertValidationFails(fn (): bool => $field->fresh()->update(['manual_write_access' => FieldDictionaryField::MANUAL_WRITE_ACCESS_EDITABLE]));
+        $this->assertValidationFails(fn (): bool => $field->fresh()->update(['scenario_write_access' => FieldDictionaryField::SCENARIO_WRITE_ACCESS_DENIED]));
+        $this->assertValidationFails(fn (): bool => $field->fresh()->update(['value_owner' => FieldDictionaryField::VALUE_OWNER_OPERATOR]));
         $this->assertValidationFails(fn (): bool => $field->fresh()->update(['hint_group' => FieldDictionaryField::HINT_GROUP_SYSTEM]));
     }
 
@@ -568,7 +584,40 @@ class FilamentFieldDictionaryFieldsResourceTest extends TestCase
         $this->assertFalse($field->is_system);
         $this->assertSame(FieldDictionaryField::CONDITION_VISIBILITY_MAIN, $field->condition_visibility);
         $this->assertSame(FieldDictionaryField::WRITE_ACCESS_WRITABLE, $field->write_access);
+        $this->assertSame(FieldDictionaryField::MANUAL_WRITE_ACCESS_EDITABLE, $field->manual_write_access);
+        $this->assertSame(FieldDictionaryField::SCENARIO_WRITE_ACCESS_ALLOWED, $field->scenario_write_access);
+        $this->assertSame(FieldDictionaryField::VALUE_OWNER_OPERATOR, $field->value_owner);
         $this->assertSame(FieldDictionaryField::HINT_GROUP_DIALOG, $field->hint_group);
+    }
+
+    public function test_user_dialog_field_syncs_legacy_write_access_from_scenario_access(): void
+    {
+        $field = FieldDictionaryField::query()->create([
+            'entity' => FieldDictionaryField::ENTITY_DIALOG,
+            'field_key' => 'scenario_editable_counter',
+            'name' => 'Счётчик сценария',
+            'type' => FieldDictionaryField::TYPE_NUMBER,
+            'sort_order' => 1000,
+        ]);
+
+        $this->assertSame(FieldDictionaryField::SCENARIO_WRITE_ACCESS_ALLOWED, $field->scenario_write_access);
+        $this->assertSame(FieldDictionaryField::WRITE_ACCESS_WRITABLE, $field->write_access);
+
+        $field->update([
+            'scenario_write_access' => FieldDictionaryField::SCENARIO_WRITE_ACCESS_DENIED,
+        ]);
+        $field->refresh();
+
+        $this->assertSame(FieldDictionaryField::SCENARIO_WRITE_ACCESS_DENIED, $field->scenario_write_access);
+        $this->assertSame(FieldDictionaryField::WRITE_ACCESS_READ_ONLY, $field->write_access);
+
+        $field->update([
+            'scenario_write_access' => FieldDictionaryField::SCENARIO_WRITE_ACCESS_ALLOWED,
+        ]);
+        $field->refresh();
+
+        $this->assertSame(FieldDictionaryField::SCENARIO_WRITE_ACCESS_ALLOWED, $field->scenario_write_access);
+        $this->assertSame(FieldDictionaryField::WRITE_ACCESS_WRITABLE, $field->write_access);
     }
 
     public function test_user_contact_field_stays_display_only_and_read_only(): void
@@ -587,17 +636,25 @@ class FilamentFieldDictionaryFieldsResourceTest extends TestCase
         $this->assertFalse($field->is_system);
         $this->assertSame(FieldDictionaryField::CONDITION_VISIBILITY_DISPLAY_ONLY, $field->condition_visibility);
         $this->assertSame(FieldDictionaryField::WRITE_ACCESS_READ_ONLY, $field->write_access);
+        $this->assertSame(FieldDictionaryField::MANUAL_WRITE_ACCESS_READONLY, $field->manual_write_access);
+        $this->assertSame(FieldDictionaryField::SCENARIO_WRITE_ACCESS_DENIED, $field->scenario_write_access);
+        $this->assertSame(FieldDictionaryField::VALUE_OWNER_OPERATOR, $field->value_owner);
         $this->assertSame(FieldDictionaryField::HINT_GROUP_CONTACT, $field->hint_group);
 
         $field->update([
             'condition_visibility' => FieldDictionaryField::CONDITION_VISIBILITY_MAIN,
-            'write_access' => FieldDictionaryField::WRITE_ACCESS_WRITABLE,
+            'manual_write_access' => FieldDictionaryField::MANUAL_WRITE_ACCESS_EDITABLE,
+            'scenario_write_access' => FieldDictionaryField::SCENARIO_WRITE_ACCESS_ALLOWED,
+            'value_owner' => FieldDictionaryField::VALUE_OWNER_SCENARIO,
             'hint_group' => FieldDictionaryField::HINT_GROUP_SYSTEM,
         ]);
         $field->refresh();
 
         $this->assertSame(FieldDictionaryField::CONDITION_VISIBILITY_DISPLAY_ONLY, $field->condition_visibility);
         $this->assertSame(FieldDictionaryField::WRITE_ACCESS_READ_ONLY, $field->write_access);
+        $this->assertSame(FieldDictionaryField::MANUAL_WRITE_ACCESS_READONLY, $field->manual_write_access);
+        $this->assertSame(FieldDictionaryField::SCENARIO_WRITE_ACCESS_DENIED, $field->scenario_write_access);
+        $this->assertSame(FieldDictionaryField::VALUE_OWNER_OPERATOR, $field->value_owner);
         $this->assertSame(FieldDictionaryField::HINT_GROUP_CONTACT, $field->hint_group);
     }
 

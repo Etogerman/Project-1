@@ -248,7 +248,7 @@
 
         .sp-table {
             width: 100%;
-            min-width: 1420px;
+            min-width: 1580px;
             border-collapse: collapse;
             color: var(--ac-text);
             font-size: var(--ac-fs-13);
@@ -310,7 +310,9 @@
         .sp-col-type { width: 130px; }
         .sp-col-group { width: 140px; }
         .sp-col-condition { width: 160px; }
-        .sp-col-write { width: 140px; }
+        .sp-col-card-write { width: 120px; }
+        .sp-col-scenario-write { width: 120px; }
+        .sp-col-owner { width: 140px; }
         .sp-col-source { width: 150px; }
         .sp-col-multiple { width: 120px; }
         .sp-col-system { width: 116px; }
@@ -694,7 +696,9 @@
                         <col class="sp-col-type">
                         <col class="sp-col-group">
                         <col class="sp-col-condition">
-                        <col class="sp-col-write">
+                        <col class="sp-col-card-write">
+                        <col class="sp-col-scenario-write">
+                        <col class="sp-col-owner">
                         <col class="sp-col-source">
                         <col class="sp-col-multiple">
                         <col class="sp-col-system">
@@ -709,8 +713,10 @@
                             <th>Тип</th>
                             <th>Группа</th>
                             <th>Условия</th>
-                            <th>Изменение</th>
-                            <th>Источник</th>
+                            <th>В карточке</th>
+                            <th>В сценарии</th>
+                            <th>Источник значения</th>
+                            <th>Поле-источник</th>
                             <th>Множ.</th>
                             <th>Системное</th>
                             <th class="sp-col-order">Порядок</th>
@@ -750,7 +756,9 @@
                                 </td>
                                 <td><span class="sp-row-group">{{ $row['group_label'] }}</span></td>
                                 <td><span class="sp-row-group">{{ $row['condition_visibility_label'] }}</span></td>
-                                <td><span class="sp-row-group">{{ $row['write_access_label'] }}</span></td>
+                                <td><span class="sp-row-group">{{ $row['manual_write_access_label'] }}</span></td>
+                                <td><span class="sp-row-group">{{ $row['scenario_write_access_label'] }}</span></td>
+                                <td><span class="sp-row-group">{{ $row['value_owner_label'] }}</span></td>
                                 <td>
                                     <span class="sp-source {{ ($row['source_field_key'] ?? '') !== '' ? 'is-on' : '' }}" title="{{ ($row['source_field_label'] ?? '') !== '' ? $row['source_field_label'] : $row['source_label'] }}">
                                         <span class="sp-source__dot"></span>
@@ -777,7 +785,7 @@
                             </tr>
                         @empty
                             <tr>
-                                <td colspan="12" class="sp-empty-row">
+                                <td colspan="14" class="sp-empty-row">
                                     Поля по текущему фильтру не найдены.
                                 </td>
                             </tr>
@@ -810,8 +818,22 @@
                                 </select>
                             </td>
                             <td>
-                                <select class="sp-select" wire:model.defer="newField.write_access" @disabled($activeEntity === \App\Models\FieldDictionaryField::ENTITY_CONTACT)>
-                                    @foreach ($this->writeAccessOptions() as $access => $label)
+                                <select class="sp-select" wire:model.defer="newField.manual_write_access" @disabled($activeEntity === \App\Models\FieldDictionaryField::ENTITY_CONTACT)>
+                                    @foreach ($this->manualWriteAccessOptions() as $access => $label)
+                                        <option value="{{ $access }}">{{ $label }}</option>
+                                    @endforeach
+                                </select>
+                            </td>
+                            <td>
+                                <select class="sp-select" wire:model.defer="newField.scenario_write_access" @disabled($activeEntity === \App\Models\FieldDictionaryField::ENTITY_CONTACT)>
+                                    @foreach ($this->scenarioWriteAccessOptions() as $access => $label)
+                                        <option value="{{ $access }}">{{ $label }}</option>
+                                    @endforeach
+                                </select>
+                            </td>
+                            <td>
+                                <select class="sp-select" wire:model.defer="newField.value_owner" @disabled($activeEntity === \App\Models\FieldDictionaryField::ENTITY_CONTACT)>
+                                    @foreach ($this->valueOwnerOptions() as $access => $label)
                                         <option value="{{ $access }}">{{ $label }}</option>
                                     @endforeach
                                 </select>
@@ -910,17 +932,38 @@
                         </div>
 
                         <div class="sp-form-row">
-                            <label class="sp-form-row__label">Изменение</label>
-                            <select class="sp-select" wire:model.defer="fieldRows.{{ $selectedFieldId }}.write_access" @disabled($selectedRow['is_system'] || ($selectedRow['entity'] ?? null) === \App\Models\FieldDictionaryField::ENTITY_CONTACT)>
-                                @foreach ($this->writeAccessOptions() as $access => $label)
+                            <label class="sp-form-row__label">Ручное изменение в карточке</label>
+                            <select class="sp-select" wire:model.defer="fieldRows.{{ $selectedFieldId }}.manual_write_access" @disabled($selectedRow['is_system'] || ($selectedRow['entity'] ?? null) === \App\Models\FieldDictionaryField::ENTITY_CONTACT)>
+                                @foreach ($this->manualWriteAccessOptions() as $access => $label)
                                     <option value="{{ $access }}">{{ $label }}</option>
                                 @endforeach
                             </select>
                         </div>
                     </div>
 
+                    <div class="sp-form-grid">
+                        <div class="sp-form-row">
+                            <label class="sp-form-row__label">Изменение через сценарий</label>
+                            <select class="sp-select" wire:model.defer="fieldRows.{{ $selectedFieldId }}.scenario_write_access" @disabled($selectedRow['is_system'] || ($selectedRow['entity'] ?? null) === \App\Models\FieldDictionaryField::ENTITY_CONTACT)>
+                                @foreach ($this->scenarioWriteAccessOptions() as $access => $label)
+                                    <option value="{{ $access }}">{{ $label }}</option>
+                                @endforeach
+                            </select>
+                            <span class="sp-form-row__hint">Старое поле write_access синхронизируется автоматически.</span>
+                        </div>
+
+                        <div class="sp-form-row">
+                            <label class="sp-form-row__label">Основной источник значения</label>
+                            <select class="sp-select" wire:model.defer="fieldRows.{{ $selectedFieldId }}.value_owner" @disabled($selectedRow['is_system'] || ($selectedRow['entity'] ?? null) === \App\Models\FieldDictionaryField::ENTITY_CONTACT)>
+                                @foreach ($this->valueOwnerOptions() as $owner => $label)
+                                    <option value="{{ $owner }}">{{ $label }}</option>
+                                @endforeach
+                            </select>
+                        </div>
+                    </div>
+
                     <div class="sp-form-row">
-                        <label class="sp-form-row__label">Источник</label>
+                        <label class="sp-form-row__label">Поле-источник</label>
                         <select class="sp-select" wire:model.defer="fieldRows.{{ $selectedFieldId }}.source_field_key" @disabled($selectedRow['is_system'])>
                             <option value="">Нет</option>
                             @foreach ($this->sourceOptions((int) $selectedFieldId) as $sourceKey => $sourceLabel)

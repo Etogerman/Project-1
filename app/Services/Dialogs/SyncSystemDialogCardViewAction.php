@@ -24,17 +24,11 @@ class SyncSystemDialogCardViewAction
 
     public const TAB_DIAGNOSTICS = 'diagnostics';
 
-    public const BLOCK_DIALOG_CONVERSATION = 'dialog_conversation';
-
-    public const BLOCK_DIALOG_SYSTEM_FIELDS = 'dialog_system_fields';
-
-    public const BLOCK_DIALOG_FIELDS = 'dialog_fields';
-
     public const BLOCK_DIALOG_PEER_SYNC = 'dialog_peer_sync';
 
-    public const SECTION_DIALOG_CONVERSATION = 'dialog_conversation';
-
     public const SECTION_DIALOG_SIDE_DATA = 'dialog_side_data';
+
+    public const SECTION_DIALOG_FIELDS = 'dialog_fields';
 
     /**
      * @var array<string, array{name:string,sort_order:int,fields:list<string>}>

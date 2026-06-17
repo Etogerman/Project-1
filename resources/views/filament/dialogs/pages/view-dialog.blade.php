@@ -332,17 +332,16 @@
                 @foreach ($dialogGeneralSections as $section)
                     <section
                         class="ac-surface ac-surface--secondary ac-dialog-side-card"
-                        data-role="{{ ($section['section_key'] ?? '') === \App\Services\Dialogs\SyncSystemDialogCardViewAction::BLOCK_DIALOG_FIELDS ? 'dialog-fields-section' : 'dialog-card-section' }}"
+                        data-role="{{ ($section['section_key'] ?? '') === \App\Services\Dialogs\SyncSystemDialogCardViewAction::SECTION_DIALOG_FIELDS ? 'dialog-fields-section' : 'dialog-card-section' }}"
                         data-section-key="{{ $section['section_key'] ?? '' }}"
                     >
                         <div class="ac-surface__header ac-surface__header--centered">
                             <div class="ac-surface__title-group">
-                                <p class="ac-surface__eyebrow">Общее</p>
                                 <h3 class="ac-surface__title">{{ $section['title'] }}</h3>
                             </div>
                         </div>
 
-                        @if (($section['rows'] ?? []) === [] && ($section['section_key'] ?? '') === \App\Services\Dialogs\SyncSystemDialogCardViewAction::BLOCK_DIALOG_FIELDS)
+                        @if (($section['rows'] ?? []) === [] && ($section['section_key'] ?? '') === \App\Services\Dialogs\SyncSystemDialogCardViewAction::SECTION_DIALOG_FIELDS)
                             <div class="ac-surface__divider">
                                 <p data-role="dialog-fields-empty" class="ac-empty-state ac-empty-state--compact">Поля диалога пока не заполнены</p>
                             </div>
@@ -360,7 +359,6 @@
                     <section class="ac-surface ac-surface--secondary ac-dialog-side-card">
                         <div class="ac-surface__header ac-surface__header--centered">
                             <div class="ac-surface__title-group">
-                                <p class="ac-surface__eyebrow">Битрикс24</p>
                                 <h3 class="ac-surface__title">{{ $section['title'] }}</h3>
                             </div>
                         </div>
@@ -377,7 +375,6 @@
                     <section class="ac-surface ac-surface--secondary ac-dialog-side-card">
                         <div class="ac-surface__header ac-surface__header--centered">
                             <div class="ac-surface__title-group">
-                                <p class="ac-surface__eyebrow">Системные поля</p>
                                 <h3 class="ac-surface__title">{{ $section['title'] }}</h3>
                             </div>
                         </div>
@@ -396,7 +393,6 @@
                             <section class="ac-surface ac-dialog-side-card">
                                 <div class="ac-surface__header ac-surface__header--centered">
                                     <div class="ac-surface__title-group">
-                                        <p class="ac-surface__eyebrow">Диагностика</p>
                                         <h3 class="ac-surface__title">{{ $section['title'] }}</h3>
                                     </div>
                                 </div>
@@ -448,7 +444,7 @@
                         @endif
 
                         @foreach (($section['blocks'] ?? []) as $blockKey)
-                            @if ($blockKey === \App\Services\Dialogs\SyncSystemDialogCardViewAction::BLOCK_DIALOG_FIELDS && $dialogFields['is_visible'])
+                            @if ($blockKey === \App\Services\Dialogs\SyncSystemDialogCardViewAction::SECTION_DIALOG_FIELDS && $dialogFields['is_visible'])
                                 <div class="ac-surface__divider">
                                     <p class="ac-dialog-summary__section-title">Поля диалога</p>
                                     @if ($dialogFields['fields'] === [])
@@ -467,5 +463,33 @@
                 @endif
             </aside>
         </div>
+
+        @if ($this->dialogFieldDraftDirty)
+            <div data-role="dialog-field-savebar" class="ac-savebar is-visible">
+                <span class="ac-savebar__status">Есть несохранённые изменения</span>
+
+                <div class="ac-savebar__actions">
+                    <button
+                        type="button"
+                        wire:click="resetDialogFieldDraftValues"
+                        wire:loading.attr="disabled"
+                        wire:target="resetDialogFieldDraftValues,saveDialogFieldDraftValues"
+                        class="ac-button ac-button--secondary"
+                    >
+                        Отмена
+                    </button>
+                    <button
+                        type="button"
+                        wire:click="saveDialogFieldDraftValues"
+                        wire:loading.attr="disabled"
+                        wire:target="saveDialogFieldDraftValues"
+                        class="ac-button ac-button--success"
+                    >
+                        <span wire:loading.remove wire:target="saveDialogFieldDraftValues">Сохранить</span>
+                        <span wire:loading wire:target="saveDialogFieldDraftValues">Сохраняем...</span>
+                    </button>
+                </div>
+            </div>
+        @endif
     </div>
 </x-filament-panels::page>

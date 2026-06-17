@@ -3,9 +3,11 @@
         @php
             $isStatusRow = ($row['key'] ?? '') === 'status' && isset($dialogInboxStatus);
             $isAssigneeRow = ($row['key'] ?? '') === 'assigned_user_id' && isset($dialogAssignee);
+            $canEdit = (bool) ($row['can_edit'] ?? false);
             $rowValue = trim((string) ($row['value'] ?? ''));
             $canCopy = ! $isStatusRow
                 && ! $isAssigneeRow
+                && ! $canEdit
                 && ($row['can_copy'] ?? true)
                 && $rowValue !== ''
                 && $rowValue !== '—';
@@ -57,23 +59,14 @@
                             class="ac-select"
                             data-role="dialog-assignee-select"
                             wire:model.live="selectedDialogAssigneeId"
+                            wire:loading.attr="disabled"
+                            wire:target="saveDialogFieldDraftValues,resetDialogFieldDraftValues"
                         >
                             <option value="">Свободен</option>
                             @foreach (($dialogAssignee['available_assignees'] ?? []) as $assigneeId => $assigneeLabel)
                                 <option value="{{ $assigneeId }}">{{ $assigneeLabel }}</option>
                             @endforeach
                         </select>
-                        <button
-                            type="button"
-                            class="ac-dialog-assignee-save"
-                            data-role="dialog-save-assignee-button"
-                            wire:click="saveDialogAssignee"
-                            wire:loading.attr="disabled"
-                            wire:target="saveDialogAssignee"
-                            aria-label="Сохранить ответственного"
-                        >
-                            Сохранить
-                        </button>
                     </div>
                 @else
                     <button
@@ -89,6 +82,23 @@
                         <span data-role="dialog-assignee-current">{{ $row['value'] }}</span>
                     </button>
                 @endif
+            @elseif ($canEdit)
+                <div
+                    class="ac-dialog-field-row"
+                    data-role="dialog-field-editor"
+                >
+                    <input
+                        type="text"
+                        class="ac-dialog-field-row__input"
+                        data-role="dialog-field-value-input"
+                        aria-label="Значение поля {{ $row['label'] }}"
+                        value="{{ $row['editable_value'] ?? '' }}"
+                        wire:model.live.debounce.300ms="dialogFieldDraftValues.{{ $row['key'] ?? '' }}"
+                        wire:keydown.enter.prevent="saveDialogFieldDraftValues"
+                        wire:loading.attr="disabled"
+                        wire:target="saveDialogFieldDraftValues,resetDialogFieldDraftValues"
+                    >
+                </div>
             @else
                 <p class="ac-meta__value" title="{{ $row['value'] }}">
                     {{ $row['value'] }}
