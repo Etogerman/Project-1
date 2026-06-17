@@ -1,3 +1,38 @@
+@php
+    $notificationSoundOptions = [
+        ['value' => '01_click', 'label' => '01 Клик', 'url' => asset('audio/notifications/01_click.wav')],
+        ['value' => '02_double_click', 'label' => '02 Двойной клик', 'url' => asset('audio/notifications/02_double_click.wav')],
+        ['value' => '03_snap_click', 'label' => '03 Щелчок', 'url' => asset('audio/notifications/03_snap_click.wav')],
+        ['value' => '04_glass_tick', 'label' => '04 Стеклянный тик', 'url' => asset('audio/notifications/04_glass_tick.wav')],
+        ['value' => '05_soft_tick', 'label' => '05 Мягкий тик', 'url' => asset('audio/notifications/05_soft_tick.wav')],
+        ['value' => '06_wood_tap', 'label' => '06 Глухой тап', 'url' => asset('audio/notifications/06_wood_tap.wav')],
+        ['value' => '07_digital_blip', 'label' => '07 Цифровой блип', 'url' => asset('audio/notifications/07_digital_blip.wav')],
+        ['value' => '08_clean_ping', 'label' => '08 Чистый пинг', 'url' => asset('audio/notifications/08_clean_ping.wav')],
+        ['value' => '09_low_ping', 'label' => '09 Низкий пинг', 'url' => asset('audio/notifications/09_low_ping.wav')],
+        ['value' => '10_high_ping', 'label' => '10 Высокий пинг', 'url' => asset('audio/notifications/10_high_ping.wav')],
+        ['value' => '11_double_ping', 'label' => '11 Двойной пинг', 'url' => asset('audio/notifications/11_double_ping.wav')],
+        ['value' => '12_rising_ping', 'label' => '12 Восходящий пинг', 'url' => asset('audio/notifications/12_rising_ping.wav')],
+        ['value' => '13_falling_ping', 'label' => '13 Нисходящий пинг', 'url' => asset('audio/notifications/13_falling_ping.wav')],
+        ['value' => '14_ping_tick', 'label' => '14 Пинг-тик', 'url' => asset('audio/notifications/14_ping_tick.wav')],
+        ['value' => '15_pop', 'label' => '15 Поп', 'url' => asset('audio/notifications/15_pop.wav')],
+        ['value' => '16_soft_pop', 'label' => '16 Мягкий поп', 'url' => asset('audio/notifications/16_soft_pop.wav')],
+        ['value' => '17_bubble_pop', 'label' => '17 Пузырьковый поп', 'url' => asset('audio/notifications/17_bubble_pop.wav')],
+        ['value' => '18_radio_beep', 'label' => '18 Радио-бип', 'url' => asset('audio/notifications/18_radio_beep.wav')],
+        ['value' => '19_two_tone_beep', 'label' => '19 Двухтональный бип', 'url' => asset('audio/notifications/19_two_tone_beep.wav')],
+        ['value' => '20_scanner_beep', 'label' => '20 Сканер-бип', 'url' => asset('audio/notifications/20_scanner_beep.wav')],
+        ['value' => '21_tiny_bell', 'label' => '21 Короткий звонок', 'url' => asset('audio/notifications/21_tiny_bell.wav')],
+        ['value' => '22_bright_bell', 'label' => '22 Яркий звонок', 'url' => asset('audio/notifications/22_bright_bell.wav')],
+        ['value' => '23_short_chime', 'label' => '23 Короткий чайм', 'url' => asset('audio/notifications/23_short_chime.wav')],
+        ['value' => '24_chime_tick', 'label' => '24 Чайм-тик', 'url' => asset('audio/notifications/24_chime_tick.wav')],
+        ['value' => '25_desk_bell', 'label' => '25 Настольный звонок', 'url' => asset('audio/notifications/25_desk_bell.wav')],
+        ['value' => '26_alert_tap', 'label' => '26 Сигнальный тап', 'url' => asset('audio/notifications/26_alert_tap.wav')],
+        ['value' => '27_operator_beep', 'label' => '27 Операторский бип', 'url' => asset('audio/notifications/27_operator_beep.wav')],
+        ['value' => '28_compact_signal', 'label' => '28 Компактный сигнал', 'url' => asset('audio/notifications/28_compact_signal.wav')],
+        ['value' => '29_confirm_ding', 'label' => '29 Подтверждающий динь', 'url' => asset('audio/notifications/29_confirm_ding.wav')],
+        ['value' => '30_clear_notify', 'label' => '30 Ясное уведомление', 'url' => asset('audio/notifications/30_clear_notify.wav')],
+    ];
+@endphp
+
 <div class="ac-admin-topbar-end">
     @include('filament.components.environment-indicator')
 
@@ -55,6 +90,26 @@
                 </button>
             </div>
 
+            <label class="ac-admin-notifications__field">
+                <span>Звук</span>
+                <select data-ac-notifications-sound-choice>
+                    @foreach ($notificationSoundOptions as $sound)
+                        <option
+                            value="{{ $sound['value'] }}"
+                            data-ac-notifications-sound-option
+                        >
+                            {{ $sound['label'] }}
+                        </option>
+                    @endforeach
+                </select>
+            </label>
+
+            <div class="ac-admin-notifications__volume" role="group" aria-label="Громкость уведомлений">
+                <button type="button" data-ac-notifications-volume="quiet">Тихий</button>
+                <button type="button" data-ac-notifications-volume="medium">Средний</button>
+                <button type="button" data-ac-notifications-volume="loud">Громкий</button>
+            </div>
+
             <div class="ac-admin-notifications__list" data-ac-notifications-list></div>
 
             <p class="ac-admin-notifications__empty" data-ac-notifications-empty>
@@ -82,6 +137,8 @@
         const preferencesUrl = root.dataset.preferencesUrl;
         const markReadUrl = root.dataset.markReadUrl;
         const csrfToken = root.dataset.csrfToken;
+        const soundOptions = @json($notificationSoundOptions);
+        const defaultSoundChoice = '07_digital_blip';
         const toggle = root.querySelector('[data-ac-notifications-toggle]');
         const popover = root.querySelector('[data-ac-notifications-popover]');
         const countNode = root.querySelector('[data-ac-notifications-count]');
@@ -91,21 +148,51 @@
         const markReadButton = root.querySelector('[data-ac-notifications-mark-read]');
         const soundToggle = root.querySelector('[data-ac-notifications-sound-toggle]');
         const soundTest = root.querySelector('[data-ac-notifications-sound-test]');
+        const soundChoiceSelect = root.querySelector('[data-ac-notifications-sound-choice]');
         const scopeButtons = Array.from(root.querySelectorAll('[data-ac-notifications-scope]'));
+        const volumeButtons = Array.from(root.querySelectorAll('[data-ac-notifications-volume]'));
         const soundStorageKey = 'ab.dialogNotifications.soundEnabled.v1';
+        const soundChoiceStorageKey = 'ab.dialogNotifications.soundChoice.v1';
+        const soundLevelStorageKey = 'ab.dialogNotifications.soundLevel.v1';
         const soundDedupeStorageKey = 'ab.dialogNotifications.soundDedupe.v1';
+        const lastSoundMessageStorageKey = 'ab.dialogNotifications.lastSoundMessage.v1';
         const stateStorageKey = 'ab.dialogNotifications.state.v1';
         const pollLeaseStorageKey = 'ab.dialogNotifications.pollLease.v1';
+        const soundVolumeByLevel = {
+            quiet: 0.3,
+            medium: 0.65,
+            loud: 1,
+        };
         const soundDedupeWindowMs = 10000;
-        const pollLeaseMs = 11000;
-        const pollIntervalMs = 8000;
+        const pollLeaseMs = 5000;
+        const pollIntervalMs = 3000;
         const tabId = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
 
         let soundEnabled = window.localStorage.getItem(soundStorageKey) === '1';
+        let soundChoice = normalizeSoundChoice(window.localStorage.getItem(soundChoiceStorageKey));
+        let soundLevel = normalizeSoundLevel(window.localStorage.getItem(soundLevelStorageKey));
+        let lastSoundMessageId = normalizePositiveInteger(window.localStorage.getItem(lastSoundMessageStorageKey));
         let audioContext = null;
+        const soundBufferCache = new Map();
         let latestKnownNotificationMessageId = 0;
         let hasBootstrappedSoundBaseline = false;
         let isPolling = false;
+
+        function normalizeSoundLevel(value) {
+            return ['quiet', 'medium', 'loud'].includes(value) ? value : 'medium';
+        }
+
+        function normalizeSoundChoice(value) {
+            return soundOptions.some((option) => option.value === value)
+                ? value
+                : defaultSoundChoice;
+        }
+
+        function normalizePositiveInteger(value) {
+            const number = Number(value || 0);
+
+            return Number.isFinite(number) && number > 0 ? number : 0;
+        }
 
         const jsonHeaders = () => ({
             'Accept': 'application/json',
@@ -134,7 +221,31 @@
             root.classList.toggle('is-sound-enabled', soundEnabled);
         };
 
-        const ensureAudio = async () => {
+        const renderSoundLevelState = () => {
+            volumeButtons.forEach((button) => {
+                const isActive = button.dataset.acNotificationsVolume === soundLevel;
+                button.classList.toggle('is-active', isActive);
+                button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+            });
+        };
+
+        const renderSoundChoiceState = () => {
+            if (soundChoiceSelect) {
+                soundChoiceSelect.value = soundChoice;
+            }
+        };
+
+        const selectedSoundOption = () => (
+            soundOptions.find((option) => option.value === soundChoice) || soundOptions[0]
+        );
+
+        const selectedVolume = () => soundVolumeByLevel[soundLevel] ?? soundVolumeByLevel.medium;
+
+        const reportSoundBlocked = () => {
+            statusNode.textContent = 'Звук заблокирован. Нажмите «Проверить».';
+        };
+
+        const ensureAudioContext = async () => {
             const Context = window.AudioContext || window.webkitAudioContext;
 
             if (!Context) {
@@ -147,7 +258,49 @@
                 await audioContext.resume();
             }
 
+            if (audioContext.state !== 'running') {
+                throw new Error('AudioContext is not running.');
+            }
+
             return audioContext;
+        };
+
+        const loadSoundBuffer = async (context, option) => {
+            if (!option?.url) {
+                throw new Error('Notification sound is not configured.');
+            }
+
+            if (soundBufferCache.has(option.url)) {
+                return soundBufferCache.get(option.url);
+            }
+
+            const response = await fetch(option.url, { cache: 'force-cache' });
+
+            if (!response.ok) {
+                throw new Error(`Notification sound failed: ${response.status}`);
+            }
+
+            const buffer = await context.decodeAudioData(await response.arrayBuffer());
+
+            soundBufferCache.set(option.url, buffer);
+
+            return buffer;
+        };
+
+        const preloadSelectedSound = () => {
+            const option = selectedSoundOption();
+
+            if (!option?.url) {
+                return;
+            }
+
+            if (audioContext) {
+                loadSoundBuffer(audioContext, option).catch(() => {});
+
+                return;
+            }
+
+            fetch(option.url, { cache: 'force-cache' }).catch(() => {});
         };
 
         const playSound = async () => {
@@ -155,21 +308,23 @@
                 return;
             }
 
-            const context = await ensureAudio();
-            const oscillator = context.createOscillator();
-            const gain = context.createGain();
-            const now = context.currentTime;
+            const option = selectedSoundOption();
 
-            oscillator.type = 'sine';
-            oscillator.frequency.setValueAtTime(880, now);
-            oscillator.frequency.exponentialRampToValueAtTime(660, now + 0.16);
-            gain.gain.setValueAtTime(0.0001, now);
-            gain.gain.exponentialRampToValueAtTime(0.16, now + 0.02);
-            gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.2);
-            oscillator.connect(gain);
+            if (!option?.url) {
+                return;
+            }
+
+            const context = await ensureAudioContext();
+            const buffer = await loadSoundBuffer(context, option);
+            const source = context.createBufferSource();
+            const gain = context.createGain();
+            const startedAt = context.currentTime + 0.01;
+
+            source.buffer = buffer;
+            gain.gain.setValueAtTime(selectedVolume(), startedAt);
+            source.connect(gain);
             gain.connect(context.destination);
-            oscillator.start(now);
-            oscillator.stop(now + 0.22);
+            source.start(startedAt);
         };
 
         const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -191,13 +346,34 @@
             }));
         };
 
-        const playSoundForMessage = async (messageId) => {
-            if (!soundEnabled || messageId < 1 || soundWasRecentlyPlayed(messageId)) {
+        const rememberSoundMessage = (messageId) => {
+            if (messageId <= lastSoundMessageId) {
                 return;
             }
 
-            claimSoundForMessage(messageId);
-            await playSound();
+            lastSoundMessageId = messageId;
+            window.localStorage.setItem(lastSoundMessageStorageKey, String(messageId));
+        };
+
+        const playSoundForMessage = async (messageId) => {
+            if (
+                !soundEnabled
+                || messageId < 1
+                || messageId <= lastSoundMessageId
+                || soundWasRecentlyPlayed(messageId)
+            ) {
+                return;
+            }
+
+            try {
+                await playSound();
+                claimSoundForMessage(messageId);
+                rememberSoundMessage(messageId);
+            } catch (error) {
+                reportSoundBlocked();
+
+                throw error;
+            }
         };
 
         const playCoordinatedSound = async (messageId) => {
@@ -236,6 +412,7 @@
 
             if (Number(state.messageId || 0) === messageId && state.tabId === tabId) {
                 await playSound();
+                rememberSoundMessage(messageId);
             }
         };
 
@@ -272,11 +449,13 @@
             }));
         };
 
-        const renderCachedState = () => {
+        const renderCachedState = (options = {}) => {
             const cached = readJsonStorage(stateStorageKey);
 
             if (cached.state && typeof cached.state === 'object') {
-                renderState(cached.state, { allowSound: false });
+                renderState(cached.state, {
+                    allowSound: options.allowSound === true,
+                });
             }
         };
 
@@ -351,20 +530,22 @@
             setStatus(state);
 
             if (!hasBootstrappedSoundBaseline) {
-                latestKnownNotificationMessageId = latestNotificationMessageId;
+                latestKnownNotificationMessageId = Math.max(
+                    latestKnownNotificationMessageId,
+                    lastSoundMessageId,
+                );
                 hasBootstrappedSoundBaseline = true;
-
-                return;
             }
 
-            if (
-                allowSound
-                && document.visibilityState === 'visible'
-                &&
-                latestNotificationMessageId > latestKnownNotificationMessageId
-                && Number(state.count || 0) > 0
-            ) {
+            const shouldPlaySound = allowSound
+                && latestNotificationMessageId > lastSoundMessageId
+                && Number(state.count || 0) > 0;
+
+            if (latestNotificationMessageId > latestKnownNotificationMessageId) {
                 latestKnownNotificationMessageId = latestNotificationMessageId;
+            }
+
+            if (shouldPlaySound) {
                 playCoordinatedSound(latestNotificationMessageId).catch(() => {});
             }
         };
@@ -375,7 +556,7 @@
             }
 
             if (!options.force && !acquirePollLease()) {
-                renderCachedState();
+                renderCachedState({ allowSound: true });
 
                 return;
             }
@@ -492,7 +673,9 @@
             renderSoundState();
 
             if (soundEnabled) {
-                playSound().catch(() => {});
+                playSound().catch(() => {
+                    reportSoundBlocked();
+                });
             }
         });
 
@@ -503,7 +686,33 @@
                 renderSoundState();
             }
 
-            playSound().catch(() => {});
+            playSound().catch(() => {
+                reportSoundBlocked();
+            });
+        });
+
+        soundChoiceSelect?.addEventListener('change', () => {
+            soundChoice = normalizeSoundChoice(soundChoiceSelect.value);
+            window.localStorage.setItem(soundChoiceStorageKey, soundChoice);
+            renderSoundChoiceState();
+            preloadSelectedSound();
+
+            if (soundEnabled) {
+                playSound().catch(() => {});
+            }
+        });
+
+        volumeButtons.forEach((button) => {
+            button.addEventListener('click', () => {
+                soundLevel = normalizeSoundLevel(button.dataset.acNotificationsVolume);
+                window.localStorage.setItem(soundLevelStorageKey, soundLevel);
+                renderSoundLevelState();
+                preloadSelectedSound();
+
+                if (soundEnabled) {
+                    playSound().catch(() => {});
+                }
+            });
         });
 
         window.addEventListener('storage', (event) => {
@@ -512,12 +721,31 @@
                 renderSoundState();
             }
 
+            if (event.key === soundChoiceStorageKey) {
+                soundChoice = normalizeSoundChoice(event.newValue);
+                renderSoundChoiceState();
+                preloadSelectedSound();
+            }
+
+            if (event.key === soundLevelStorageKey) {
+                soundLevel = normalizeSoundLevel(event.newValue);
+                renderSoundLevelState();
+                preloadSelectedSound();
+            }
+
+            if (event.key === lastSoundMessageStorageKey) {
+                lastSoundMessageId = normalizePositiveInteger(event.newValue);
+            }
+
             if (event.key === stateStorageKey) {
-                renderCachedState();
+                renderCachedState({ allowSound: true });
             }
         });
 
         renderSoundState();
+        renderSoundChoiceState();
+        renderSoundLevelState();
+        preloadSelectedSound();
         renderCachedState();
         fetchState(true, { force: document.visibilityState === 'visible' });
         window.setInterval(() => fetchState(false), pollIntervalMs);

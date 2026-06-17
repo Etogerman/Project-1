@@ -34,12 +34,31 @@ class AdminDialogNotificationsTest extends TestCase
             'is_admin' => true,
         ]);
 
-        $this->actingAs($admin)
-            ->get(DialogResource::getUrl('index'))
+        $response = $this->actingAs($admin)
+            ->get(DialogResource::getUrl('index'));
+
+        $response
             ->assertOk()
             ->assertSee('data-ac-dialog-notifications', false)
             ->assertSee(route('admin.dialog-notifications.show'), false)
-            ->assertSee('Включить звук');
+            ->assertSee('Включить звук')
+            ->assertSee('data-ac-notifications-sound-choice', false)
+            ->assertSee('01 Клик')
+            ->assertSee('07_digital_blip', false)
+            ->assertSee('30 Ясное уведомление')
+            ->assertSee('30_clear_notify.wav', false)
+            ->assertSee('Тихий')
+            ->assertSee('Средний')
+            ->assertSee('Громкий')
+            ->assertSee('const pollIntervalMs = 3000', false)
+            ->assertSee('const pollLeaseMs = 5000', false)
+            ->assertSee('ab.dialogNotifications.lastSoundMessage.v1', false)
+            ->assertSee('window.AudioContext || window.webkitAudioContext', false)
+            ->assertSee('latestNotificationMessageId > lastSoundMessageId', false)
+            ->assertSee('Звук заблокирован. Нажмите', false)
+            ->assertSee('renderCachedState({ allowSound: true })', false);
+
+        $this->assertSame(30, substr_count($response->getContent(), 'data-ac-notifications-sound-option'));
     }
 
     public function test_initial_state_can_set_baseline_without_returning_old_messages(): void
