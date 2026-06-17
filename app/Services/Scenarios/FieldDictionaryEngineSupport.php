@@ -68,7 +68,7 @@ class FieldDictionaryEngineSupport
 
     public function supportsChangeFieldWrite(FieldDictionaryField $field): bool
     {
-        if ($field->write_access !== FieldDictionaryField::WRITE_ACCESS_WRITABLE) {
+        if ($field->scenario_write_access !== FieldDictionaryField::SCENARIO_WRITE_ACCESS_ALLOWED) {
             return false;
         }
 
@@ -155,7 +155,7 @@ class FieldDictionaryEngineSupport
             $dictionary = FieldDictionaryField::query()
                 ->where('entity', $entity)
                 ->where('is_system', true)
-                ->get(['field_key', 'type', 'condition_visibility', 'write_access'])
+                ->get(['field_key', 'type', 'condition_visibility', 'scenario_write_access'])
                 ->keyBy('field_key');
 
             foreach (EngineFieldRegistry::fields($entity) as $fieldKey => $engineField) {
@@ -178,7 +178,7 @@ class FieldDictionaryEngineSupport
                     $problems[] = "{$entity}.{$fieldKey}: поле разрешено в условиях, но движок не умеет его читать.";
                 }
 
-                if ($field->write_access === FieldDictionaryField::WRITE_ACCESS_WRITABLE
+                if ($field->scenario_write_access === FieldDictionaryField::SCENARIO_WRITE_ACCESS_ALLOWED
                     && ! in_array((string) $fieldKey, $this->writableSystemFieldKeys($entity), true)) {
                     $problems[] = "{$entity}.{$fieldKey}: поле разрешено для записи, но движок не умеет его писать.";
                 }
@@ -227,7 +227,7 @@ class FieldDictionaryEngineSupport
 
     private function writeUnavailableReason(FieldDictionaryField $field): string
     {
-        if ($field->write_access !== FieldDictionaryField::WRITE_ACCESS_WRITABLE) {
+        if ($field->scenario_write_access !== FieldDictionaryField::SCENARIO_WRITE_ACCESS_ALLOWED) {
             return 'Поле не разрешено менять через действие.';
         }
 

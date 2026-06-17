@@ -3830,42 +3830,6 @@
         font-size: 0.74rem;
     }
 
-    .ac-dialog-assignee-save {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 1.65rem;
-        min-height: 1.65rem;
-        height: 1.65rem;
-        flex: 0 0 1.65rem;
-        border: 1px solid color-mix(in srgb, var(--ac-success) 42%, transparent);
-        border-radius: 0.38rem;
-        background: var(--ac-success);
-        color: #ffffff;
-        font-size: 0.82rem;
-        font-weight: 800;
-        line-height: 1;
-        cursor: pointer;
-        box-shadow: var(--ac-shadow-sm);
-        transition: background 140ms ease, box-shadow 140ms ease, transform 140ms ease;
-    }
-
-    .ac-dialog-assignee-save:hover:not(:disabled),
-    .ac-dialog-assignee-save:focus-visible:not(:disabled) {
-        background: color-mix(in srgb, var(--ac-success) 88%, var(--ac-text));
-        box-shadow: 0 12px 22px -18px color-mix(in srgb, var(--ac-success) 55%, transparent);
-    }
-
-    .ac-dialog-assignee-save:focus-visible {
-        outline: 2px solid color-mix(in srgb, var(--ac-success) 32%, transparent);
-        outline-offset: 2px;
-    }
-
-    .ac-dialog-assignee-save:disabled {
-        cursor: wait;
-        opacity: 0.7;
-    }
-
     .ac-surface {
         border: 1px solid var(--ac-border);
         border-radius: var(--ac-radius-xl);
@@ -4331,74 +4295,24 @@
     }
 
     .ac-dialog-field-row {
-        display: grid;
-        align-items: start;
-        gap: 0.75rem;
-        grid-template-columns: minmax(0, 1fr);
-        border: 1px solid var(--ac-border);
-        border-radius: 0.65rem;
-        background: color-mix(in oklch, var(--ac-surface-muted) 58%, transparent);
-        padding: 0.75rem;
-    }
-
-    .ac-dialog-field-row__content {
+        display: block;
+        justify-self: end;
+        width: 100%;
         min-width: 0;
-    }
-
-    .ac-dialog-field-row__content .ac-meta__value {
-        overflow-wrap: anywhere;
-    }
-
-    .ac-dialog-field-row__value-line {
-        display: grid;
-        grid-template-columns: minmax(7.5rem, 0.9fr) minmax(0, 1.1fr) auto;
-        align-items: center;
-        gap: 0.45rem;
-    }
-
-    .ac-dialog-field-row__value-line .ac-meta__label,
-    .ac-dialog-field-row__value-line .ac-meta__value {
-        margin: 0;
-        min-width: 0;
-    }
-
-    .ac-dialog-field-row__value-line .ac-meta__value {
-        text-align: right;
-    }
-
-    .ac-dialog-field-row__edit {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 1.75rem;
-        height: 1.75rem;
-        border: 1px solid transparent;
-        border-radius: 999px;
-        background: transparent;
-        color: var(--ac-muted);
-        cursor: pointer;
-    }
-
-    .ac-dialog-field-row__edit:hover {
-        border-color: var(--ac-border);
-        background: color-mix(in oklch, var(--ac-primary) 10%, var(--ac-surface));
-        color: var(--ac-text);
-    }
-
-    .ac-dialog-field-row__editor {
-        margin-top: 0.4rem;
     }
 
     .ac-dialog-field-row__input {
         width: 100%;
         min-width: 0;
         border: 1px solid var(--ac-border);
-        border-radius: 0.55rem;
+        border-radius: var(--ac-radius-md);
         background: var(--ac-surface);
         color: var(--ac-text);
-        font-size: 0.875rem;
+        font-size: 0.82rem;
+        font-weight: 650;
         line-height: 1.25;
-        padding: 0.55rem 0.65rem;
+        min-height: 1.5rem;
+        padding: 0.14rem 0.35rem;
         text-align: right;
     }
 
@@ -4408,32 +4322,6 @@
         outline-offset: 1px;
     }
 
-    .ac-dialog-field-row__actions {
-        display: flex;
-        align-items: center;
-        justify-content: flex-end;
-        min-width: 0;
-        margin-top: -0.25rem;
-    }
-
-    .ac-dialog-field-row__save {
-        border: 1px solid var(--ac-border);
-        border-radius: 0.55rem;
-        background: var(--ac-primary);
-        color: var(--ac-text);
-        cursor: pointer;
-        font-size: 0.75rem;
-        font-weight: 700;
-        line-height: 1;
-        padding: 0.45rem 0.65rem;
-    }
-
-    .ac-dialog-field-row__save:hover {
-        border-color: var(--ac-border-strong);
-        background: color-mix(in oklch, var(--ac-primary) 84%, white);
-    }
-
-    .ac-dialog-field-row__save:disabled,
     .ac-dialog-field-row__input:disabled {
         cursor: wait;
         opacity: 0.7;

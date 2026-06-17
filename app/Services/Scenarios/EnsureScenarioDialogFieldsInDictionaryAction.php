@@ -44,6 +44,9 @@ class EnsureScenarioDialogFieldsInDictionaryAction
                     'is_system' => false,
                     'condition_visibility' => FieldDictionaryField::CONDITION_VISIBILITY_MAIN,
                     'write_access' => FieldDictionaryField::WRITE_ACCESS_WRITABLE,
+                    'manual_write_access' => FieldDictionaryField::MANUAL_WRITE_ACCESS_EDITABLE,
+                    'scenario_write_access' => FieldDictionaryField::SCENARIO_WRITE_ACCESS_ALLOWED,
+                    'value_owner' => FieldDictionaryField::VALUE_OWNER_SCENARIO,
                     'hint_group' => FieldDictionaryField::HINT_GROUP_DIALOG,
                 ]);
             }

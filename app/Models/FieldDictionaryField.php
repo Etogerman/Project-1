@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 
 class FieldDictionaryField extends Model
@@ -43,6 +44,26 @@ class FieldDictionaryField extends Model
     public const WRITE_ACCESS_READ_ONLY = 'read_only';
 
     public const WRITE_ACCESS_SYSTEM_ONLY = 'system_only';
+
+    public const MANUAL_WRITE_ACCESS_EDITABLE = 'editable';
+
+    public const MANUAL_WRITE_ACCESS_READONLY = 'readonly';
+
+    public const SCENARIO_WRITE_ACCESS_ALLOWED = 'allowed';
+
+    public const SCENARIO_WRITE_ACCESS_DENIED = 'denied';
+
+    public const VALUE_OWNER_OPERATOR = 'operator';
+
+    public const VALUE_OWNER_CLIENT = 'client';
+
+    public const VALUE_OWNER_SCENARIO = 'scenario';
+
+    public const VALUE_OWNER_SYSTEM = 'system';
+
+    public const VALUE_OWNER_INTEGRATION = 'integration';
+
+    public const VALUE_OWNER_COMPUTED = 'computed';
 
     public const HINT_GROUP_CONTACT = 'contact';
 
@@ -89,6 +110,9 @@ class FieldDictionaryField extends Model
         'is_system',
         'condition_visibility',
         'write_access',
+        'manual_write_access',
+        'scenario_write_access',
+        'value_owner',
         'hint_group',
         'card_display_type',
     ];
@@ -208,6 +232,63 @@ class FieldDictionaryField extends Model
     public static function writeAccessLabel(?string $value): string
     {
         return self::writeAccessOptions()[$value] ?? (string) $value;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public static function manualWriteAccessOptions(): array
+    {
+        return [
+            self::MANUAL_WRITE_ACCESS_EDITABLE => 'Можно',
+            self::MANUAL_WRITE_ACCESS_READONLY => 'Нельзя',
+        ];
+    }
+
+    public static function manualWriteAccessLabel(?string $value): string
+    {
+        return self::manualWriteAccessOptions()[$value] ?? (string) $value;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public static function scenarioWriteAccessOptions(): array
+    {
+        return [
+            self::SCENARIO_WRITE_ACCESS_ALLOWED => 'Можно',
+            self::SCENARIO_WRITE_ACCESS_DENIED => 'Нельзя',
+        ];
+    }
+
+    public static function scenarioWriteAccessLabel(?string $value): string
+    {
+        return self::scenarioWriteAccessOptions()[$value] ?? (string) $value;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public static function valueOwnerOptions(): array
+    {
+        return [
+            self::VALUE_OWNER_OPERATOR => 'Оператор',
+            self::VALUE_OWNER_CLIENT => 'Клиент',
+            self::VALUE_OWNER_SCENARIO => 'Сценарий',
+            self::VALUE_OWNER_SYSTEM => 'Система',
+            self::VALUE_OWNER_INTEGRATION => 'Интеграция',
+            self::VALUE_OWNER_COMPUTED => 'Вычисляется',
+        ];
+    }
+
+    public static function valueOwnerLabel(?string $value): string
+    {
+        return self::valueOwnerOptions()[$value] ?? (string) $value;
+    }
+
+    public static function legacyWriteAccessForScenario(string $scenarioWriteAccess, string $previousWriteAccess = self::WRITE_ACCESS_READ_ONLY): string
+    {
+        return self::legacyWriteAccessFromScenario($scenarioWriteAccess, $previousWriteAccess);
     }
 
     /**
@@ -360,6 +441,9 @@ class FieldDictionaryField extends Model
                 'is_system',
                 'condition_visibility',
                 'write_access',
+                'manual_write_access',
+                'scenario_write_access',
+                'value_owner',
                 'hint_group',
             ])
             ->each(function (FieldDictionaryField $field) use (&$catalog): void {
@@ -378,6 +462,9 @@ class FieldDictionaryField extends Model
                     'is_system' => (bool) $field->is_system,
                     'condition_visibility' => (string) $field->condition_visibility,
                     'write_access' => (string) $field->write_access,
+                    'manual_write_access' => (string) ($field->manual_write_access ?? self::defaultManualWriteAccessForModel($field)),
+                    'scenario_write_access' => (string) ($field->scenario_write_access ?? self::defaultScenarioWriteAccessForModel($field)),
+                    'value_owner' => (string) ($field->value_owner ?? self::defaultValueOwnerForModel($field)),
                     'hint_group' => (string) $field->hint_group,
                     'hint_group_label' => self::hintGroupLabel($field->hint_group),
                     'condition_supported' => $support['condition_supported'],
@@ -569,7 +656,7 @@ class FieldDictionaryField extends Model
                         ->first();
 
                     if (! $field instanceof self) {
-                        static::query()->create($definition);
+                        static::query()->create(self::filterDefinitionForCurrentSchema($definition));
 
                         continue;
                     }
@@ -582,6 +669,12 @@ class FieldDictionaryField extends Model
                         'hint_group' => $definition['hint_group'],
                         'card_display_type' => $definition['card_display_type'],
                     ];
+
+                    if (self::supportsSeparatedWriteAccess()) {
+                        $attributes['manual_write_access'] = $definition['manual_write_access'];
+                        $attributes['scenario_write_access'] = $definition['scenario_write_access'];
+                        $attributes['value_owner'] = $definition['value_owner'];
+                    }
 
                     if (! $field->is_system) {
                         $attributes['type'] = $definition['type'];
@@ -849,7 +942,14 @@ class FieldDictionaryField extends Model
         ?string $writeAccess = null,
         ?string $hintGroup = null,
         ?string $cardDisplayType = null,
+        ?string $manualWriteAccess = null,
+        ?string $scenarioWriteAccess = null,
+        ?string $valueOwner = null,
     ): array {
+        $resolvedWriteAccess = $writeAccess ?? self::defaultWriteAccess($entity, $fieldKey);
+        $resolvedCardDisplayType = $cardDisplayType ?? self::CARD_DISPLAY_VALUE;
+        $resolvedScenarioWriteAccess = $scenarioWriteAccess ?? self::scenarioWriteAccessFromLegacy($resolvedWriteAccess);
+
         return [
             'entity' => $entity,
             'field_key' => $fieldKey,
@@ -861,9 +961,12 @@ class FieldDictionaryField extends Model
             'is_multiple' => $isMultiple,
             'is_system' => true,
             'condition_visibility' => $conditionVisibility ?? self::defaultConditionVisibility($entity, $fieldKey),
-            'write_access' => $writeAccess ?? self::defaultWriteAccess($entity, $fieldKey),
+            'write_access' => self::legacyWriteAccessFromScenario($resolvedScenarioWriteAccess, $resolvedWriteAccess),
+            'manual_write_access' => $manualWriteAccess ?? self::defaultManualWriteAccess($entity, $fieldKey, true),
+            'scenario_write_access' => $resolvedScenarioWriteAccess,
+            'value_owner' => $valueOwner ?? self::defaultValueOwner($entity, $fieldKey, true, $resolvedCardDisplayType),
             'hint_group' => $hintGroup ?? self::defaultHintGroup($entity, $fieldKey),
-            'card_display_type' => $cardDisplayType ?? self::CARD_DISPLAY_VALUE,
+            'card_display_type' => $resolvedCardDisplayType,
         ];
     }
 
@@ -879,12 +982,23 @@ class FieldDictionaryField extends Model
         $this->is_system = (bool) $this->is_system;
         $this->condition_visibility = trim((string) ($this->condition_visibility ?? self::defaultConditionVisibilityForModel($this)));
         $this->write_access = trim((string) ($this->write_access ?? self::defaultWriteAccessForModel($this)));
+        if (self::supportsSeparatedWriteAccess()) {
+            $this->manual_write_access = trim((string) ($this->manual_write_access ?? self::defaultManualWriteAccessForModel($this)));
+            $this->scenario_write_access = trim((string) ($this->scenario_write_access ?? self::defaultScenarioWriteAccessForModel($this)));
+            $this->value_owner = trim((string) ($this->value_owner ?? self::defaultValueOwnerForModel($this)));
+            $this->write_access = self::legacyWriteAccessFromScenario($this->scenario_write_access, $this->write_access);
+        }
         $this->hint_group = trim((string) ($this->hint_group ?? self::defaultHintGroup($this->entity, $this->field_key)));
         $this->card_display_type = trim((string) ($this->card_display_type ?? self::CARD_DISPLAY_VALUE));
 
         if ($this->entity === self::ENTITY_CONTACT && ! $this->is_system) {
             $this->condition_visibility = self::CONDITION_VISIBILITY_DISPLAY_ONLY;
             $this->write_access = self::WRITE_ACCESS_READ_ONLY;
+            if (self::supportsSeparatedWriteAccess()) {
+                $this->manual_write_access = self::MANUAL_WRITE_ACCESS_READONLY;
+                $this->scenario_write_access = self::SCENARIO_WRITE_ACCESS_DENIED;
+                $this->value_owner = self::VALUE_OWNER_OPERATOR;
+            }
             $this->hint_group = self::HINT_GROUP_CONTACT;
         }
     }
@@ -943,6 +1057,11 @@ class FieldDictionaryField extends Model
             && (
                 $original->condition_visibility !== $this->condition_visibility
                 || $original->write_access !== $this->write_access
+                || (self::supportsSeparatedWriteAccess() && (
+                    $original->manual_write_access !== $this->manual_write_access
+                    || $original->scenario_write_access !== $this->scenario_write_access
+                    || $original->value_owner !== $this->value_owner
+                ))
                 || $original->hint_group !== $this->hint_group
                 || $original->card_display_type !== $this->card_display_type
             )
@@ -1010,6 +1129,26 @@ class FieldDictionaryField extends Model
             throw ValidationException::withMessages([
                 'write_access' => 'Неизвестная доступность поля для изменения.',
             ]);
+        }
+
+        if (self::supportsSeparatedWriteAccess()) {
+            if (! array_key_exists($this->manual_write_access, self::manualWriteAccessOptions())) {
+                throw ValidationException::withMessages([
+                    'manual_write_access' => 'Неизвестная доступность поля для ручного изменения.',
+                ]);
+            }
+
+            if (! array_key_exists($this->scenario_write_access, self::scenarioWriteAccessOptions())) {
+                throw ValidationException::withMessages([
+                    'scenario_write_access' => 'Неизвестная доступность поля для изменения сценарием.',
+                ]);
+            }
+
+            if (! array_key_exists($this->value_owner, self::valueOwnerOptions())) {
+                throw ValidationException::withMessages([
+                    'value_owner' => 'Неизвестный основной источник значения поля.',
+                ]);
+            }
         }
 
         if (! array_key_exists($this->hint_group, self::hintGroupOptions())) {
@@ -1208,6 +1347,72 @@ class FieldDictionaryField extends Model
         return self::WRITE_ACCESS_READ_ONLY;
     }
 
+    protected static function defaultManualWriteAccess(string $entity, string $fieldKey, bool $isSystem): string
+    {
+        if ($entity === self::ENTITY_DIALOG && ! $isSystem) {
+            return self::MANUAL_WRITE_ACCESS_EDITABLE;
+        }
+
+        return self::MANUAL_WRITE_ACCESS_READONLY;
+    }
+
+    protected static function defaultScenarioWriteAccess(string $entity, string $fieldKey, bool $isSystem): string
+    {
+        if ($entity === self::ENTITY_DIALOG && ! $isSystem) {
+            return self::SCENARIO_WRITE_ACCESS_ALLOWED;
+        }
+
+        return self::scenarioWriteAccessFromLegacy(self::defaultWriteAccess($entity, $fieldKey));
+    }
+
+    protected static function defaultValueOwner(string $entity, string $fieldKey, bool $isSystem, string $cardDisplayType = self::CARD_DISPLAY_VALUE): string
+    {
+        if (! $isSystem) {
+            return $entity === self::ENTITY_DIALOG
+                ? self::VALUE_OWNER_OPERATOR
+                : self::VALUE_OWNER_OPERATOR;
+        }
+
+        if (str_contains($fieldKey, 'bitrix24_')) {
+            return self::VALUE_OWNER_INTEGRATION;
+        }
+
+        if ($cardDisplayType !== self::CARD_DISPLAY_VALUE || str_starts_with($fieldKey, 'effective_')) {
+            return self::VALUE_OWNER_COMPUTED;
+        }
+
+        if (
+            $fieldKey === 'id'
+            || $fieldKey === 'created_at'
+            || $fieldKey === 'updated_at'
+            || str_ends_with($fieldKey, '_id')
+            || str_ends_with($fieldKey, '_at')
+            || str_ends_with($fieldKey, '_status')
+        ) {
+            return self::VALUE_OWNER_SYSTEM;
+        }
+
+        return self::VALUE_OWNER_SYSTEM;
+    }
+
+    protected static function scenarioWriteAccessFromLegacy(string $writeAccess): string
+    {
+        return $writeAccess === self::WRITE_ACCESS_WRITABLE
+            ? self::SCENARIO_WRITE_ACCESS_ALLOWED
+            : self::SCENARIO_WRITE_ACCESS_DENIED;
+    }
+
+    protected static function legacyWriteAccessFromScenario(string $scenarioWriteAccess, string $previousWriteAccess = self::WRITE_ACCESS_READ_ONLY): string
+    {
+        if ($scenarioWriteAccess === self::SCENARIO_WRITE_ACCESS_ALLOWED) {
+            return self::WRITE_ACCESS_WRITABLE;
+        }
+
+        return $previousWriteAccess === self::WRITE_ACCESS_SYSTEM_ONLY
+            ? self::WRITE_ACCESS_SYSTEM_ONLY
+            : self::WRITE_ACCESS_READ_ONLY;
+    }
+
     protected static function defaultConditionVisibilityForModel(self $field): string
     {
         if ($field->entity === self::ENTITY_DIALOG && ! $field->is_system) {
@@ -1224,6 +1429,48 @@ class FieldDictionaryField extends Model
         }
 
         return self::defaultWriteAccess($field->entity, $field->field_key);
+    }
+
+    protected static function defaultManualWriteAccessForModel(self $field): string
+    {
+        return self::defaultManualWriteAccess($field->entity, $field->field_key, (bool) $field->is_system);
+    }
+
+    protected static function defaultScenarioWriteAccessForModel(self $field): string
+    {
+        if (filled($field->write_access)) {
+            return self::scenarioWriteAccessFromLegacy((string) $field->write_access);
+        }
+
+        return self::defaultScenarioWriteAccess($field->entity, $field->field_key, (bool) $field->is_system);
+    }
+
+    protected static function defaultValueOwnerForModel(self $field): string
+    {
+        return self::defaultValueOwner(
+            $field->entity,
+            $field->field_key,
+            (bool) $field->is_system,
+            (string) ($field->card_display_type ?? self::CARD_DISPLAY_VALUE),
+        );
+    }
+
+    protected static function filterDefinitionForCurrentSchema(array $definition): array
+    {
+        if (self::supportsSeparatedWriteAccess()) {
+            return $definition;
+        }
+
+        unset($definition['manual_write_access'], $definition['scenario_write_access'], $definition['value_owner']);
+
+        return $definition;
+    }
+
+    protected static function supportsSeparatedWriteAccess(): bool
+    {
+        return Schema::hasColumn('field_dictionary_fields', 'manual_write_access')
+            && Schema::hasColumn('field_dictionary_fields', 'scenario_write_access')
+            && Schema::hasColumn('field_dictionary_fields', 'value_owner');
     }
 
     public static function defaultHintGroup(string $entity, string $fieldKey): string

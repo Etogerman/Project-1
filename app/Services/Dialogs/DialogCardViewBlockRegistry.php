@@ -10,9 +10,7 @@ class DialogCardViewBlockRegistry
     public function options(): array
     {
         return [
-            SyncSystemDialogCardViewAction::BLOCK_DIALOG_CONVERSATION => 'Сообщения диалога',
-            SyncSystemDialogCardViewAction::BLOCK_DIALOG_SYSTEM_FIELDS => 'Основные данные диалога',
-            SyncSystemDialogCardViewAction::BLOCK_DIALOG_FIELDS => 'Поля диалога',
+            SyncSystemDialogCardViewAction::SECTION_DIALOG_FIELDS => 'Поля диалога',
             SyncSystemDialogCardViewAction::BLOCK_DIALOG_PEER_SYNC => 'Загрузка истории',
         ];
     }

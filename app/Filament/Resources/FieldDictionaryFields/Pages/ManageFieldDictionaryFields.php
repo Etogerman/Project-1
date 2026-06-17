@@ -236,9 +236,25 @@ class ManageFieldDictionaryFields extends Page
     /**
      * @return array<string, string>
      */
-    public function writeAccessOptions(): array
+    public function manualWriteAccessOptions(): array
     {
-        return FieldDictionaryField::writeAccessOptions();
+        return FieldDictionaryField::manualWriteAccessOptions();
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public function scenarioWriteAccessOptions(): array
+    {
+        return FieldDictionaryField::scenarioWriteAccessOptions();
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public function valueOwnerOptions(): array
+    {
+        return FieldDictionaryField::valueOwnerOptions();
     }
 
     /**
@@ -267,7 +283,9 @@ class ManageFieldDictionaryFields extends Page
                         $row['type_label'] ?? '',
                         $row['group_label'] ?? '',
                         $row['condition_visibility_label'] ?? '',
-                        $row['write_access_label'] ?? '',
+                        $row['manual_write_access_label'] ?? '',
+                        $row['scenario_write_access_label'] ?? '',
+                        $row['value_owner_label'] ?? '',
                     ]));
 
                     return str_contains($haystack, $search);
@@ -334,6 +352,15 @@ class ManageFieldDictionaryFields extends Page
             'write_access' => $this->activeEntity === FieldDictionaryField::ENTITY_DIALOG
                 ? FieldDictionaryField::WRITE_ACCESS_WRITABLE
                 : FieldDictionaryField::WRITE_ACCESS_READ_ONLY,
+            'manual_write_access' => $this->activeEntity === FieldDictionaryField::ENTITY_DIALOG
+                ? FieldDictionaryField::MANUAL_WRITE_ACCESS_EDITABLE
+                : FieldDictionaryField::MANUAL_WRITE_ACCESS_READONLY,
+            'scenario_write_access' => $this->activeEntity === FieldDictionaryField::ENTITY_DIALOG
+                ? FieldDictionaryField::SCENARIO_WRITE_ACCESS_ALLOWED
+                : FieldDictionaryField::SCENARIO_WRITE_ACCESS_DENIED,
+            'value_owner' => $this->activeEntity === FieldDictionaryField::ENTITY_DIALOG
+                ? FieldDictionaryField::VALUE_OWNER_OPERATOR
+                : FieldDictionaryField::VALUE_OWNER_OPERATOR,
             'hint_group' => $this->activeEntity === FieldDictionaryField::ENTITY_DIALOG
                 ? FieldDictionaryField::HINT_GROUP_DIALOG
                 : FieldDictionaryField::HINT_GROUP_CONTACT,
@@ -357,6 +384,12 @@ class ManageFieldDictionaryFields extends Page
             'condition_visibility_label' => FieldDictionaryField::conditionVisibilityLabel($field->condition_visibility),
             'write_access' => $field->write_access,
             'write_access_label' => FieldDictionaryField::writeAccessLabel($field->write_access),
+            'manual_write_access' => $field->manual_write_access,
+            'manual_write_access_label' => FieldDictionaryField::manualWriteAccessLabel($field->manual_write_access),
+            'scenario_write_access' => $field->scenario_write_access,
+            'scenario_write_access_label' => FieldDictionaryField::scenarioWriteAccessLabel($field->scenario_write_access),
+            'value_owner' => $field->value_owner,
+            'value_owner_label' => FieldDictionaryField::valueOwnerLabel($field->value_owner),
             'hint_group' => $field->hint_group,
             'source_label' => filled($field->source_field_key) ? 'Да' : 'Нет',
             'source_field_label' => $this->resolveSourceLabel($field),
@@ -405,7 +438,25 @@ class ManageFieldDictionaryFields extends Page
                 ? $field->write_access
                 : ($isUserContactField
                     ? FieldDictionaryField::WRITE_ACCESS_READ_ONLY
-                    : (string) ($row['write_access'] ?? FieldDictionaryField::WRITE_ACCESS_READ_ONLY)),
+                    : FieldDictionaryField::legacyWriteAccessForScenario(
+                        (string) ($row['scenario_write_access'] ?? FieldDictionaryField::SCENARIO_WRITE_ACCESS_DENIED),
+                        (string) ($field?->write_access ?? FieldDictionaryField::WRITE_ACCESS_READ_ONLY),
+                    )),
+            'manual_write_access' => $isSystem
+                ? $field->manual_write_access
+                : ($isUserContactField
+                    ? FieldDictionaryField::MANUAL_WRITE_ACCESS_READONLY
+                    : (string) ($row['manual_write_access'] ?? FieldDictionaryField::MANUAL_WRITE_ACCESS_READONLY)),
+            'scenario_write_access' => $isSystem
+                ? $field->scenario_write_access
+                : ($isUserContactField
+                    ? FieldDictionaryField::SCENARIO_WRITE_ACCESS_DENIED
+                    : (string) ($row['scenario_write_access'] ?? FieldDictionaryField::SCENARIO_WRITE_ACCESS_DENIED)),
+            'value_owner' => $isSystem
+                ? $field->value_owner
+                : ($isUserContactField
+                    ? FieldDictionaryField::VALUE_OWNER_OPERATOR
+                    : (string) ($row['value_owner'] ?? FieldDictionaryField::VALUE_OWNER_OPERATOR)),
             'hint_group' => $isSystem
                 ? $field->hint_group
                 : ($isUserContactField

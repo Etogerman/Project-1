@@ -197,13 +197,16 @@ class BuildDialogCardViewLayoutAction
         }
 
         $rendererRegistry = app(CardViewFieldRendererRegistry::class);
+        $legacyBlockRegistry = app(DialogCardViewBlockRegistry::class);
 
         $sections = $tab->visibleSections
-            ->map(function (CardViewSection $section) use ($rendererRegistry): array {
+            ->map(function (CardViewSection $section) use ($rendererRegistry, $legacyBlockRegistry): array {
                 $blocks = $section->visibleItems
-                    ->map(function (CardViewItem $item) use ($rendererRegistry): string {
+                    ->map(function (CardViewItem $item) use ($rendererRegistry, $legacyBlockRegistry): string {
                         if ($item->item_type === CardViewItem::TYPE_BLOCK) {
-                            return (string) $item->item_key;
+                            $blockKey = (string) $item->item_key;
+
+                            return $legacyBlockRegistry->contains($blockKey) ? $blockKey : '';
                         }
 
                         return $rendererRegistry->legacyBlockKeyForField($item->field) ?? '';
@@ -219,53 +222,6 @@ class BuildDialogCardViewLayoutAction
                 ];
             })
             ->filter(fn (array $section): bool => ($section['blocks'] ?? []) !== [])
-            ->values()
-            ->all();
-
-        return $sections !== [] ? ['sections' => $sections] : null;
-    }
-
-    /**
-     * @return ?array{sections:list<array{section_key:string,title:string,blocks:list<string>}>}
-     */
-    private function blockTab(string $tabKey): ?array
-    {
-        $view = $this->activeView([
-            'visibleTabs' => fn ($query) => $query
-                ->where('tab_key', $tabKey)
-                ->with([
-                    'visibleSections' => fn ($sectionQuery) => $sectionQuery
-                        ->with([
-                            'visibleItems' => fn ($itemQuery) => $itemQuery
-                                ->where('item_type', CardViewItem::TYPE_BLOCK),
-                        ]),
-                ]),
-        ]);
-
-        if (! $view instanceof CardView) {
-            return null;
-        }
-
-        $tab = $view->visibleTabs->first();
-
-        if ($tab === null) {
-            return null;
-        }
-
-        $sections = $tab->visibleSections
-            ->map(function (CardViewSection $section): array {
-                $blocks = $section->visibleItems
-                    ->map(fn (CardViewItem $item): string => (string) $item->item_key)
-                    ->filter(fn (string $blockKey): bool => $blockKey !== '')
-                    ->values()
-                    ->all();
-
-                return [
-                    'section_key' => (string) $section->section_key,
-                    'title' => (string) $section->name,
-                    'blocks' => $blocks,
-                ];
-            })
             ->values()
             ->all();
 
