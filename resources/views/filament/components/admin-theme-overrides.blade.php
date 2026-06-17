@@ -741,6 +741,7 @@
     }
 
     .ac-admin-notifications__scope,
+    .ac-admin-notifications__volume,
     .ac-admin-notifications__sound {
         display: flex;
         align-items: center;
@@ -748,7 +749,8 @@
         min-width: 0;
     }
 
-    .ac-admin-notifications__scope {
+    .ac-admin-notifications__scope,
+    .ac-admin-notifications__volume {
         padding: 0.2rem;
         border: 1px solid var(--ac-border);
         border-radius: 8px;
@@ -756,6 +758,7 @@
     }
 
     .ac-admin-notifications__scope button,
+    .ac-admin-notifications__volume button,
     .ac-admin-notifications__sound-toggle,
     .ac-admin-notifications__link {
         display: inline-flex;
@@ -773,12 +776,14 @@
         cursor: pointer;
     }
 
-    .ac-admin-notifications__scope button {
+    .ac-admin-notifications__scope button,
+    .ac-admin-notifications__volume button {
         flex: 1 1 0;
         padding: 0 0.45rem;
     }
 
     .ac-admin-notifications__scope button:hover,
+    .ac-admin-notifications__volume button:hover,
     .ac-admin-notifications__sound-toggle:hover,
     .ac-admin-notifications__link:hover {
         background: var(--ac-primary-soft);
@@ -786,6 +791,7 @@
     }
 
     .ac-admin-notifications__scope button.is-active,
+    .ac-admin-notifications__volume button.is-active,
     .ac-admin-notifications__sound-toggle {
         background: var(--ac-surface);
         color: var(--ac-text);
@@ -799,6 +805,38 @@
 
     .ac-admin-notifications__sound {
         justify-content: space-between;
+    }
+
+    .ac-admin-notifications__field {
+        display: grid;
+        gap: 0.3rem;
+        min-width: 0;
+    }
+
+    .ac-admin-notifications__field span {
+        color: var(--ac-text-muted);
+        font-size: 0.72rem;
+        font-weight: 700;
+        line-height: 1.2;
+    }
+
+    .ac-admin-notifications__field select {
+        width: 100%;
+        min-height: 2.1rem;
+        min-width: 0;
+        border: 1px solid var(--ac-border);
+        border-radius: 8px;
+        background: var(--ac-surface);
+        color: var(--ac-text);
+        font-size: 0.78rem;
+        font-weight: 650;
+        line-height: 1.2;
+        outline: none;
+    }
+
+    .ac-admin-notifications__field select:focus {
+        border-color: var(--ac-primary);
+        box-shadow: 0 0 0 3px var(--ac-primary-soft);
     }
 
     .ac-admin-notifications__sound-toggle {
