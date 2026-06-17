@@ -424,16 +424,20 @@
             if (
                 !soundEnabled
                 || messageId < 1
-                || messageId === lastSoundMessageId
-                || soundWasRecentlyPlayed(messageId)
             ) {
-                return;
+                return false;
+            }
+
+            if (messageId === lastSoundMessageId || soundWasRecentlyPlayed(messageId)) {
+                return true;
             }
 
             try {
                 await playSound();
                 claimSoundForMessage(messageId);
                 rememberSoundMessage(messageId);
+
+                return true;
             } catch (error) {
                 reportSoundBlocked();
 
@@ -451,23 +455,21 @@
             await sleep(visibilityDelay + Math.floor(Math.random() * 120));
 
             if (navigator.locks?.request) {
-                await navigator.locks.request(
+                return await navigator.locks.request(
                     'ab-dialog-notifications-sound',
                     { ifAvailable: true },
                     async (lock) => {
                         if (!lock) {
-                            return;
+                            return soundWasRecentlyPlayed(messageId);
                         }
 
-                        await playSoundForMessage(messageId);
+                        return await playSoundForMessage(messageId);
                     },
                 );
-
-                return;
             }
 
             if (soundWasRecentlyPlayed(messageId)) {
-                return;
+                return true;
             }
 
             claimSoundAttemptForMessage(messageId);
@@ -476,8 +478,10 @@
             const state = readSoundDedupeState();
 
             if (Number(state.messageId || 0) === messageId && state.tabId === tabId) {
-                await playSoundForMessage(messageId);
+                return await playSoundForMessage(messageId);
             }
+
+            return soundWasRecentlyPlayed(messageId);
         };
 
         const readPollLease = () => readJsonStorage(pollLeaseStorageKey);
@@ -505,9 +509,10 @@
             return readPollLease().tabId === tabId;
         };
 
-        const writeCachedState = (state) => {
+        const writeCachedState = (state, options = {}) => {
             window.localStorage.setItem(stateStorageKey, JSON.stringify({
                 state,
+                allowSound: options.allowSound !== false,
                 writtenAt: Date.now(),
                 tabId,
             }));
@@ -517,8 +522,10 @@
             const cached = readJsonStorage(stateStorageKey);
 
             if (cached.state && typeof cached.state === 'object') {
+                const cachedAllowsSound = cached.allowSound !== false;
+
                 renderState(cached.state, {
-                    allowSound: options.allowSound === true,
+                    allowSound: options.allowSound === true && cachedAllowsSound,
                 });
             }
         };
@@ -602,29 +609,47 @@
                 latestKnownNotification.sortAt,
                 latestKnownNotification.id,
             ) > 0;
+            const rememberLatestNotification = () => {
+                latestKnownNotification = { sortAt: latestNotificationSortAt, id: latestNotificationMessageId };
+            };
 
             if (shouldUpdateSoundBaseline) {
                 if (latestNotificationMessageId > 0 && isAfterBaseline) {
-                    latestKnownNotification = { sortAt: latestNotificationSortAt, id: latestNotificationMessageId };
+                    rememberLatestNotification();
                 }
 
                 hasBootstrappedSoundBaseline = true;
+
+                return;
             }
 
-            const shouldPlaySound = allowSound
-                && !shouldUpdateSoundBaseline
-                && latestNotificationMessageId > 0
-                && isAfterBaseline
-                && latestNotificationMessageId !== lastSoundMessageId
-                && notificationCount > 0;
-
-            if (latestNotificationMessageId > 0 && isAfterBaseline) {
-                latestKnownNotification = { sortAt: latestNotificationSortAt, id: latestNotificationMessageId };
+            if (latestNotificationMessageId < 1 || !isAfterBaseline) {
+                return;
             }
 
-            if (shouldPlaySound) {
-                playCoordinatedSound(latestNotificationMessageId).catch(() => {});
+            if (
+                !allowSound
+                || !soundEnabled
+                || notificationCount < 1
+                || latestNotificationMessageId === lastSoundMessageId
+                || soundWasRecentlyPlayed(latestNotificationMessageId)
+            ) {
+                rememberLatestNotification();
+
+                return;
             }
+
+            playCoordinatedSound(latestNotificationMessageId)
+                .then((handled) => {
+                    if (
+                        handled
+                        || latestNotificationMessageId === lastSoundMessageId
+                        || soundWasRecentlyPlayed(latestNotificationMessageId)
+                    ) {
+                        rememberLatestNotification();
+                    }
+                })
+                .catch(() => {});
         };
 
         const fetchState = async (initialize = false, options = {}) => {
@@ -668,7 +693,7 @@
 
                 const state = await response.json();
 
-                writeCachedState(state);
+                writeCachedState(state, { allowSound: !initialize });
                 renderState(state, { baselineSound: initialize });
             } catch (error) {
                 statusNode.textContent = 'Нет связи с уведомлениями';
@@ -690,7 +715,7 @@
 
             const state = await response.json();
 
-            writeCachedState(state);
+            writeCachedState(state, { allowSound: false });
             renderState(state, { allowSound: false });
         };
 
@@ -723,7 +748,7 @@
 
                     const state = await response.json();
 
-                    writeCachedState(state);
+                    writeCachedState(state, { allowSound: false });
                     renderState(state, { allowSound: false });
                 } catch (error) {
                     statusNode.textContent = 'Режим не сохранён';
