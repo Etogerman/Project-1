@@ -4,10 +4,13 @@ namespace Tests\Feature;
 
 use App\Models\Channel;
 use App\Models\Contact;
+use App\Models\ContactEmail;
 use App\Models\ContactIdentity;
 use App\Models\Dialog;
+use App\Models\FieldDictionaryField;
 use App\Models\Message;
 use App\Services\Scenarios\EngineFieldRegistry;
+use App\Services\Scenarios\FieldDictionaryEngineSupport;
 use App\Services\Scenarios\GenericDbScenarioRuntime;
 use App\Services\Scenarios\ScenarioEdgeExpressionCondition;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -31,6 +34,7 @@ class EngineFieldRegistryTest extends TestCase
         'id',
         'phone',
         'phones',
+        'emails',
         'first_name',
         'first_name_source',
         'first_name_resolution_method',
@@ -58,14 +62,25 @@ class EngineFieldRegistryTest extends TestCase
         'data_collection_attempts_count',
         'is_auto_reply_enabled',
         'assigned_user_id',
+        'duplicate_review_status',
+        'merged_into_contact_id',
+        'merged_at',
+        'merge_reason',
+        'merge_trigger_phone',
         'bitrix24_contact_id',
         'bitrix24_sync_status',
         'bitrix24_last_synced_at',
+        'bitrix24_linked_at',
+        'bitrix24_sync_pending',
+        'bitrix24_sync_fingerprint',
         'bitrix24_deal_id',
         'bitrix24_deal_sync_status',
         'bitrix24_deal_last_synced_at',
+        'bitrix24_deal_linked_at',
+        'bitrix24_deal_sync_pending',
         'bitrix24_history_sync_status',
         'bitrix24_history_last_synced_at',
+        'bitrix24_history_sync_pending',
         'created_at',
         'updated_at',
     ];
@@ -76,6 +91,7 @@ class EngineFieldRegistryTest extends TestCase
         'channel_id',
         'stage',
         'phone',
+        'external_username',
         'bot_subscription_status',
         'bot_subscription_changed_at',
         'external_chat_id',
@@ -152,6 +168,7 @@ class EngineFieldRegistryTest extends TestCase
 
     private const EXPECTED_CONTACT_FIELD_CONDITION_FIELDS = [
         'phone',
+        'emails',
         'first_name',
         'first_name_source',
         'last_name',
@@ -165,6 +182,7 @@ class EngineFieldRegistryTest extends TestCase
 
     private const EXPECTED_CONTACT_PROMPT_VARIABLE_FIELDS = [
         'phone',
+        'emails',
         'first_name',
         'first_name_source',
         'last_name',
@@ -266,6 +284,31 @@ class EngineFieldRegistryTest extends TestCase
         $this->assertSame([], EngineFieldRegistry::writableFieldKeys(EngineFieldRegistry::ENTITY_DIALOG));
     }
 
+    public function test_field_dictionary_support_matches_engine_registry(): void
+    {
+        FieldDictionaryField::syncSystemDefinitions();
+
+        $this->assertSame([], app(FieldDictionaryEngineSupport::class)->consistencyProblems());
+    }
+
+    public function test_missing_dialog_field_is_not_supported_until_it_exists_in_dictionary(): void
+    {
+        $support = app(FieldDictionaryEngineSupport::class);
+
+        $this->assertFalse($support->supportsDialogChangeField('новое_поле_диалога'));
+        $this->assertFalse($support->supportsDialogFieldCondition('новое_поле_диалога'));
+
+        FieldDictionaryField::query()->create([
+            'entity' => FieldDictionaryField::ENTITY_DIALOG,
+            'field_key' => 'новое_поле_диалога',
+            'name' => 'Новое поле диалога',
+            'type' => FieldDictionaryField::TYPE_TEXT,
+        ]);
+
+        $this->assertTrue($support->supportsDialogChangeField('новое_поле_диалога'));
+        $this->assertTrue($support->supportsDialogFieldCondition('новое_поле_диалога'));
+    }
+
     public function test_registry_rejects_unknown_entity(): void
     {
         $this->expectException(InvalidArgumentException::class);
@@ -279,6 +322,22 @@ class EngineFieldRegistryTest extends TestCase
 
         $this->assertTrue($this->evaluateCondition('{{contact.city}} == "Казань"', $message));
         $this->assertFalse($this->evaluateCondition('{{contact.city}} == "Москва"', $message));
+    }
+
+    public function test_condition_reads_contact_emails(): void
+    {
+        $message = $this->createInboundMessage();
+
+        ContactEmail::factory()->create([
+            'contact_id' => $message->contact_id,
+            'email_raw' => 'CLIENT@Example.COM',
+            'email_normalized' => 'client@example.com',
+            'is_primary' => true,
+        ]);
+
+        $this->assertTrue($this->evaluateCondition('{{contact.emails}} != ""', $message));
+        $this->assertTrue($this->evaluateCondition('{{contact.emails}} == "client@example.com"', $message));
+        $this->assertFalse($this->evaluateCondition('{{contact.emails}} == "other@example.com"', $message));
     }
 
     public function test_condition_resolves_location_source_alias_to_region_source(): void
@@ -305,6 +364,9 @@ class EngineFieldRegistryTest extends TestCase
         $this->assertTrue(
             $this->evaluateCondition('{{dialog.external_chat_id}} == "telegram-chat-700"', $message),
         );
+        $this->assertTrue(
+            $this->evaluateCondition('{{dialog.external_username}} == "telegram_user_500"', $message),
+        );
     }
 
     public function test_condition_reads_dialog_user_field_from_fields_payload(): void
@@ -315,6 +377,32 @@ class EngineFieldRegistryTest extends TestCase
         $this->assertFalse($this->evaluateCondition('{{dialog.vip_level}} == "silver"', $message));
     }
 
+    public function test_runtime_field_condition_reads_dialog_system_and_user_fields(): void
+    {
+        $message = $this->createInboundMessage(dialogOverrides: [
+            'stage' => Dialog::STAGE_PHONE_RECEIVED,
+            'confirmed_phone_raw' => '+7 999 111 22 33',
+            'confirmed_phone_normalized' => '+79991112233',
+            'fields_payload' => ['vip_level' => 'gold'],
+        ]);
+
+        $this->assertSame(Dialog::STAGE_PHONE_RECEIVED, $this->runtimeFieldConditionValue($message, 'dialog', 'stage'));
+        $this->assertSame('+7 999 111 22 33', $this->runtimeFieldConditionValue($message, 'dialog', 'phone'));
+        $this->assertSame('telegram_user_500', $this->runtimeFieldConditionValue($message, 'dialog', 'external_username'));
+        $this->assertSame('gold', $this->runtimeFieldConditionValue($message, 'dialog', 'vip_level'));
+    }
+
+    public function test_runtime_dialog_field_string_value_reads_system_field_for_simulated_start(): void
+    {
+        $message = $this->createInboundMessage(dialogOverrides: [
+            'external_chat_id' => 'start-parameter-chat',
+            'fields_payload' => ['start_param' => '/fallback'],
+        ]);
+
+        $this->assertSame('start-parameter-chat', $this->runtimeDialogFieldStringValue($message, 'external_chat_id'));
+        $this->assertSame('/fallback', $this->runtimeDialogFieldStringValue($message, 'start_param'));
+    }
+
     public function test_text_substitution_uses_listed_contact_field(): void
     {
         $message = $this->createInboundMessage(contactOverrides: ['city' => 'Казань']);
@@ -322,6 +410,46 @@ class EngineFieldRegistryTest extends TestCase
         $this->assertSame(
             'Город: Казань',
             $this->substituteText($message, 'Город: {{contact.city|нет города}}'),
+        );
+    }
+
+    public function test_text_substitution_uses_contact_emails(): void
+    {
+        $message = $this->createInboundMessage();
+
+        ContactEmail::factory()->create([
+            'contact_id' => $message->contact_id,
+            'email_raw' => 'Primary@Example.COM',
+            'email_normalized' => 'primary@example.com',
+            'is_primary' => true,
+        ]);
+
+        $this->assertSame(
+            'Email: primary@example.com',
+            $this->substituteText($message, 'Email: {{contact.emails|нет email}}'),
+        );
+    }
+
+    public function test_text_substitution_uses_root_contact_email_for_merged_contact(): void
+    {
+        $message = $this->createInboundMessage();
+        $root = Contact::factory()->create();
+
+        $message->contact->forceFill([
+            'merged_into_contact_id' => $root->id,
+            'merged_at' => now(),
+        ])->save();
+
+        ContactEmail::factory()->create([
+            'contact_id' => $root->id,
+            'email_raw' => 'Root@Example.COM',
+            'email_normalized' => 'root@example.com',
+            'is_primary' => true,
+        ]);
+
+        $this->assertSame(
+            'Email: root@example.com',
+            $this->substituteText($message, 'Email: {{contact.emails|нет email}}'),
         );
     }
 
@@ -381,6 +509,20 @@ class EngineFieldRegistryTest extends TestCase
         return (string) $method->invoke(app(GenericDbScenarioRuntime::class), $message, $text, [], 'snapshot-block');
     }
 
+    private function runtimeFieldConditionValue(Message $message, string $fieldScope, string $fieldKey): mixed
+    {
+        $method = new ReflectionMethod(GenericDbScenarioRuntime::class, 'v3FieldConditionValue');
+
+        return $method->invoke(app(GenericDbScenarioRuntime::class), $message, $fieldScope, $fieldKey);
+    }
+
+    private function runtimeDialogFieldStringValue(Message $message, string $fieldKey): string
+    {
+        $method = new ReflectionMethod(GenericDbScenarioRuntime::class, 'v3DialogFieldStringValue');
+
+        return (string) $method->invoke(app(GenericDbScenarioRuntime::class), $message, $fieldKey);
+    }
+
     private function applyChangeContactField(Message $message, string $fieldKey, string $value): bool
     {
         $method = new ReflectionMethod(GenericDbScenarioRuntime::class, 'applyV3ChangeContactFieldAction');
@@ -403,6 +545,7 @@ class EngineFieldRegistryTest extends TestCase
             'channel_id' => $channel->id,
             'platform' => $channel->platform,
             'external_user_id' => 'telegram-user-500',
+            'external_username' => 'telegram_user_500',
         ]);
 
         $dialog = Dialog::factory()->create(array_merge([

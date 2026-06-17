@@ -22,6 +22,7 @@ use App\Models\User;
 use App\Services\Bots\ContactIdentityAvatarStorage;
 use App\Services\Dialogs\BuildDialogMessageSnapshotPayloadAction;
 use App\Services\Dialogs\LoadDialogMessagesPageAction;
+use App\Services\Dialogs\SyncSystemDialogCardViewAction;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
@@ -99,24 +100,26 @@ class FilamentDialogsResourceTest extends TestCase
             'sort_order' => 1000,
             'is_multiple' => false,
             'is_system' => false,
+            'write_access' => FieldDictionaryField::WRITE_ACCESS_WRITABLE,
+            'manual_write_access' => FieldDictionaryField::MANUAL_WRITE_ACCESS_EDITABLE,
+            'scenario_write_access' => FieldDictionaryField::SCENARIO_WRITE_ACCESS_ALLOWED,
+            'value_owner' => FieldDictionaryField::VALUE_OWNER_OPERATOR,
         ]);
 
         Livewire::actingAs($admin)
             ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
             ->assertSee('Поля диалога')
             ->assertSee('data-role="dialog-fields-section"', false)
-            ->assertSee('data-role="dialog-field-row"', false)
+            ->assertSee('data-role="dialog-side-field-row"', false)
             ->assertSee('data-field-key="client_city"', false)
-            ->assertSee('data-field-value-type="scalar"', false)
-            ->assertSee('data-role="dialog-field-value"', false)
-            ->assertSee('data-role="dialog-field-edit"', false)
-            ->assertSee('data-role="dialog-field-edit-input"', false)
-            ->assertSee('data-role="dialog-field-save"', false)
             ->assertDontSee('data-role="dialog-field-copy-key"', false)
             ->assertDontSee('Копировать ключ')
             ->assertSee('Город клиента')
             ->assertSee('client_city')
             ->assertSee('Москва')
+            ->assertSee('data-role="dialog-field-editor"', false)
+            ->assertDontSee('data-role="dialog-field-save-button"', false)
+            ->assertDontSee('data-role="dialog-field-savebar"', false)
             ->assertSee('test1')
             ->assertSee('1')
             ->assertDontSee('data-field-key="_v3"', false)
@@ -135,6 +138,7 @@ class FilamentDialogsResourceTest extends TestCase
             'fields_payload' => [
                 'сколько_раз_спросили_имя' => 3,
                 'client_city' => 'Москва',
+                'readonly_note' => 'не менять',
                 '_v3' => [
                     'transition_counts' => [
                         'published_1:edge_test' => 1,
@@ -142,16 +146,68 @@ class FilamentDialogsResourceTest extends TestCase
                 ],
             ],
         ])->save();
+        FieldDictionaryField::query()->create([
+            'entity' => FieldDictionaryField::ENTITY_DIALOG,
+            'field_key' => 'сколько_раз_спросили_имя',
+            'name' => 'Сколько раз спросили имя',
+            'type' => FieldDictionaryField::TYPE_NUMBER,
+            'options' => [],
+            'source_field_key' => null,
+            'sort_order' => 1000,
+            'is_multiple' => false,
+            'is_system' => false,
+            'write_access' => FieldDictionaryField::WRITE_ACCESS_WRITABLE,
+            'manual_write_access' => FieldDictionaryField::MANUAL_WRITE_ACCESS_EDITABLE,
+            'scenario_write_access' => FieldDictionaryField::SCENARIO_WRITE_ACCESS_ALLOWED,
+            'value_owner' => FieldDictionaryField::VALUE_OWNER_OPERATOR,
+        ]);
+        FieldDictionaryField::query()->create([
+            'entity' => FieldDictionaryField::ENTITY_DIALOG,
+            'field_key' => 'client_city',
+            'name' => 'Город клиента',
+            'type' => FieldDictionaryField::TYPE_TEXT,
+            'options' => [],
+            'source_field_key' => null,
+            'sort_order' => 1001,
+            'is_multiple' => false,
+            'is_system' => false,
+            'write_access' => FieldDictionaryField::WRITE_ACCESS_WRITABLE,
+            'manual_write_access' => FieldDictionaryField::MANUAL_WRITE_ACCESS_EDITABLE,
+            'scenario_write_access' => FieldDictionaryField::SCENARIO_WRITE_ACCESS_ALLOWED,
+            'value_owner' => FieldDictionaryField::VALUE_OWNER_OPERATOR,
+        ]);
+        FieldDictionaryField::query()->create([
+            'entity' => FieldDictionaryField::ENTITY_DIALOG,
+            'field_key' => 'readonly_note',
+            'name' => 'Заметка только для чтения',
+            'type' => FieldDictionaryField::TYPE_TEXT,
+            'options' => [],
+            'source_field_key' => null,
+            'sort_order' => 1002,
+            'is_multiple' => false,
+            'is_system' => false,
+            'write_access' => FieldDictionaryField::WRITE_ACCESS_READ_ONLY,
+            'manual_write_access' => FieldDictionaryField::MANUAL_WRITE_ACCESS_READONLY,
+            'scenario_write_access' => FieldDictionaryField::SCENARIO_WRITE_ACCESS_DENIED,
+            'value_owner' => FieldDictionaryField::VALUE_OWNER_OPERATOR,
+        ]);
 
         Livewire::actingAs($admin)
             ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
-            ->call('saveDialogFieldValue', 'сколько_раз_спросили_имя', '7')
-            ->call('saveDialogFieldValue', 'client_city', 'Химки');
+            ->assertSet('dialogFieldDraftDirty', false)
+            ->set('dialogFieldDraftValues.сколько_раз_спросили_имя', '7')
+            ->set('dialogFieldDraftValues.client_city', 'Химки')
+            ->assertSet('dialogFieldDraftDirty', true)
+            ->assertSee('data-role="dialog-field-savebar"', false)
+            ->call('saveDialogFieldDraftValues')
+            ->assertSet('dialogFieldDraftDirty', false)
+            ->call('saveDialogFieldValue', 'readonly_note', 'изменено');
 
         $dialog->refresh();
 
         $this->assertSame(7, data_get($dialog->fields_payload, 'сколько_раз_спросили_имя'));
         $this->assertSame('Химки', data_get($dialog->fields_payload, 'client_city'));
+        $this->assertSame('не менять', data_get($dialog->fields_payload, 'readonly_note'));
         $this->assertSame(1, data_get($dialog->fields_payload, '_v3.transition_counts.published_1:edge_test'));
     }
 
@@ -177,7 +233,7 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('Поля диалога')
             ->assertSee('data-role="dialog-fields-empty"', false)
             ->assertSee('Поля диалога пока не заполнены')
-            ->assertDontSee('data-role="dialog-field-row"', false)
+            ->assertDontSee('data-field-key="_v3"', false)
             ->assertDontSee('_v3')
             ->assertDontSee('transition_counts');
     }
@@ -235,7 +291,7 @@ class FilamentDialogsResourceTest extends TestCase
         $this->actingAs($admin)
             ->get(DialogResource::getUrl('view', ['record' => $dialog]))
             ->assertOk()
-            ->assertSee('data-role="dialog-system-fields-section"', false)
+            ->assertSee('data-role="dialog-general-tab"', false)
             ->assertSee('data-role="dialog-stage-strip"', false)
             ->assertDontSee('data-field-key="stage"', false)
             ->assertSee('data-field-key="current_block_id"', false)
@@ -244,13 +300,11 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('#12 · Старт: анкета')
             ->assertSee('v'.$publishedVersion->id)
             ->assertSee('Телефон канала')
+            ->assertSee('Последнее сообщение')
             ->assertSee('Последнее входящее')
             ->assertSee('Последнее исходящее')
-            ->assertSee('Последний текст диалога')
-            ->assertSee('Входящий текст клиента')
-            ->assertSee('Ответ оператора')
-            ->assertSee('data-role="dialog-contact-label"', false)
-            ->assertSee('data-role="dialog-channel-label"', false)
+            ->assertSee('data-field-key="contact_id"', false)
+            ->assertSee('data-field-key="channel_id"', false)
             ->assertDontSee('Аватарка');
     }
 
@@ -1040,6 +1094,7 @@ class FilamentDialogsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->call('selectTab', SyncSystemDialogCardViewAction::TAB_DIAGNOSTICS)
             ->assertSeeHtml('data-role="dialog-peer-sync-status"')
             ->assertSee('Завершена')
             ->assertSee('23.04.2026 13:15')
@@ -1109,7 +1164,7 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('Статус')
             ->assertSee('Требует ответа')
             ->assertSee('Не требует ответа')
-            ->assertSee('data-role="dialog-system-fields-section"', escape: false)
+            ->assertSee('data-role="dialog-general-tab"', escape: false)
             ->assertSee('data-field-key="status"', escape: false)
             ->assertSee('data-role="dialog-inbox-status-toggle"', escape: false)
             ->assertSee('data-role="dialog-inbox-status-current"', escape: false)
@@ -1145,7 +1200,7 @@ class FilamentDialogsResourceTest extends TestCase
         $this->actingAs($admin)
             ->get(DialogResource::getUrl('view', ['record' => $dialog]))
             ->assertOk()
-            ->assertSee('data-role="dialog-system-fields-section"', escape: false)
+            ->assertSee('data-role="dialog-general-tab"', escape: false)
             ->assertSee('data-field-key="assigned_user_id"', escape: false)
             ->assertSee('data-role="dialog-assignee-toggle"', escape: false)
             ->assertSee('data-role="dialog-assignee-current"', escape: false)
@@ -1179,11 +1234,12 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSet('selectedDialogAssigneeId', '')
             ->assertSee('data-role="dialog-assignee-editor"', escape: false)
             ->assertSee('data-role="dialog-assignee-select"', escape: false)
-            ->assertSee('data-role="dialog-save-assignee-button"', escape: false)
-            ->assertSee('aria-label="Сохранить ответственного"', escape: false)
+            ->assertDontSee('data-role="dialog-save-assignee-button"', escape: false)
             ->assertSee('Новый Ответственный Петров')
             ->set('selectedDialogAssigneeId', (string) $assignee->id)
-            ->call('saveDialogAssignee')
+            ->assertSet('dialogFieldDraftDirty', true)
+            ->assertSee('data-role="dialog-field-savebar"', escape: false)
+            ->call('saveDialogFieldDraftValues')
             ->assertNotified()
             ->assertSet('isDialogAssigneeEditing', false)
             ->assertSee('Новый Ответственный Петров');
@@ -1212,11 +1268,12 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSet('isDialogAssigneeEditing', true)
             ->assertSet('selectedDialogAssigneeId', (string) $owner->id)
             ->assertSee('data-role="dialog-assignee-select"', escape: false)
-            ->assertSee('data-role="dialog-save-assignee-button"', escape: false)
-            ->assertSee('aria-label="Сохранить ответственного"', escape: false)
+            ->assertDontSee('data-role="dialog-save-assignee-button"', escape: false)
             ->assertSee('Свободен')
             ->set('selectedDialogAssigneeId', '')
-            ->call('saveDialogAssignee')
+            ->assertSet('dialogFieldDraftDirty', true)
+            ->assertSee('data-role="dialog-field-savebar"', escape: false)
+            ->call('saveDialogFieldDraftValues')
             ->assertNotified()
             ->assertSet('isDialogAssigneeEditing', false)
             ->assertSee('Свободен');
@@ -1387,8 +1444,8 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('Клиент диалога')
             ->assertSee('Канал обращения')
             ->assertSee('МПП из справочника')
-            ->assertSee('data-role="dialog-contact-label"', false)
-            ->assertSee('data-role="dialog-channel-label"', false)
+            ->assertSee('data-field-key="contact_id"', false)
+            ->assertSee('data-field-key="channel_id"', false)
             ->assertDontSee('Имя из мессенджера')
             ->assertDontSee('<p class="ac-surface__subtitle">', false)
             ->assertSee('Telegram Клиент');

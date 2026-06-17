@@ -254,11 +254,11 @@
 
                             this.$nextTick(() => this.scrollToBottom());
                         },
-                    }"
-                    x-init="if (! initialized) { scheduleInitialScroll(); initialized = true; } startLiveRefresh();"
-                    x-on:dialog-history-older-messages-loaded.window="$nextTick(() => restorePositionAfterPrepend())"
-                    x-on:dialog-history-refreshed.window="$nextTick(() => handleRefreshComplete($event.detail))"
-                    x-on:dialog-reply-sent.window="$nextTick(() => scrollToBottom())"
+                        }"
+                        x-init="if (! initialized) { scheduleInitialScroll(); initialized = true; } startLiveRefresh();"
+                        x-on:dialog-history-older-messages-loaded.window="$nextTick(() => restorePositionAfterPrepend())"
+                        x-on:dialog-history-refreshed.window="$nextTick(() => handleRefreshComplete($event.detail))"
+                        x-on:dialog-reply-sent.window="$nextTick(() => scrollToBottom())"
                     class="ac-surface ac-dialog-chat-panel"
                 >
                     <div class="ac-surface__header ac-surface__header--centered">
@@ -310,268 +310,186 @@
             </div>
 
             <aside data-role="dialog-side-panel" class="ac-dialog-side-column">
-                <section class="ac-surface ac-dialog-side-card" data-role="dialog-system-fields-section">
-                    <p class="ac-dialog-summary__section-title">Системные поля</p>
-                    @php
-                        $statusOptions = $dialogInboxStatus['options'];
-                        $currentStatusLabel = $statusOptions[$dialogInboxStatusSelection] ?? (array_values($statusOptions)[0] ?? '—');
-                        $nextStatusValue = collect($statusOptions)
-                            ->keys()
-                            ->first(fn ($statusValue) => $statusValue !== $dialogInboxStatusSelection);
-                        $nextStatusLabel = $nextStatusValue !== null ? ($statusOptions[$nextStatusValue] ?? null) : null;
-                    @endphp
-                    <div class="ac-dialog-side-list">
-                        @foreach ($dialogSystemFields['rows'] as $systemField)
-                            <div
-                                class="ac-meta @if ($systemField['key'] === 'assigned_user_id' && $this->isDialogAssigneeEditing) ac-meta--assignee-editing @endif"
-                                data-role="dialog-system-field-row"
-                                data-field-key="{{ $systemField['key'] }}"
-                                @if (filled($systemField['tone'])) data-tone="{{ $systemField['tone'] }}" @endif
-                            >
-                                <p class="ac-meta__label">
-                                    {{ $systemField['label'] }}
-                                </p>
-                                @if ($systemField['key'] === 'status')
-                                    <button
-                                        type="button"
-                                        class="ac-dialog-status-toggle"
-                                        data-role="dialog-inbox-status-toggle"
-                                        wire:click="setDialogInboxStatus(@js($nextStatusValue))"
-                                        wire:loading.attr="disabled"
-                                        wire:target="setDialogInboxStatus"
-                                        aria-label="{{ $dialogFieldLabel('status', 'Статус') }}"
-                                        title="{{ $nextStatusLabel ? 'Сменить на: '.$nextStatusLabel : $currentStatusLabel }}"
-                                        @disabled(! $dialogInboxStatus['is_editable'] || $nextStatusValue === null)
-                                    >
-                                        <span data-role="dialog-inbox-status-current">{{ $currentStatusLabel }}</span>
-                                    </button>
-                                @elseif ($systemField['key'] === 'assigned_user_id' && $dialogAssignee['can_manage'])
-                                    @if ($this->isDialogAssigneeEditing)
-                                        <div class="ac-dialog-assignee-editor" data-role="dialog-assignee-editor">
-                                            <select
-                                                id="dialog-assignee-select"
-                                                data-role="dialog-assignee-select"
-                                                wire:model="selectedDialogAssigneeId"
-                                                class="ac-select"
-                                            >
-                                                <option value="">Свободен</option>
-                                                @foreach ($dialogAssignee['available_assignees'] as $userId => $userName)
-                                                    <option value="{{ $userId }}">{{ $userName }}</option>
-                                                @endforeach
-                                            </select>
+                <nav data-role="dialog-card-tabs" class="ac-dialog-side-tabs" aria-label="Вкладки диалога">
+                    @foreach ($tabs as $tab)
+                        <a
+                            href="{{ $tab['url'] }}"
+                            wire:click.prevent="selectTab('{{ $tab['key'] }}')"
+                            data-role="dialog-card-tab-{{ $tab['key'] }}"
+                            data-active="{{ $tab['isActive'] ? 'true' : 'false' }}"
+                            @class([
+                                'ac-dialog-side-tabs__link',
+                                'is-active' => $tab['isActive'],
+                            ])
+                        >
+                            {{ $tab['label'] }}
+                        </a>
+                    @endforeach
+                </nav>
 
-                                            <button
-                                                data-role="dialog-save-assignee-button"
-                                                type="button"
-                                                wire:click="saveDialogAssignee"
-                                                wire:loading.attr="disabled"
-                                                wire:target="saveDialogAssignee"
-                                                class="ac-dialog-assignee-save"
-                                                aria-label="Сохранить ответственного"
-                                                title="Сохранить"
-                                            >
-                                                <span wire:loading.remove wire:target="saveDialogAssignee" aria-hidden="true">✓</span>
-                                                <span wire:loading wire:target="saveDialogAssignee" aria-hidden="true">…</span>
-                                            </button>
-                                        </div>
-                                    @else
-                                        <button
-                                            type="button"
-                                            class="ac-dialog-status-toggle ac-dialog-assignee-toggle"
-                                            data-role="dialog-assignee-toggle"
-                                            wire:click="openDialogAssigneeEditor"
-                                            wire:loading.attr="disabled"
-                                            wire:target="openDialogAssigneeEditor,saveDialogAssignee"
-                                            aria-label="Изменить ответственного за контакт"
-                                            title="Изменить ответственного за контакт"
-                                        >
-                                            <span data-role="dialog-assignee-current">{{ $systemField['value'] }}</span>
-                                        </button>
-                                    @endif
-                                @else
-                                    <p
-                                        @if (filled($systemField['value_role'])) data-role="{{ $systemField['value_role'] }}" @endif
-                                        class="ac-meta__value"
-                                        title="{{ $systemField['value'] }}"
-                                    >
-                                        @if (filled($systemField['url']))
-                                            <a class="ac-meta__link" href="{{ $systemField['url'] }}" title="{{ $systemField['value'] }}">
-                                                {{ $systemField['value'] }}
-                                            </a>
-                                        @else
-                                            {{ $systemField['value'] }}
-                                        @endif
-                                    </p>
-                                @endif
-                                @if (filled($systemField['detail']))
-                                    <p class="ac-meta__value ac-meta__value--muted" title="{{ $systemField['detail'] }}">
-                                        {{ $systemField['detail'] }}
-                                    </p>
-                                @endif
-                            </div>
-                        @endforeach
-                    </div>
-                </section>
-
-                @if ($dialogFields['is_visible'])
+                @if ($activeTab === \App\Services\Dialogs\SyncSystemDialogCardViewAction::TAB_GENERAL)
+            <div data-role="dialog-general-tab" class="ac-dialog-side-stack">
+                @foreach ($dialogGeneralSections as $section)
                     <section
-                        class="ac-surface ac-dialog-side-card"
-                        data-role="dialog-fields-section"
-                        data-dialog-id="{{ $record->id }}"
+                        class="ac-surface ac-surface--secondary ac-dialog-side-card"
+                        data-role="{{ ($section['section_key'] ?? '') === \App\Services\Dialogs\SyncSystemDialogCardViewAction::SECTION_DIALOG_FIELDS ? 'dialog-fields-section' : 'dialog-card-section' }}"
+                        data-section-key="{{ $section['section_key'] ?? '' }}"
                     >
-                        <p class="ac-dialog-summary__section-title">Поля диалога</p>
-                        @if ($dialogFields['fields'] === [])
-                            <p class="ac-empty-state ac-empty-state--compact" data-role="dialog-fields-empty">
-                                Поля диалога пока не заполнены
-                            </p>
-                        @else
-                            <div class="ac-dialog-fields-list">
-                                @foreach ($dialogFields['fields'] as $field)
-                                    <div
-                                        class="ac-dialog-field-row"
-                                        wire:key="dialog-field-row-{{ md5($field['key']) }}"
-                                        data-role="dialog-field-row"
-                                        data-field-key="{{ $field['key'] }}"
-                                        data-field-value-type="{{ $field['value_type'] }}"
-                                        x-data="{ value: @js($field['editable_value']), isEditing: false, isSaving: false }"
-                                    >
-                                        <div class="ac-dialog-field-row__content">
-                                            @if ($field['can_edit'])
-                                                <div class="ac-dialog-field-row__value-line">
-                                                    <p class="ac-meta__label" data-role="dialog-field-key">
-                                                        {{ $field['label'] }}
-                                                    </p>
-                                                    <p
-                                                        class="ac-meta__value"
-                                                        data-role="dialog-field-value"
-                                                        x-show="! isEditing"
-                                                    >
-                                                        {{ $field['value'] }}
-                                                    </p>
-                                                    <input
-                                                        x-cloak
-                                                        x-ref="input"
-                                                        x-show="isEditing"
-                                                        type="text"
-                                                        class="ac-dialog-field-row__input"
-                                                        data-role="dialog-field-edit-input"
-                                                        aria-label="Значение поля {{ $field['label'] }}"
-                                                        value="{{ $field['editable_value'] }}"
-                                                        x-model="value"
-                                                        x-bind:hidden="! isEditing"
-                                                        x-bind:disabled="isSaving"
-                                                        x-on:keydown.enter.prevent="
-                                                            isSaving = true;
-                                                            $wire.saveDialogFieldValue(@js($field['key']), value).then(() => isEditing = false).finally(() => isSaving = false);
-                                                        "
-                                                    >
-                                                    <button
-                                                        type="button"
-                                                        class="ac-dialog-field-row__edit"
-                                                        data-role="dialog-field-edit"
-                                                        title="Редактировать поле"
-                                                        aria-label="Редактировать поле {{ $field['label'] }}"
-                                                        x-on:click="
-                                                            isEditing = true;
-                                                            $nextTick(() => $refs.input?.focus());
-                                                        "
-                                                    >
-                                                        <x-filament::icon icon="heroicon-m-pencil-square" class="h-4 w-4" />
-                                                    </button>
-                                                </div>
-                                            @else
-                                                <div class="ac-dialog-field-row__value-line">
-                                                    <p class="ac-meta__label" data-role="dialog-field-key">
-                                                        {{ $field['label'] }}
-                                                    </p>
-                                                    <p class="ac-meta__value" data-role="dialog-field-value">
-                                                        {{ $field['value'] }}
-                                                    </p>
-                                                </div>
-                                            @endif
-                                        </div>
-                                        <div
-                                            class="ac-dialog-field-row__actions"
-                                            x-cloak
-                                            x-show="isEditing"
-                                        >
-                                            @if ($field['can_edit'])
-                                                <button
-                                                    type="button"
-                                                    class="ac-dialog-field-row__save"
-                                                    data-role="dialog-field-save"
-                                                    x-bind:disabled="isSaving"
-                                                    x-on:click="
-                                                        isSaving = true;
-                                                        $wire.saveDialogFieldValue(@js($field['key']), value).then(() => isEditing = false).finally(() => isSaving = false);
-                                                    "
-                                                >
-                                                    <span x-show="! isSaving">Сохранить</span>
-                                                    <span x-cloak x-show="isSaving">Сохраняю</span>
-                                                </button>
-                                            @endif
-                                        </div>
-                                    </div>
-                                @endforeach
-                            </div>
-                        @endif
-                    </section>
-                @endif
-
-                @if ($peerSyncState['is_visible'])
-                    <section class="ac-surface ac-dialog-side-card">
-                        <p class="ac-dialog-summary__section-title">Загрузка истории</p>
-                        <div class="ac-dialog-side-list">
-                            <div class="ac-meta">
-                                <p class="ac-meta__label">
-                                    Статус загрузки истории
-                                </p>
-                                <div class="ac-meta__value">
-                                    <span
-                                        data-role="dialog-peer-sync-status"
-                                        data-tone="{{ $peerSyncState['status_tone'] }}"
-                                        class="ac-pill"
-                                    >
-                                        {{ $peerSyncState['status_label'] }}
-                                    </span>
-                                </div>
-                            </div>
-                            <div class="ac-meta">
-                                <p class="ac-meta__label">
-                                    История завершена
-                                </p>
-                                <p data-role="dialog-peer-sync-history-complete" class="ac-meta__value">
-                                    {{ $peerSyncState['history_complete_label'] }}
-                                </p>
-                            </div>
-                            <div class="ac-meta">
-                                <p class="ac-meta__label">
-                                    Самое раннее сообщение
-                                </p>
-                                <p data-role="dialog-peer-sync-oldest-message" class="ac-meta__value">
-                                    {{ $peerSyncState['oldest_imported_message_id_label'] }}
-                                </p>
-                            </div>
-                            <div class="ac-meta">
-                                <p class="ac-meta__label">
-                                    Последнее observed message
-                                </p>
-                                <p data-role="dialog-peer-sync-latest-message" class="ac-meta__value">
-                                    {{ $peerSyncState['latest_observed_message_id_label'] }}
-                                </p>
-                            </div>
-                            <div class="ac-meta">
-                                <p class="ac-meta__label">
-                                    Ошибка peer sync
-                                </p>
-                                <p data-role="dialog-peer-sync-error" class="ac-meta__value">
-                                    {{ $peerSyncState['last_sync_error_label'] }}
-                                </p>
+                        <div class="ac-surface__header ac-surface__header--centered">
+                            <div class="ac-surface__title-group">
+                                <h3 class="ac-surface__title">{{ $section['title'] }}</h3>
                             </div>
                         </div>
+
+                        @if (($section['rows'] ?? []) === [] && ($section['section_key'] ?? '') === \App\Services\Dialogs\SyncSystemDialogCardViewAction::SECTION_DIALOG_FIELDS)
+                            <div class="ac-surface__divider">
+                                <p data-role="dialog-fields-empty" class="ac-empty-state ac-empty-state--compact">Поля диалога пока не заполнены</p>
+                            </div>
+                        @else
+                            @include('filament.dialogs.partials.dialog-side-field-list', [
+                                'rows' => $section['rows'],
+                            ])
+                        @endif
                     </section>
+                @endforeach
+            </div>
+                @elseif ($activeTab === \App\Services\Dialogs\SyncSystemDialogCardViewAction::TAB_BITRIX24)
+            <div data-role="dialog-bitrix24-tab" class="ac-dialog-side-stack">
+                @foreach ($dialogBitrixSections as $section)
+                    <section class="ac-surface ac-surface--secondary ac-dialog-side-card">
+                        <div class="ac-surface__header ac-surface__header--centered">
+                            <div class="ac-surface__title-group">
+                                <h3 class="ac-surface__title">{{ $section['title'] }}</h3>
+                            </div>
+                        </div>
+
+                        @include('filament.dialogs.partials.dialog-side-field-list', [
+                            'rows' => $section['rows'],
+                        ])
+                    </section>
+                @endforeach
+            </div>
+                @elseif ($activeTab === \App\Services\Dialogs\SyncSystemDialogCardViewAction::TAB_SYSTEM_FIELDS)
+            <div data-role="dialog-system-fields-tab" class="ac-dialog-side-stack">
+                @foreach ($dialogSystemFieldSections as $section)
+                    <section class="ac-surface ac-surface--secondary ac-dialog-side-card">
+                        <div class="ac-surface__header ac-surface__header--centered">
+                            <div class="ac-surface__title-group">
+                                <h3 class="ac-surface__title">{{ $section['title'] }}</h3>
+                            </div>
+                        </div>
+
+                        @include('filament.dialogs.partials.dialog-side-field-list', [
+                            'rows' => $section['rows'],
+                        ])
+                    </section>
+                @endforeach
+            </div>
+                @elseif ($activeTab === \App\Services\Dialogs\SyncSystemDialogCardViewAction::TAB_DIAGNOSTICS)
+            <div data-role="dialog-diagnostics-tab" class="ac-dialog-side-stack">
+                @foreach ($dialogDiagnosticsBlocks as $section)
+                    @foreach (($section['blocks'] ?? []) as $blockKey)
+                        @if ($blockKey === \App\Services\Dialogs\SyncSystemDialogCardViewAction::BLOCK_DIALOG_PEER_SYNC && $peerSyncState['is_visible'])
+                            <section class="ac-surface ac-dialog-side-card">
+                                <div class="ac-surface__header ac-surface__header--centered">
+                                    <div class="ac-surface__title-group">
+                                        <h3 class="ac-surface__title">{{ $section['title'] }}</h3>
+                                    </div>
+                                </div>
+                                <div class="ac-dialog-side-list ac-surface__divider">
+                                    <div class="ac-meta">
+                                        <p class="ac-meta__label">Статус загрузки истории</p>
+                                        <div class="ac-meta__value">
+                                            <span data-role="dialog-peer-sync-status" data-tone="{{ $peerSyncState['status_tone'] }}" class="ac-pill">
+                                                {{ $peerSyncState['status_label'] }}
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <div class="ac-meta">
+                                        <p class="ac-meta__label">История завершена</p>
+                                        <p data-role="dialog-peer-sync-history-complete" class="ac-meta__value">{{ $peerSyncState['history_complete_label'] }}</p>
+                                    </div>
+                                    <div class="ac-meta">
+                                        <p class="ac-meta__label">Самое раннее сообщение</p>
+                                        <p data-role="dialog-peer-sync-oldest-message" class="ac-meta__value">{{ $peerSyncState['oldest_imported_message_id_label'] }}</p>
+                                    </div>
+                                    <div class="ac-meta">
+                                        <p class="ac-meta__label">Последнее observed message</p>
+                                        <p data-role="dialog-peer-sync-latest-message" class="ac-meta__value">{{ $peerSyncState['latest_observed_message_id_label'] }}</p>
+                                    </div>
+                                    <div class="ac-meta">
+                                        <p class="ac-meta__label">Ошибка peer sync</p>
+                                        <p data-role="dialog-peer-sync-error" class="ac-meta__value">{{ $peerSyncState['last_sync_error_label'] }}</p>
+                                    </div>
+                                </div>
+                            </section>
+                        @endif
+                    @endforeach
+                @endforeach
+            </div>
+                @else
+            <div data-role="dialog-custom-tab" class="ac-dialog-side-stack">
+                @foreach ($dialogCustomSections as $section)
+                    <section class="ac-surface ac-surface--secondary ac-dialog-side-card">
+                        <div class="ac-surface__header ac-surface__header--centered">
+                            <div class="ac-surface__title-group">
+                                <h3 class="ac-surface__title">{{ $section['title'] }}</h3>
+                            </div>
+                        </div>
+
+                        @if (($section['rows'] ?? []) !== [])
+                            @include('filament.dialogs.partials.dialog-side-field-list', [
+                                'rows' => $section['rows'],
+                            ])
+                        @endif
+
+                        @foreach (($section['blocks'] ?? []) as $blockKey)
+                            @if ($blockKey === \App\Services\Dialogs\SyncSystemDialogCardViewAction::SECTION_DIALOG_FIELDS && $dialogFields['is_visible'])
+                                <div class="ac-surface__divider">
+                                    <p class="ac-dialog-summary__section-title">Поля диалога</p>
+                                    @if ($dialogFields['fields'] === [])
+                                        <p class="ac-empty-state ac-empty-state--compact">Поля диалога пока не заполнены</p>
+                                    @else
+                                        @include('filament.dialogs.partials.dialog-side-field-list', [
+                                            'rows' => $dialogFields['fields'],
+                                        ])
+                                    @endif
+                                </div>
+                            @endif
+                        @endforeach
+                    </section>
+                @endforeach
+            </div>
                 @endif
             </aside>
         </div>
+
+        @if ($this->dialogFieldDraftDirty)
+            <div data-role="dialog-field-savebar" class="ac-savebar is-visible">
+                <span class="ac-savebar__status">Есть несохранённые изменения</span>
+
+                <div class="ac-savebar__actions">
+                    <button
+                        type="button"
+                        wire:click="resetDialogFieldDraftValues"
+                        wire:loading.attr="disabled"
+                        wire:target="resetDialogFieldDraftValues,saveDialogFieldDraftValues"
+                        class="ac-button ac-button--secondary"
+                    >
+                        Отмена
+                    </button>
+                    <button
+                        type="button"
+                        wire:click="saveDialogFieldDraftValues"
+                        wire:loading.attr="disabled"
+                        wire:target="saveDialogFieldDraftValues"
+                        class="ac-button ac-button--success"
+                    >
+                        <span wire:loading.remove wire:target="saveDialogFieldDraftValues">Сохранить</span>
+                        <span wire:loading wire:target="saveDialogFieldDraftValues">Сохраняем...</span>
+                    </button>
+                </div>
+            </div>
+        @endif
     </div>
 </x-filament-panels::page>

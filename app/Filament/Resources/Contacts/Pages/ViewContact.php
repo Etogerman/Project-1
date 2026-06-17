@@ -8,12 +8,16 @@ use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\FieldDictionaryField;
 use App\Services\Contacts\AddContactTimelineCommentAction;
+use App\Services\Contacts\BuildContactCardViewLayoutAction;
+use App\Services\Contacts\ContactCardViewBlockRegistry;
+use App\Services\Contacts\SyncSystemContactCardViewAction;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
 use Filament\Support\Enums\Width;
 use Illuminate\Contracts\Support\Htmlable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Log;
 use Livewire\Attributes\Url;
 use Throwable;
 
@@ -27,9 +31,19 @@ class ViewContact extends ViewRecord
 
     public const TAB_BITRIX24 = 'bitrix24';
 
+    public const TAB_DEDUP = 'dedup';
+
+    public const TAB_SYSTEM_FIELDS = 'system_fields';
+
     public const TAB_HISTORY = 'history';
 
     public const TAB_DIAGNOSTICS = 'diagnostics';
+
+    private const GENERAL_BLOCK_KEYS = [
+        SyncSystemContactCardViewAction::BLOCK_CONTACT_PHONES,
+        SyncSystemContactCardViewAction::BLOCK_CONTACT_EMAILS,
+        SyncSystemContactCardViewAction::BLOCK_CONTACT_TAGS,
+    ];
 
     protected static string $resource = ContactResource::class;
 
@@ -188,23 +202,56 @@ class ViewContact extends ViewRecord
         $isGeneralTab = $this->activeTab === self::TAB_GENERAL;
         $isDialogsTab = $this->activeTab === self::TAB_DIALOGS;
         $isBitrix24Tab = $this->activeTab === self::TAB_BITRIX24;
+        $isDedupTab = $this->activeTab === self::TAB_DEDUP;
+        $isSystemFieldsTab = $this->activeTab === self::TAB_SYSTEM_FIELDS;
         $isDiagnosticsTab = $this->activeTab === self::TAB_DIAGNOSTICS;
         $isHistoryTab = $this->activeTab === self::TAB_HISTORY;
+        $isCustomTab = ! $this->isKnownContactTab($this->activeTab);
         $profileViewData = ContactResource::buildContactProfileViewData($record);
-        $dialogsViewData = $isDialogsTab
-            ? ContactResource::buildDialogsViewData($record)
-            : ['dialogs' => []];
-        $ownershipControls = $isGeneralTab
+        $ownershipControls = $isGeneralTab || $isCustomTab
             ? ContactResource::buildOwnershipControlsViewData($record)
             : [];
-        $tagsViewData = $isGeneralTab
+        $showDedupStatus = ContactResource::shouldShowDedupStatusSection($record);
+        $customTabSections = $isCustomTab
+            ? $this->buildCustomTabSections(
+                $record,
+                $this->activeTab,
+                (bool) ($profileViewData['canEditProfile'] ?? false),
+                $profileViewData,
+                $ownershipControls,
+            )
+            : [];
+        $customBlockKeys = $this->collectCardViewBlockKeys($customTabSections);
+        $dialogBlocks = $isDialogsTab
+            ? $this->buildDialogBlocks($record)
+            : [];
+        $dialogsViewData = (($isDialogsTab && $this->dialogBlocksContainContactDialogs($dialogBlocks))
+            || in_array(SyncSystemContactCardViewAction::BLOCK_CONTACT_DIALOGS, $customBlockKeys, true))
+            ? ContactResource::buildDialogsViewData($record)
+            : ['dialogs' => []];
+        $historyBlocks = $isHistoryTab
+            ? $this->buildHistoryBlocks($record)
+            : [];
+        $historyBlockVisible = $isHistoryTab && $this->historyBlocksContainContactHistory($historyBlocks);
+        $customHistoryBlockVisible = in_array(SyncSystemContactCardViewAction::BLOCK_CONTACT_HISTORY, $customBlockKeys, true)
+            && $this->canViewHistoryTab();
+        $generalBlocks = $isGeneralTab
+            ? $this->buildGeneralBlocks($record)
+            : [];
+        $phoneBlockVisible = ($isGeneralTab && $this->generalBlocksContainBlock($generalBlocks, SyncSystemContactCardViewAction::BLOCK_CONTACT_PHONES))
+            || in_array(SyncSystemContactCardViewAction::BLOCK_CONTACT_PHONES, $customBlockKeys, true);
+        $emailBlockVisible = ($isGeneralTab && $this->generalBlocksContainBlock($generalBlocks, SyncSystemContactCardViewAction::BLOCK_CONTACT_EMAILS))
+            || in_array(SyncSystemContactCardViewAction::BLOCK_CONTACT_EMAILS, $customBlockKeys, true);
+        $tagBlockVisible = ($isGeneralTab && $this->generalBlocksContainBlock($generalBlocks, SyncSystemContactCardViewAction::BLOCK_CONTACT_TAGS))
+            || in_array(SyncSystemContactCardViewAction::BLOCK_CONTACT_TAGS, $customBlockKeys, true);
+        $tagsViewData = $tagBlockVisible
             ? ContactResource::buildTagsViewData($record)
             : [
                 'tags' => [],
                 'canManageTags' => false,
                 'availableTags' => [],
             ];
-        $phoneNumbersViewData = $isGeneralTab
+        $phoneNumbersViewData = $phoneBlockVisible
             ? ContactResource::buildPhoneNumbersViewData($record)
             : [
                 'phoneNumbers' => [],
@@ -212,43 +259,802 @@ class ViewContact extends ViewRecord
                 'canDeletePhones' => false,
             ];
         $phoneNumbersViewData['sectionTitle'] = $this->contactFieldLabel('phones', 'Телефоны');
-        $showDedupStatus = $isGeneralTab && ContactResource::shouldShowDedupStatusSection($record);
-        $diagnosticsViewData = $isDiagnosticsTab
+        $emailsViewData = $emailBlockVisible
+            ? ContactResource::buildContactEmailsViewData($record)
+            : [
+                'emails' => [],
+                'canEditEmails' => false,
+                'canDeleteEmails' => false,
+            ];
+        $emailsViewData['sectionTitle'] = $this->contactFieldLabel('emails', 'Email');
+        $dedupBlocks = $isDedupTab && $showDedupStatus
+            ? $this->buildDedupBlocks($record)
+            : [];
+        $dedupBlockVisible = $isDedupTab && $showDedupStatus && $this->dedupBlocksContainContactDedup($dedupBlocks);
+        $customDedupBlockVisible = $showDedupStatus
+            && in_array(SyncSystemContactCardViewAction::BLOCK_CONTACT_DEDUP, $customBlockKeys, true);
+        $diagnosticsBlocks = $isDiagnosticsTab
+            ? $this->buildDiagnosticsBlocks($record)
+            : [];
+        $diagnosticsBlockVisible = $isDiagnosticsTab && $this->diagnosticsBlocksContainContactDiagnostics($diagnosticsBlocks);
+        $customDiagnosticsBlockVisible = ContactResource::canCurrentUserViewContactDiagnostics()
+            && in_array(SyncSystemContactCardViewAction::BLOCK_CONTACT_DIAGNOSTICS, $customBlockKeys, true);
+        $diagnosticsViewData = $diagnosticsBlockVisible || $customDiagnosticsBlockVisible
             ? ContactResource::buildDiagnosticsViewData($record)
             : null;
         $canAddHistoryComment = $this->canCurrentEmployeeAddContactHistoryComments();
+        $generalCardSections = $isGeneralTab
+            ? $this->buildGeneralCardSections($record, (bool) ($profileViewData['canEditProfile'] ?? false), $profileViewData, $ownershipControls)
+            : [];
 
         return [
             'activeTab' => $this->activeTab,
+            'isCustomTab' => $isCustomTab,
             'contactHeader' => $this->buildHeaderViewData($record, $profileViewData),
             'contactStats' => $isGeneralTab ? $this->buildStatsViewData($record) : [],
             'tabs' => $this->buildTabsViewData(),
             'showFieldKeys' => false,
-            'profileRows' => $isGeneralTab ? $this->buildProfileRows($record, (bool) ($profileViewData['canEditProfile'] ?? false), $profileViewData) : [],
-            'locationRows' => $isGeneralTab ? $this->buildLocationRows($record, (bool) ($profileViewData['canEditProfile'] ?? false), $profileViewData) : [],
-            'workRows' => $isGeneralTab ? $this->buildWorkRows($record, $ownershipControls, $tagsViewData, $phoneNumbersViewData) : [],
+            'generalCardSections' => $generalCardSections,
+            'profileRows' => $generalCardSections['client_data']['rows'] ?? [],
+            'locationRows' => $generalCardSections['location']['rows'] ?? [],
+            'workRows' => $generalCardSections['work']['rows'] ?? [],
+            'generalBlocks' => $generalBlocks,
             'bitrixSections' => $isBitrix24Tab ? $this->buildBitrixSections($record) : [],
+            'systemFieldSections' => $isSystemFieldsTab ? $this->buildSystemFieldSections($record) : [],
+            'customTabSections' => $customTabSections,
+            'dialogBlocks' => $dialogBlocks,
+            'dedupBlocks' => $dedupBlocks,
+            'diagnosticsBlocks' => $diagnosticsBlocks,
+            'historyBlocks' => $historyBlocks,
             'profileViewData' => $profileViewData,
             'ownershipControls' => $ownershipControls,
-            'dedupStatusViewData' => $showDedupStatus
+            'dedupStatusViewData' => ($dedupBlockVisible || $customDedupBlockVisible)
                 ? ContactResource::buildDedupStatusViewData($record)
                 : null,
             'diagnosticsViewData' => $diagnosticsViewData,
             'tagsViewData' => $tagsViewData,
             'phoneNumbersViewData' => $phoneNumbersViewData,
+            'emailsViewData' => $emailsViewData,
             'dialogsViewData' => $dialogsViewData,
-            'historyViewData' => $isHistoryTab
+            'historyViewData' => ($historyBlockVisible || $customHistoryBlockVisible)
                 ? ContactResource::buildHistoryTimelineViewData($record, $this->historyVisibleCount)
                 : [
                     'items' => [],
                     'hasMore' => false,
                     'visibleCount' => 0,
                     'totalCount' => 0,
-                ],
+            ],
             'historyCommentViewData' => [
-                'canAddComment' => $canAddHistoryComment,
+                'canAddComment' => ($historyBlockVisible || $customHistoryBlockVisible) && $canAddHistoryComment,
             ],
         ];
+    }
+
+    /**
+     * @return array<string, array{dataRole:string,title:string,rows:list<array<string, mixed>>}>
+     */
+    protected function buildGeneralCardSections(Contact $record, bool $canEditProfile, array $profileViewData, array $ownershipControls): array
+    {
+        try {
+            $layout = app(BuildContactCardViewLayoutAction::class)->general();
+
+            if (! is_array($layout)) {
+                return $this->buildFallbackGeneralCardSections($record, $canEditProfile, $profileViewData, $ownershipControls);
+            }
+
+            $sections = [];
+            $rowsByKey = $this->buildGeneralCardRowsByKey($record, $canEditProfile, $profileViewData, $ownershipControls);
+
+            foreach ($layout['sections'] as $section) {
+                $sectionKey = (string) ($section['section_key'] ?? '');
+
+                if ($sectionKey === '') {
+                    continue;
+                }
+
+                $rows = [];
+
+                foreach (($section['fields'] ?? []) as $fieldKey) {
+                    $row = $rowsByKey[(string) $fieldKey] ?? null;
+
+                    if ($row === null) {
+                        Log::warning('contact_card_view_unknown_field_key', [
+                            'contact_id' => $record->id,
+                            'field_key' => $fieldKey,
+                            'section_key' => $sectionKey,
+                        ]);
+
+                        continue;
+                    }
+
+                    $rows[] = $row;
+                }
+
+                $sections[$sectionKey] = [
+                    'dataRole' => $this->contactCardSectionDataRole($sectionKey),
+                    'title' => (string) ($section['title'] ?? $sectionKey),
+                    'rows' => $rows,
+                ];
+            }
+
+            foreach (['client_data', 'location', 'work'] as $requiredSectionKey) {
+                if (! array_key_exists($requiredSectionKey, $sections)) {
+                    return $this->buildFallbackGeneralCardSections($record, $canEditProfile, $profileViewData, $ownershipControls);
+                }
+            }
+
+            return $sections;
+        } catch (Throwable $throwable) {
+            Log::warning('contact_card_view_fallback_used', [
+                'contact_id' => $record->id,
+                'error' => $throwable->getMessage(),
+            ]);
+
+            return $this->buildFallbackGeneralCardSections($record, $canEditProfile, $profileViewData, $ownershipControls);
+        }
+    }
+
+    /**
+     * @return array<string, array<string, mixed>>
+     */
+    protected function buildGeneralCardRowsByKey(Contact $record, bool $canEditProfile, array $profileViewData, array $ownershipControls): array
+    {
+        $rows = [
+            ...$this->buildProfileRows($record, $canEditProfile, $profileViewData),
+            ...$this->buildLocationRows($record, $canEditProfile, $profileViewData),
+            ...$this->buildWorkRows($record, $ownershipControls),
+        ];
+
+        return collect($rows)
+            ->mapWithKeys(fn (array $row): array => [(string) ($row['key'] ?? '') => $row])
+            ->filter(fn (array $row, string $key): bool => $key !== '')
+            ->all();
+    }
+
+    /**
+     * @return array<string, array{dataRole:string,title:string,rows:list<array<string, mixed>>}>
+     */
+    protected function buildFallbackGeneralCardSections(Contact $record, bool $canEditProfile, array $profileViewData, array $ownershipControls): array
+    {
+        return [
+            'client_data' => [
+                'dataRole' => 'contact-section-client-data',
+                'title' => 'Данные клиента',
+                'rows' => $this->buildProfileRows($record, $canEditProfile, $profileViewData),
+            ],
+            'location' => [
+                'dataRole' => 'contact-section-location',
+                'title' => 'Локация',
+                'rows' => $this->buildLocationRows($record, $canEditProfile, $profileViewData),
+            ],
+            'work' => [
+                'dataRole' => 'contact-section-work',
+                'title' => 'Работа с контактом',
+                'rows' => $this->buildWorkRows($record, $ownershipControls),
+            ],
+        ];
+    }
+
+    /**
+     * @return list<array{section_key:string,title:string,blocks:list<string>}>
+     */
+    protected function buildGeneralBlocks(Contact $record): array
+    {
+        $fallback = $this->buildFallbackGeneralBlocks();
+
+        try {
+            $layout = app(BuildContactCardViewLayoutAction::class)->generalBlocks();
+
+            if (! is_array($layout)) {
+                return $fallback;
+            }
+
+            $sections = [];
+
+            foreach ($layout['sections'] as $section) {
+                $sectionKey = (string) ($section['section_key'] ?? '');
+
+                if ($sectionKey === '') {
+                    continue;
+                }
+
+                $blocks = [];
+
+                foreach (($section['blocks'] ?? []) as $blockKey) {
+                    $blockKey = (string) $blockKey;
+
+                    if (in_array($blockKey, self::GENERAL_BLOCK_KEYS, true)) {
+                        $blocks[] = $blockKey;
+
+                        continue;
+                    }
+
+                    Log::warning('contact_card_view_unknown_general_block_key', [
+                        'contact_id' => $record->id,
+                        'block_key' => $blockKey,
+                        'section_key' => $sectionKey,
+                    ]);
+                }
+
+                $sections[] = [
+                    'section_key' => $sectionKey,
+                    'title' => (string) ($section['title'] ?? $sectionKey),
+                    'blocks' => $blocks,
+                ];
+            }
+
+            return $sections;
+        } catch (Throwable $throwable) {
+            Log::warning('contact_general_blocks_card_view_fallback_used', [
+                'contact_id' => $record->id,
+                'error' => $throwable->getMessage(),
+            ]);
+
+            return $fallback;
+        }
+    }
+
+    /**
+     * @return list<array{section_key:string,title:string,blocks:list<string>}>
+     */
+    protected function buildFallbackGeneralBlocks(): array
+    {
+        return [
+            [
+                'section_key' => 'contact_phones',
+                'title' => 'Телефоны',
+                'blocks' => [
+                    SyncSystemContactCardViewAction::BLOCK_CONTACT_PHONES,
+                ],
+            ],
+            [
+                'section_key' => 'contact_emails',
+                'title' => 'Email',
+                'blocks' => [
+                    SyncSystemContactCardViewAction::BLOCK_CONTACT_EMAILS,
+                ],
+            ],
+            [
+                'section_key' => 'contact_tags',
+                'title' => 'Теги',
+                'blocks' => [
+                    SyncSystemContactCardViewAction::BLOCK_CONTACT_TAGS,
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * @param  list<array{section_key:string,title:string,blocks:list<string>}>  $generalBlocks
+     */
+    protected function generalBlocksContainBlock(array $generalBlocks, string $expectedBlockKey): bool
+    {
+        foreach ($generalBlocks as $section) {
+            foreach (($section['blocks'] ?? []) as $blockKey) {
+                if ($blockKey === $expectedBlockKey) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @return list<array{section_key:string,title:string,rows:list<array<string, mixed>>,blocks:list<string>}>
+     */
+    protected function buildCustomTabSections(
+        Contact $record,
+        string $tabKey,
+        bool $canEditProfile,
+        array $profileViewData,
+        array $ownershipControls,
+    ): array {
+        try {
+            $layout = app(BuildContactCardViewLayoutAction::class)->itemsForTab($tabKey);
+
+            if (! is_array($layout)) {
+                return [];
+            }
+
+            $rowsByKey = $this->buildAllContactRowsByKey($record, $canEditProfile, $profileViewData, $ownershipControls);
+            $blockRegistry = app(ContactCardViewBlockRegistry::class);
+            $sections = [];
+
+            foreach ($layout['sections'] as $section) {
+                $sectionKey = (string) ($section['section_key'] ?? '');
+
+                if ($sectionKey === '') {
+                    continue;
+                }
+
+                $rows = [];
+                $blocks = [];
+
+                foreach (($section['items'] ?? []) as $item) {
+                    $itemKey = (string) ($item['item_key'] ?? '');
+                    $itemType = (string) ($item['item_type'] ?? '');
+
+                    if ($itemKey === '') {
+                        continue;
+                    }
+
+                    if ($itemType === 'field') {
+                        $complexBlockKey = (string) ($item['renderer_block_key'] ?? '');
+
+                        if ($complexBlockKey !== '') {
+                            $blocks[] = $complexBlockKey;
+
+                            continue;
+                        }
+
+                        $row = $rowsByKey[$itemKey] ?? null;
+
+                        if ($row === null) {
+                            Log::warning('contact_card_view_unknown_custom_field_key', [
+                                'contact_id' => $record->id,
+                                'field_key' => $itemKey,
+                                'section_key' => $sectionKey,
+                                'tab_key' => $tabKey,
+                            ]);
+
+                            continue;
+                        }
+
+                        $rows[] = $row;
+
+                        continue;
+                    }
+
+                    if ($itemType === 'block') {
+                        if (! $blockRegistry->contains($itemKey)) {
+                            Log::warning('contact_card_view_unknown_custom_block_key', [
+                                'contact_id' => $record->id,
+                                'block_key' => $itemKey,
+                                'section_key' => $sectionKey,
+                                'tab_key' => $tabKey,
+                            ]);
+
+                            continue;
+                        }
+
+                        $blocks[] = $itemKey;
+                    }
+                }
+
+                if ($rows === [] && $blocks === []) {
+                    continue;
+                }
+
+                $sections[] = [
+                    'section_key' => $sectionKey,
+                    'title' => (string) ($section['title'] ?? $sectionKey),
+                    'rows' => $rows,
+                    'blocks' => $blocks,
+                ];
+            }
+
+            return $sections;
+        } catch (Throwable $throwable) {
+            Log::warning('contact_custom_card_view_fallback_used', [
+                'contact_id' => $record->id,
+                'tab_key' => $tabKey,
+                'error' => $throwable->getMessage(),
+            ]);
+
+            return [];
+        }
+    }
+
+    /**
+     * @param  list<array{blocks:list<string>}>  $sections
+     * @return list<string>
+     */
+    protected function collectCardViewBlockKeys(array $sections): array
+    {
+        return collect($sections)
+            ->flatMap(fn (array $section): array => $section['blocks'] ?? [])
+            ->filter(fn (string $blockKey): bool => $blockKey !== '')
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @return array<string, array<string, mixed>>
+     */
+    protected function buildAllContactRowsByKey(Contact $record, bool $canEditProfile, array $profileViewData, array $ownershipControls): array
+    {
+        $rows = [
+            ...array_values($this->buildGeneralCardRowsByKey($record, $canEditProfile, $profileViewData, $ownershipControls)),
+            ...collect($this->buildFallbackBitrixSections($record))->flatMap(fn (array $section): array => $section['rows'])->all(),
+            ...collect($this->buildFallbackSystemFieldSections($record))->flatMap(fn (array $section): array => $section['rows'])->all(),
+        ];
+
+        return collect($rows)
+            ->mapWithKeys(fn (array $row): array => [(string) ($row['key'] ?? '') => $row])
+            ->filter(fn (array $row, string $key): bool => $key !== '')
+            ->all();
+    }
+
+    /**
+     * @return list<array{section_key:string,title:string,blocks:list<string>}>
+     */
+    protected function buildDialogBlocks(Contact $record): array
+    {
+        $fallback = $this->buildFallbackDialogBlocks();
+
+        try {
+            $layout = app(BuildContactCardViewLayoutAction::class)->dialogs();
+
+            if (! is_array($layout)) {
+                return $fallback;
+            }
+
+            $sections = [];
+
+            foreach ($layout['sections'] as $section) {
+                $sectionKey = (string) ($section['section_key'] ?? '');
+
+                if ($sectionKey === '') {
+                    continue;
+                }
+
+                $blocks = [];
+
+                foreach (($section['blocks'] ?? []) as $blockKey) {
+                    $blockKey = (string) $blockKey;
+
+                    if ($blockKey === SyncSystemContactCardViewAction::BLOCK_CONTACT_DIALOGS) {
+                        $blocks[] = $blockKey;
+
+                        continue;
+                    }
+
+                    Log::warning('contact_card_view_unknown_dialog_block_key', [
+                        'contact_id' => $record->id,
+                        'block_key' => $blockKey,
+                        'section_key' => $sectionKey,
+                    ]);
+                }
+
+                $sections[] = [
+                    'section_key' => $sectionKey,
+                    'title' => (string) ($section['title'] ?? $sectionKey),
+                    'blocks' => $blocks,
+                ];
+            }
+
+            if ($sections === []) {
+                return $fallback;
+            }
+
+            return $sections;
+        } catch (Throwable $throwable) {
+            Log::warning('contact_dialogs_card_view_fallback_used', [
+                'contact_id' => $record->id,
+                'error' => $throwable->getMessage(),
+            ]);
+
+            return $fallback;
+        }
+    }
+
+    /**
+     * @return list<array{section_key:string,title:string,blocks:list<string>}>
+     */
+    protected function buildFallbackDialogBlocks(): array
+    {
+        return [
+            [
+                'section_key' => 'contact_dialogs',
+                'title' => 'Диалоги',
+                'blocks' => [
+                    SyncSystemContactCardViewAction::BLOCK_CONTACT_DIALOGS,
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * @param  list<array{section_key:string,title:string,blocks:list<string>}>  $dialogBlocks
+     */
+    protected function dialogBlocksContainContactDialogs(array $dialogBlocks): bool
+    {
+        foreach ($dialogBlocks as $section) {
+            foreach (($section['blocks'] ?? []) as $blockKey) {
+                if ($blockKey === SyncSystemContactCardViewAction::BLOCK_CONTACT_DIALOGS) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @return list<array{section_key:string,title:string,blocks:list<string>}>
+     */
+    protected function buildHistoryBlocks(Contact $record): array
+    {
+        $fallback = $this->buildFallbackHistoryBlocks();
+
+        try {
+            $layout = app(BuildContactCardViewLayoutAction::class)->history();
+
+            if (! is_array($layout)) {
+                return $fallback;
+            }
+
+            $sections = [];
+
+            foreach ($layout['sections'] as $section) {
+                $sectionKey = (string) ($section['section_key'] ?? '');
+
+                if ($sectionKey === '') {
+                    continue;
+                }
+
+                $blocks = [];
+
+                foreach (($section['blocks'] ?? []) as $blockKey) {
+                    $blockKey = (string) $blockKey;
+
+                    if ($blockKey === SyncSystemContactCardViewAction::BLOCK_CONTACT_HISTORY) {
+                        $blocks[] = $blockKey;
+
+                        continue;
+                    }
+
+                    Log::warning('contact_card_view_unknown_history_block_key', [
+                        'contact_id' => $record->id,
+                        'block_key' => $blockKey,
+                        'section_key' => $sectionKey,
+                    ]);
+                }
+
+                $sections[] = [
+                    'section_key' => $sectionKey,
+                    'title' => (string) ($section['title'] ?? $sectionKey),
+                    'blocks' => $blocks,
+                ];
+            }
+
+            if ($sections === []) {
+                return $fallback;
+            }
+
+            return $sections;
+        } catch (Throwable $throwable) {
+            Log::warning('contact_history_card_view_fallback_used', [
+                'contact_id' => $record->id,
+                'error' => $throwable->getMessage(),
+            ]);
+
+            return $fallback;
+        }
+    }
+
+    /**
+     * @return list<array{section_key:string,title:string,blocks:list<string>}>
+     */
+    protected function buildFallbackHistoryBlocks(): array
+    {
+        return [
+            [
+                'section_key' => 'contact_history',
+                'title' => 'История',
+                'blocks' => [
+                    SyncSystemContactCardViewAction::BLOCK_CONTACT_HISTORY,
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * @param  list<array{section_key:string,title:string,blocks:list<string>}>  $historyBlocks
+     */
+    protected function historyBlocksContainContactHistory(array $historyBlocks): bool
+    {
+        foreach ($historyBlocks as $section) {
+            foreach (($section['blocks'] ?? []) as $blockKey) {
+                if ($blockKey === SyncSystemContactCardViewAction::BLOCK_CONTACT_HISTORY) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @return list<array{section_key:string,title:string,blocks:list<string>}>
+     */
+    protected function buildDedupBlocks(Contact $record): array
+    {
+        $fallback = $this->buildFallbackDedupBlocks();
+
+        try {
+            $layout = app(BuildContactCardViewLayoutAction::class)->dedup();
+
+            if (! is_array($layout)) {
+                return $fallback;
+            }
+
+            $sections = [];
+
+            foreach ($layout['sections'] as $section) {
+                $sectionKey = (string) ($section['section_key'] ?? '');
+
+                if ($sectionKey === '') {
+                    continue;
+                }
+
+                $blocks = [];
+
+                foreach (($section['blocks'] ?? []) as $blockKey) {
+                    $blockKey = (string) $blockKey;
+
+                    if ($blockKey === SyncSystemContactCardViewAction::BLOCK_CONTACT_DEDUP) {
+                        $blocks[] = $blockKey;
+
+                        continue;
+                    }
+
+                    Log::warning('contact_card_view_unknown_dedup_block_key', [
+                        'contact_id' => $record->id,
+                        'block_key' => $blockKey,
+                        'section_key' => $sectionKey,
+                    ]);
+                }
+
+                $sections[] = [
+                    'section_key' => $sectionKey,
+                    'title' => (string) ($section['title'] ?? $sectionKey),
+                    'blocks' => $blocks,
+                ];
+            }
+
+            if ($sections === []) {
+                return $fallback;
+            }
+
+            return $sections;
+        } catch (Throwable $throwable) {
+            Log::warning('contact_dedup_card_view_fallback_used', [
+                'contact_id' => $record->id,
+                'error' => $throwable->getMessage(),
+            ]);
+
+            return $fallback;
+        }
+    }
+
+    /**
+     * @return list<array{section_key:string,title:string,blocks:list<string>}>
+     */
+    protected function buildFallbackDedupBlocks(): array
+    {
+        return [
+            [
+                'section_key' => 'contact_dedup',
+                'title' => 'Склейки',
+                'blocks' => [
+                    SyncSystemContactCardViewAction::BLOCK_CONTACT_DEDUP,
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * @param  list<array{section_key:string,title:string,blocks:list<string>}>  $dedupBlocks
+     */
+    protected function dedupBlocksContainContactDedup(array $dedupBlocks): bool
+    {
+        foreach ($dedupBlocks as $section) {
+            foreach (($section['blocks'] ?? []) as $blockKey) {
+                if ($blockKey === SyncSystemContactCardViewAction::BLOCK_CONTACT_DEDUP) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @return list<array{section_key:string,title:string,blocks:list<string>}>
+     */
+    protected function buildDiagnosticsBlocks(Contact $record): array
+    {
+        $fallback = $this->buildFallbackDiagnosticsBlocks();
+
+        try {
+            $layout = app(BuildContactCardViewLayoutAction::class)->diagnostics();
+
+            if (! is_array($layout)) {
+                return $fallback;
+            }
+
+            $sections = [];
+
+            foreach ($layout['sections'] as $section) {
+                $sectionKey = (string) ($section['section_key'] ?? '');
+
+                if ($sectionKey === '') {
+                    continue;
+                }
+
+                $blocks = [];
+
+                foreach (($section['blocks'] ?? []) as $blockKey) {
+                    $blockKey = (string) $blockKey;
+
+                    if ($blockKey === SyncSystemContactCardViewAction::BLOCK_CONTACT_DIAGNOSTICS) {
+                        $blocks[] = $blockKey;
+
+                        continue;
+                    }
+
+                    Log::warning('contact_card_view_unknown_diagnostics_block_key', [
+                        'contact_id' => $record->id,
+                        'block_key' => $blockKey,
+                        'section_key' => $sectionKey,
+                    ]);
+                }
+
+                $sections[] = [
+                    'section_key' => $sectionKey,
+                    'title' => (string) ($section['title'] ?? $sectionKey),
+                    'blocks' => $blocks,
+                ];
+            }
+
+            if ($sections === []) {
+                return $fallback;
+            }
+
+            return $sections;
+        } catch (Throwable $throwable) {
+            Log::warning('contact_diagnostics_card_view_fallback_used', [
+                'contact_id' => $record->id,
+                'error' => $throwable->getMessage(),
+            ]);
+
+            return $fallback;
+        }
+    }
+
+    /**
+     * @return list<array{section_key:string,title:string,blocks:list<string>}>
+     */
+    protected function buildFallbackDiagnosticsBlocks(): array
+    {
+        return [
+            [
+                'section_key' => 'contact_diagnostics',
+                'title' => 'Диагностика',
+                'blocks' => [
+                    SyncSystemContactCardViewAction::BLOCK_CONTACT_DIAGNOSTICS,
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * @param  list<array{section_key:string,title:string,blocks:list<string>}>  $diagnosticsBlocks
+     */
+    protected function diagnosticsBlocksContainContactDiagnostics(array $diagnosticsBlocks): bool
+    {
+        foreach ($diagnosticsBlocks as $section) {
+            foreach (($section['blocks'] ?? []) as $blockKey) {
+                if ($blockKey === SyncSystemContactCardViewAction::BLOCK_CONTACT_DIAGNOSTICS) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     protected function resolveWorkspaceContact(): ?Contact
@@ -402,21 +1208,106 @@ class ViewContact extends ViewRecord
      */
     protected function buildTabsViewData(): array
     {
-        $tabs = [
-            $this->makeTab(self::TAB_GENERAL, 'Общее'),
-            $this->makeTab(self::TAB_DIALOGS, 'Диалоги'),
-            $this->makeTab(self::TAB_BITRIX24, 'Битрикс24'),
+        return collect($this->availableContactTabs())
+            ->map(fn (array $tab): array => $this->makeTab($tab['key'], $tab['label']))
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @return list<array{key:string,label:string}>
+     */
+    protected function availableContactTabs(): array
+    {
+        $record = $this->resolveWorkspaceContact();
+        $fallbackTabs = $this->fallbackContactTabs();
+        $fallbackAllowedTabs = collect($fallbackTabs)
+            ->filter(fn (array $tab): bool => $this->contactTabAllowed($tab['key'], $record))
+            ->values()
+            ->all();
+
+        try {
+            $layoutTabs = app(BuildContactCardViewLayoutAction::class)->tabs();
+        } catch (Throwable $throwable) {
+            Log::warning('contact_card_view_tabs_fallback_used', [
+                'contact_id' => $record?->id,
+                'error' => $throwable->getMessage(),
+            ]);
+
+            $layoutTabs = null;
+        }
+
+        $sourceTabs = is_array($layoutTabs)
+            ? collect($layoutTabs)
+                ->map(fn (array $tab): array => [
+                    'key' => (string) ($tab['tab_key'] ?? ''),
+                    'label' => (string) ($tab['title'] ?? ''),
+                ])
+                ->filter(fn (array $tab): bool => $tab['key'] !== '')
+                ->values()
+                ->all()
+            : $fallbackTabs;
+
+        $fallbackLabels = collect($fallbackTabs)
+            ->mapWithKeys(fn (array $tab): array => [$tab['key'] => $tab['label']]);
+
+        $tabs = [];
+
+        foreach ($sourceTabs as $tab) {
+            $key = (string) ($tab['key'] ?? '');
+
+            if (! $this->contactTabAllowed($key, $record)) {
+                continue;
+            }
+
+            $tabs[] = [
+                'key' => $key,
+                'label' => filled($tab['label'] ?? null)
+                    ? (string) $tab['label']
+                    : (string) ($fallbackLabels[$key] ?? $key),
+            ];
+        }
+
+        return $tabs !== []
+            ? $tabs
+            : $fallbackAllowedTabs;
+    }
+
+    /**
+     * @return list<array{key:string,label:string}>
+     */
+    protected function fallbackContactTabs(): array
+    {
+        return [
+            ['key' => self::TAB_GENERAL, 'label' => 'Общее'],
+            ['key' => self::TAB_DIALOGS, 'label' => 'Диалоги'],
+            ['key' => self::TAB_BITRIX24, 'label' => 'Битрикс24'],
+            ['key' => self::TAB_HISTORY, 'label' => 'История'],
+            ['key' => self::TAB_DEDUP, 'label' => 'Склейки'],
+            ['key' => self::TAB_SYSTEM_FIELDS, 'label' => 'Системные поля'],
+            ['key' => self::TAB_DIAGNOSTICS, 'label' => 'Диагностика'],
         ];
+    }
 
-        if ($this->canViewHistoryTab()) {
-            $tabs[] = $this->makeTab(self::TAB_HISTORY, 'История');
-        }
+    protected function contactTabAllowed(string $tabKey, ?Contact $record): bool
+    {
+        return match ($tabKey) {
+            self::TAB_GENERAL,
+            self::TAB_DIALOGS,
+            self::TAB_BITRIX24,
+            self::TAB_SYSTEM_FIELDS => true,
+            self::TAB_DEDUP => $record instanceof Contact && ContactResource::shouldShowDedupStatusSection($record),
+            self::TAB_HISTORY => $this->canViewHistoryTab(),
+            self::TAB_DIAGNOSTICS => ContactResource::canCurrentUserViewContactDiagnostics(),
+            default => ! $this->isKnownContactTab($tabKey),
+        };
+    }
 
-        if (ContactResource::canCurrentUserViewContactDiagnostics()) {
-            $tabs[] = $this->makeTab(self::TAB_DIAGNOSTICS, 'Диагностика');
-        }
-
-        return $tabs;
+    protected function isKnownContactTab(string $tabKey): bool
+    {
+        return collect($this->fallbackContactTabs())
+            ->pluck('key')
+            ->contains($tabKey);
     }
 
     /**
@@ -474,11 +1365,11 @@ class ViewContact extends ViewRecord
     /**
      * @return list<array{label:string,key:string,value:string}>
      */
-    protected function buildWorkRows(Contact $record, array $ownershipControls, array $tagsViewData, array $phoneNumbersViewData): array
+    protected function buildWorkRows(Contact $record, array $ownershipControls): array
     {
         return [
             $this->makeRow(
-                'Ответственный',
+                $this->contactFieldLabel('assigned_user_id', 'Ответственный'),
                 'assigned_user_id',
                 (string) ($ownershipControls['assignedUserLabel'] ?? ContactResource::formatAssignedUserLabel($record)),
                 ($ownershipControls['canManageOwnership'] ?? false)
@@ -490,24 +1381,29 @@ class ViewContact extends ViewRecord
                     : null,
             ),
             $this->makeRow(
-                'Автоответы',
+                $this->contactFieldLabel('is_auto_reply_enabled', 'Автоответы'),
                 'is_auto_reply_enabled',
                 (string) ($ownershipControls['autoReplyStatusLabel'] ?? ($record->isAutoReplyEnabled() ? 'Включены' : 'Отключены')),
                 $this->buildAutoReplyAction($ownershipControls),
             ),
             $this->makeRow(
-                'Категория автоответа',
-                'auto_reply_category',
-                filled($record->auto_reply_category) ? (string) $record->auto_reply_category : '—',
-            ),
-            $this->makeRow(
-                'Заблокирован клиентом',
-                'bot_subscription_status',
+                $this->contactFieldLabel('has_blocked_bot_dialog', 'Заблокирован клиентом'),
+                'has_blocked_bot_dialog',
                 $record->dialogs()
                     ->where('bot_subscription_status', Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER)
                     ->exists() ? 'Да' : 'Нет',
             ),
         ];
+    }
+
+    protected function contactCardSectionDataRole(string $sectionKey): string
+    {
+        return match ($sectionKey) {
+            'client_data' => 'contact-section-client-data',
+            'location' => 'contact-section-location',
+            'work' => 'contact-section-work',
+            default => 'contact-section-'.$sectionKey,
+        };
     }
 
     protected function contactFieldLabel(string $fieldKey, string $fallback): string
@@ -535,6 +1431,69 @@ class ViewContact extends ViewRecord
      * @return list<array{title:string,subtitle:string,rows:list<array{label:string,key:string,value:string}>}>
      */
     protected function buildBitrixSections(Contact $record): array
+    {
+        $fallback = $this->buildFallbackBitrixSections($record);
+
+        try {
+            $layout = app(BuildContactCardViewLayoutAction::class)->bitrix24();
+
+            if (! is_array($layout)) {
+                return $fallback;
+            }
+
+            $sections = [];
+
+            foreach ($layout['sections'] as $section) {
+                $sectionKey = (string) ($section['section_key'] ?? '');
+
+                if ($sectionKey === '') {
+                    continue;
+                }
+
+                $rows = [];
+
+                foreach (($section['fields'] ?? []) as $fieldKey) {
+                    $row = $this->buildBitrixRowForField((string) $fieldKey, $record);
+
+                    if ($row === null) {
+                        Log::warning('contact_card_view_unknown_bitrix_field_key', [
+                            'contact_id' => $record->id,
+                            'field_key' => $fieldKey,
+                            'section_key' => $sectionKey,
+                        ]);
+
+                        continue;
+                    }
+
+                    $rows[] = $row;
+                }
+
+                $sections[] = [
+                    'title' => (string) ($section['title'] ?? $sectionKey),
+                    'subtitle' => $this->contactBitrixSectionSubtitle($sectionKey),
+                    'rows' => $rows,
+                ];
+            }
+
+            if (count($sections) < 3) {
+                return $fallback;
+            }
+
+            return $sections;
+        } catch (Throwable $throwable) {
+            Log::warning('contact_bitrix_card_view_fallback_used', [
+                'contact_id' => $record->id,
+                'error' => $throwable->getMessage(),
+            ]);
+
+            return $fallback;
+        }
+    }
+
+    /**
+     * @return list<array{title:string,subtitle:string,rows:list<array{label:string,key:string,value:string}>}>
+     */
+    protected function buildFallbackBitrixSections(Contact $record): array
     {
         return [
             [
@@ -570,6 +1529,171 @@ class ViewContact extends ViewRecord
                 ],
             ],
         ];
+    }
+
+    /**
+     * @return ?array{label:string,key:string,value:string}
+     */
+    protected function buildBitrixRowForField(string $fieldKey, Contact $record): ?array
+    {
+        foreach ($this->buildFallbackBitrixSections($record) as $section) {
+            foreach ($section['rows'] as $row) {
+                if (($row['key'] ?? null) === $fieldKey) {
+                    return $row;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    protected function contactBitrixSectionSubtitle(string $sectionKey): string
+    {
+        return match ($sectionKey) {
+            'bitrix24_contact' => 'Состояние синхронизации карточки контакта в CRM.',
+            'bitrix24_deal' => 'Состояние привязки и синхронизации связанной сделки.',
+            'bitrix24_history' => 'Статус выгрузки истории переписки в CRM.',
+            default => '',
+        };
+    }
+
+    /**
+     * @return list<array{title:string,subtitle:string,rows:list<array{label:string,key:string,value:string}>}>
+     */
+    protected function buildSystemFieldSections(Contact $record): array
+    {
+        $fallback = $this->buildFallbackSystemFieldSections($record);
+
+        try {
+            $layout = app(BuildContactCardViewLayoutAction::class)->systemFields();
+
+            if (! is_array($layout)) {
+                return $fallback;
+            }
+
+            $sections = [];
+
+            foreach ($layout['sections'] as $section) {
+                $sectionKey = (string) ($section['section_key'] ?? '');
+
+                if ($sectionKey === '') {
+                    continue;
+                }
+
+                $rows = [];
+
+                foreach (($section['fields'] ?? []) as $fieldKey) {
+                    $row = $this->buildSystemFieldRowForField((string) $fieldKey, $record);
+
+                    if ($row === null) {
+                        Log::warning('contact_card_view_unknown_system_field_key', [
+                            'contact_id' => $record->id,
+                            'field_key' => $fieldKey,
+                            'section_key' => $sectionKey,
+                        ]);
+
+                        continue;
+                    }
+
+                    $rows[] = $row;
+                }
+
+                $sections[] = [
+                    'title' => (string) ($section['title'] ?? $sectionKey),
+                    'subtitle' => $this->contactSystemFieldSectionSubtitle($sectionKey),
+                    'rows' => $rows,
+                ];
+            }
+
+            if (count($sections) < 2) {
+                return $fallback;
+            }
+
+            return $sections;
+        } catch (Throwable $throwable) {
+            Log::warning('contact_system_fields_card_view_fallback_used', [
+                'contact_id' => $record->id,
+                'error' => $throwable->getMessage(),
+            ]);
+
+            return $fallback;
+        }
+    }
+
+    /**
+     * @return list<array{title:string,subtitle:string,rows:list<array{label:string,key:string,value:string}>}>
+     */
+    protected function buildFallbackSystemFieldSections(Contact $record): array
+    {
+        $record->loadMissing('mergedInto');
+
+        return [
+            [
+                'title' => 'Служебные поля контакта',
+                'subtitle' => 'Идентификаторы и даты записи контакта.',
+                'rows' => [
+                    $this->makeRow($this->contactFieldLabel('id', 'ID'), 'id', (string) $record->id),
+                    $this->makeRow($this->contactFieldLabel('created_at', 'Создан'), 'created_at', $this->formatDateTime($record->created_at)),
+                    $this->makeRow($this->contactFieldLabel('updated_at', 'Обновлён'), 'updated_at', $this->formatDateTime($record->updated_at)),
+                ],
+            ],
+            [
+                'title' => 'Склейки и дубли',
+                'subtitle' => 'Служебные поля дедупликации контакта.',
+                'rows' => [
+                    $this->makeRow($this->contactFieldLabel('duplicate_review_status', 'Статус проверки дубля'), 'duplicate_review_status', $this->formatSystemDuplicateReviewStatus($record->duplicate_review_status)),
+                    $this->makeRow($this->contactFieldLabel('merged_into_contact_id', 'Основной контакт'), 'merged_into_contact_id', $record->mergedInto !== null ? sprintf('#%d %s', $record->mergedInto->id, $record->mergedInto->display_name) : '—'),
+                    $this->makeRow($this->contactFieldLabel('merged_at', 'Склеен'), 'merged_at', $this->formatDateTime($record->merged_at)),
+                    $this->makeRow($this->contactFieldLabel('merge_reason', 'Причина склейки'), 'merge_reason', $this->formatSystemMergeReason($record->merge_reason)),
+                    $this->makeRow($this->contactFieldLabel('merge_trigger_phone', 'Триггерный телефон'), 'merge_trigger_phone', $record->merge_trigger_phone ?: '—'),
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * @return ?array{label:string,key:string,value:string}
+     */
+    protected function buildSystemFieldRowForField(string $fieldKey, Contact $record): ?array
+    {
+        foreach ($this->buildFallbackSystemFieldSections($record) as $section) {
+            foreach ($section['rows'] as $row) {
+                if (($row['key'] ?? null) === $fieldKey) {
+                    return $row;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    protected function contactSystemFieldSectionSubtitle(string $sectionKey): string
+    {
+        return match ($sectionKey) {
+            'system_identity' => 'Идентификаторы и даты записи контакта.',
+            'system_dedup' => 'Служебные поля дедупликации контакта.',
+            default => '',
+        };
+    }
+
+    protected function formatSystemDuplicateReviewStatus(?string $value): string
+    {
+        return match ($value) {
+            Contact::DUPLICATE_REVIEW_STATUS_PENDING => 'Нужна проверка',
+            Contact::DUPLICATE_REVIEW_STATUS_RESOLVED => 'Разобрано',
+            Contact::DUPLICATE_REVIEW_STATUS_NONE, null, '' => '—',
+            default => (string) $value,
+        };
+    }
+
+    protected function formatSystemMergeReason(?string $mergeReason): string
+    {
+        return match ($mergeReason) {
+            'phone_exact_match' => 'Совпадение телефона',
+            'cross_channel_identity_resolution' => 'Разрешение cross-channel identity ambiguity',
+            null, '' => '—',
+            default => $mergeReason,
+        };
     }
 
     /**
@@ -659,21 +1783,16 @@ class ViewContact extends ViewRecord
 
     protected function normalizeTab(string $tab): string
     {
-        $allowedTabs = [
-            self::TAB_GENERAL,
-            self::TAB_DIALOGS,
-            self::TAB_BITRIX24,
-        ];
+        $availableTabs = $this->availableContactTabs();
+        $allowedTabs = collect($availableTabs)
+            ->pluck('key')
+            ->all();
 
-        if ($this->canViewHistoryTab()) {
-            $allowedTabs[] = self::TAB_HISTORY;
+        if (in_array($tab, $allowedTabs, true)) {
+            return $tab;
         }
 
-        if (ContactResource::canCurrentUserViewContactDiagnostics()) {
-            $allowedTabs[] = self::TAB_DIAGNOSTICS;
-        }
-
-        return in_array($tab, $allowedTabs, true) ? $tab : self::TAB_GENERAL;
+        return $availableTabs[0]['key'] ?? self::TAB_GENERAL;
     }
 
     protected function canViewHistoryTab(): bool

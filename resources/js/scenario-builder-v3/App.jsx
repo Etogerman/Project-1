@@ -92,6 +92,7 @@ const TAG_CONDITION_MODE_OPTIONS = [
 ];
 const EDGE_CONTACT_FIELD_OPTIONS = [
     ['phone', 'Телефон', 'phone'],
+    ['emails', 'Email', 'email'],
     ['first_name', 'Имя', 'any_text'],
     ['last_name', 'Фамилия', 'any_text'],
     ['country', 'Страна', 'any_text'],
@@ -240,6 +241,7 @@ const TRANSITION_CONTACT_WRITABLE_FIELD_KEYS = new Set([
 ]);
 const CONTACT_RUNTIME_CONDITION_FIELD_KEYS = new Set([
     'phone',
+    'emails',
     'first_name',
     'first_name_source',
     'last_name',
@@ -259,6 +261,7 @@ const START_EXPRESSION_CONTACT_FIELD_KEYS = new Set([
     'id',
     'phone',
     'phones',
+    'emails',
     'first_name',
     'first_name_source',
     'first_name_resolution_method',
@@ -541,6 +544,12 @@ const AI_PROMPT_VARIABLE_GROUPS = [
                 label: 'Телефон',
                 source: 'Основной телефон из карточки контакта.',
                 type: 'Текст',
+            },
+            {
+                token: '{{contact.emails}}',
+                label: 'Email',
+                source: 'Email из карточки контакта.',
+                type: 'Email',
             },
             {
                 token: '{{contact.last_name}}',
@@ -7277,7 +7286,7 @@ function SimulateStartParameterActionFields({ item, dialogFieldKeys = [], onChan
                         source_field_key: normalizeDialogFieldKey(fieldKey),
                     })}
                     suggestions={dialogFieldKeys}
-                    purpose="action"
+                    purpose="dialog_field_read"
                 />
             </label>
             <label className="ac-v3-builder__check ac-v3-builder__simulate-start-clear-check">
@@ -8444,6 +8453,14 @@ function normalizeFieldDictionary(catalog) {
                 isMultiple: false,
                 isSystem: true,
                 isFallback: true,
+                conditionVisibility: 'main',
+                writeAccess: ACTION_CONTACT_WRITABLE_FIELD_KEYS.has(key) ? 'writable' : 'read_only',
+                hintGroup: 'contact',
+                hintGroupLabel: 'Контакт',
+                conditionSupported: true,
+                fieldConditionSupported: CONTACT_RUNTIME_CONDITION_FIELD_KEYS.has(key),
+                writeSupported: ACTION_CONTACT_WRITABLE_FIELD_KEYS.has(key),
+                promptVariableSupported: false,
                 sortOrder: 1000,
             });
         });
@@ -8481,6 +8498,16 @@ function normalizeFieldDictionary(catalog) {
                 isMultiple: row?.is_multiple === true,
                 isSystem: row?.is_system === true,
                 isFallback: false,
+                conditionVisibility: String(row?.condition_visibility ?? 'display_only').trim() || 'display_only',
+                writeAccess: String(row?.write_access ?? 'read_only').trim() || 'read_only',
+                hintGroup: String(row?.hint_group ?? '').trim(),
+                hintGroupLabel: String(row?.hint_group_label ?? row?.group_label ?? '').trim(),
+                conditionSupported: row?.condition_supported === true,
+                fieldConditionSupported: row?.field_condition_supported === true,
+                writeSupported: row?.write_supported === true,
+                promptVariableSupported: row?.prompt_variable_supported === true,
+                conditionUnavailableReason: String(row?.condition_unavailable_reason ?? '').trim(),
+                writeUnavailableReason: String(row?.write_unavailable_reason ?? '').trim(),
                 sortOrder: Number(row?.sort_order) || 1000,
             });
         });
@@ -8584,7 +8611,7 @@ function contactCaptureFields() {
 
 function contactConditionFields() {
     return currentFieldDictionary().contact
-        .filter((field) => CONTACT_RUNTIME_CONDITION_FIELD_KEYS.has(field.key))
+        .filter((field) => field.fieldConditionSupported === true)
         .map((field) => [field.key, field.label, field.dataType]);
 }
 
@@ -8593,7 +8620,7 @@ function contactActionFieldOptions(currentFieldKey = '') {
     const options = currentFieldDictionary().contact.map((field) => ({
         key: field.key,
         label: field.label,
-        disabled: ! ACTION_CONTACT_WRITABLE_FIELD_KEYS.has(field.key),
+        disabled: field.writeSupported !== true,
     }));
 
     if (currentKey && ! options.some((option) => option.key === currentKey)) {
@@ -8653,7 +8680,7 @@ function defaultTransitionContactFieldKey() {
 
 function defaultWritableContactFieldKey() {
     return currentFieldDictionary().contact
-        .find((field) => ACTION_CONTACT_WRITABLE_FIELD_KEYS.has(field.key))
+        .find((field) => field.writeSupported === true)
         ?.key ?? 'first_name';
 }
 
@@ -8666,7 +8693,7 @@ function defaultRuntimeWritableContactFieldKey() {
 function aiPromptVariableGroups() {
     const dictionary = currentFieldDictionary();
     const contactItems = dictionary.contact
-        .filter((field) => ! ['id', 'created_at', 'updated_at'].includes(field.key))
+        .filter((field) => field.promptVariableSupported === true)
         .map((field) => ({
             token: `{{contact.${field.key}}}`,
             label: field.label,
@@ -8674,7 +8701,7 @@ function aiPromptVariableGroups() {
             type: variableTypeLabel(field),
         }));
     const dialogItems = dictionary.dialog
-        .filter((field) => ! ['id', 'created_at', 'updated_at'].includes(field.key))
+        .filter((field) => field.promptVariableSupported === true)
         .map((field) => ({
             token: `{{dialog.${field.key}}}`,
             label: field.label,
@@ -8698,19 +8725,33 @@ function aiPromptVariableGroups() {
 function startExpressionVariableGroups() {
     const dictionary = currentFieldDictionary();
     const contactItems = dictionary.contact
-        .filter((field) => START_EXPRESSION_CONTACT_FIELD_KEYS.has(field.key))
+        .filter((field) => field.conditionSupported === true && field.conditionVisibility !== 'system')
         .map((field) => ({
             token: `{{contact.${field.key}}}`,
             label: field.label,
         }));
     const dialogItems = dictionary.dialog
-        .filter((field) => ! field.isSystem || START_EXPRESSION_DIALOG_SYSTEM_FIELD_KEYS.has(field.key))
+        .filter((field) => field.conditionSupported === true && field.conditionVisibility !== 'system')
         .map((field) => ({
             token: `{{dialog.${field.key}}}`,
             label: field.label,
         }));
+    const systemItems = [
+        ...dictionary.contact
+            .filter((field) => field.conditionSupported === true && field.conditionVisibility === 'system')
+            .map((field) => ({
+                token: `{{contact.${field.key}}}`,
+                label: `Контакт · ${field.label}`,
+            })),
+        ...dictionary.dialog
+            .filter((field) => field.conditionSupported === true && field.conditionVisibility === 'system')
+            .map((field) => ({
+                token: `{{dialog.${field.key}}}`,
+                label: `Диалог · ${field.label}`,
+            })),
+    ];
 
-    return [
+    const groups = [
         {
             title: 'Контакт',
             items: contactItems.length > 0 ? contactItems : [
@@ -8726,6 +8767,15 @@ function startExpressionVariableGroups() {
             ],
         },
     ];
+
+    if (systemItems.length > 0) {
+        groups.push({
+            title: 'Системные поля',
+            items: systemItems,
+        });
+    }
+
+    return groups;
 }
 
 function variableTypeLabel(field) {
@@ -8776,7 +8826,11 @@ function dialogFieldSuggestionsFromDictionary(fieldDictionary = currentFieldDict
         .map((field) => ({
             key: field.key,
             label: field.label || field.key,
-            group: field.group || '',
+            group: field.hintGroupLabel || field.group || '',
+            isSystem: field.isSystem === true,
+            conditionSupported: field.conditionSupported === true,
+            fieldConditionSupported: field.fieldConditionSupported === true,
+            writeSupported: field.writeSupported === true,
         }));
 }
 
@@ -8797,14 +8851,41 @@ function DialogFieldKeyInput({ value, onChange, placeholder, suggestions = [], p
                     key,
                     label: String(suggestion.label ?? key),
                     group: String(suggestion.group ?? ''),
+                    isSystem: suggestion.isSystem === true,
+                    conditionSupported: suggestion.conditionSupported === true,
+                    fieldConditionSupported: suggestion.fieldConditionSupported === true,
+                    writeSupported: suggestion.writeSupported === true,
                 };
             }
 
             const key = normalizeDialogFieldKey(suggestion);
 
-            return { key, label: key, group: '' };
+            return {
+                key,
+                label: key,
+                group: '',
+                isSystem: false,
+                conditionSupported: true,
+                fieldConditionSupported: true,
+                writeSupported: true,
+            };
         })
-        .filter((suggestion) => suggestion.key !== '');
+        .filter((suggestion) => suggestion.key !== '')
+        .filter((suggestion) => {
+            if (purpose === 'condition') {
+                return suggestion.fieldConditionSupported === true;
+            }
+
+            if (purpose === 'dialog_field_read') {
+                return suggestion.isSystem !== true;
+            }
+
+            if (['action', 'capture', 'transition_action'].includes(purpose)) {
+                return suggestion.writeSupported === true;
+            }
+
+            return true;
+        });
 
     const updateSuggestionsPosition = useCallback(() => {
         if (! wrapperRef.current || typeof window === 'undefined') {
@@ -11176,7 +11257,11 @@ export function normalizeActionItemForType(item) {
             : 'contact';
         const requestedTargetField = normalizeDictionaryFieldKey(item.target_field);
         const targetField = targetScope === 'contact'
-            ? (CONTACT_RUNTIME_WRITABLE_FIELD_KEYS.has(requestedTargetField) ? requestedTargetField : defaultRuntimeWritableContactFieldKey())
+            ? (
+                requestedTargetField && (dictionaryField(FIELD_DICTIONARY_ENTITY_CONTACT, requestedTargetField) || CONTACT_RUNTIME_WRITABLE_FIELD_KEYS.has(requestedTargetField))
+                    ? requestedTargetField
+                    : defaultRuntimeWritableContactFieldKey()
+            )
             : normalizeDialogFieldKey(item.target_field || 'field');
         const sourceType = item.source_type === 'static_value' ? 'static_value' : 'ai_data';
 
@@ -11199,7 +11284,11 @@ export function normalizeActionItemForType(item) {
         : 'contact';
     const requestedTargetField = normalizeDictionaryFieldKey(item.target_field);
     const targetField = targetScope === 'contact'
-        ? (ACTION_CONTACT_WRITABLE_FIELD_KEYS.has(requestedTargetField) ? requestedTargetField : defaultWritableContactFieldKey())
+        ? (
+            requestedTargetField && (dictionaryField(FIELD_DICTIONARY_ENTITY_CONTACT, requestedTargetField) || ACTION_CONTACT_WRITABLE_FIELD_KEYS.has(requestedTargetField))
+                ? requestedTargetField
+                : defaultWritableContactFieldKey()
+        )
         : normalizeDialogFieldKey(item.target_field || 'field');
     const valueSource = ACTION_VALUE_SOURCE_OPTIONS.some(([value]) => value === item.value_source)
         ? item.value_source

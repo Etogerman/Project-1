@@ -494,6 +494,13 @@ class Contact extends Model
             ->orderBy('id');
     }
 
+    public function emails(): HasMany
+    {
+        return $this->hasMany(ContactEmail::class)
+            ->orderByDesc('is_primary')
+            ->orderBy('id');
+    }
+
     public function duplicateReviews(): HasMany
     {
         return $this->hasMany(ContactDuplicateReview::class);

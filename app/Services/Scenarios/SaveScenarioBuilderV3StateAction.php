@@ -21,6 +21,7 @@ class SaveScenarioBuilderV3StateAction
     public function __construct(
         private readonly ValidateScenarioBuilderV3StateAction $validateScenarioBuilderV3StateAction,
         private readonly BuildScenarioBuilderV3StateAction $buildScenarioBuilderV3StateAction,
+        private readonly EnsureScenarioDialogFieldsInDictionaryAction $ensureScenarioDialogFieldsInDictionaryAction,
     ) {}
 
     /**
@@ -29,14 +30,18 @@ class SaveScenarioBuilderV3StateAction
      */
     public function handle(Scenario $scenario, array $input): array
     {
-        $validated = $this->validateScenarioBuilderV3StateAction->handle($input);
         $user = auth()->user();
         $idMap = [
             'blocks' => [],
             'edges' => [],
         ];
+        $validated = null;
 
-        DB::transaction(function () use ($scenario, $validated, $user, &$idMap): void {
+        DB::transaction(function () use ($scenario, $input, $user, &$idMap, &$validated): void {
+            $builder = is_array($input['builder'] ?? null) ? $input['builder'] : [];
+            $this->ensureScenarioDialogFieldsInDictionaryAction->handle($builder);
+            $validated = $this->validateScenarioBuilderV3StateAction->handle($input);
+
             $version = ScenarioVersion::query()
                 ->whereKey($validated['draft_version_id'])
                 ->where('scenario_id', $scenario->id)

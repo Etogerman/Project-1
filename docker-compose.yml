@@ -85,9 +85,11 @@ services:
 
   ngrok:
     image: ngrok/ngrok:latest
-    command: http http://dev:8000 --url ${APP_URL:?APP_URL is required for ngrok}
+    command: http http://dev:8000
     env_file:
       - path: .env
+        required: false
+      - path: .env.ngrok
         required: false
     ports:
       - "4040:4040"

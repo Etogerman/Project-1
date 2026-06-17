@@ -18,6 +18,7 @@ use App\Models\AiTask;
 use App\Models\AutoReplyRule;
 use App\Models\Channel;
 use App\Models\Contact;
+use App\Models\ContactEmail;
 use App\Models\ContactFirstNameResolutionEvent;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
@@ -1997,12 +1998,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
     private function v3FieldConditionValue(Message $message, string $fieldScope, string $fieldKey): mixed
     {
         if ($fieldScope === 'dialog') {
-            $dialog = $message->dialog instanceof Dialog
-                ? $message->dialog
-                : ($message->dialog_id !== null ? Dialog::query()->find($message->dialog_id) : null);
-            $fieldsPayload = is_array($dialog?->fields_payload) ? $dialog->fields_payload : [];
-
-            return $fieldsPayload[$fieldKey] ?? null;
+            return $this->v3DialogReadableFieldValue($message, $fieldKey);
         }
 
         if (! $message->contact instanceof Contact || ! in_array($fieldKey, EngineFieldRegistry::CONTACT_FIELD_CONDITION_FIELDS, true)) {
@@ -2017,6 +2013,18 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 ->flatMap(fn (ContactPhoneNumber $phone): array => [
                     $phone->phone_normalized,
                     $phone->phone_raw,
+                ])
+                ->filter(fn (mixed $value): bool => trim((string) $value) !== '')
+                ->values()
+                ->all();
+        }
+
+        if ($fieldKey === 'emails') {
+            return $contact->emails()
+                ->get(['email_normalized', 'email_raw'])
+                ->flatMap(fn (ContactEmail $email): array => [
+                    $email->email_normalized,
+                    $email->email_raw,
                 ])
                 ->filter(fn (mixed $value): bool => trim((string) $value) !== '')
                 ->values()
@@ -5168,22 +5176,43 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
     private function v3DialogFieldStringValue(Message $message, string $fieldKey): string
     {
+        $value = $this->v3DialogReadableFieldValue($message, $fieldKey);
+
+        return trim((string) ($value ?? ''));
+    }
+
+    private function v3DialogReadableFieldValue(Message $message, string $fieldKey): mixed
+    {
         if (! $this->validV3DialogVariableKey($fieldKey)) {
-            return '';
+            return null;
         }
 
-        $dialog = $message->dialog_id !== null
-            ? Dialog::query()->find($message->dialog_id)
-            : ($message->relationLoaded('dialog') ? $message->dialog : null);
+        $dialog = $message->dialog instanceof Dialog
+            ? $message->dialog
+            : ($message->dialog_id !== null ? Dialog::query()->find($message->dialog_id) : null);
 
         if (! $dialog instanceof Dialog) {
-            return '';
+            return null;
+        }
+
+        if (in_array($fieldKey, EngineFieldRegistry::readableFieldKeys(EngineFieldRegistry::ENTITY_DIALOG), true)) {
+            return $this->v3DialogSystemFieldValue($dialog, $fieldKey);
         }
 
         $fields = is_array($dialog->fields_payload) ? $dialog->fields_payload : [];
-        $value = $fields[$fieldKey] ?? null;
 
-        return trim((string) ($value ?? ''));
+        return $fields[$fieldKey] ?? null;
+    }
+
+    private function v3DialogSystemFieldValue(Dialog $dialog, string $fieldKey): mixed
+    {
+        return match ($fieldKey) {
+            'phone' => $dialog->confirmed_phone_raw ?: $dialog->confirmed_phone_normalized,
+            'external_username' => $dialog->currentContactIdentity?->external_username,
+            'last_inbound_message_at' => $dialog->last_inbound_at,
+            'last_outbound_message_at' => $dialog->last_outbound_at,
+            default => $dialog->{$fieldKey} ?? null,
+        };
     }
 
     private function v3VirtualStartParameterMessage(Message $message, string $parameter): Message
@@ -6374,12 +6403,22 @@ TEXT;
             return null;
         }
 
+        $contact = $this->resolveRootContactAction->handle($contact);
+
         if ($field === 'phone') {
             $phone = $contact->phoneNumbers()
                 ->whereNotNull('phone_normalized')
                 ->value('phone_normalized');
 
             return $phone === null ? null : trim((string) $phone);
+        }
+
+        if ($field === 'emails') {
+            $email = $contact->emails()
+                ->whereNotNull('email_normalized')
+                ->value('email_normalized');
+
+            return $email === null ? null : trim((string) $email);
         }
 
         $field = EngineFieldRegistry::resolveReadAlias(EngineFieldRegistry::ENTITY_CONTACT, $field);
