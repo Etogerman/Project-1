@@ -186,7 +186,7 @@
         let lastSoundMessageId = normalizePositiveInteger(window.localStorage.getItem(lastSoundMessageStorageKey));
         let audioContext = null;
         const soundBufferCache = new Map();
-        let latestKnownNotificationMessageId = 0;
+        let latestKnownNotification = { sortAt: null, id: 0 };
         let hasBootstrappedSoundBaseline = false;
         let isPolling = false;
 
@@ -205,6 +205,37 @@
 
             return Number.isFinite(number) && number > 0 ? number : 0;
         }
+
+        const sortAtToTimestamp = (value) => {
+            if (value === null || value === undefined || value === '') {
+                return null;
+            }
+
+            const timestamp = Date.parse(String(value).replace(' ', 'T'));
+
+            return Number.isNaN(timestamp) ? null : timestamp;
+        };
+
+        const compareChronology = (leftSortAt, leftId, rightSortAt, rightId) => {
+            const leftTimestamp = sortAtToTimestamp(leftSortAt);
+            const rightTimestamp = sortAtToTimestamp(rightSortAt);
+
+            if (leftTimestamp === null && rightTimestamp !== null) {
+                return -1;
+            }
+
+            if (leftTimestamp !== null && rightTimestamp === null) {
+                return 1;
+            }
+
+            const byTimestamp = (leftTimestamp ?? 0) - (rightTimestamp ?? 0);
+
+            if (byTimestamp !== 0) {
+                return byTimestamp < 0 ? -1 : 1;
+            }
+
+            return (Number(leftId) || 0) - (Number(rightId) || 0);
+        };
 
         const jsonHeaders = () => ({
             'Accept': 'application/json',
@@ -234,6 +265,7 @@
             count: 0,
             items: [],
             latest_notification_message_id: 0,
+            latest_notification_sort_at: null,
         });
 
         const setPopoverOpen = (isOpen) => {
@@ -380,7 +412,7 @@
         };
 
         const rememberSoundMessage = (messageId) => {
-            if (messageId <= lastSoundMessageId) {
+            if (messageId < 1 || messageId === lastSoundMessageId) {
                 return;
             }
 
@@ -392,7 +424,7 @@
             if (
                 !soundEnabled
                 || messageId < 1
-                || messageId <= lastSoundMessageId
+                || messageId === lastSoundMessageId
                 || soundWasRecentlyPlayed(messageId)
             ) {
                 return;
@@ -555,6 +587,7 @@
             const allowSound = options.allowSound !== false;
             const items = Array.isArray(state.items) ? state.items : [];
             const latestNotificationMessageId = Number(state.latest_notification_message_id || 0);
+            const latestNotificationSortAt = state.latest_notification_sort_at ?? null;
             const notificationCount = Number(state.count || 0);
 
             renderBadge(notificationCount);
@@ -563,24 +596,30 @@
             setStatus(state);
 
             const shouldUpdateSoundBaseline = !hasBootstrappedSoundBaseline || options.baselineSound === true;
+            const isAfterBaseline = compareChronology(
+                latestNotificationSortAt,
+                latestNotificationMessageId,
+                latestKnownNotification.sortAt,
+                latestKnownNotification.id,
+            ) > 0;
 
             if (shouldUpdateSoundBaseline) {
-                latestKnownNotificationMessageId = Math.max(
-                    latestKnownNotificationMessageId,
-                    lastSoundMessageId,
-                    latestNotificationMessageId,
-                );
+                if (latestNotificationMessageId > 0 && isAfterBaseline) {
+                    latestKnownNotification = { sortAt: latestNotificationSortAt, id: latestNotificationMessageId };
+                }
+
                 hasBootstrappedSoundBaseline = true;
             }
 
             const shouldPlaySound = allowSound
                 && !shouldUpdateSoundBaseline
-                && latestNotificationMessageId > latestKnownNotificationMessageId
-                && latestNotificationMessageId > lastSoundMessageId
+                && latestNotificationMessageId > 0
+                && isAfterBaseline
+                && latestNotificationMessageId !== lastSoundMessageId
                 && notificationCount > 0;
 
-            if (latestNotificationMessageId > latestKnownNotificationMessageId) {
-                latestKnownNotificationMessageId = latestNotificationMessageId;
+            if (latestNotificationMessageId > 0 && isAfterBaseline) {
+                latestKnownNotification = { sortAt: latestNotificationSortAt, id: latestNotificationMessageId };
             }
 
             if (shouldPlaySound) {

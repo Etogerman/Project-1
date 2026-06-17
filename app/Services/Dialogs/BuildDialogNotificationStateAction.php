@@ -57,6 +57,7 @@ class BuildDialogNotificationStateAction
         $count = (clone $notificationQuery)->count();
         $items = $this->notificationItems($notificationQuery);
         $latestNotificationMessageId = (int) ($items[0]['message_id'] ?? 0);
+        $latestNotificationSortAt = $items[0]['sort_at'] ?? null;
 
         return [
             'scope' => $scope,
@@ -66,6 +67,7 @@ class BuildDialogNotificationStateAction
             'last_read_message_sort_at' => $preference['last_read_message_sort_at'],
             'latest_scoped_inbound_message_id' => (int) ($latestScopedInboundBoundary['id'] ?? 0),
             'latest_notification_message_id' => $latestNotificationMessageId,
+            'latest_notification_sort_at' => $latestNotificationSortAt,
             'count' => $count,
             'items' => $items,
         ];
@@ -353,6 +355,7 @@ class BuildDialogNotificationStateAction
             'channel' => $this->channelLabel($dialog->channel ?? $message->channel),
             'text' => $this->previewText($message),
             'received_at' => $message->received_at?->format('d.m.Y H:i') ?? $message->created_at?->format('d.m.Y H:i'),
+            'sort_at' => $this->normalizeSortAt($this->messageChronology->resolveSortAt($message)),
             'url' => DialogResource::getUrl('view', ['record' => $dialog]),
         ];
     }
