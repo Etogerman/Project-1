@@ -4,13 +4,16 @@ namespace App\Filament\Resources\Contacts\Pages\Concerns;
 
 use App\Models\Contact;
 use App\Models\ContactDuplicateReview;
+use App\Models\ContactEmail;
 use App\Models\ContactPhoneNumber;
 use App\Models\Tag;
 use App\Models\User;
+use App\Services\Contacts\AddContactEmailAction;
 use App\Services\Contacts\ApplyContactFirstNameAction;
 use App\Services\Contacts\AssignContactTagAction;
 use App\Services\Contacts\ClaimContactAction;
 use App\Services\Contacts\DeleteContactAction;
+use App\Services\Contacts\DeleteContactEmailAction;
 use App\Services\Contacts\DeleteContactPhoneAction;
 use App\Services\Contacts\DismissCrossChannelIdentityAmbiguityReviewAction;
 use App\Services\Contacts\ReleaseContactAssignmentAction;
@@ -20,6 +23,7 @@ use App\Services\Contacts\ResolveCrossChannelIdentityAmbiguityReviewAction;
 use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\Contacts\SetContactAssigneeAction;
 use App\Services\Contacts\SetContactAutoReplyEnabledAction;
+use App\Services\Contacts\UpdateContactEmailAction;
 use App\Services\Contacts\UpdateContactPhoneAction;
 use App\Services\Contacts\UpdateContactProfileAction;
 use App\Services\DataCollection\ResumeContactDataCollectionAction;
@@ -44,6 +48,12 @@ trait InteractsWithContactWorkspace
     public string $editingPhoneId = '';
 
     public string $editingPhoneRaw = '';
+
+    public bool $showEditEmailDialog = false;
+
+    public string $editingEmailId = '';
+
+    public string $editingEmailRaw = '';
 
     public bool $showEditProfileDialog = false;
 
@@ -72,6 +82,12 @@ trait InteractsWithContactWorkspace
     public string $deletingPhoneId = '';
 
     public string $deletingPhoneLabel = '';
+
+    public bool $showDeleteEmailDialog = false;
+
+    public string $deletingEmailId = '';
+
+    public string $deletingEmailLabel = '';
 
     public bool $showDeleteContactDialog = false;
 
@@ -355,6 +371,39 @@ trait InteractsWithContactWorkspace
         }
     }
 
+    public function openAddEmailDialog(): void
+    {
+        if ($this->abortIfContactEmailEditForbidden('Не удалось открыть добавление email')) {
+            return;
+        }
+
+        $this->editingEmailId = '';
+        $this->editingEmailRaw = '';
+        $this->resetErrorBag('editingEmailRaw');
+        $this->showEditEmailDialog = true;
+    }
+
+    public function openEditEmailDialog(int|string $emailId): void
+    {
+        if ($this->abortIfContactEmailEditForbidden('Не удалось открыть редактирование email')) {
+            return;
+        }
+
+        try {
+            $email = $this->resolveWorkspaceContactEmail($emailId);
+
+            $this->editingEmailId = (string) $email->id;
+            $this->editingEmailRaw = $email->email_raw;
+            $this->showEditEmailDialog = true;
+        } catch (Throwable $throwable) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось открыть редактирование email')
+                ->body($throwable->getMessage())
+                ->send();
+        }
+    }
+
     public function openEditProfileDialog(): void
     {
         if ($this->abortIfContactProfileForbidden('Не удалось открыть редактирование профиля')) {
@@ -538,6 +587,11 @@ trait InteractsWithContactWorkspace
         $this->resetPhoneEditingState();
     }
 
+    public function closeEditEmailDialog(): void
+    {
+        $this->resetEmailEditingState();
+    }
+
     public function saveMountedContactPhone(): void
     {
         if ($this->abortIfContactPhoneEditForbidden('Не удалось обновить номер')) {
@@ -583,6 +637,59 @@ trait InteractsWithContactWorkspace
         }
     }
 
+    public function saveMountedContactEmail(): void
+    {
+        if ($this->abortIfContactEmailEditForbidden('Не удалось сохранить email')) {
+            return;
+        }
+
+        $validated = $this->validate([
+            'editingEmailRaw' => ['required', 'string', 'max:255'],
+        ]);
+
+        try {
+            $record = $this->resolveWorkspaceContact();
+
+            if (! $record instanceof Contact) {
+                throw new RuntimeException('Не удалось определить текущий контакт.');
+            }
+
+            if ($this->editingEmailId === '') {
+                app(AddContactEmailAction::class)->handle(
+                    $record,
+                    (string) $validated['editingEmailRaw'],
+                    ContactEmail::SOURCE_MANUAL,
+                );
+            } else {
+                $email = $this->resolveWorkspaceContactEmail($this->editingEmailId);
+
+                app(UpdateContactEmailAction::class)->handle(
+                    $email,
+                    (string) $validated['editingEmailRaw'],
+                );
+            }
+
+            $this->resetEmailEditingState();
+            $this->replaceWorkspaceContactWithEffectiveContact($record);
+
+            Notification::make()
+                ->success()
+                ->title('Email сохранён')
+                ->body('Изменения сохранены.')
+                ->send();
+        } catch (RuntimeException $exception) {
+            throw ValidationException::withMessages([
+                'editingEmailRaw' => $exception->getMessage(),
+            ]);
+        } catch (Throwable $throwable) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось сохранить email')
+                ->body($throwable->getMessage())
+                ->send();
+        }
+    }
+
     public function openDeletePhoneDialog(int|string $phoneId): void
     {
         if ($this->abortIfContactPhoneDeleteForbidden('Не удалось открыть удаление номера')) {
@@ -604,9 +711,35 @@ trait InteractsWithContactWorkspace
         }
     }
 
+    public function openDeleteEmailDialog(int|string $emailId): void
+    {
+        if ($this->abortIfContactEmailDeleteForbidden('Не удалось открыть удаление email')) {
+            return;
+        }
+
+        try {
+            $email = $this->resolveWorkspaceContactEmail($emailId);
+
+            $this->deletingEmailId = (string) $email->id;
+            $this->deletingEmailLabel = $email->email_raw;
+            $this->showDeleteEmailDialog = true;
+        } catch (Throwable $throwable) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось открыть удаление email')
+                ->body($throwable->getMessage())
+                ->send();
+        }
+    }
+
     public function closeDeletePhoneDialog(): void
     {
         $this->resetPhoneDeletingState();
+    }
+
+    public function closeDeleteEmailDialog(): void
+    {
+        $this->resetEmailDeletingState();
     }
 
     public function openDeleteContactDialog(): void
@@ -827,6 +960,40 @@ trait InteractsWithContactWorkspace
         }
     }
 
+    public function deleteMountedContactEmail(): void
+    {
+        if ($this->abortIfContactEmailDeleteForbidden('Не удалось удалить email')) {
+            return;
+        }
+
+        try {
+            $record = $this->resolveWorkspaceContact();
+
+            if (! $record instanceof Contact) {
+                throw new RuntimeException('Не удалось определить текущий контакт.');
+            }
+
+            $email = $this->resolveWorkspaceContactEmail($this->deletingEmailId);
+
+            app(DeleteContactEmailAction::class)->handle($email);
+
+            $this->resetEmailDeletingState();
+            $this->replaceWorkspaceContactWithEffectiveContact($record);
+
+            Notification::make()
+                ->success()
+                ->title('Email удалён')
+                ->body('Email удалён из контакта.')
+                ->send();
+        } catch (Throwable $throwable) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось удалить email')
+                ->body($throwable->getMessage())
+                ->send();
+        }
+    }
+
     public function enableMountedContactAutoReply(): void
     {
         $this->setMountedContactAutoReplyEnabled(true);
@@ -955,6 +1122,25 @@ trait InteractsWithContactWorkspace
         return $phoneNumber;
     }
 
+    protected function resolveWorkspaceContactEmail(int|string $emailId): ContactEmail
+    {
+        $record = $this->resolveWorkspaceContact();
+
+        if (! $record instanceof Contact) {
+            throw new RuntimeException('Не удалось определить текущий контакт.');
+        }
+
+        $email = $record->emails()
+            ->whereKey((int) $emailId)
+            ->first();
+
+        if (! $email instanceof ContactEmail) {
+            throw new RuntimeException('Не удалось определить выбранный email.');
+        }
+
+        return $email;
+    }
+
     protected function resolveWorkspaceOpenCrossChannelIdentityReview(int|string $reviewId): ContactDuplicateReview
     {
         $record = $this->resolveWorkspaceContact();
@@ -1004,6 +1190,14 @@ trait InteractsWithContactWorkspace
         $this->editingPhoneId = '';
         $this->editingPhoneRaw = '';
         $this->resetErrorBag('editingPhoneRaw');
+    }
+
+    protected function resetEmailEditingState(): void
+    {
+        $this->showEditEmailDialog = false;
+        $this->editingEmailId = '';
+        $this->editingEmailRaw = '';
+        $this->resetErrorBag('editingEmailRaw');
     }
 
     protected function resetProfileEditingState(): void
@@ -1070,6 +1264,13 @@ trait InteractsWithContactWorkspace
         $this->showDeletePhoneDialog = false;
         $this->deletingPhoneId = '';
         $this->deletingPhoneLabel = '';
+    }
+
+    protected function resetEmailDeletingState(): void
+    {
+        $this->showDeleteEmailDialog = false;
+        $this->deletingEmailId = '';
+        $this->deletingEmailLabel = '';
     }
 
     protected function resetContactDeletingState(): void
@@ -1166,9 +1367,39 @@ trait InteractsWithContactWorkspace
         return true;
     }
 
+    protected function abortIfContactEmailEditForbidden(string $title): bool
+    {
+        if ($this->canCurrentEmployeeEditExistingContactEmails()) {
+            return false;
+        }
+
+        Notification::make()
+            ->danger()
+            ->title($title)
+            ->body('Это действие недоступно текущему сотруднику.')
+            ->send();
+
+        return true;
+    }
+
     protected function abortIfContactPhoneDeleteForbidden(string $title): bool
     {
         if ($this->canCurrentEmployeeDeleteExistingContactPhones()) {
+            return false;
+        }
+
+        Notification::make()
+            ->danger()
+            ->title($title)
+            ->body('Это действие недоступно текущему сотруднику.')
+            ->send();
+
+        return true;
+    }
+
+    protected function abortIfContactEmailDeleteForbidden(string $title): bool
+    {
+        if ($this->canCurrentEmployeeDeleteExistingContactEmails()) {
             return false;
         }
 
@@ -1230,6 +1461,16 @@ trait InteractsWithContactWorkspace
 
         return $employee instanceof User
             && $employee->canDeleteExistingContactPhones();
+    }
+
+    protected function canCurrentEmployeeEditExistingContactEmails(): bool
+    {
+        return $this->canCurrentEmployeeEditExistingContactPhones();
+    }
+
+    protected function canCurrentEmployeeDeleteExistingContactEmails(): bool
+    {
+        return $this->canCurrentEmployeeDeleteExistingContactPhones();
     }
 
     protected function resolveWorkspaceContactOrNotify(string $title): ?Contact

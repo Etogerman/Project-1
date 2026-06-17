@@ -98,6 +98,10 @@
 @endphp
 
 <div class="ac-admin-topbar-start">
+    <a class="ac-admin-brand" href="{{ url('/admin') }}" aria-label="AB Connector">
+        AB Connector
+    </a>
+
     <nav class="ac-admin-breadcrumbs" aria-label="Хлебные крошки">
         @if (filled($sectionUrl))
             <a class="ac-admin-breadcrumbs__item" href="{{ $sectionUrl }}">{{ $sectionLabel }}</a>

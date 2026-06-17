@@ -18,6 +18,7 @@ use App\Models\AiTask;
 use App\Models\AutoReplyRule;
 use App\Models\Channel;
 use App\Models\Contact;
+use App\Models\ContactEmail;
 use App\Models\ContactFirstNameResolutionEvent;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
@@ -2017,6 +2018,18 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 ->flatMap(fn (ContactPhoneNumber $phone): array => [
                     $phone->phone_normalized,
                     $phone->phone_raw,
+                ])
+                ->filter(fn (mixed $value): bool => trim((string) $value) !== '')
+                ->values()
+                ->all();
+        }
+
+        if ($fieldKey === 'emails') {
+            return $contact->emails()
+                ->get(['email_normalized', 'email_raw'])
+                ->flatMap(fn (ContactEmail $email): array => [
+                    $email->email_normalized,
+                    $email->email_raw,
                 ])
                 ->filter(fn (mixed $value): bool => trim((string) $value) !== '')
                 ->values()
@@ -6374,12 +6387,22 @@ TEXT;
             return null;
         }
 
+        $contact = $this->resolveRootContactAction->handle($contact);
+
         if ($field === 'phone') {
             $phone = $contact->phoneNumbers()
                 ->whereNotNull('phone_normalized')
                 ->value('phone_normalized');
 
             return $phone === null ? null : trim((string) $phone);
+        }
+
+        if ($field === 'emails') {
+            $email = $contact->emails()
+                ->whereNotNull('email_normalized')
+                ->value('email_normalized');
+
+            return $email === null ? null : trim((string) $email);
         }
 
         $field = EngineFieldRegistry::resolveReadAlias(EngineFieldRegistry::ENTITY_CONTACT, $field);

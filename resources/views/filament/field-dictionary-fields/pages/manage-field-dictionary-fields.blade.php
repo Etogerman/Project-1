@@ -1,7 +1,12 @@
 <x-filament-panels::page>
     @php
         $selectedRow = $selectedFieldId !== null ? ($fieldRows[$selectedFieldId] ?? null) : null;
-        $countLabel = count($fieldRows).' '.trans_choice('поле|поля|полей', count($fieldRows));
+        $visibleFieldRows = $this->visibleFieldRows();
+        $visibleFieldsCount = count($visibleFieldRows);
+        $totalFieldsCount = count($fieldRows);
+        $countLabel = $visibleFieldsCount.' '.trans_choice('поле|поля|полей', $visibleFieldsCount);
+        $hintGroupCounts = $this->hintGroupCounts();
+        $hasActiveFilters = trim($search) !== '' || $activeHintGroup !== 'all';
 
         $typeClass = function (?string $type): string {
             return match ($type) {
@@ -82,41 +87,10 @@
             gap: var(--ac-sp-2);
         }
 
-        .sp-btn {
-            appearance: none;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 6px;
-            min-height: 30px;
-            border: 1px solid var(--ac-border-input);
-            border-radius: var(--ac-radius-2);
-            background: var(--ac-surface);
-            color: var(--ac-text);
-            cursor: pointer;
-            font-size: var(--ac-fs-13);
-            font-weight: var(--ac-fw-semi);
-            padding: 0 12px;
-        }
-
-        .sp-btn:hover {
-            background: var(--ac-surface-2);
-        }
-
-        .sp-btn--primary {
-            border-color: var(--ac-accent);
-            background: var(--ac-accent);
-            color: var(--ac-text-inverse);
-        }
-
-        .sp-btn--danger {
-            border-color: var(--ac-danger);
-            color: var(--ac-danger);
-        }
-
-        .sp-btn:disabled {
-            cursor: not-allowed;
-            opacity: .48;
+        .sp-actions .ac-button,
+        .sp-drawer__foot .ac-button,
+        .sp-danger-zone .ac-button {
+            white-space: nowrap;
         }
 
         .sp-tabs {
@@ -211,6 +185,7 @@
         }
 
         .sp-group-chip {
+            appearance: none;
             display: inline-flex;
             align-items: center;
             gap: 6px;
@@ -219,6 +194,7 @@
             border-radius: var(--ac-radius-2);
             background: transparent;
             color: var(--ac-text-2);
+            cursor: pointer;
             font-size: var(--ac-fs-13);
             font-weight: var(--ac-fw-medium);
             padding: 0 10px;
@@ -239,6 +215,21 @@
             padding: 1px 6px;
         }
 
+        .sp-filter-reset {
+            appearance: none;
+            border: 0;
+            background: transparent;
+            color: var(--ac-accent);
+            cursor: pointer;
+            font: inherit;
+            font-weight: var(--ac-fw-semi);
+            padding: 0;
+        }
+
+        .sp-filter-reset:hover {
+            text-decoration: underline;
+        }
+
         .sp-table-section {
             width: 100%;
             max-width: 100%;
@@ -257,7 +248,7 @@
 
         .sp-table {
             width: 100%;
-            min-width: 1180px;
+            min-width: 1580px;
             border-collapse: collapse;
             color: var(--ac-text);
             font-size: var(--ac-fs-13);
@@ -294,6 +285,13 @@
             background: var(--ac-surface);
         }
 
+        .sp-empty-row {
+            height: 96px !important;
+            color: var(--ac-text-3);
+            font-size: var(--ac-fs-13);
+            text-align: center !important;
+        }
+
         .sp-table tbody tr:hover td {
             background: var(--ac-surface-2);
         }
@@ -310,7 +308,11 @@
         .sp-col-key { width: 170px; }
         .sp-col-label { width: 190px; }
         .sp-col-type { width: 130px; }
-        .sp-col-group { width: 120px; }
+        .sp-col-group { width: 140px; }
+        .sp-col-condition { width: 160px; }
+        .sp-col-card-write { width: 120px; }
+        .sp-col-scenario-write { width: 120px; }
+        .sp-col-owner { width: 140px; }
         .sp-col-source { width: 150px; }
         .sp-col-multiple { width: 120px; }
         .sp-col-system { width: 116px; }
@@ -635,8 +637,7 @@
             </div>
 
             <div class="sp-actions">
-                <button type="button" class="sp-btn">Импорт CSV</button>
-                <button type="button" class="sp-btn sp-btn--primary" onclick="document.querySelector('[data-role=new-field-key]')?.focus()">
+                <button type="button" class="ac-button ac-button--primary ac-button--compact" onclick="document.querySelector('[data-role=new-field-key]')?.focus()">
                     <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 4v12M4 10h12"/></svg>
                     Новое поле
                 </button>
@@ -654,26 +655,35 @@
                     <span class="sp-tab__count">{{ $activeEntity === $entity ? count($fieldRows) : '' }}</span>
                 </button>
             @endforeach
-            <button type="button" class="sp-tab" disabled>Глобальные переменные</button>
         </nav>
 
         <section class="sp-toolbar">
             <label class="sp-search">
                 <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="9" r="5.5"/><path d="m13 13 4 4"/></svg>
-                <input type="search" placeholder="Поиск по ключу или названию" />
+                <input type="search" placeholder="Поиск по ключу или названию" wire:model.live.debounce.250ms="search" />
             </label>
 
             <div class="sp-count">
-                <b>{{ $countLabel }}</b> · системные защищены · множественность выбирается при создании
+                <b>{{ $countLabel }}</b>
+                @if ($visibleFieldsCount !== $totalFieldsCount)
+                    из {{ $totalFieldsCount }}
+                @endif
+                · системные защищены · множественность выбирается при создании
+                @if ($hasActiveFilters)
+                    · <button type="button" class="sp-filter-reset" wire:click="resetFilters">сбросить фильтр</button>
+                @endif
             </div>
         </section>
 
         <nav class="sp-groups" aria-label="Группы полей">
-            <span class="sp-group-chip is-active">Все <span>{{ count($fieldRows) }}</span></span>
-            <span class="sp-group-chip">Основное</span>
-            <span class="sp-group-chip">Адрес</span>
-            <span class="sp-group-chip">Контакты</span>
-            <span class="sp-group-chip">Системные</span>
+            <button type="button" class="sp-group-chip {{ $activeHintGroup === 'all' ? 'is-active' : '' }}" wire:click="selectHintGroup('all')">
+                Все <span>{{ $totalFieldsCount }}</span>
+            </button>
+            @foreach ($this->hintGroupOptions() as $group => $groupLabel)
+                <button type="button" class="sp-group-chip {{ $activeHintGroup === $group ? 'is-active' : '' }}" wire:click="selectHintGroup('{{ $group }}')">
+                    {{ $groupLabel }} <span>{{ $hintGroupCounts[$group] ?? 0 }}</span>
+                </button>
+            @endforeach
         </nav>
 
         <section class="sp-table-section">
@@ -685,6 +695,10 @@
                         <col class="sp-col-label">
                         <col class="sp-col-type">
                         <col class="sp-col-group">
+                        <col class="sp-col-condition">
+                        <col class="sp-col-card-write">
+                        <col class="sp-col-scenario-write">
+                        <col class="sp-col-owner">
                         <col class="sp-col-source">
                         <col class="sp-col-multiple">
                         <col class="sp-col-system">
@@ -698,7 +712,11 @@
                             <th>Название</th>
                             <th>Тип</th>
                             <th>Группа</th>
-                            <th>Источник</th>
+                            <th>Условия</th>
+                            <th>В карточке</th>
+                            <th>В сценарии</th>
+                            <th>Источник значения</th>
+                            <th>Поле-источник</th>
                             <th>Множ.</th>
                             <th>Системное</th>
                             <th class="sp-col-order">Порядок</th>
@@ -706,7 +724,7 @@
                         </tr>
                     </thead>
                     <tbody>
-                        @foreach ($fieldRows as $fieldId => $row)
+                        @forelse ($visibleFieldRows as $fieldId => $row)
                             <tr
                                 wire:key="field-row-{{ $fieldId }}"
                                 wire:click="selectField({{ $fieldId }})"
@@ -737,6 +755,10 @@
                                     </span>
                                 </td>
                                 <td><span class="sp-row-group">{{ $row['group_label'] }}</span></td>
+                                <td><span class="sp-row-group">{{ $row['condition_visibility_label'] }}</span></td>
+                                <td><span class="sp-row-group">{{ $row['manual_write_access_label'] }}</span></td>
+                                <td><span class="sp-row-group">{{ $row['scenario_write_access_label'] }}</span></td>
+                                <td><span class="sp-row-group">{{ $row['value_owner_label'] }}</span></td>
                                 <td>
                                     <span class="sp-source {{ ($row['source_field_key'] ?? '') !== '' ? 'is-on' : '' }}" title="{{ ($row['source_field_label'] ?? '') !== '' ? $row['source_field_label'] : $row['source_label'] }}">
                                         <span class="sp-source__dot"></span>
@@ -761,7 +783,13 @@
                                     </button>
                                 </td>
                             </tr>
-                        @endforeach
+                        @empty
+                            <tr>
+                                <td colspan="14" class="sp-empty-row">
+                                    Поля по текущему фильтру не найдены.
+                                </td>
+                            </tr>
+                        @endforelse
                     </tbody>
                     <tfoot>
                         <tr>
@@ -775,7 +803,41 @@
                                     @endforeach
                                 </select>
                             </td>
-                            <td><span class="sp-row-group">Пользовательское</span></td>
+                            <td>
+                                <select class="sp-select" wire:model.defer="newField.hint_group" @disabled($activeEntity === \App\Models\FieldDictionaryField::ENTITY_CONTACT)>
+                                    @foreach ($this->hintGroupOptions() as $group => $label)
+                                        <option value="{{ $group }}">{{ $label }}</option>
+                                    @endforeach
+                                </select>
+                            </td>
+                            <td>
+                                <select class="sp-select" wire:model.defer="newField.condition_visibility" @disabled($activeEntity === \App\Models\FieldDictionaryField::ENTITY_CONTACT)>
+                                    @foreach ($this->conditionVisibilityOptions() as $visibility => $label)
+                                        <option value="{{ $visibility }}">{{ $label }}</option>
+                                    @endforeach
+                                </select>
+                            </td>
+                            <td>
+                                <select class="sp-select" wire:model.defer="newField.manual_write_access" @disabled($activeEntity === \App\Models\FieldDictionaryField::ENTITY_CONTACT)>
+                                    @foreach ($this->manualWriteAccessOptions() as $access => $label)
+                                        <option value="{{ $access }}">{{ $label }}</option>
+                                    @endforeach
+                                </select>
+                            </td>
+                            <td>
+                                <select class="sp-select" wire:model.defer="newField.scenario_write_access" @disabled($activeEntity === \App\Models\FieldDictionaryField::ENTITY_CONTACT)>
+                                    @foreach ($this->scenarioWriteAccessOptions() as $access => $label)
+                                        <option value="{{ $access }}">{{ $label }}</option>
+                                    @endforeach
+                                </select>
+                            </td>
+                            <td>
+                                <select class="sp-select" wire:model.defer="newField.value_owner" @disabled($activeEntity === \App\Models\FieldDictionaryField::ENTITY_CONTACT)>
+                                    @foreach ($this->valueOwnerOptions() as $access => $label)
+                                        <option value="{{ $access }}">{{ $label }}</option>
+                                    @endforeach
+                                </select>
+                            </td>
                             <td>
                                 <select class="sp-select" wire:model.defer="newField.source_field_key">
                                     <option value="">Нет</option>
@@ -792,7 +854,7 @@
                             </td>
                             <td><span class="sp-badge">Нет</span></td>
                             <td><input class="sp-input" type="number" step="1" wire:model.defer="newField.sort_order" /></td>
-                            <td><button type="button" class="sp-btn sp-btn--primary" wire:click="createField">Добавить</button></td>
+                            <td><button type="button" class="ac-button ac-button--primary ac-button--compact" wire:click="createField">Добавить</button></td>
                         </tr>
                     </tfoot>
                 </table>
@@ -850,7 +912,58 @@
                     </div>
 
                     <div class="sp-form-row">
-                        <label class="sp-form-row__label">Источник</label>
+                        <label class="sp-form-row__label">Группа подсказок</label>
+                        <select class="sp-select" wire:model.defer="fieldRows.{{ $selectedFieldId }}.hint_group" @disabled($selectedRow['is_system'] || ($selectedRow['entity'] ?? null) === \App\Models\FieldDictionaryField::ENTITY_CONTACT)>
+                            @foreach ($this->hintGroupOptions() as $group => $label)
+                                <option value="{{ $group }}">{{ $label }}</option>
+                            @endforeach
+                        </select>
+                        <span class="sp-form-row__hint">Так поле группируется в подсказках конструктора.</span>
+                    </div>
+
+                    <div class="sp-form-grid">
+                        <div class="sp-form-row">
+                            <label class="sp-form-row__label">Условия</label>
+                            <select class="sp-select" wire:model.defer="fieldRows.{{ $selectedFieldId }}.condition_visibility" @disabled($selectedRow['is_system'] || ($selectedRow['entity'] ?? null) === \App\Models\FieldDictionaryField::ENTITY_CONTACT)>
+                                @foreach ($this->conditionVisibilityOptions() as $visibility => $label)
+                                    <option value="{{ $visibility }}">{{ $label }}</option>
+                                @endforeach
+                            </select>
+                        </div>
+
+                        <div class="sp-form-row">
+                            <label class="sp-form-row__label">Ручное изменение в карточке</label>
+                            <select class="sp-select" wire:model.defer="fieldRows.{{ $selectedFieldId }}.manual_write_access" @disabled($selectedRow['is_system'] || ($selectedRow['entity'] ?? null) === \App\Models\FieldDictionaryField::ENTITY_CONTACT)>
+                                @foreach ($this->manualWriteAccessOptions() as $access => $label)
+                                    <option value="{{ $access }}">{{ $label }}</option>
+                                @endforeach
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="sp-form-grid">
+                        <div class="sp-form-row">
+                            <label class="sp-form-row__label">Изменение через сценарий</label>
+                            <select class="sp-select" wire:model.defer="fieldRows.{{ $selectedFieldId }}.scenario_write_access" @disabled($selectedRow['is_system'] || ($selectedRow['entity'] ?? null) === \App\Models\FieldDictionaryField::ENTITY_CONTACT)>
+                                @foreach ($this->scenarioWriteAccessOptions() as $access => $label)
+                                    <option value="{{ $access }}">{{ $label }}</option>
+                                @endforeach
+                            </select>
+                            <span class="sp-form-row__hint">Старое поле write_access синхронизируется автоматически.</span>
+                        </div>
+
+                        <div class="sp-form-row">
+                            <label class="sp-form-row__label">Основной источник значения</label>
+                            <select class="sp-select" wire:model.defer="fieldRows.{{ $selectedFieldId }}.value_owner" @disabled($selectedRow['is_system'] || ($selectedRow['entity'] ?? null) === \App\Models\FieldDictionaryField::ENTITY_CONTACT)>
+                                @foreach ($this->valueOwnerOptions() as $owner => $label)
+                                    <option value="{{ $owner }}">{{ $label }}</option>
+                                @endforeach
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="sp-form-row">
+                        <label class="sp-form-row__label">Поле-источник</label>
                         <select class="sp-select" wire:model.defer="fieldRows.{{ $selectedFieldId }}.source_field_key" @disabled($selectedRow['is_system'])>
                             <option value="">Нет</option>
                             @foreach ($this->sourceOptions((int) $selectedFieldId) as $sourceKey => $sourceLabel)
@@ -870,10 +983,10 @@
 
                     <div class="sp-danger-zone">
                         <strong>Удаление поля</strong>
-                        <p>Системные поля удалить нельзя. Если поле используется как источник, сначала нужно убрать связь.</p>
+                        <p>Системные поля удалить нельзя. Если поле используется как источник, в виде карточки или опубликованном сценарии, удаление будет заблокировано.</p>
                         <button
                             type="button"
-                            class="sp-btn sp-btn--danger"
+                            class="ac-button ac-button--danger-soft ac-button--compact"
                             wire:click="deleteField({{ $selectedFieldId }})"
                             @disabled($selectedRow['is_system'] || $selectedRow['is_referenced_as_source'])
                             onclick="return confirm('Удалить поле из справочника?')"
@@ -884,8 +997,8 @@
                 </div>
 
                 <div class="sp-drawer__foot">
-                    <button type="button" class="sp-btn" wire:click="closeFieldDrawer">Отмена</button>
-                    <button type="button" class="sp-btn sp-btn--primary" wire:click="saveField({{ $selectedFieldId }})">Сохранить</button>
+                    <button type="button" class="ac-button ac-button--secondary ac-button--compact" wire:click="closeFieldDrawer">Отмена</button>
+                    <button type="button" class="ac-button ac-button--primary ac-button--compact" wire:click="saveField({{ $selectedFieldId }})">Сохранить</button>
                 </div>
             </aside>
         @endif

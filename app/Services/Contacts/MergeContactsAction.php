@@ -6,6 +6,7 @@ use App\Data\Contacts\MergeContactsResult;
 use App\Data\Contacts\SelectedMergeContactsResult;
 use App\Models\Contact;
 use App\Models\ContactDuplicateReview;
+use App\Models\ContactEmail;
 use App\Models\ContactIdentity;
 use App\Models\ContactMergeLog;
 use App\Models\ContactPhoneNumber;
@@ -119,6 +120,12 @@ class MergeContactsAction
                 ->orderBy('id')
                 ->lockForUpdate()
                 ->get();
+            /** @var Collection<int, ContactEmail> $emails */
+            $emails = ContactEmail::query()
+                ->whereIn('contact_id', [$lockedPrimary->id, $lockedSecondary->id])
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get();
 
             $this->assertIdentityConflictFree($lockedPrimary, $lockedSecondary, $identities);
 
@@ -160,6 +167,11 @@ class MergeContactsAction
                 secondary: $lockedSecondary,
                 phones: $phones,
                 triggerPhone: $triggerPhone,
+            );
+            $this->mergeEmails(
+                primary: $lockedPrimary,
+                secondary: $lockedSecondary,
+                emails: $emails,
             );
             $this->mergeTags(
                 primary: $lockedPrimary,
@@ -439,6 +451,69 @@ class MergeContactsAction
         }
 
         return $phonesMovedCount;
+    }
+
+    /**
+     * @param  Collection<int, ContactEmail>  $emails
+     */
+    private function mergeEmails(Contact $primary, Contact $secondary, Collection $emails): int
+    {
+        /** @var Collection<int, ContactEmail> $primaryEmails */
+        $primaryEmails = $emails->where('contact_id', $primary->id)->values();
+        /** @var Collection<int, ContactEmail> $secondaryEmails */
+        $secondaryEmails = $emails->where('contact_id', $secondary->id)->values();
+
+        $survivingByNormalized = [];
+
+        foreach ($primaryEmails as $email) {
+            $survivingByNormalized[$email->email_normalized] = $email;
+        }
+
+        $primaryEmailId = $primaryEmails->firstWhere('is_primary', true)?->id;
+        $secondaryPrimaryEmailNormalized = null;
+        $emailsMovedCount = 0;
+
+        foreach ($secondaryEmails as $email) {
+            if ($email->is_primary) {
+                $secondaryPrimaryEmailNormalized = $email->email_normalized;
+            }
+
+            if (array_key_exists($email->email_normalized, $survivingByNormalized)) {
+                continue;
+            }
+
+            $email->forceFill([
+                'contact_id' => $primary->id,
+                'is_primary' => false,
+            ])->save();
+
+            $survivingByNormalized[$email->email_normalized] = $email->fresh();
+            $emailsMovedCount++;
+        }
+
+        if ($primaryEmailId === null) {
+            $candidateEmail = null;
+
+            if ($secondaryPrimaryEmailNormalized !== null && array_key_exists($secondaryPrimaryEmailNormalized, $survivingByNormalized)) {
+                $candidateEmail = $survivingByNormalized[$secondaryPrimaryEmailNormalized];
+            } else {
+                $candidateEmail = collect($survivingByNormalized)
+                    ->sortBy('id')
+                    ->first();
+            }
+
+            if ($candidateEmail instanceof ContactEmail) {
+                ContactEmail::query()
+                    ->where('contact_id', $primary->id)
+                    ->update(['is_primary' => false]);
+
+                ContactEmail::query()
+                    ->whereKey($candidateEmail->id)
+                    ->update(['is_primary' => true]);
+            }
+        }
+
+        return $emailsMovedCount;
     }
 
     private function mergeTags(Contact $primary, Contact $secondary): void

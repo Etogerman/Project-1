@@ -21,6 +21,12 @@ class ManageFieldDictionaryFields extends Page
     #[Url(as: 'entity', history: true, except: FieldDictionaryField::ENTITY_CONTACT)]
     public string $activeEntity = FieldDictionaryField::ENTITY_CONTACT;
 
+    #[Url(as: 'q', history: true, except: '')]
+    public string $search = '';
+
+    #[Url(as: 'group', history: true, except: 'all')]
+    public string $activeHintGroup = 'all';
+
     /**
      * @var array<int, array<string, mixed>>
      */
@@ -73,6 +79,7 @@ class ManageFieldDictionaryFields extends Page
     {
         $this->activeEntity = $this->normalizeEntity($entity);
         $this->selectedFieldId = null;
+        $this->activeHintGroup = 'all';
         $this->reloadRows();
     }
 
@@ -101,6 +108,19 @@ class ManageFieldDictionaryFields extends Page
         }
 
         $this->selectedFieldId = $fieldId;
+    }
+
+    public function selectHintGroup(string $group): void
+    {
+        $this->activeHintGroup = $group === 'all' || array_key_exists($group, FieldDictionaryField::hintGroupOptions())
+            ? $group
+            : 'all';
+    }
+
+    public function resetFilters(): void
+    {
+        $this->search = '';
+        $this->activeHintGroup = 'all';
     }
 
     public function closeFieldDrawer(): void
@@ -208,6 +228,84 @@ class ManageFieldDictionaryFields extends Page
     /**
      * @return array<string, string>
      */
+    public function conditionVisibilityOptions(): array
+    {
+        return FieldDictionaryField::conditionVisibilityOptions();
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public function manualWriteAccessOptions(): array
+    {
+        return FieldDictionaryField::manualWriteAccessOptions();
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public function scenarioWriteAccessOptions(): array
+    {
+        return FieldDictionaryField::scenarioWriteAccessOptions();
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public function valueOwnerOptions(): array
+    {
+        return FieldDictionaryField::valueOwnerOptions();
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public function hintGroupOptions(): array
+    {
+        return FieldDictionaryField::hintGroupOptions();
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function visibleFieldRows(): array
+    {
+        $search = mb_strtolower(trim($this->search));
+
+        return collect($this->fieldRows)
+            ->when($this->activeHintGroup !== 'all', fn ($rows) => $rows
+                ->filter(fn (array $row): bool => ($row['hint_group'] ?? null) === $this->activeHintGroup))
+            ->when($search !== '', fn ($rows) => $rows
+                ->filter(function (array $row) use ($search): bool {
+                    $haystack = mb_strtolower(implode(' ', [
+                        $row['field_key'] ?? '',
+                        $row['name'] ?? '',
+                        $row['type_label'] ?? '',
+                        $row['group_label'] ?? '',
+                        $row['condition_visibility_label'] ?? '',
+                        $row['manual_write_access_label'] ?? '',
+                        $row['scenario_write_access_label'] ?? '',
+                        $row['value_owner_label'] ?? '',
+                    ]));
+
+                    return str_contains($haystack, $search);
+                }))
+            ->all();
+    }
+
+    /**
+     * @return array<string, int>
+     */
+    public function hintGroupCounts(): array
+    {
+        return collect($this->fieldRows)
+            ->countBy(fn (array $row): string => (string) ($row['hint_group'] ?? ''))
+            ->all();
+    }
+
+    /**
+     * @return array<string, string>
+     */
     public function sourceOptions(?int $fieldId = null): array
     {
         $currentFieldKey = $fieldId !== null
@@ -248,6 +346,24 @@ class ManageFieldDictionaryFields extends Page
             'sort_order' => ((int) $lastSortOrder) + 10,
             'is_multiple' => false,
             'is_system' => false,
+            'condition_visibility' => $this->activeEntity === FieldDictionaryField::ENTITY_DIALOG
+                ? FieldDictionaryField::CONDITION_VISIBILITY_MAIN
+                : FieldDictionaryField::CONDITION_VISIBILITY_DISPLAY_ONLY,
+            'write_access' => $this->activeEntity === FieldDictionaryField::ENTITY_DIALOG
+                ? FieldDictionaryField::WRITE_ACCESS_WRITABLE
+                : FieldDictionaryField::WRITE_ACCESS_READ_ONLY,
+            'manual_write_access' => $this->activeEntity === FieldDictionaryField::ENTITY_DIALOG
+                ? FieldDictionaryField::MANUAL_WRITE_ACCESS_EDITABLE
+                : FieldDictionaryField::MANUAL_WRITE_ACCESS_READONLY,
+            'scenario_write_access' => $this->activeEntity === FieldDictionaryField::ENTITY_DIALOG
+                ? FieldDictionaryField::SCENARIO_WRITE_ACCESS_ALLOWED
+                : FieldDictionaryField::SCENARIO_WRITE_ACCESS_DENIED,
+            'value_owner' => $this->activeEntity === FieldDictionaryField::ENTITY_DIALOG
+                ? FieldDictionaryField::VALUE_OWNER_OPERATOR
+                : FieldDictionaryField::VALUE_OWNER_OPERATOR,
+            'hint_group' => $this->activeEntity === FieldDictionaryField::ENTITY_DIALOG
+                ? FieldDictionaryField::HINT_GROUP_DIALOG
+                : FieldDictionaryField::HINT_GROUP_CONTACT,
         ];
     }
 
@@ -263,7 +379,18 @@ class ManageFieldDictionaryFields extends Page
             'name' => $field->name,
             'type' => $field->type,
             'type_label' => FieldDictionaryField::typeLabel($field->type),
-            'group_label' => $this->resolveGroupLabel($field),
+            'group_label' => FieldDictionaryField::hintGroupLabel($field->hint_group),
+            'condition_visibility' => $field->condition_visibility,
+            'condition_visibility_label' => FieldDictionaryField::conditionVisibilityLabel($field->condition_visibility),
+            'write_access' => $field->write_access,
+            'write_access_label' => FieldDictionaryField::writeAccessLabel($field->write_access),
+            'manual_write_access' => $field->manual_write_access,
+            'manual_write_access_label' => FieldDictionaryField::manualWriteAccessLabel($field->manual_write_access),
+            'scenario_write_access' => $field->scenario_write_access,
+            'scenario_write_access_label' => FieldDictionaryField::scenarioWriteAccessLabel($field->scenario_write_access),
+            'value_owner' => $field->value_owner,
+            'value_owner_label' => FieldDictionaryField::valueOwnerLabel($field->value_owner),
+            'hint_group' => $field->hint_group,
             'source_label' => filled($field->source_field_key) ? 'Да' : 'Нет',
             'source_field_label' => $this->resolveSourceLabel($field),
             'source_field_key' => $field->source_field_key ?? '',
@@ -282,13 +409,16 @@ class ManageFieldDictionaryFields extends Page
     protected function rowToAttributes(array $row, ?FieldDictionaryField $field = null): array
     {
         $type = (string) ($row['type'] ?? FieldDictionaryField::TYPE_TEXT);
+        $entity = $field?->entity ?? $this->activeEntity;
+        $isSystem = (bool) ($field?->is_system ?? false);
+        $isUserContactField = $entity === FieldDictionaryField::ENTITY_CONTACT && ! $isSystem;
 
         return [
-            'entity' => $field?->entity ?? $this->activeEntity,
+            'entity' => $entity,
             'field_key' => $field?->field_key ?? trim((string) ($row['field_key'] ?? '')),
             'name' => trim((string) ($row['name'] ?? '')),
-            'type' => $field?->is_system ? $field->type : $type,
-            'source_field_key' => $field?->is_system
+            'type' => $isSystem ? $field->type : $type,
+            'source_field_key' => $isSystem
                 ? $field->source_field_key
                 : (filled($row['source_field_key'] ?? null) ? trim((string) $row['source_field_key']) : null),
             'options' => $type === FieldDictionaryField::TYPE_SELECT
@@ -298,34 +428,41 @@ class ManageFieldDictionaryFields extends Page
             'is_multiple' => $field instanceof FieldDictionaryField
                 ? (bool) $field->is_multiple
                 : (bool) ($row['is_multiple'] ?? false),
-            'is_system' => (bool) ($field?->is_system ?? false),
+            'is_system' => $isSystem,
+            'condition_visibility' => $isSystem
+                ? $field->condition_visibility
+                : ($isUserContactField
+                    ? FieldDictionaryField::CONDITION_VISIBILITY_DISPLAY_ONLY
+                    : (string) ($row['condition_visibility'] ?? FieldDictionaryField::CONDITION_VISIBILITY_DISPLAY_ONLY)),
+            'write_access' => $isSystem
+                ? $field->write_access
+                : ($isUserContactField
+                    ? FieldDictionaryField::WRITE_ACCESS_READ_ONLY
+                    : FieldDictionaryField::legacyWriteAccessForScenario(
+                        (string) ($row['scenario_write_access'] ?? FieldDictionaryField::SCENARIO_WRITE_ACCESS_DENIED),
+                        (string) ($field?->write_access ?? FieldDictionaryField::WRITE_ACCESS_READ_ONLY),
+                    )),
+            'manual_write_access' => $isSystem
+                ? $field->manual_write_access
+                : ($isUserContactField
+                    ? FieldDictionaryField::MANUAL_WRITE_ACCESS_READONLY
+                    : (string) ($row['manual_write_access'] ?? FieldDictionaryField::MANUAL_WRITE_ACCESS_READONLY)),
+            'scenario_write_access' => $isSystem
+                ? $field->scenario_write_access
+                : ($isUserContactField
+                    ? FieldDictionaryField::SCENARIO_WRITE_ACCESS_DENIED
+                    : (string) ($row['scenario_write_access'] ?? FieldDictionaryField::SCENARIO_WRITE_ACCESS_DENIED)),
+            'value_owner' => $isSystem
+                ? $field->value_owner
+                : ($isUserContactField
+                    ? FieldDictionaryField::VALUE_OWNER_OPERATOR
+                    : (string) ($row['value_owner'] ?? FieldDictionaryField::VALUE_OWNER_OPERATOR)),
+            'hint_group' => $isSystem
+                ? $field->hint_group
+                : ($isUserContactField
+                    ? FieldDictionaryField::HINT_GROUP_CONTACT
+                    : (string) ($row['hint_group'] ?? FieldDictionaryField::defaultHintGroup($entity, (string) ($row['field_key'] ?? '')))),
         ];
-    }
-
-    protected function resolveGroupLabel(FieldDictionaryField $field): string
-    {
-        if (in_array($field->field_key, ['phones', 'emails', 'phone'], true)) {
-            return 'Контакты';
-        }
-
-        if (in_array($field->field_key, [
-            'country',
-            'region',
-            'region_status',
-            'region_source',
-            'city',
-            'distance_to_moscow_km',
-            'distance_to_moscow_status',
-            'distance_to_moscow_calculated_at',
-        ], true)) {
-            return 'Адрес';
-        }
-
-        if (str_contains($field->field_key, 'source') || in_array($field->field_key, ['id', 'created_at', 'updated_at'], true)) {
-            return 'Системные';
-        }
-
-        return 'Основное';
     }
 
     protected function resolveSourceLabel(FieldDictionaryField $field): string
