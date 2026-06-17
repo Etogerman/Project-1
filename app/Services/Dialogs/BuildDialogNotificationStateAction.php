@@ -9,6 +9,7 @@ use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\User;
+use DateTimeInterface;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Str;
@@ -36,18 +37,23 @@ class BuildDialogNotificationStateAction
     {
         $preference = $this->resolvePreference($user);
         $scope = $preference['scope'];
-        $lastReadMessageId = $preference['last_read_message_id'];
-        $latestScopedInboundMessageId = $this->latestScopedInboundMessageId($user, $scope);
+        $latestScopedInboundBoundary = null;
 
-        if ($initialize && $lastReadMessageId < 1 && $latestScopedInboundMessageId > 0) {
-            $lastReadMessageId = $latestScopedInboundMessageId;
-            $this->persistPreference($user, [
-                ...$preference,
-                'last_read_message_id' => $lastReadMessageId,
-            ]);
+        if ($initialize && $preference['last_read_message_id'] < 1) {
+            $latestScopedInboundBoundary = $this->latestScopedInboundMessageBoundary($user, $scope);
+
+            if ($latestScopedInboundBoundary['id'] > 0) {
+                $preference = [
+                    ...$preference,
+                    'last_read_message_id' => $latestScopedInboundBoundary['id'],
+                    'last_read_message_sort_at' => $latestScopedInboundBoundary['sort_at'],
+                ];
+
+                $this->persistPreference($user, $preference);
+            }
         }
 
-        $notificationQuery = $this->notificationDialogQuery($user, $scope, $lastReadMessageId);
+        $notificationQuery = $this->notificationDialogQuery($user, $scope, $preference);
         $count = (clone $notificationQuery)->count();
         $items = $this->notificationItems($notificationQuery);
         $latestNotificationMessageId = (int) ($items[0]['message_id'] ?? 0);
@@ -56,8 +62,9 @@ class BuildDialogNotificationStateAction
             'scope' => $scope,
             'scope_options' => $this->scopeOptions(),
             'default_scope' => $this->defaultScopeFor($user),
-            'last_read_message_id' => $lastReadMessageId,
-            'latest_scoped_inbound_message_id' => $latestScopedInboundMessageId,
+            'last_read_message_id' => $preference['last_read_message_id'],
+            'last_read_message_sort_at' => $preference['last_read_message_sort_at'],
+            'latest_scoped_inbound_message_id' => (int) ($latestScopedInboundBoundary['id'] ?? 0),
             'latest_notification_message_id' => $latestNotificationMessageId,
             'count' => $count,
             'items' => $items,
@@ -85,20 +92,27 @@ class BuildDialogNotificationStateAction
     public function markRead(User $user, ?int $messageId = null): array
     {
         $preference = $this->resolvePreference($user);
-        $targetMessageId = $preference['last_read_message_id'];
+        $targetBoundary = [
+            'id' => $preference['last_read_message_id'],
+            'sort_at' => $preference['last_read_message_sort_at'],
+        ];
 
         if ($messageId !== null && $messageId > 0) {
-            if ($this->notificationMessageExists($user, $preference['scope'], $preference['last_read_message_id'], $messageId)) {
-                $targetMessageId = $messageId;
+            $notificationBoundary = $this->notificationMessageBoundary($user, $preference['scope'], $preference, $messageId);
+
+            if ($notificationBoundary !== null) {
+                $targetBoundary = $notificationBoundary;
             }
         } else {
-            $targetMessageId = $this->latestScopedInboundMessageId($user, $preference['scope']);
+            $targetBoundary = $this->latestNotificationMessageBoundary($user, $preference['scope'], $preference)
+                ?? $targetBoundary;
         }
 
-        if ($targetMessageId > $preference['last_read_message_id']) {
+        if ($this->boundaryIsAfterPreference($targetBoundary, $preference)) {
             $this->persistPreference($user, [
                 ...$preference,
-                'last_read_message_id' => $targetMessageId,
+                'last_read_message_id' => $targetBoundary['id'],
+                'last_read_message_sort_at' => $targetBoundary['sort_at'],
             ]);
         }
 
@@ -140,7 +154,10 @@ class BuildDialogNotificationStateAction
             ->all();
     }
 
-    private function latestScopedInboundMessageId(User $user, string $scope): int
+    /**
+     * @return array{id:int,sort_at:?string}
+     */
+    private function latestScopedInboundMessageBoundary(User $user, string $scope): array
     {
         $latestInboundUserMessageId = $this->latestInboundUserMessageIdFragment();
 
@@ -153,14 +170,18 @@ class BuildDialogNotificationStateAction
             )
             ->first();
 
-        return (int) ($dialog?->getAttribute('latest_inbound_user_message_id') ?? 0);
+        return $this->boundaryFromDialog($dialog) ?? $this->emptyBoundary();
     }
 
-    private function notificationMessageExists(User $user, string $scope, int $lastReadMessageId, int $messageId): bool
+    /**
+     * @param  array{scope:string,last_read_message_id:int,last_read_message_sort_at:?string}  $preference
+     * @return array{id:int,sort_at:?string}|null
+     */
+    private function notificationMessageBoundary(User $user, string $scope, array $preference, int $messageId): ?array
     {
         $latestInboundUserMessageId = $this->latestInboundUserMessageIdFragment();
 
-        return $this->notificationDialogQuery($user, $scope, $lastReadMessageId)
+        $dialog = $this->withLatestInboundProjection($this->notificationDialogQuery($user, $scope, $preference))
             ->whereRaw(
                 $latestInboundUserMessageId['sql'].' = ?',
                 [
@@ -168,23 +189,55 @@ class BuildDialogNotificationStateAction
                     $messageId,
                 ],
             )
-            ->exists();
+            ->first();
+
+        return $this->boundaryFromDialog($dialog);
     }
 
-    private function notificationDialogQuery(User $user, string $scope, int $lastReadMessageId): Builder
+    /**
+     * @param  array{scope:string,last_read_message_id:int,last_read_message_sort_at:?string}  $preference
+     * @return array{id:int,sort_at:?string}|null
+     */
+    private function latestNotificationMessageBoundary(User $user, string $scope, array $preference): ?array
+    {
+        $dialog = $this->orderedByLatestInbound(
+            $this->withLatestInboundProjection($this->notificationDialogQuery($user, $scope, $preference)),
+        )->first();
+
+        return $this->boundaryFromDialog($dialog);
+    }
+
+    /**
+     * @param  array{scope:string,last_read_message_id:int,last_read_message_sort_at:?string}  $preference
+     */
+    private function notificationDialogQuery(User $user, string $scope, array $preference): Builder
     {
         $query = $this->scopedDialogQuery($user, $scope);
 
         DialogResource::applyInboxStatusFilter($query, DialogInboxStatusData::CODE_REQUIRES_REPLY);
 
-        if ($lastReadMessageId > 0) {
+        if ($preference['last_read_message_id'] > 0) {
             $latestInboundUserMessageId = $this->latestInboundUserMessageIdFragment();
+            $latestInboundUserMessageSortAt = $this->latestInboundUserMessageSortAtFragment();
+
+            if (filled($preference['last_read_message_sort_at'])) {
+                $isAfterBoundary = $this->messageChronology->buildIsAfterCondition(
+                    $latestInboundUserMessageSortAt,
+                    $latestInboundUserMessageId,
+                    ['sql' => '?', 'bindings' => [$preference['last_read_message_sort_at']]],
+                    ['sql' => '?', 'bindings' => [$preference['last_read_message_id']]],
+                );
+
+                $query->whereRaw($isAfterBoundary['sql'], $isAfterBoundary['bindings']);
+
+                return $query;
+            }
 
             $query->whereRaw(
                 $latestInboundUserMessageId['sql'].' > ?',
                 [
                     ...$latestInboundUserMessageId['bindings'],
-                    $lastReadMessageId,
+                    $preference['last_read_message_id'],
                 ],
             );
         }
@@ -353,7 +406,70 @@ class BuildDialogNotificationStateAction
     }
 
     /**
-     * @return array{scope:string,last_read_message_id:int}
+     * @return array{id:int,sort_at:?string}
+     */
+    private function emptyBoundary(): array
+    {
+        return [
+            'id' => 0,
+            'sort_at' => null,
+        ];
+    }
+
+    /**
+     * @return array{id:int,sort_at:?string}|null
+     */
+    private function boundaryFromDialog(?Dialog $dialog): ?array
+    {
+        if (! $dialog instanceof Dialog) {
+            return null;
+        }
+
+        $messageId = (int) $dialog->getAttribute('latest_inbound_user_message_id');
+
+        if ($messageId < 1) {
+            return null;
+        }
+
+        return [
+            'id' => $messageId,
+            'sort_at' => $this->normalizeSortAt($dialog->getAttribute('latest_inbound_user_message_sort_at')),
+        ];
+    }
+
+    /**
+     * @param  array{id:int,sort_at:?string}  $boundary
+     * @param  array{scope:string,last_read_message_id:int,last_read_message_sort_at:?string}  $preference
+     */
+    private function boundaryIsAfterPreference(array $boundary, array $preference): bool
+    {
+        if ($boundary['id'] < 1) {
+            return false;
+        }
+
+        if (filled($boundary['sort_at']) && filled($preference['last_read_message_sort_at'])) {
+            return $this->messageChronology->isAfter(
+                $boundary['sort_at'],
+                $boundary['id'],
+                $preference['last_read_message_sort_at'],
+                $preference['last_read_message_id'],
+            );
+        }
+
+        return $boundary['id'] > $preference['last_read_message_id'];
+    }
+
+    private function normalizeSortAt(mixed $value): ?string
+    {
+        if ($value instanceof DateTimeInterface) {
+            return $value->format('Y-m-d H:i:s');
+        }
+
+        return filled($value) ? (string) $value : null;
+    }
+
+    /**
+     * @return array{scope:string,last_read_message_id:int,last_read_message_sort_at:?string}
      */
     private function resolvePreference(User $user): array
     {
@@ -363,11 +479,12 @@ class BuildDialogNotificationStateAction
         return [
             'scope' => $this->normalizeScope($rawPreference['scope'] ?? null, $defaultScope),
             'last_read_message_id' => max(0, (int) ($rawPreference['last_read_message_id'] ?? 0)),
+            'last_read_message_sort_at' => $this->normalizeSortAt($rawPreference['last_read_message_sort_at'] ?? null),
         ];
     }
 
     /**
-     * @param  array{scope:string,last_read_message_id:int}  $preference
+     * @param  array{scope:string,last_read_message_id:int,last_read_message_sort_at:?string}  $preference
      */
     private function persistPreference(User $user, array $preference): void
     {

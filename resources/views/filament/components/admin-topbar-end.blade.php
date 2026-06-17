@@ -1,4 +1,10 @@
 @php
+    $currentUser = auth()->user();
+    $canViewDialogNotifications = $currentUser instanceof \App\Models\User
+        && $currentUser->can('viewAny', \App\Models\Dialog::class);
+    $notificationCacheScope = $canViewDialogNotifications
+        ? 'user-'.$currentUser->getAuthIdentifier()
+        : null;
     $notificationSoundOptions = [
         ['value' => '01_click', 'label' => '01 Клик', 'url' => asset('audio/notifications/01_click.wav')],
         ['value' => '02_double_click', 'label' => '02 Двойной клик', 'url' => asset('audio/notifications/02_double_click.wav')],
@@ -45,9 +51,11 @@
         <x-filament::icon icon="heroicon-m-moon" class="h-5 w-5" />
     </button>
 
+    @if ($canViewDialogNotifications)
     <div
         class="ac-admin-notifications"
         data-ac-dialog-notifications
+        data-cache-scope="{{ $notificationCacheScope }}"
         data-state-url="{{ route('admin.dialog-notifications.show') }}"
         data-preferences-url="{{ route('admin.dialog-notifications.preferences.update') }}"
         data-mark-read-url="{{ route('admin.dialog-notifications.mark-read') }}"
@@ -117,8 +125,10 @@
             </p>
         </section>
     </div>
+    @endif
 </div>
 
+@if ($canViewDialogNotifications)
 <script>
     (() => {
         if (window.acDialogNotificationsInitialized) {
@@ -133,6 +143,8 @@
             return;
         }
 
+        const cacheScope = root.dataset.cacheScope || 'anonymous';
+        const scopedStorageKey = (name) => `ab.dialogNotifications.${cacheScope}.${name}.v1`;
         const stateUrl = root.dataset.stateUrl;
         const preferencesUrl = root.dataset.preferencesUrl;
         const markReadUrl = root.dataset.markReadUrl;
@@ -151,13 +163,13 @@
         const soundChoiceSelect = root.querySelector('[data-ac-notifications-sound-choice]');
         const scopeButtons = Array.from(root.querySelectorAll('[data-ac-notifications-scope]'));
         const volumeButtons = Array.from(root.querySelectorAll('[data-ac-notifications-volume]'));
-        const soundStorageKey = 'ab.dialogNotifications.soundEnabled.v1';
-        const soundChoiceStorageKey = 'ab.dialogNotifications.soundChoice.v1';
-        const soundLevelStorageKey = 'ab.dialogNotifications.soundLevel.v1';
-        const soundDedupeStorageKey = 'ab.dialogNotifications.soundDedupe.v1';
-        const lastSoundMessageStorageKey = 'ab.dialogNotifications.lastSoundMessage.v1';
-        const stateStorageKey = 'ab.dialogNotifications.state.v1';
-        const pollLeaseStorageKey = 'ab.dialogNotifications.pollLease.v1';
+        const soundStorageKey = scopedStorageKey('soundEnabled');
+        const soundChoiceStorageKey = scopedStorageKey('soundChoice');
+        const soundLevelStorageKey = scopedStorageKey('soundLevel');
+        const soundDedupeStorageKey = scopedStorageKey('soundDedupe');
+        const lastSoundMessageStorageKey = scopedStorageKey('lastSoundMessage');
+        const stateStorageKey = scopedStorageKey('state');
+        const pollLeaseStorageKey = scopedStorageKey('pollLease');
         const soundVolumeByLevel = {
             quiet: 0.3,
             medium: 0.65,
@@ -210,6 +222,19 @@
                 return {};
             }
         };
+
+        const clearCachedState = () => {
+            window.localStorage.removeItem(stateStorageKey);
+            window.localStorage.removeItem(soundDedupeStorageKey);
+            window.localStorage.removeItem(pollLeaseStorageKey);
+        };
+
+        const emptyState = () => ({
+            scope: null,
+            count: 0,
+            items: [],
+            latest_notification_message_id: 0,
+        });
 
         const setPopoverOpen = (isOpen) => {
             popover.hidden = !isOpen;
@@ -530,23 +555,29 @@
             const allowSound = options.allowSound !== false;
             const items = Array.isArray(state.items) ? state.items : [];
             const latestNotificationMessageId = Number(state.latest_notification_message_id || 0);
+            const notificationCount = Number(state.count || 0);
 
-            renderBadge(state.count);
+            renderBadge(notificationCount);
             renderScopes(state.scope);
             renderItems(items);
             setStatus(state);
 
-            if (!hasBootstrappedSoundBaseline) {
+            const shouldUpdateSoundBaseline = !hasBootstrappedSoundBaseline || options.baselineSound === true;
+
+            if (shouldUpdateSoundBaseline) {
                 latestKnownNotificationMessageId = Math.max(
                     latestKnownNotificationMessageId,
                     lastSoundMessageId,
+                    latestNotificationMessageId,
                 );
                 hasBootstrappedSoundBaseline = true;
             }
 
             const shouldPlaySound = allowSound
+                && !shouldUpdateSoundBaseline
+                && latestNotificationMessageId > latestKnownNotificationMessageId
                 && latestNotificationMessageId > lastSoundMessageId
-                && Number(state.count || 0) > 0;
+                && notificationCount > 0;
 
             if (latestNotificationMessageId > latestKnownNotificationMessageId) {
                 latestKnownNotificationMessageId = latestNotificationMessageId;
@@ -584,6 +615,14 @@
                     },
                 });
 
+                if (response.status === 401 || response.status === 403) {
+                    clearCachedState();
+                    renderState(emptyState(), { allowSound: false, baselineSound: true });
+                    statusNode.textContent = 'Нет доступа к уведомлениям';
+
+                    return;
+                }
+
                 if (!response.ok) {
                     throw new Error(`Notification state failed: ${response.status}`);
                 }
@@ -591,7 +630,7 @@
                 const state = await response.json();
 
                 writeCachedState(state);
-                renderState(state);
+                renderState(state, { baselineSound: initialize });
             } catch (error) {
                 statusNode.textContent = 'Нет связи с уведомлениями';
             } finally {
@@ -643,7 +682,10 @@
                         throw new Error(`Scope update failed: ${response.status}`);
                     }
 
-                    renderState(await response.json());
+                    const state = await response.json();
+
+                    writeCachedState(state);
+                    renderState(state);
                 } catch (error) {
                     statusNode.textContent = 'Режим не сохранён';
                 }
@@ -763,3 +805,4 @@
         });
     })();
 </script>
+@endif
