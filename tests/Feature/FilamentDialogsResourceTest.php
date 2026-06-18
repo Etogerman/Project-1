@@ -602,7 +602,8 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('data-ac-dialogs-tools', false)
             ->assertSee('installViewSwitchLoadingListener', false)
             ->assertSee('data-ac-dialogs-view-link', false)
-            ->assertSee('wire:navigate.hover', false);
+            ->assertSee('wire:navigate.hover', false)
+            ->assertSee('hasCheckedVisibleRecords', false);
     }
 
     public function test_dialogs_inbox_table_uses_field_dictionary_labels(): void
@@ -1677,10 +1678,91 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertTableBulkActionVisible('delete')
             ->assertTableBulkActionHasLabel('delete', 'Удалить выбранные')
             ->callTableBulkAction('delete', [$firstDialog, $secondDialog])
-            ->assertHasNoTableBulkActionErrors();
+            ->assertHasNoTableBulkActionErrors()
+            ->assertSet('selectedTableRecords', [])
+            ->assertSet('deselectedTableRecords', [])
+            ->assertSet('isTrackingDeselectedTableRecords', false);
 
         $this->assertModelMissing($firstDialog);
         $this->assertModelMissing($secondDialog);
+    }
+
+    public function test_dialogs_inbox_clears_stale_selection_when_table_context_changes(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $firstDialog = $this->createInboxDialog([
+            'contactName' => 'Первый диалог',
+        ]);
+        $secondDialog = $this->createInboxDialog([
+            'contactName' => 'Второй диалог',
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->set('selectedTableRecords', [(string) $firstDialog->getKey()])
+            ->set('deselectedTableRecords', [(string) $secondDialog->getKey()])
+            ->set('isTrackingDeselectedTableRecords', true)
+            ->call('sortTable', 'contact_label', 'asc')
+            ->assertSet('selectedTableRecords', [])
+            ->assertSet('deselectedTableRecords', [])
+            ->assertSet('isTrackingDeselectedTableRecords', false);
+    }
+
+    public function test_dialogs_inbox_clears_stale_selection_when_selected_row_disappears_on_refresh(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createInboxDialog([
+            'contactName' => 'Диалог уйдёт из списка',
+        ]);
+        $latestInbound = Message::query()
+            ->where('dialog_id', $dialog->id)
+            ->where('message_kind', Message::KIND_INBOUND_USER)
+            ->latest('received_at')
+            ->latest('id')
+            ->firstOrFail();
+
+        $component = Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->assertCanSeeTableRecords([$dialog])
+            ->set('selectedTableRecords', [(string) $dialog->getKey()]);
+
+        $dialog->forceFill([
+            'manual_reply_dismissed_source_message_id' => $latestInbound->id,
+        ])->save();
+
+        $component
+            ->call('$refresh')
+            ->assertCanNotSeeTableRecords([$dialog])
+            ->assertSet('selectedTableRecords', [])
+            ->assertSet('deselectedTableRecords', [])
+            ->assertSet('isTrackingDeselectedTableRecords', false);
+    }
+
+    public function test_dialogs_inbox_keeps_visible_selection_when_table_refreshes(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createInboxDialog([
+            'contactName' => 'Диалог остаётся в списке',
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->assertCanSeeTableRecords([$dialog])
+            ->set('selectedTableRecords', [(string) $dialog->getKey()])
+            ->call('$refresh')
+            ->assertCanSeeTableRecords([$dialog])
+            ->assertSet('selectedTableRecords', [(string) $dialog->getKey()])
+            ->assertSet('deselectedTableRecords', [])
+            ->assertSet('isTrackingDeselectedTableRecords', false);
     }
 
     public function test_dialogs_inbox_defaults_to_requires_manual_reply_filter(): void
