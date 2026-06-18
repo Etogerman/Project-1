@@ -1,7 +1,8 @@
 @php
+    use App\Filament\Resources\Contacts\ContactResource;
+    use App\Filament\Resources\Dialogs\DialogResource;
     use App\Models\Contact;
     use App\Models\Dialog;
-    use App\Filament\Resources\Dialogs\DialogResource;
     use App\Services\Contacts\ResolveContactDisplayNameAction;
 
     $sectionLabels = [
@@ -51,6 +52,7 @@
             : $routeRecord;
 
         if (filled($recordId) && is_numeric($recordId)) {
+            $sectionUrl = ContactResource::getUrl('index');
             $contact = Contact::query()->find($recordId);
 
             if ($contact instanceof Contact) {
