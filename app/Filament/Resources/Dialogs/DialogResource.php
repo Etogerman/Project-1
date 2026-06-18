@@ -152,7 +152,6 @@ class DialogResource extends Resource
                     ->label($dialogFieldLabel('last_message_at', 'Последнее сообщение'))
                     ->state(fn (Dialog $record): string => static::resolvePreviewText($record))
                     ->description(fn (Dialog $record): ?string => static::formatPreviewMetaSummary($record))
-                    ->tooltip(fn (Dialog $record): string => static::resolvePreviewText($record))
                     ->limit(80)
                     ->toggleable(),
                 TextColumn::make('stage')
