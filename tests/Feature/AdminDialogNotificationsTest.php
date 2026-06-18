@@ -66,6 +66,9 @@ class AdminDialogNotificationsTest extends TestCase
             ->assertSee('const cachedAllowsSound = cached.allowSound !== false', false)
             ->assertSee('allowSound: options.allowSound === true && cachedAllowsSound', false)
             ->assertSee('writeCachedState(state, { allowSound: !initialize })', false)
+            ->assertSee('link.href = item.url;', false)
+            ->assertSee("link.dataset.acNotificationsOpen = String(item.message_id || '');", false)
+            ->assertSee('postJson(markReadUrl, { message_id: messageId })', false)
             ->assertSee('const rememberLatestNotification = () => {', false)
             ->assertSee('const claimSoundAttemptForMessage', false)
             ->assertSee('claimedAt: Date.now()', false)
@@ -255,6 +258,101 @@ class AdminDialogNotificationsTest extends TestCase
             ->assertOk()
             ->assertJsonPath('count', 1)
             ->assertJsonPath('items.0.message_id', $thirdMessage->id);
+    }
+
+    public function test_dialog_notifications_mark_read_message_hides_only_selected_notification(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $oldestReceivedAt = now()->startOfSecond()->subMinutes(2);
+        $middleReceivedAt = now()->startOfSecond()->subMinute();
+        $newestReceivedAt = now()->startOfSecond();
+        $oldestDialog = $this->createDialogWithInboundMessage(
+            'Первое уведомление',
+            messageOverrides: ['received_at' => $oldestReceivedAt],
+        );
+        $middleDialog = $this->createDialogWithInboundMessage(
+            'Выбранное уведомление',
+            messageOverrides: ['received_at' => $middleReceivedAt],
+        );
+        $newestDialog = $this->createDialogWithInboundMessage(
+            'Новое уведомление',
+            messageOverrides: ['received_at' => $newestReceivedAt],
+        );
+
+        $this->actingAs($admin)
+            ->getJson(route('admin.dialog-notifications.show'))
+            ->assertOk()
+            ->assertJsonPath('count', 3)
+            ->assertJsonPath('items.0.message_id', $newestDialog->last_inbound_message_id)
+            ->assertJsonPath('items.1.message_id', $middleDialog->last_inbound_message_id)
+            ->assertJsonPath('items.2.message_id', $oldestDialog->last_inbound_message_id);
+
+        $this->actingAs($admin)
+            ->postJson(route('admin.dialog-notifications.mark-read'), [
+                'message_id' => $middleDialog->last_inbound_message_id,
+            ])
+            ->assertOk()
+            ->assertJsonPath('count', 2)
+            ->assertJsonPath('last_read_message_id', 0)
+            ->assertJsonPath('items.0.message_id', $newestDialog->last_inbound_message_id)
+            ->assertJsonPath('items.1.message_id', $oldestDialog->last_inbound_message_id);
+
+        $newMiddleMessage = $this->addInboundMessage($middleDialog, 'Новое сообщение в выбранном диалоге', [
+            'received_at' => $newestReceivedAt->copy()->addMinute(),
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson(route('admin.dialog-notifications.show'))
+            ->assertOk()
+            ->assertJsonPath('count', 3)
+            ->assertJsonPath('items.0.message_id', $newMiddleMessage->id);
+    }
+
+    public function test_dialog_notifications_mark_read_all_after_dismissed_newest_notification_does_not_restore_it(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $oldestReceivedAt = now()->startOfSecond()->subMinutes(2);
+        $middleReceivedAt = now()->startOfSecond()->subMinute();
+        $newestReceivedAt = now()->startOfSecond();
+        $oldestDialog = $this->createDialogWithInboundMessage(
+            'Первое уведомление',
+            messageOverrides: ['received_at' => $oldestReceivedAt],
+        );
+        $middleDialog = $this->createDialogWithInboundMessage(
+            'Среднее уведомление',
+            messageOverrides: ['received_at' => $middleReceivedAt],
+        );
+        $newestDialog = $this->createDialogWithInboundMessage(
+            'Скрытое новое уведомление',
+            messageOverrides: ['received_at' => $newestReceivedAt],
+        );
+
+        $this->actingAs($admin)
+            ->postJson(route('admin.dialog-notifications.mark-read'), [
+                'message_id' => $newestDialog->last_inbound_message_id,
+            ])
+            ->assertOk()
+            ->assertJsonPath('count', 2)
+            ->assertJsonPath('last_read_message_id', 0)
+            ->assertJsonPath('items.0.message_id', $middleDialog->last_inbound_message_id)
+            ->assertJsonPath('items.1.message_id', $oldestDialog->last_inbound_message_id);
+
+        $this->actingAs($admin)
+            ->postJson(route('admin.dialog-notifications.mark-read'))
+            ->assertOk()
+            ->assertJsonPath('count', 0)
+            ->assertJsonPath('last_read_message_id', $newestDialog->last_inbound_message_id);
+
+        $this->actingAs($admin)
+            ->getJson(route('admin.dialog-notifications.show'))
+            ->assertOk()
+            ->assertJsonPath('count', 0);
     }
 
     public function test_dialog_notifications_mark_read_uses_chronology_boundary_when_message_ids_are_out_of_order(): void

@@ -141,6 +141,27 @@ class FilamentContactsResourceTest extends TestCase
             ->assertTableActionHidden('delete', $contact);
     }
 
+    public function test_contact_view_topbar_contacts_breadcrumb_links_to_contacts_list(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Messenger Name',
+            'first_name' => 'Герман',
+            'last_name' => 'Абрикосов',
+        ]);
+        $contactsUrl = ContactResource::getUrl('index');
+
+        $this->actingAs($admin)
+            ->get(ContactResource::getUrl('view', [
+                'record' => $contact,
+            ]))
+            ->assertOk()
+            ->assertSee('<a class="ac-admin-breadcrumbs__item" href="'.$contactsUrl.'">Контакты</a>', false);
+    }
+
     public function test_contact_view_page_renders_flat_general_sections(): void
     {
         $admin = User::factory()->create([

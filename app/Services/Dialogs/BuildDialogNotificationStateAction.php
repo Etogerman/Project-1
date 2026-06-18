@@ -26,6 +26,8 @@ class BuildDialogNotificationStateAction
 
     private const ITEM_LIMIT = 10;
 
+    private const DISMISSED_MESSAGE_LIMIT = 250;
+
     public function __construct(
         private readonly MessageChronology $messageChronology,
     ) {}
@@ -103,10 +105,18 @@ class BuildDialogNotificationStateAction
             $notificationBoundary = $this->notificationMessageBoundary($user, $preference['scope'], $preference, $messageId);
 
             if ($notificationBoundary !== null) {
-                $targetBoundary = $notificationBoundary;
+                $this->persistPreference($user, [
+                    ...$preference,
+                    'dismissed_message_ids' => $this->appendDismissedMessageId(
+                        $preference['dismissed_message_ids'],
+                        $notificationBoundary['id'],
+                    ),
+                ]);
             }
+
+            return $this->handle($user);
         } else {
-            $targetBoundary = $this->latestNotificationMessageBoundary($user, $preference['scope'], $preference)
+            $targetBoundary = $this->latestNotificationMessageBoundary($user, $preference['scope'], $preference, includeDismissed: true)
                 ?? $targetBoundary;
         }
 
@@ -115,6 +125,7 @@ class BuildDialogNotificationStateAction
                 ...$preference,
                 'last_read_message_id' => $targetBoundary['id'],
                 'last_read_message_sort_at' => $targetBoundary['sort_at'],
+                'dismissed_message_ids' => [],
             ]);
         }
 
@@ -176,7 +187,7 @@ class BuildDialogNotificationStateAction
     }
 
     /**
-     * @param  array{scope:string,last_read_message_id:int,last_read_message_sort_at:?string}  $preference
+     * @param  array{scope:string,last_read_message_id:int,last_read_message_sort_at:?string,dismissed_message_ids:array<int, int>}  $preference
      * @return array{id:int,sort_at:?string}|null
      */
     private function notificationMessageBoundary(User $user, string $scope, array $preference, int $messageId): ?array
@@ -197,26 +208,28 @@ class BuildDialogNotificationStateAction
     }
 
     /**
-     * @param  array{scope:string,last_read_message_id:int,last_read_message_sort_at:?string}  $preference
+     * @param  array{scope:string,last_read_message_id:int,last_read_message_sort_at:?string,dismissed_message_ids:array<int, int>}  $preference
      * @return array{id:int,sort_at:?string}|null
      */
-    private function latestNotificationMessageBoundary(User $user, string $scope, array $preference): ?array
+    private function latestNotificationMessageBoundary(User $user, string $scope, array $preference, bool $includeDismissed = false): ?array
     {
         $dialog = $this->orderedByLatestInbound(
-            $this->withLatestInboundProjection($this->notificationDialogQuery($user, $scope, $preference)),
+            $this->withLatestInboundProjection($this->notificationDialogQuery($user, $scope, $preference, includeDismissed: $includeDismissed)),
         )->first();
 
         return $this->boundaryFromDialog($dialog);
     }
 
     /**
-     * @param  array{scope:string,last_read_message_id:int,last_read_message_sort_at:?string}  $preference
+     * @param  array{scope:string,last_read_message_id:int,last_read_message_sort_at:?string,dismissed_message_ids:array<int, int>}  $preference
      */
-    private function notificationDialogQuery(User $user, string $scope, array $preference): Builder
+    private function notificationDialogQuery(User $user, string $scope, array $preference, bool $includeDismissed = false): Builder
     {
         $query = $this->scopedDialogQuery($user, $scope);
 
         DialogResource::applyInboxStatusFilter($query, DialogInboxStatusData::CODE_REQUIRES_REPLY);
+
+        $latestInboundUserMessageId = null;
 
         if ($preference['last_read_message_id'] > 0) {
             $latestInboundUserMessageId = $this->latestInboundUserMessageIdFragment();
@@ -232,14 +245,26 @@ class BuildDialogNotificationStateAction
 
                 $query->whereRaw($isAfterBoundary['sql'], $isAfterBoundary['bindings']);
 
-                return $query;
+            } else {
+                $query->whereRaw(
+                    $latestInboundUserMessageId['sql'].' > ?',
+                    [
+                        ...$latestInboundUserMessageId['bindings'],
+                        $preference['last_read_message_id'],
+                    ],
+                );
             }
+        }
+
+        if (! $includeDismissed && $preference['dismissed_message_ids'] !== []) {
+            $latestInboundUserMessageId ??= $this->latestInboundUserMessageIdFragment();
+            $placeholders = implode(', ', array_fill(0, count($preference['dismissed_message_ids']), '?'));
 
             $query->whereRaw(
-                $latestInboundUserMessageId['sql'].' > ?',
+                $latestInboundUserMessageId['sql'].' not in ('.$placeholders.')',
                 [
                     ...$latestInboundUserMessageId['bindings'],
-                    $preference['last_read_message_id'],
+                    ...$preference['dismissed_message_ids'],
                 ],
             );
         }
@@ -442,7 +467,7 @@ class BuildDialogNotificationStateAction
 
     /**
      * @param  array{id:int,sort_at:?string}  $boundary
-     * @param  array{scope:string,last_read_message_id:int,last_read_message_sort_at:?string}  $preference
+     * @param  array{scope:string,last_read_message_id:int,last_read_message_sort_at:?string,dismissed_message_ids:array<int, int>}  $preference
      */
     private function boundaryIsAfterPreference(array $boundary, array $preference): bool
     {
@@ -472,7 +497,7 @@ class BuildDialogNotificationStateAction
     }
 
     /**
-     * @return array{scope:string,last_read_message_id:int,last_read_message_sort_at:?string}
+     * @return array{scope:string,last_read_message_id:int,last_read_message_sort_at:?string,dismissed_message_ids:array<int, int>}
      */
     private function resolvePreference(User $user): array
     {
@@ -483,11 +508,12 @@ class BuildDialogNotificationStateAction
             'scope' => $this->normalizeScope($rawPreference['scope'] ?? null, $defaultScope),
             'last_read_message_id' => max(0, (int) ($rawPreference['last_read_message_id'] ?? 0)),
             'last_read_message_sort_at' => $this->normalizeSortAt($rawPreference['last_read_message_sort_at'] ?? null),
+            'dismissed_message_ids' => $this->normalizeDismissedMessageIds($rawPreference['dismissed_message_ids'] ?? []),
         ];
     }
 
     /**
-     * @param  array{scope:string,last_read_message_id:int,last_read_message_sort_at:?string}  $preference
+     * @param  array{scope:string,last_read_message_id:int,last_read_message_sort_at:?string,dismissed_message_ids:array<int, int>}  $preference
      */
     private function persistPreference(User $user, array $preference): void
     {
@@ -510,6 +536,47 @@ class BuildDialogNotificationStateAction
         ], true)
             ? $scope
             : $fallback;
+    }
+
+    /**
+     * @return array<int, int>
+     */
+    private function normalizeDismissedMessageIds(mixed $messageIds): array
+    {
+        if (! is_array($messageIds)) {
+            return [];
+        }
+
+        $normalized = [];
+
+        foreach ($messageIds as $messageId) {
+            $messageId = (int) $messageId;
+
+            if ($messageId > 0 && ! in_array($messageId, $normalized, true)) {
+                $normalized[] = $messageId;
+            }
+        }
+
+        return array_slice($normalized, -self::DISMISSED_MESSAGE_LIMIT);
+    }
+
+    /**
+     * @param  array<int, int>  $messageIds
+     * @return array<int, int>
+     */
+    private function appendDismissedMessageId(array $messageIds, int $messageId): array
+    {
+        if ($messageId < 1) {
+            return $this->normalizeDismissedMessageIds($messageIds);
+        }
+
+        $messageIds = array_values(array_filter(
+            $this->normalizeDismissedMessageIds($messageIds),
+            fn (int $existingMessageId): bool => $existingMessageId !== $messageId,
+        ));
+        $messageIds[] = $messageId;
+
+        return array_slice($messageIds, -self::DISMISSED_MESSAGE_LIMIT);
     }
 
     /**
