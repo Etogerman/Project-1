@@ -276,7 +276,12 @@ class DialogResource extends Resource
             ->selectable()
             ->toolbarActions([
                 DeleteBulkAction::make()
-                    ->label('Удалить выбранные'),
+                    ->label('Удалить выбранные')
+                    ->after(function ($livewire): void {
+                        if ($livewire instanceof ListDialogs) {
+                            $livewire->clearDialogTableSelection();
+                        }
+                    }),
             ])
             ->defaultSort('last_message_at', 'desc')
             ->recordUrl(fn (Dialog $record): string => static::getUrl('view', [
