@@ -5,6 +5,7 @@ namespace App\Filament\Resources\Dialogs\Pages;
 use App\Filament\Resources\Dialogs\DialogResource;
 use App\Filament\Resources\Pages\ListRecords;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
 
 class ListDialogs extends ListRecords
 {
@@ -16,6 +17,11 @@ class ListDialogs extends ListRecords
 
         $this->clearDialogTableSelection();
         $this->rememberNavigationUrlFromRequest();
+    }
+
+    public function rendering($view = null, array $data = []): void
+    {
+        $this->clearStaleDialogTableSelection();
     }
 
     public function updated(string $name, mixed $value): void
@@ -183,6 +189,47 @@ class ListDialogs extends ListRecords
         $this->isTrackingDeselectedTableRecords = false;
 
         $this->deselectAllTableRecords();
+    }
+
+    private function clearStaleDialogTableSelection(): void
+    {
+        if ($this->isTrackingDeselectedTableRecords || $this->selectedTableRecords === []) {
+            return;
+        }
+
+        $visibleRecordKeys = $this->currentVisibleDialogTableRecordKeyLookup();
+
+        foreach ($this->selectedTableRecords as $recordKey) {
+            if (array_key_exists((string) $recordKey, $visibleRecordKeys)) {
+                continue;
+            }
+
+            $this->clearDialogTableSelection();
+
+            return;
+        }
+    }
+
+    /**
+     * @return array<string, true>
+     */
+    private function currentVisibleDialogTableRecordKeyLookup(): array
+    {
+        $records = $this->getTableRecords();
+
+        if (method_exists($records, 'getCollection')) {
+            $records = $records->getCollection();
+        }
+
+        return collect($records)
+            ->mapWithKeys(function (Model | array $record, int | string $key): array {
+                if ($record instanceof Model) {
+                    return [(string) $record->getKey() => true];
+                }
+
+                return [(string) $key => true];
+            })
+            ->all();
     }
 
     protected function getTableQuery(): Builder
