@@ -3774,6 +3774,93 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
     background: var(--sheet-color, transparent);
 }
 
+.ac-v3-builder__sheet-dialog-danger {
+    display: grid;
+    gap: 12px;
+    border: 1px solid color-mix(in oklch, var(--danger) 28%, var(--border));
+    border-radius: 10px;
+    background: color-mix(in oklch, var(--danger) 8%, var(--surface));
+    padding: 12px;
+}
+
+.ac-v3-builder__sheet-dialog-danger > div:first-child {
+    display: grid;
+    align-items: center;
+    column-gap: 12px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    row-gap: 4px;
+}
+
+.ac-v3-builder__sheet-dialog-danger strong {
+    color: color-mix(in oklch, var(--danger) 74%, var(--text));
+    font-size: 13px;
+    grid-column: 1;
+}
+
+.ac-v3-builder__sheet-dialog-danger small {
+    color: var(--text-2);
+    font-size: 12px;
+    grid-column: 1;
+}
+
+.ac-v3-builder__sheet-dialog-danger-count {
+    display: inline-flex;
+    align-items: baseline;
+    align-self: center;
+    justify-content: center;
+    border: 1px solid color-mix(in oklch, var(--danger) 24%, var(--border));
+    border-radius: 999px;
+    background: var(--surface);
+    color: color-mix(in oklch, var(--danger) 72%, var(--text));
+    gap: 4px;
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    min-width: 82px;
+    padding: 5px 10px;
+    white-space: nowrap;
+}
+
+.ac-v3-builder__sheet-dialog-danger-count b {
+    font-size: 14px;
+}
+
+.ac-v3-builder__sheet-dialog-danger-count span {
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.ac-v3-builder__sheet-dialog-danger button {
+    min-height: 34px !important;
+    border: 1px solid var(--border-strong) !important;
+    border-radius: 8px !important;
+    background: var(--surface) !important;
+    color: var(--text) !important;
+    font-weight: 700 !important;
+    padding: 0 12px !important;
+}
+
+.ac-v3-builder__sheet-dialog-danger button.is-danger {
+    border-color: color-mix(in oklch, var(--danger) 46%, var(--border)) !important;
+    color: color-mix(in oklch, var(--danger) 78%, var(--text)) !important;
+}
+
+.ac-v3-builder__sheet-dialog-confirm {
+    display: grid;
+    gap: 10px;
+}
+
+.ac-v3-builder__sheet-dialog-confirm p {
+    margin: 0;
+    color: var(--text-2);
+    font-size: 13px;
+}
+
+.ac-v3-builder__sheet-dialog-confirm div {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
 .ac-v3-builder__publish-dialog-head {
     display: flex;
     align-items: center;
