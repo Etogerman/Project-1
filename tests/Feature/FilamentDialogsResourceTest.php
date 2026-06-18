@@ -606,6 +606,27 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('hasCheckedVisibleRecords', false);
     }
 
+    public function test_dialogs_inbox_preview_column_does_not_render_tooltips(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $this->createInboxDialog();
+
+        $html = $this->actingAs($admin)
+            ->get(DialogResource::getUrl('index'))
+            ->assertOk()
+            ->assertSee('fi-ta-cell-preview-text', false)
+            ->assertSee('Пользователь написал первым')
+            ->getContent();
+
+        $this->assertDoesNotMatchRegularExpression(
+            '/<td[^>]*fi-ta-cell-preview-text(?:(?!<\\/td>).)*x-tooltip/s',
+            $html,
+        );
+    }
+
     public function test_dialogs_inbox_table_uses_field_dictionary_labels(): void
     {
         $admin = User::factory()->create([
