@@ -603,7 +603,26 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('installViewSwitchLoadingListener', false)
             ->assertSee('data-ac-dialogs-view-link', false)
             ->assertSee('wire:navigate.hover', false)
-            ->assertSee('hasCheckedVisibleRecords', false);
+            ->assertSee('syncSelectionIndicatorVisibility', false);
+
+        $themeOverrides = file_get_contents(resource_path('views/filament/components/admin-theme-overrides.blade.php'));
+
+        $this->assertIsString($themeOverrides);
+        $this->assertStringContainsString('syncSelectionIndicatorVisibility', $themeOverrides);
+        $this->assertStringContainsString('shouldShowSelectionIndicator', $themeOverrides);
+        $this->assertStringContainsString('node.hidden = !shouldShowSelectionIndicator', $themeOverrides);
+        $this->assertStringContainsString('shouldIgnoreRowNavigationTarget', $themeOverrides);
+        $this->assertStringContainsString('bindSelectionCellClickGuards', $themeOverrides);
+        $this->assertStringContainsString('ensureSelectionCheckboxId', $themeOverrides);
+        $this->assertStringContainsString('installSelectionCellClickGuard', $themeOverrides);
+        $this->assertStringContainsString('resolveSelectionCellClickTarget', $themeOverrides);
+        $this->assertStringContainsString('resolvePageSelectionClickTarget', $themeOverrides);
+        $this->assertStringContainsString('togglePageSelectionCheckbox', $themeOverrides);
+        $this->assertStringContainsString('syncPageSelectionCheckbox', $themeOverrides);
+        $this->assertStringContainsString('selectionCellClickSuppressedUntil', $themeOverrides);
+        $this->assertStringContainsString('ac-dialogs-selection-hitbox', $themeOverrides);
+        $this->assertStringContainsString('acDialogsSelectionHitboxReady', $themeOverrides);
+        $this->assertStringContainsString('td.fi-ta-selection-cell', $themeOverrides);
     }
 
     public function test_dialogs_inbox_preview_column_does_not_render_tooltips(): void

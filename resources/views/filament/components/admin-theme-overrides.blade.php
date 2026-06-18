@@ -9350,6 +9350,7 @@
 
     .fi-resource-dialogs .fi-ta-selection-cell,
     .fi-resource-dialogs .fi-ta-table th:first-child:has(.fi-checkbox-input) {
+        position: relative;
         width: 3rem;
         min-width: 3rem;
         max-width: 3rem;
@@ -9363,10 +9364,19 @@
     }
 
     .fi-resource-dialogs .fi-ta-table .fi-checkbox-input {
+        position: relative;
+        z-index: 2;
         width: 1rem;
         height: 1rem;
         border-radius: 4px;
         accent-color: var(--ac-primary);
+    }
+
+    .fi-resource-dialogs .fi-ta-selection-cell .ac-dialogs-selection-hitbox {
+        position: absolute;
+        inset: 0;
+        z-index: 1;
+        cursor: pointer;
     }
 
     .fi-resource-dialogs .fi-ta-header-cell-contact-label,
@@ -10475,6 +10485,7 @@
         const userId = @json($acDialogsTableUserId);
         const storageKey = `ab.dialogs.table.columns.v1.user.${userId || 'guest'}`;
         const tableSelector = '.fi-resource-dialogs .fi-ta-table';
+        const selectionCellSelector = `${tableSelector} tbody td.fi-ta-selection-cell, ${tableSelector} tbody td.fi-ta-group-selection-cell`;
         const toolbarSelector = '.fi-resource-dialogs .fi-ta-header-toolbar';
         const scrollSelector = '.fi-resource-dialogs .fi-ta-content-ctn';
         const configByFilament = new Map(columnConfig.map((column) => [column.filament, column]));
@@ -10487,6 +10498,8 @@
         ];
         let sortFallbackListenerReady = false;
         let rowNavigationFallbackReady = false;
+        let selectionCellClickGuardReady = false;
+        let selectionCellClickSuppressedUntil = 0;
         let dialogSideFieldCopyListenerReady = false;
         let viewSwitchLoadingListenerReady = false;
         let viewSwitchLoadingResetTimer = null;
@@ -10495,6 +10508,17 @@
             const path = window.location.pathname.replace(/\/+$/, '');
 
             return !!document.querySelector('.fi-resource-dialogs') && path === '/admin/dialogs';
+        };
+
+        const findSelectionCellTarget = (target) => target?.closest?.(selectionCellSelector) || null;
+
+        const shouldIgnoreRowNavigationTarget = (target) => {
+            if (!target?.closest) {
+                return false;
+            }
+
+            return Boolean(findSelectionCellTarget(target))
+                || Boolean(target.closest('button, input, select, textarea, summary, label, [role="button"], [role="checkbox"], [data-ac-dialogs-resize], .ac-dialogs-columns'));
         };
 
         const resetViewSwitchLoading = () => {
@@ -10939,6 +10963,48 @@
             });
         };
 
+        const syncSelectionIndicatorVisibility = (table, selectionVisible = null) => {
+            const tableContainer = table?.closest('.fi-ta-ctn');
+
+            if (!tableContainer) {
+                return;
+            }
+
+            const isSelectionVisible = selectionVisible ?? !tableContainer.classList.contains('ac-dialogs-selection-hidden');
+            const recordCheckboxes = Array.from(table.querySelectorAll('.fi-ta-record-checkbox'));
+            const shouldShowSelectionIndicator = isSelectionVisible
+                && recordCheckboxes.length > 0
+                && recordCheckboxes.some((checkbox) => checkbox.checked);
+
+            tableContainer.querySelectorAll('.fi-ta-selection-indicator').forEach((node) => {
+                node.hidden = !shouldShowSelectionIndicator;
+                node.style.display = shouldShowSelectionIndicator ? '' : 'none';
+            });
+
+            syncPageSelectionCheckbox(table);
+        };
+
+        const syncPageSelectionCheckbox = (table) => {
+            const pageCheckbox = table?.querySelector('thead .fi-ta-page-checkbox');
+
+            if (!pageCheckbox) {
+                return;
+            }
+
+            const recordCheckboxes = Array.from(table.querySelectorAll('tbody .fi-ta-record-checkbox'));
+            const checkedCount = recordCheckboxes.filter((checkbox) => checkbox.checked).length;
+
+            pageCheckbox.checked = recordCheckboxes.length > 0 && checkedCount === recordCheckboxes.length;
+            pageCheckbox.indeterminate = checkedCount > 0 && checkedCount < recordCheckboxes.length;
+        };
+
+        const setSelectionCheckboxChecked = (checkbox, checked) => {
+            checkbox.checked = checked;
+            checkbox.closest('tr')?.classList.toggle('fi-selected', checked);
+            checkbox.dispatchEvent(new Event('input', { bubbles: true }));
+            checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+        };
+
         const applyColumnLayout = (table, columns, state) => {
             reorderDom(table, columns, state);
             buildColgroup(table, columns, state);
@@ -10966,17 +11032,9 @@
             const selectionColumn = columns.find((column) => column.isSelection);
             const selectionVisible = selectionColumn ? Boolean(state.visible[selectionColumn.id]) : true;
             const tableContainer = table.closest('.fi-ta-ctn');
-            const recordCheckboxes = Array.from(table.querySelectorAll('.fi-ta-record-checkbox'));
-            const hasCheckedVisibleRecords = recordCheckboxes.some((checkbox) => checkbox.checked);
-            const shouldShowSelectionIndicator = selectionVisible
-                && recordCheckboxes.length > 0
-                && hasCheckedVisibleRecords;
 
             tableContainer?.classList.toggle('ac-dialogs-selection-hidden', !selectionVisible);
-            tableContainer?.querySelectorAll('.fi-ta-selection-indicator').forEach((node) => {
-                node.hidden = !shouldShowSelectionIndicator;
-                node.style.display = shouldShowSelectionIndicator ? '' : 'none';
-            });
+            syncSelectionIndicatorVisibility(table, selectionVisible);
             setLastVisibleBoundary(table, columns, state);
             updateScrollState(scroll);
         };
@@ -11135,7 +11193,7 @@
                     return null;
                 }
 
-                if (target.closest('button, input, select, textarea, summary, [data-ac-dialogs-resize], .ac-dialogs-columns')) {
+                if (shouldIgnoreRowNavigationTarget(target)) {
                     return null;
                 }
 
@@ -11165,6 +11223,208 @@
 
             document.addEventListener('pointerup', openRowLink, true);
             document.addEventListener('click', openRowLink, true);
+        };
+
+        const ensureSelectionCheckboxId = (checkbox, index) => {
+            if (checkbox.id) {
+                return checkbox.id;
+            }
+
+            const row = checkbox.closest('tr');
+            const rawKey = row?.getAttribute('wire:key')
+                || row?.dataset.acDialogsRowUrl
+                || checkbox.value
+                || index;
+            const normalizedKey = String(rawKey).replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || index;
+            const baseId = `ac-dialogs-selection-${normalizedKey}`;
+            let nextId = baseId;
+            let suffix = 1;
+
+            while (document.getElementById(nextId)) {
+                nextId = `${baseId}-${suffix}`;
+                suffix += 1;
+            }
+
+            checkbox.id = nextId;
+
+            return nextId;
+        };
+
+        const toggleSelectionCheckbox = (checkbox) => {
+            setSelectionCheckboxChecked(checkbox, !checkbox.checked);
+            syncSelectionIndicatorVisibility(checkbox.closest(tableSelector));
+        };
+
+        const togglePageSelectionCheckbox = (table) => {
+            const recordCheckboxes = Array.from(table.querySelectorAll('tbody .fi-ta-record-checkbox:not(:disabled)'));
+            const shouldSelect = recordCheckboxes.some((checkbox) => !checkbox.checked);
+
+            recordCheckboxes.forEach((checkbox) => {
+                setSelectionCheckboxChecked(checkbox, shouldSelect);
+            });
+
+            syncSelectionIndicatorVisibility(table);
+        };
+
+        const resolvePageSelectionClickTarget = (event) => {
+            if (!isDialogsIndex() || !event.target?.closest) {
+                return null;
+            }
+
+            const pageCheckbox = event.target.closest(`${tableSelector} thead .fi-ta-page-checkbox`);
+            const cell = pageCheckbox?.closest('th.fi-ta-selection-cell')
+                || event.target.closest(`${tableSelector} thead th.fi-ta-selection-cell`);
+            const table = cell?.closest(tableSelector);
+
+            if (!cell || !table) {
+                return null;
+            }
+
+            return { cell, table };
+        };
+
+        const resolveSelectionCellClickTarget = (event) => {
+            if (!isDialogsIndex()) {
+                return null;
+            }
+
+            const cell = findSelectionCellTarget(event.target);
+
+            if (!cell) {
+                return null;
+            }
+
+            const checkbox = cell.querySelector('.fi-ta-record-checkbox, input[type="checkbox"]');
+
+            if (!checkbox || checkbox.disabled) {
+                return null;
+            }
+
+            return { cell, checkbox };
+        };
+
+        const stopSelectionCellEvent = (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation?.();
+        };
+
+        const installSelectionCellClickGuard = () => {
+            if (selectionCellClickGuardReady) {
+                return;
+            }
+
+            selectionCellClickGuardReady = true;
+
+            document.addEventListener('pointerup', (event) => {
+                const pageTarget = resolvePageSelectionClickTarget(event);
+
+                if (pageTarget) {
+                    const isPrimaryPointer = event.button === undefined
+                        || event.button === 0
+                        || event.button === -1;
+
+                    if (!isPrimaryPointer || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+                        return;
+                    }
+
+                    stopSelectionCellEvent(event);
+                    togglePageSelectionCheckbox(pageTarget.table);
+                    selectionCellClickSuppressedUntil = Date.now() + 750;
+                    return;
+                }
+
+                const target = resolveSelectionCellClickTarget(event);
+
+                if (!target) {
+                    return;
+                }
+
+                const isPrimaryPointer = event.button === undefined
+                    || event.button === 0
+                    || event.button === -1;
+
+                if (!isPrimaryPointer || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+                    return;
+                }
+
+                stopSelectionCellEvent(event);
+                toggleSelectionCheckbox(target.checkbox);
+                selectionCellClickSuppressedUntil = Date.now() + 750;
+            }, true);
+
+            document.addEventListener('click', (event) => {
+                const pageTarget = resolvePageSelectionClickTarget(event);
+
+                if (pageTarget) {
+                    const isPrimaryPointer = event.button === undefined || event.button === 0;
+
+                    if (!isPrimaryPointer || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+                        return;
+                    }
+
+                    stopSelectionCellEvent(event);
+
+                    if (Date.now() <= selectionCellClickSuppressedUntil) {
+                        return;
+                    }
+
+                    togglePageSelectionCheckbox(pageTarget.table);
+                    return;
+                }
+
+                const target = resolveSelectionCellClickTarget(event);
+
+                if (!target) {
+                    return;
+                }
+
+                const isPrimaryPointer = event.button === undefined || event.button === 0;
+
+                if (!isPrimaryPointer || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+                    return;
+                }
+
+                stopSelectionCellEvent(event);
+
+                if (Date.now() <= selectionCellClickSuppressedUntil) {
+                    return;
+                }
+
+                toggleSelectionCheckbox(target.checkbox);
+            }, true);
+        };
+
+        const bindSelectionCellClickGuards = (table) => {
+            table.querySelectorAll('tbody td.fi-ta-selection-cell, tbody td.fi-ta-group-selection-cell').forEach((cell, index) => {
+                const checkbox = cell.querySelector('.fi-ta-record-checkbox, input[type="checkbox"]');
+
+                if (!checkbox) {
+                    cell.querySelector('.ac-dialogs-selection-hitbox')?.remove();
+                    cell.removeAttribute('data-ac-dialogs-selection-hitbox-ready');
+                    return;
+                }
+
+                const checkboxId = ensureSelectionCheckboxId(checkbox, index);
+                let hitbox = cell.querySelector('.ac-dialogs-selection-hitbox');
+
+                if (!hitbox) {
+                    hitbox = document.createElement('label');
+                    hitbox.className = 'ac-dialogs-selection-hitbox';
+                    hitbox.setAttribute('aria-hidden', 'true');
+                    hitbox.setAttribute('tabindex', '-1');
+                    cell.append(hitbox);
+                }
+
+                hitbox.htmlFor = checkboxId;
+                cell.dataset.acDialogsSelectionHitboxReady = '1';
+                cell.style.cursor = 'pointer';
+
+                if (checkbox.dataset.acDialogsSelectionChangeBound !== '1') {
+                    checkbox.dataset.acDialogsSelectionChangeBound = '1';
+                    checkbox.addEventListener('change', () => syncSelectionIndicatorVisibility(table));
+                }
+            });
         };
 
         const bindRowNavigation = (table) => {
@@ -11566,6 +11826,7 @@
             }
 
             bindRowNavigation(table);
+            bindSelectionCellClickGuards(table);
 
             const scroll = table.closest(scrollSelector);
             scroll?.classList.add('ac-dialogs-table-scroll');
@@ -11606,6 +11867,7 @@
         };
 
         installSortFallbackListener();
+        installSelectionCellClickGuard();
         installRowNavigationFallbackListener();
         installDialogSideFieldCopyListener();
         installViewSwitchLoadingListener();
