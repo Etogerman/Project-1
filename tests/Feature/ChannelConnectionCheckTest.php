@@ -6,6 +6,7 @@ use App\Models\Channel;
 use App\Models\ChannelConnectionCheckRun;
 use App\Services\Bots\ChannelWebhookUrlGenerator;
 use App\Services\Bots\CheckChannelConnectionAction;
+use App\Services\Bots\RecordChannelConnectionCheckRunAction;
 use App\Services\Bots\ResolveChannelConnectionCheckerHealthAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
@@ -418,6 +419,50 @@ class ChannelConnectionCheckTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_bulk_console_command_marks_run_failed_when_unexpected_runtime_error_happens(): void
+    {
+        Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => [],
+            'bot_token_present' => false,
+            'is_active' => true,
+        ]);
+
+        $this->app->bind(
+            RecordChannelConnectionCheckRunAction::class,
+            fn (): RecordChannelConnectionCheckRunAction => new class extends RecordChannelConnectionCheckRunAction
+            {
+                public function finish(
+                    ChannelConnectionCheckRun $run,
+                    int $processedCount,
+                    int $successCount,
+                    int $failureCount,
+                    ?string $lastErrorCode = null,
+                    ?string $lastErrorMessage = null,
+                ): ChannelConnectionCheckRun {
+                    throw new \RuntimeException('Unexpected finish failure');
+                }
+            },
+        );
+
+        $exitCode = Artisan::call('channels:check-connections');
+
+        $this->assertSame(1, $exitCode);
+
+        $run = ChannelConnectionCheckRun::query()->latest('id')->first();
+
+        $this->assertInstanceOf(ChannelConnectionCheckRun::class, $run);
+        $this->assertSame(ChannelConnectionCheckRun::STATUS_FAILED, $run->status);
+        $this->assertSame(1, $run->processed_count);
+        $this->assertSame(1, $run->success_count);
+        $this->assertSame(1, $run->failure_count);
+        $this->assertNotNull($run->started_at);
+        $this->assertNotNull($run->finished_at);
+        $this->assertSame('RuntimeException', $run->last_error_code);
+        $this->assertSame('Unexpected finish failure', $run->last_error_message);
+    }
+
     public function test_connection_checker_health_reports_missing_stale_and_fresh_scheduler_runs(): void
     {
         $resolver = app(ResolveChannelConnectionCheckerHealthAction::class);
@@ -481,6 +526,39 @@ class ChannelConnectionCheckTest extends TestCase
         $this->assertFalse($fresh['show_banner']);
         $this->assertNull($fresh['stale_channel_reason']);
         $this->assertSame(3, $fresh['processed_count']);
+    }
+
+    public function test_connection_checker_health_keeps_fresh_successful_run_green_while_next_run_is_running(): void
+    {
+        $resolver = app(ResolveChannelConnectionCheckerHealthAction::class);
+
+        ChannelConnectionCheckRun::query()->create([
+            'started_at' => now()->subMinutes(2),
+            'finished_at' => now()->subMinute(),
+            'status' => ChannelConnectionCheckRun::STATUS_SUCCESS,
+            'processed_count' => 3,
+            'success_count' => 3,
+            'failure_count' => 0,
+            'environment' => app()->environment(),
+        ]);
+
+        ChannelConnectionCheckRun::query()->create([
+            'started_at' => now(),
+            'finished_at' => null,
+            'status' => ChannelConnectionCheckRun::STATUS_STARTED,
+            'processed_count' => 0,
+            'success_count' => 0,
+            'failure_count' => 0,
+            'environment' => app()->environment(),
+        ]);
+
+        $health = $resolver->handle();
+
+        $this->assertSame('ok', $health['status']);
+        $this->assertSame('success', $health['tone']);
+        $this->assertFalse($health['show_banner']);
+        $this->assertNull($health['stale_channel_reason']);
+        $this->assertSame(3, $health['processed_count']);
     }
 
     public function test_connection_check_migration_keeps_existing_active_supported_bots_sendable_until_first_check(): void

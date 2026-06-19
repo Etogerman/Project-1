@@ -62,46 +62,54 @@ Artisan::command('channels:check-connections {--channel= : ID одного ка�
         $lastErrorCode = null;
         $lastErrorMessage = null;
 
-        $channels = Channel::query()
-            ->orderByRaw('CASE WHEN connection_checked_at IS NULL THEN 0 ELSE 1 END')
-            ->orderBy('connection_checked_at')
-            ->orderBy('id')
-            ->limit($limit)
-            ->get();
+        try {
+            $channels = Channel::query()
+                ->orderByRaw('CASE WHEN connection_checked_at IS NULL THEN 0 ELSE 1 END')
+                ->orderBy('connection_checked_at')
+                ->orderBy('id')
+                ->limit($limit)
+                ->get();
 
-        foreach ($channels as $channel) {
-            $processedCount++;
+            foreach ($channels as $channel) {
+                $processedCount++;
 
-            try {
-                $checker->handle($channel);
-                $successCount++;
-            } catch (Throwable $throwable) {
-                $failureCount++;
-                $lastErrorCode = class_basename($throwable);
-                $lastErrorMessage = $throwable->getMessage();
-                report($throwable);
-                $this->warn("Канал #{$channel->id} не удалось проверить из-за ошибки checker-а.");
+                try {
+                    $checker->handle($channel);
+                    $successCount++;
+                } catch (Throwable $throwable) {
+                    $failureCount++;
+                    $lastErrorCode = class_basename($throwable);
+                    $lastErrorMessage = $throwable->getMessage();
+                    report($throwable);
+                    $this->warn("Канал #{$channel->id} не удалось проверить из-за ошибки checker-а.");
+                }
             }
-        }
 
-        $runRecorder->finish(
-            $run,
-            $processedCount,
-            $successCount,
-            $failureCount,
-            $lastErrorCode,
-            $lastErrorMessage,
-        );
+            $runRecorder->finish(
+                $run,
+                $processedCount,
+                $successCount,
+                $failureCount,
+                $lastErrorCode,
+                $lastErrorMessage,
+            );
 
-        $this->info("Проверено каналов: {$processedCount}.");
+            $this->info("Проверено каналов: {$processedCount}.");
 
-        if ($failureCount > 0) {
-            $this->warn("Ошибок checker-а: {$failureCount}.");
+            if ($failureCount > 0) {
+                $this->warn("Ошибок checker-а: {$failureCount}.");
+
+                return 1;
+            }
+
+            return 0;
+        } catch (Throwable $throwable) {
+            $runRecorder->fail($run, $throwable, $processedCount, $successCount, $failureCount + 1);
+            report($throwable);
+            $this->error("Не удалось завершить проверку каналов: {$throwable->getMessage()}");
 
             return 1;
         }
-
-        return 0;
     } finally {
         $lock->release();
     }
