@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Data\TelegramAccount\TelegramAccountGatewayDiagnosticsData;
 use App\Jobs\ProcessAutoReplyJob;
 use App\Jobs\ProcessDataCollectionQuestionJob;
 use App\Jobs\ProcessDataCollectionResponseJob;
@@ -15,7 +16,9 @@ use App\Models\Message;
 use App\Models\TelegramAccountOutgoingMessage;
 use App\Models\User;
 use App\Services\Bots\SendManualDialogReplyAction;
+use App\Services\TelegramAccount\ResolveTelegramAccountGatewayDiagnosticsAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
@@ -543,6 +546,45 @@ class TelegramAccountGatewayControllerTest extends TestCase
         ], $runtimeState->runtime_payload);
         $this->assertDatabaseCount('messages', 0);
         $this->assertDatabaseCount('dialogs', 0);
+    }
+
+    public function test_gateway_runtime_state_endpoint_keeps_utc_heartbeat_fresh_in_app_timezone(): void
+    {
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $now = Carbon::parse('2026-06-19 15:05:00', config('app.timezone'));
+        $this->travelTo($now);
+
+        $channel = $this->createTelegramAccountChannel([
+            'name' => 'Telegram Account UTC Heartbeat',
+        ]);
+        $heartbeatAt = $now->copy()->subSeconds(30)->utc()->toIso8601String();
+
+        $payload = $this->runtimeStatePayload(
+            channel: $channel,
+            runtimePayload: [
+                'gateway_session' => 'channel-'.$channel->id,
+                'gateway_version' => '0.1.0',
+            ],
+            includeHeartbeat: false,
+        );
+        $payload['last_gateway_heartbeat_at'] = $heartbeatAt;
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(
+            route('internal.telegram-account.runtime-state.handle', ['channel' => $channel]),
+            $payload,
+        )->assertOk();
+
+        $runtimeState = ChannelRuntimeState::query()->firstOrFail();
+
+        $this->assertSame('2026-06-19T15:04:30+03:00', $runtimeState->last_gateway_heartbeat_at?->toIso8601String());
+        $this->assertTrue($channel->fresh('runtimeState')->hasFreshTelegramAccountGatewayHeartbeat());
+
+        $diagnostics = app(ResolveTelegramAccountGatewayDiagnosticsAction::class)->handle($channel->fresh('runtimeState'));
+
+        $this->assertSame(TelegramAccountGatewayDiagnosticsData::CODE_OUTGOING_REPLIES_UNCONFIRMED, $diagnostics->code);
     }
 
     public function test_gateway_runtime_state_endpoint_preserves_existing_sync_timestamps_on_partial_update(): void

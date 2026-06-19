@@ -67,12 +67,12 @@
             </div>
         </section>
 
-        <details class="ac-channel-view-panel ac-channel-view-panel--collapsible">
-            <summary class="ac-channel-view-panel__header ac-channel-view-panel__summary">
+        <div class="ac-channel-view-panel ac-channel-view-panel--collapsible" x-data="{ open: false }" x-bind:data-open="open ? 'true' : 'false'">
+            <button type="button" class="ac-channel-view-panel__header ac-channel-view-panel__summary" x-bind:aria-expanded="open ? 'true' : 'false'" x-on:click="open = ! open">
                 <span>Лента сообщений</span>
-                <span class="ac-channel-view-panel__summary-state" aria-hidden="true"></span>
-            </summary>
-            <div class="ac-channel-view-panel__body">
+                <span class="ac-channel-view-panel__summary-state" aria-hidden="true" x-text="open ? 'Свернуть' : 'Развернуть'">Развернуть</span>
+            </button>
+            <div class="ac-channel-view-panel__body" x-show="open" x-cloak>
                 <div class="ac-bitrix-table-shell">
                     <table class="ac-bitrix-table ac-channel-view-feed-table">
                         <tbody>
@@ -84,14 +84,14 @@
                     </table>
                 </div>
             </div>
-        </details>
+        </div>
 
-        <details class="ac-channel-view-panel ac-channel-view-panel--collapsible">
-            <summary class="ac-channel-view-panel__header ac-channel-view-panel__summary">
+        <div class="ac-channel-view-panel ac-channel-view-panel--collapsible" x-data="{ open: false }" x-bind:data-open="open ? 'true' : 'false'">
+            <button type="button" class="ac-channel-view-panel__header ac-channel-view-panel__summary" x-bind:aria-expanded="open ? 'true' : 'false'" x-on:click="open = ! open">
                 <span>Техжурнал</span>
-                <span class="ac-channel-view-panel__summary-state" aria-hidden="true"></span>
-            </summary>
-            <div class="ac-channel-view-panel__body">
+                <span class="ac-channel-view-panel__summary-state" aria-hidden="true" x-text="open ? 'Свернуть' : 'Развернуть'">Развернуть</span>
+            </button>
+            <div class="ac-channel-view-panel__body" x-show="open" x-cloak>
                 <div class="ac-bitrix-table-shell">
                     <table class="ac-bitrix-table ac-channel-view-feed-table">
                         <tbody>
@@ -103,6 +103,6 @@
                     </table>
                 </div>
             </div>
-        </details>
+        </div>
     </div>
 @endif

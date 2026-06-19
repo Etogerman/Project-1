@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\TelegramAccount\ResolveTelegramAccountGatewayDiagnosticsAction;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -585,23 +586,13 @@ class Channel extends Model
 
     public function hasReadyTelegramAccountGatewayOutgoingReplies(): bool
     {
-        if (! $this->exists || ! $this->is_active || ! $this->isAccountConnection() || $this->platform !== self::PLATFORM_TELEGRAM) {
+        if (! $this->exists) {
             return false;
         }
 
-        $this->loadMissing('runtimeState');
-
-        $runtimeState = $this->runtimeState;
-
-        if (! $runtimeState instanceof ChannelRuntimeState) {
-            return false;
-        }
-
-        return $runtimeState->auth_status === ChannelRuntimeState::AUTH_STATUS_AUTHORIZED
-            && $runtimeState->authorization_state === ChannelRuntimeState::AUTHORIZATION_STATE_READY
-            && $runtimeState->sync_status === ChannelRuntimeState::SYNC_STATUS_LIVE
-            && $this->hasFreshTelegramAccountGatewayHeartbeat()
-            && data_get($runtimeState->runtime_payload, 'gateway_capabilities.outgoing_replies') === true;
+        return app(ResolveTelegramAccountGatewayDiagnosticsAction::class)
+            ->handle($this)
+            ->isOutgoingReplyReady;
     }
 
     public function hasFreshConnectionCheck(): bool
