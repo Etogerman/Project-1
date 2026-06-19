@@ -338,6 +338,57 @@ class Channel extends Model
         return '@'.ltrim((string) $this->bot_username, '@');
     }
 
+    public function getTelegramAccountIdentityLabel(): ?string
+    {
+        if (! $this->isAccountConnection()) {
+            return null;
+        }
+
+        $username = $this->telegramAccountIdentityValue('username');
+
+        if ($username !== null) {
+            return '@'.ltrim($username, '@');
+        }
+
+        $id = $this->telegramAccountIdentityValue('id');
+
+        if ($id !== null) {
+            return 'ID '.$id;
+        }
+
+        return $this->telegramAccountIdentityValue('display_name');
+    }
+
+    public function getTelegramAccountDisplayNameLabel(): ?string
+    {
+        if (! $this->isAccountConnection()) {
+            return null;
+        }
+
+        return $this->telegramAccountIdentityValue('display_name')
+            ?? $this->getTelegramAccountIdentityLabel();
+    }
+
+    public function getTelegramAccountExternalIdLabel(): ?string
+    {
+        if (! $this->isAccountConnection()) {
+            return null;
+        }
+
+        return $this->telegramAccountIdentityValue('id');
+    }
+
+    public function getTelegramAccountProfileUrl(): ?string
+    {
+        if (! $this->isAccountConnection() || $this->platform !== self::PLATFORM_TELEGRAM) {
+            return null;
+        }
+
+        $username = $this->telegramAccountIdentityValue('username');
+
+        return $username === null ? null : 'https://t.me/'.ltrim($username, '@');
+    }
+
     public function getBotProfileUrl(): ?string
     {
         if (filled($this->bot_profile_url)) {
@@ -670,6 +721,23 @@ class Channel extends Model
         return $runtimeState instanceof ChannelRuntimeState
             && $runtimeState->last_gateway_heartbeat_at !== null
             && $runtimeState->last_gateway_heartbeat_at->greaterThanOrEqualTo(now()->subMinutes(self::GATEWAY_HEARTBEAT_FRESH_FOR_MINUTES));
+    }
+
+    private function telegramAccountIdentityValue(string $key): ?string
+    {
+        $value = data_get($this->runtimeState?->runtime_payload, "account.{$key}");
+
+        if (is_int($value) || is_float($value)) {
+            $value = (string) $value;
+        }
+
+        if (! is_string($value)) {
+            return null;
+        }
+
+        $value = trim($value);
+
+        return $value === '' ? null : $value;
     }
 
     protected function getAccountHealthStatusLabel(): string
