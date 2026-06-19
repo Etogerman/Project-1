@@ -3288,6 +3288,38 @@
         }
     }
 
+    .fi-resource-channels .fi-header {
+        align-items: center;
+        flex-wrap: nowrap;
+    }
+
+    .fi-resource-channels .fi-header-heading {
+        white-space: nowrap;
+    }
+
+    .fi-resource-channels .fi-header-actions-ctn {
+        flex: 0 0 auto;
+        flex-wrap: nowrap;
+        margin-left: auto;
+        margin-top: 0;
+    }
+
+    @media (max-width: 720px) {
+        .fi-resource-channels .fi-header {
+            align-items: flex-start;
+            flex-wrap: wrap;
+        }
+
+        .fi-resource-channels .fi-header-heading {
+            white-space: normal;
+        }
+
+        .fi-resource-channels .fi-header-actions-ctn {
+            width: 100%;
+            margin-left: 0;
+        }
+    }
+
     .ac-channel-form-modal .fi-modal-content {
         gap: 0.9rem;
     }
