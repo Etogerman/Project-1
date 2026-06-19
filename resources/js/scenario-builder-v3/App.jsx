@@ -1132,16 +1132,18 @@ export default function App({
         setNotice('Лист добавлен. Нажмите «Сохранить», чтобы записать изменение.');
     }
 
-    function openRenameSheet(sheet) {
+    function openSheetSettings(sheet) {
         if (! sheet) {
             return;
         }
 
         setSheetDialog({
-            type: 'rename',
+            type: 'settings',
             sheetId: sheet.id,
             name: sheet.name || '',
             color: sheet.color || 'none',
+            blockCount: sheetBlockCount(allBlocks, sheet.id),
+            isMain: sheet.id === MAIN_SHEET.id,
         });
     }
 
@@ -1178,10 +1180,12 @@ export default function App({
         }
 
         setSheetDialog({
-            type: 'delete',
+            type: 'settings',
             sheetId: sheet.id,
             name: sheet.name || sheet.id,
+            color: sheet.color || 'none',
             blockCount: sheetBlockCount(allBlocks, sheet.id),
+            confirmDelete: true,
         });
     }
 
@@ -3391,8 +3395,8 @@ export default function App({
                         className={sheet.id === activeSheet.id ? 'is-active' : ''}
                         data-sheet-color={sheet.color || 'none'}
                         onClick={(event) => {
-                            if (event.target.closest('[data-sheet-rename]')) {
-                                openRenameSheet(sheet);
+                            if (event.target.closest('[data-sheet-settings]')) {
+                                openSheetSettings(sheet);
 
                                 return;
                             }
@@ -3403,7 +3407,7 @@ export default function App({
                         <span>{sheet.name}</span>
                         <b>{sheetBlockCount(allBlocks, sheet.id)}</b>
                         {sheet.id === activeSheet.id ? (
-                            <span className="ac-v3-builder__sheet-tab-gear" title="Переименовать лист" data-sheet-rename>
+                            <span className="ac-v3-builder__sheet-tab-gear" title="Параметры листа" data-sheet-settings>
                                 <GearIcon />
                             </span>
                         ) : null}
@@ -3520,7 +3524,7 @@ export default function App({
                     }}
                     onRename={(sheet) => {
                         setIsSheetListOpen(false);
-                        openRenameSheet(sheet);
+                        openSheetSettings(sheet);
                     }}
                     onDelete={(sheet) => {
                         setIsSheetListOpen(false);
@@ -3750,16 +3754,18 @@ function Notice({ kind, children, onClose }) {
 function SheetManageDialog({ dialog, onRename, onDelete, onClose }) {
     const [name, setName] = useState(dialog.name ?? '');
     const [color, setColor] = useState(dialog.color ?? 'none');
-    const isDelete = dialog.type === 'delete';
+    const [isConfirmingDelete, setIsConfirmingDelete] = useState(Boolean(dialog.confirmDelete));
+    const canDelete = dialog.sheetId !== MAIN_SHEET.id && dialog.isMain !== true;
+    const blockCount = Number.isFinite(Number(dialog.blockCount)) ? Number(dialog.blockCount) : 0;
+
+    useEffect(() => {
+        setName(dialog.name ?? '');
+        setColor(dialog.color ?? 'none');
+        setIsConfirmingDelete(Boolean(dialog.confirmDelete));
+    }, [dialog.sheetId, dialog.name, dialog.color, dialog.confirmDelete]);
 
     function handleSubmit(event) {
         event.preventDefault();
-
-        if (isDelete) {
-            onDelete(dialog.sheetId);
-
-            return;
-        }
 
         onRename(dialog.sheetId, name, color);
     }
@@ -3768,53 +3774,88 @@ function SheetManageDialog({ dialog, onRename, onDelete, onClose }) {
         <div className="ac-v3-builder__dialog-backdrop" role="presentation">
             <form className="ac-v3-builder__sheet-dialog" role="dialog" aria-modal="true" aria-labelledby="sheet-dialog-title" onSubmit={handleSubmit}>
                 <div className="ac-v3-builder__publish-dialog-head">
-                    <h2 id="sheet-dialog-title">{isDelete ? 'Удалить лист' : 'Переименовать лист'}</h2>
+                    <h2 id="sheet-dialog-title">Параметры листа</h2>
                     <button type="button" title="Закрыть" onClick={onClose}>×</button>
                 </div>
 
                 <div className="ac-v3-builder__publish-dialog-body">
-                    {isDelete ? (
-                        <p>
-                            Лист <strong>{dialog.name}</strong> будет удалён вместе с блоками и связями на нём.
-                            Блоков на листе: <strong>{dialog.blockCount ?? 0}</strong>.
-                        </p>
-                    ) : (
-                        <div className="ac-v3-builder__sheet-dialog-field">
-                            <label>
-                                <span>Название листа</span>
-                                <input
-                                    type="text"
-                                    value={name}
-                                    maxLength={40}
-                                    autoFocus
-                                    onChange={(event) => setName(event.target.value)}
-                                />
-                            </label>
-                            <span>Цвет листа</span>
-                            <div className="ac-v3-builder__sheet-color-grid" role="radiogroup" aria-label="Цвет листа">
-                                {SHEET_COLORS.map(([value, label]) => (
-                                    <button
-                                        key={value}
-                                        type="button"
-                                        className={color === value ? 'is-active' : ''}
-                                        data-sheet-color={value}
-                                        aria-pressed={color === value ? 'true' : 'false'}
-                                        onClick={() => setColor(value)}
-                                    >
-                                        <i aria-hidden="true" />
-                                        <span>{label}</span>
-                                    </button>
-                                ))}
-                            </div>
+                    <div className="ac-v3-builder__sheet-dialog-field">
+                        <label>
+                            <span>Название листа</span>
+                            <input
+                                type="text"
+                                value={name}
+                                maxLength={40}
+                                autoFocus
+                                onChange={(event) => setName(event.target.value)}
+                            />
+                        </label>
+                        <span>Цвет листа</span>
+                        <div className="ac-v3-builder__sheet-color-grid" role="radiogroup" aria-label="Цвет листа">
+                            {SHEET_COLORS.map(([value, label]) => (
+                                <button
+                                    key={value}
+                                    type="button"
+                                    className={color === value ? 'is-active' : ''}
+                                    data-sheet-color={value}
+                                    aria-pressed={color === value ? 'true' : 'false'}
+                                    onClick={() => setColor(value)}
+                                >
+                                    <i aria-hidden="true" />
+                                    <span>{label}</span>
+                                </button>
+                            ))}
                         </div>
-                    )}
+                    </div>
+
+                    <div className="ac-v3-builder__sheet-dialog-danger">
+                        <div>
+                            <strong>Удаление листа</strong>
+                            <small>
+                                {canDelete
+                                    ? 'Будут удалены блоки и связи на этом листе.'
+                                    : 'Главный лист удалить нельзя.'}
+                            </small>
+                            {canDelete ? (
+                                <span className="ac-v3-builder__sheet-dialog-danger-count">
+                                    <b>{blockCount}</b>
+                                    {' '}
+                                    <span>{pluralBlocks(blockCount)}</span>
+                                </span>
+                            ) : null}
+                        </div>
+
+                        {canDelete ? (
+                            isConfirmingDelete ? (
+                                <div className="ac-v3-builder__sheet-dialog-confirm" role="group" aria-label="Подтверждение удаления листа">
+                                    <p>
+                                        Лист <strong>{dialog.name}</strong> будет удалён вместе с блоками и связями на нём.
+                                    </p>
+                                    <div>
+                                        <button type="button" onClick={() => setIsConfirmingDelete(false)}>
+                                            Не удалять
+                                        </button>
+                                        <button type="button" className="is-danger" onClick={() => onDelete(dialog.sheetId)}>
+                                            Удалить лист
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <button type="button" className="is-danger" onClick={() => setIsConfirmingDelete(true)}>
+                                    Удалить лист
+                                </button>
+                            )
+                        ) : (
+                            <button type="button" className="is-danger" disabled>
+                                Удалить лист
+                            </button>
+                        )}
+                    </div>
                 </div>
 
                 <div className="ac-v3-builder__publish-dialog-footer">
                     <button type="button" onClick={onClose}>Отмена</button>
-                    <button type="submit" className={isDelete ? 'is-danger' : ''}>
-                        {isDelete ? 'Удалить' : 'Сохранить'}
-                    </button>
+                    <button type="submit">Сохранить</button>
                 </div>
             </form>
         </div>
@@ -6487,6 +6528,22 @@ function pluralRows(count) {
     }
 
     return 'рядов';
+}
+
+function pluralBlocks(count) {
+    const value = Math.abs(Number(count) || 0);
+    const lastDigit = value % 10;
+    const lastTwoDigits = value % 100;
+
+    if (lastDigit === 1 && lastTwoDigits !== 11) {
+        return 'блок';
+    }
+
+    if (lastDigit >= 2 && lastDigit <= 4 && (lastTwoDigits < 12 || lastTwoDigits > 14)) {
+        return 'блока';
+    }
+
+    return 'блоков';
 }
 
 function AiFields({ ai, blockKey, onUpdateModulePayload, onRemoveAiVariant }) {
