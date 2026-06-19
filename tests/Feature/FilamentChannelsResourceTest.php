@@ -7,6 +7,7 @@ use App\Filament\Resources\Channels\Pages\ManageChannels;
 use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Channel;
 use App\Models\ChannelActivityLog;
+use App\Models\ChannelConnectionCheckRun;
 use App\Models\ChannelRuntimeState;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
@@ -982,11 +983,20 @@ class FilamentChannelsResourceTest extends TestCase
             'is_active' => true,
         ]);
         $webhookUrl = sprintf('https://connector.example/webhooks/telegram/%d', $channel->id);
+        ChannelConnectionCheckRun::query()->create([
+            'started_at' => now()->subMinute(),
+            'finished_at' => now(),
+            'status' => ChannelConnectionCheckRun::STATUS_SUCCESS,
+            'processed_count' => 1,
+            'success_count' => 1,
+            'failure_count' => 0,
+            'environment' => app()->environment(),
+        ]);
 
         $channel->forceFill([
             'connection_status' => Channel::CONNECTION_STATUS_CONNECTED,
             'webhook_status' => Channel::WEBHOOK_STATUS_INSTALLED,
-            'connection_checked_at' => now()->subMinutes(3),
+            'connection_checked_at' => now()->subMinutes(11),
             'connection_error_message' => null,
             'expected_webhook_url' => $webhookUrl,
             'provider_webhook_url' => $webhookUrl,
@@ -1011,6 +1021,51 @@ class FilamentChannelsResourceTest extends TestCase
         $this->assertSame(Channel::CONNECTION_STATUS_CONNECTED, $connectionState['connection_status']);
         $this->assertSame('warning', $statusColorResolver->invoke(null, $channel, $connectionState));
         $this->assertSame('warning', $webhookColorResolver->invoke(null, $channel, $connectionState));
+    }
+
+    public function test_scheduler_health_problem_is_displayed_separately_from_stale_bot_webhook_state(): void
+    {
+        config()->set('app.url', 'https://connector.example');
+
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Stale Telegram Bot',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'telegram-token'],
+            'bot_token_present' => true,
+            'is_active' => true,
+        ]);
+        $webhookUrl = sprintf('https://connector.example/webhooks/telegram/%d', $channel->id);
+
+        $channel->forceFill([
+            'connection_status' => Channel::CONNECTION_STATUS_CONNECTED,
+            'webhook_status' => Channel::WEBHOOK_STATUS_INSTALLED,
+            'connection_checked_at' => now()->subMinutes(11),
+            'connection_error_message' => null,
+            'expected_webhook_url' => $webhookUrl,
+            'provider_webhook_url' => $webhookUrl,
+        ])->saveQuietly();
+
+        $connectionState = app(CheckChannelConnectionAction::class)
+            ->resolveEffectiveState($channel->fresh());
+        $errorResolver = new ReflectionMethod(ChannelResource::class, 'resolveConnectionErrorDisplay');
+        $errorResolver->setAccessible(true);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->assertSee('Планировщик проверок ещё не запускался')
+            ->assertTableColumnStateSet('health_status', 'Нет heartbeat', $channel)
+            ->assertTableColumnStateSet('webhook_secret_status', 'Был установлен', $channel)
+            ->mountTableAction('view', $channel)
+            ->assertMountedActionModalSee('Планировщик')
+            ->assertMountedActionModalSee('Планировщик проверок ещё не запускался')
+            ->assertMountedActionModalSee('Планировщик проверок каналов ещё не записывал heartbeat.');
+
+        $this->assertNull($errorResolver->invoke(null, $channel, $connectionState));
     }
 
     public function test_account_channel_allows_safe_edit_and_hides_bot_only_actions(): void
