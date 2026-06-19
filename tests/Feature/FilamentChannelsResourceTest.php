@@ -136,6 +136,7 @@ class FilamentChannelsResourceTest extends TestCase
             ->assertTableActionHidden('manageScenarios', $channel)
             ->assertTableActionHidden('hideChannel', $channel)
             ->assertTableActionHidden('showChannel', $channel)
+            ->assertTableActionHidden('edit', $channel)
             ->assertTableActionHidden('delete', $channel);
     }
 
@@ -167,6 +168,7 @@ class FilamentChannelsResourceTest extends TestCase
             ->assertTableActionVisible('manageScenarios', $channel)
             ->assertTableActionVisible('hideChannel', $channel)
             ->assertTableActionHidden('showChannel', $channel)
+            ->assertTableActionVisible('edit', $channel)
             ->assertTableActionHidden('delete', $channel);
     }
 
@@ -914,7 +916,7 @@ class FilamentChannelsResourceTest extends TestCase
         $this->assertSame('warning', $webhookColorResolver->invoke(null, $channel, $connectionState));
     }
 
-    public function test_account_channel_hides_bot_only_edit_and_manage_scenarios_actions(): void
+    public function test_account_channel_allows_safe_edit_and_hides_bot_only_actions(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -922,13 +924,44 @@ class FilamentChannelsResourceTest extends TestCase
         ]);
 
         $channel = Channel::factory()->account()->create([
+            'name' => 'Local Telegram Account Gateway',
             'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_ACCOUNT,
+            'credentials' => [],
+            'bot_token_present' => false,
+            'is_active' => true,
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
         ]);
+        $originalChannelConnectionTypeId = $channel->channel_connection_type_id;
 
         Livewire::actingAs($admin)
             ->test(ManageChannels::class)
-            ->assertTableActionHidden('edit', $channel)
-            ->assertTableActionHidden('manageScenarios', $channel);
+            ->assertTableActionVisible('edit', $channel)
+            ->assertTableActionHidden('manageScenarios', $channel)
+            ->assertTableActionHidden('syncBotMetadata', $channel)
+            ->callTableAction('edit', $channel, [
+                'name' => 'Аккаунт Telegram локальный',
+                'channel_connection_type_id' => 999,
+                'platform' => Channel::PLATFORM_MAX,
+                'connection_type' => Channel::CONNECTION_TYPE_BOT,
+                'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+                'credentials' => [
+                    'token' => 'should-not-be-saved',
+                ],
+                'is_active' => false,
+            ])
+            ->assertHasNoTableActionErrors();
+
+        $channel->refresh();
+
+        $this->assertSame('Аккаунт Telegram локальный', $channel->name);
+        $this->assertSame(Channel::PLATFORM_TELEGRAM, $channel->platform);
+        $this->assertSame(Channel::CONNECTION_TYPE_ACCOUNT, $channel->connection_type);
+        $this->assertSame($originalChannelConnectionTypeId, $channel->channel_connection_type_id);
+        $this->assertSame([], $channel->credentials);
+        $this->assertFalse($channel->bot_token_present);
+        $this->assertTrue($channel->is_active);
+        $this->assertSame(Channel::AUTO_REPLY_MODE_RULES_ONLY, $channel->auto_reply_mode);
     }
 
     public function test_account_channel_table_error_columns_use_runtime_state(): void
