@@ -118,6 +118,7 @@ class ChannelResource extends Resource
                             })
                             ->placeholder('Определить по платформе и режиму')
                             ->native(false)
+                            ->hidden(fn (?Channel $record): bool => $record?->isAccountConnection() ?? false)
                             ->helperText('Канал выбирает тип подключения. Платформа и режим ниже синхронизируются для совместимости.'),
                         Select::make('platform')
                             ->label('Платформа')
@@ -125,7 +126,8 @@ class ChannelResource extends Resource
                             ->options(Channel::platformOptions())
                             ->required()
                             ->selectablePlaceholder(false)
-                            ->native(false),
+                            ->native(false)
+                            ->hidden(fn (?Channel $record): bool => $record?->isAccountConnection() ?? false),
                         Select::make('connection_type')
                             ->label('Тип')
                             ->extraFieldWrapperAttributes(['class' => 'ac-channel-form-field'])
@@ -133,7 +135,8 @@ class ChannelResource extends Resource
                             ->default(Channel::CONNECTION_TYPE_BOT)
                             ->required()
                             ->selectablePlaceholder(false)
-                            ->native(false),
+                            ->native(false)
+                            ->hidden(fn (?Channel $record): bool => $record?->isAccountConnection() ?? false),
                     ])
                     ->columnSpanFull()
                     ->columns(3),
@@ -159,7 +162,8 @@ class ChannelResource extends Resource
                             ->required()
                             ->selectablePlaceholder(false)
                             ->native(false)
-                            ->dehydrateStateUsing(fn (string|int|bool|null $state): bool => (string) $state === '1'),
+                            ->dehydrateStateUsing(fn (string|int|bool|null $state): bool => (string) $state === '1')
+                            ->hidden(fn (?Channel $record): bool => $record?->isAccountConnection() ?? false),
                     ])
                     ->columnSpanFull()
                     ->columns(2),
@@ -183,7 +187,8 @@ class ChannelResource extends Resource
                             ->columnSpanFull(),
                     ])
                     ->columnSpanFull()
-                    ->columns(2),
+                    ->columns(2)
+                    ->hidden(fn (?Channel $record): bool => $record?->isAccountConnection() ?? false),
             ]);
     }
 
@@ -835,7 +840,7 @@ class ChannelResource extends Resource
                     ->iconButton()
                     ->color('gray')
                     ->extraAttributes(['class' => 'ac-channel-table-action'])
-                    ->visible(fn (Channel $record): bool => $record->isBotConnection())
+                    ->visible(fn (Channel $record): bool => static::canUpdateChannel($record))
                     ->modalFooterActionsAlignment(Alignment::End)
                     ->extraModalWindowAttributes(['class' => 'ac-channel-form-modal'])
                     ->tooltip('Изменить')
@@ -1061,6 +1066,10 @@ class ChannelResource extends Resource
      */
     public static function mutateChannelData(array $data, ?Channel $record = null): array
     {
+        if ($record?->isAccountConnection()) {
+            return static::mutateAccountChannelData($data, $record);
+        }
+
         $data = static::syncChannelConnectionTypeData($data);
         $token = trim((string) data_get($data, 'credentials.token', ''));
         $credentials = $record?->readableCredentials() ?? [];
@@ -1079,6 +1088,28 @@ class ChannelResource extends Resource
         Arr::forget($data, 'credentials');
 
         return $data;
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    protected static function mutateAccountChannelData(array $data, Channel $record): array
+    {
+        $autoReplyMode = (string) data_get(
+            $data,
+            'auto_reply_mode',
+            $record->auto_reply_mode ?? Channel::AUTO_REPLY_MODE_RULES_ONLY,
+        );
+
+        if (! array_key_exists($autoReplyMode, Channel::autoReplyModeOptions())) {
+            $autoReplyMode = $record->auto_reply_mode ?? Channel::AUTO_REPLY_MODE_RULES_ONLY;
+        }
+
+        return [
+            'name' => (string) data_get($data, 'name', $record->name),
+            'auto_reply_mode' => $autoReplyMode,
+        ];
     }
 
     /**
