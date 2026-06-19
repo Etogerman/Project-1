@@ -134,6 +134,8 @@ class FilamentChannelsResourceTest extends TestCase
             ->assertTableActionHidden('checkConnection', $channel)
             ->assertTableActionHidden('syncBotMetadata', $channel)
             ->assertTableActionHidden('manageScenarios', $channel)
+            ->assertTableActionHidden('hideChannel', $channel)
+            ->assertTableActionHidden('showChannel', $channel)
             ->assertTableActionHidden('delete', $channel);
     }
 
@@ -163,7 +165,112 @@ class FilamentChannelsResourceTest extends TestCase
             ->assertTableActionVisible('checkConnection', $channel)
             ->assertTableActionVisible('syncBotMetadata', $channel)
             ->assertTableActionVisible('manageScenarios', $channel)
+            ->assertTableActionVisible('hideChannel', $channel)
+            ->assertTableActionHidden('showChannel', $channel)
             ->assertTableActionHidden('delete', $channel);
+    }
+
+    public function test_admin_can_hide_channel_from_table_without_disabling_it(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Old Smoke Bot',
+            'is_active' => true,
+            'is_hidden' => false,
+        ]);
+        $activeChannel = Channel::factory()->create([
+            'name' => 'Working Bot',
+            'is_active' => true,
+            'is_hidden' => false,
+        ]);
+        $inactiveButVisibleChannel = Channel::factory()->create([
+            'name' => 'Inactive But Visible Bot',
+            'is_active' => false,
+            'is_hidden' => false,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->assertCanSeeTableRecords([$channel, $activeChannel, $inactiveButVisibleChannel])
+            ->assertTableActionVisible('hideChannel', $channel)
+            ->assertTableActionHidden('showChannel', $channel)
+            ->callTableAction('hideChannel', $channel)
+            ->assertHasNoTableActionErrors();
+
+        $channel->refresh();
+
+        $this->assertTrue($channel->is_active);
+        $this->assertTrue($channel->is_hidden);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->assertCanSeeTableRecords([$activeChannel, $inactiveButVisibleChannel])
+            ->assertCanNotSeeTableRecords([$channel]);
+    }
+
+    public function test_admin_can_show_hidden_channels_without_enabling_them(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Hidden Smoke Bot',
+            'is_active' => false,
+            'is_hidden' => true,
+        ]);
+        $activeChannel = Channel::factory()->create([
+            'name' => 'Visible Bot',
+            'is_active' => true,
+            'is_hidden' => false,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->filterTable('visibility', 'hidden')
+            ->assertCanSeeTableRecords([$channel])
+            ->assertCanNotSeeTableRecords([$activeChannel])
+            ->assertTableActionVisible('showChannel', $channel)
+            ->assertTableActionHidden('hideChannel', $channel)
+            ->callTableAction('showChannel', $channel)
+            ->assertHasNoTableActionErrors();
+
+        $channel->refresh();
+
+        $this->assertFalse($channel->is_active);
+        $this->assertFalse($channel->is_hidden);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->assertCanSeeTableRecords([$channel, $activeChannel]);
+    }
+
+    public function test_admin_can_use_visibility_filter_to_show_all_channels(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $visibleChannel = Channel::factory()->create([
+            'name' => 'Visible Channel',
+            'is_active' => false,
+            'is_hidden' => false,
+        ]);
+        $hiddenChannel = Channel::factory()->create([
+            'name' => 'Hidden Channel',
+            'is_active' => true,
+            'is_hidden' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->assertCanSeeTableRecords([$visibleChannel])
+            ->assertCanNotSeeTableRecords([$hiddenChannel])
+            ->filterTable('visibility', 'all')
+            ->assertCanSeeTableRecords([$visibleChannel, $hiddenChannel]);
     }
 
     public function test_channel_delete_is_blocked_even_for_channel_editor(): void
@@ -346,6 +453,7 @@ class FilamentChannelsResourceTest extends TestCase
                 $this->assertTrue($table->hasColumnManager());
                 $this->assertFalse($table->hasDeferredColumnManager());
                 $this->assertFalse($table->getColumnManagerApplyAction()->isVisible());
+                $this->assertFalse($table->hasDeferredFilters());
                 $this->assertSame('Кнопки', $table->getRecordActionsColumnLabel());
             });
     }
@@ -585,7 +693,7 @@ class FilamentChannelsResourceTest extends TestCase
         );
     }
 
-    public function test_account_channel_table_summary_uses_runtime_state_labels(): void
+    public function test_account_channel_table_summary_is_hidden_to_keep_name_column_compact(): void
     {
         $channel = Channel::factory()->account()->create([
             'name' => 'Telegram Account',
@@ -608,10 +716,11 @@ class FilamentChannelsResourceTest extends TestCase
         $summaryBuilder = new ReflectionMethod(ChannelResource::class, 'buildChannelTableSummary');
         $summaryBuilder->setAccessible(true);
 
-        $summary = $summaryBuilder->invoke(null, $channel->fresh('runtimeState'));
+        $channel = $channel->fresh('runtimeState');
+        $summary = $summaryBuilder->invoke(null, $channel);
 
-        $this->assertSame('Авторизация: Авторизован · Синхронизация: В реальном времени · Исходящие: готовы', $summary);
-        $this->assertSame('Работает', $channel->fresh('runtimeState')->getHealthStatusLabel());
+        $this->assertNull($summary);
+        $this->assertSame('Работает', $channel->getHealthStatusLabel());
     }
 
     public function test_account_channel_view_modal_shows_gateway_diagnostics_instead_of_unsupported_connection_error(): void

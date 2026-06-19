@@ -37,6 +37,7 @@ class ChannelFactory extends Factory
             'last_error_at' => null,
             'last_error_message' => null,
             'is_active' => true,
+            'is_hidden' => false,
             'connection_status' => Channel::CONNECTION_STATUS_CONNECTED,
             'webhook_status' => Channel::WEBHOOK_STATUS_INSTALLED,
             'connection_checked_at' => now(),
