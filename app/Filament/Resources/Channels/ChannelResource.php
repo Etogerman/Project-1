@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\Channels;
 
+use App\Data\TelegramAccount\TelegramAccountGatewayDiagnosticsData;
 use App\Filament\Resources\Channels\Pages\ManageChannels;
 use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Channel;
@@ -17,6 +18,7 @@ use App\Services\Dialogs\BuildConversationFeedViewDataAction;
 use App\Services\Dialogs\MessageChronology;
 use App\Services\Scenarios\ScenarioRegistry;
 use App\Services\Scenarios\SyncChannelScenarioBindingsAction;
+use App\Services\TelegramAccount\ResolveTelegramAccountGatewayDiagnosticsAction;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Actions\EditAction;
@@ -52,6 +54,14 @@ use UnitEnum;
 
 class ChannelResource extends Resource
 {
+    /**
+     * @var array<string, string>
+     */
+    private const MESSAGE_AUTO_REPLY_BUSINESS_STATUS_LABELS = [
+        'bot.reply_skipped_no_rule' => 'Автоответ пропущен: правило не найдено',
+        'bot.reply_skipped_contact_disabled' => 'Автоответ пропущен: отключён для контакта',
+    ];
+
     protected static ?string $model = Channel::class;
 
     protected static ?string $recordTitleAttribute = 'display_title';
@@ -502,7 +512,7 @@ class ChannelResource extends Resource
                     ->toggleable(),
                 TextColumn::make('connection_error_message')
                     ->label('Ошибка')
-                    ->state(fn (Channel $record): ?string => static::resolveConnectionState($record)['connection_error_message'])
+                    ->state(fn (Channel $record): ?string => static::resolveConnectionErrorDisplay($record, static::resolveConnectionState($record)))
                     ->limit(60)
                     ->wrap()
                     ->toggleable(),
@@ -1344,16 +1354,18 @@ class ChannelResource extends Resource
     {
         if ($record->isAccountConnection()) {
             $runtimeState = $record->runtimeState;
+            $gatewayDiagnostics = static::resolveTelegramAccountGatewayDiagnostics($record);
 
             if ($runtimeState === null) {
-                return 'Аккаунт ещё не авторизован';
+                return $gatewayDiagnostics->label;
             }
 
             if ($runtimeState->authorization_state === ChannelRuntimeState::AUTHORIZATION_STATE_READY) {
                 return sprintf(
-                    'Авторизация: %s · Синхронизация: %s',
+                    'Авторизация: %s · Синхронизация: %s · Исходящие: %s',
                     $runtimeState->getAuthStatusLabel(),
                     $runtimeState->getSyncStatusLabel(),
+                    $gatewayDiagnostics->isOutgoingReplyReady ? 'готовы' : 'недоступны',
                 );
             }
 
@@ -1392,6 +1404,10 @@ class ChannelResource extends Resource
      */
     protected static function resolveConnectionStatusLabel(Channel $record, array $connectionState): string
     {
+        if ($record->isAccountConnection()) {
+            return $record->getHealthStatusLabel();
+        }
+
         if (static::isStaleConnectionState($connectionState)) {
             return 'Проверка устарела';
         }
@@ -1404,6 +1420,10 @@ class ChannelResource extends Resource
      */
     protected static function resolveConnectionStatusColor(Channel $record, array $connectionState): string
     {
+        if ($record->isAccountConnection()) {
+            return $record->getHealthStatusColor();
+        }
+
         if (static::isStaleConnectionState($connectionState)) {
             return 'warning';
         }
@@ -1416,6 +1436,10 @@ class ChannelResource extends Resource
      */
     protected static function resolveLiveWebhookStatusLabel(Channel $record, array $connectionState): string
     {
+        if ($record->isAccountConnection()) {
+            return 'Не применяется';
+        }
+
         if (static::isStaleConnectionState($connectionState)) {
             return 'Проверка устарела';
         }
@@ -1428,6 +1452,10 @@ class ChannelResource extends Resource
      */
     protected static function resolveLiveWebhookStatusColor(Channel $record, array $connectionState): string
     {
+        if ($record->isAccountConnection()) {
+            return 'gray';
+        }
+
         if (static::isStaleConnectionState($connectionState)) {
             return 'warning';
         }
@@ -1442,6 +1470,23 @@ class ChannelResource extends Resource
     {
         return ($connectionState['connection_status'] ?? null) === Channel::CONNECTION_STATUS_CONNECTED
             && ($connectionState['connection_error_message'] ?? null) === Channel::CONNECTION_ERROR_STALE;
+    }
+
+    protected static function resolveTelegramAccountGatewayDiagnostics(Channel $record): TelegramAccountGatewayDiagnosticsData
+    {
+        return app(ResolveTelegramAccountGatewayDiagnosticsAction::class)->handle($record);
+    }
+
+    /**
+     * @param  array{connection_status: string, webhook_status: string, connection_error_message: ?string, provider_webhook_url: ?string, expected_webhook_url: ?string, connection_checked_at: mixed}  $connectionState
+     */
+    protected static function resolveConnectionErrorDisplay(Channel $record, array $connectionState): ?string
+    {
+        if ($record->isAccountConnection()) {
+            return 'Проверка подключения не применяется к Telegram account';
+        }
+
+        return $connectionState['connection_error_message'];
     }
 
     /**
@@ -1465,6 +1510,10 @@ class ChannelResource extends Resource
         $lastErrorMessage = $record->isAccountConnection()
             ? $record->runtimeState?->last_error_message
             : $record->last_error_message;
+        $gatewayDiagnostics = $record->isAccountConnection()
+            ? static::resolveTelegramAccountGatewayDiagnostics($record)
+            : null;
+        $connectionErrorMessage = $formatText(static::resolveConnectionErrorDisplay($record, $connectionState), 'Ошибок не было');
 
         return [
             'record' => $record,
@@ -1482,20 +1531,25 @@ class ChannelResource extends Resource
                     ['label' => 'Состояние', 'value' => static::resolveConnectionStatusLabel($record, $connectionState), 'tone' => static::resolveConnectionStatusColor($record, $connectionState)],
                     ['label' => 'Включён', 'value' => $record->is_active ? 'Да' : 'Нет', 'tone' => $record->is_active ? 'success' : 'gray'],
                     ['label' => 'Последняя проверка', 'value' => $formatDate($connectionState['connection_checked_at'])],
-                    ['label' => 'Ошибка подключения', 'value' => $formatText($connectionState['connection_error_message'], 'Ошибок не было')],
+                    ['label' => 'Ошибка подключения', 'value' => $connectionErrorMessage],
                     ['label' => 'Обновлён', 'value' => $formatDate($record->updated_at)],
                 ],
                 [
                     ['label' => 'Платформа', 'value' => Channel::platformOptions()[$record->platform] ?? $record->platform, 'tone' => 'info'],
                     ['label' => 'Имя бота', 'value' => $record->isBotConnection() ? $formatText($record->bot_name, 'Не загружено') : '—'],
                     ['label' => 'Webhook', 'value' => static::resolveLiveWebhookStatusLabel($record, $connectionState), 'tone' => static::resolveLiveWebhookStatusColor($record, $connectionState)],
-                    ['label' => 'Ожидаемый URL', 'value' => $formatText($connectionState['expected_webhook_url'])],
+                    ['label' => 'Исходящие ответы', 'value' => $gatewayDiagnostics?->label ?? '—', 'tone' => $gatewayDiagnostics?->severity],
+                    ['label' => 'Последний heartbeat gateway', 'value' => $formatDate($record->runtimeState?->last_gateway_heartbeat_at)],
+                    ['label' => 'Ожидаемый URL', 'value' => $record->isAccountConnection() ? '—' : $formatText($connectionState['expected_webhook_url'])],
                 ],
                 [
                     ['label' => 'Тип', 'value' => $record->getConnectionTypeLabel(), 'tone' => 'warning'],
                     ['label' => 'Username', 'value' => $record->isBotConnection() ? ($record->getBotUsernameLabel() ?? 'Не загружен') : '—'],
-                    ['label' => 'Последний webhook', 'value' => $formatDate($record->last_webhook_received_at)],
-                    ['label' => 'URL в Telegram', 'value' => $formatText($connectionState['provider_webhook_url'])],
+                    ['label' => 'Авторизация', 'value' => $record->isAccountConnection() ? ($record->runtimeState?->getAuthStatusLabel() ?? 'Не авторизован') : '—', 'tone' => $record->isAccountConnection() ? ($record->runtimeState?->getAuthStatusColor() ?? 'gray') : null],
+                    ['label' => 'Синхронизация', 'value' => $record->isAccountConnection() ? ($record->runtimeState?->getSyncStatusLabel() ?? 'Ожидает') : '—', 'tone' => $record->isAccountConnection() ? ($record->runtimeState?->getSyncStatusColor() ?? 'gray') : null],
+                    ['label' => 'Последний webhook', 'value' => $record->isAccountConnection() ? '—' : $formatDate($record->last_webhook_received_at)],
+                    ['label' => 'URL в Telegram', 'value' => $record->isAccountConnection() ? '—' : $formatText($connectionState['provider_webhook_url'])],
+                    ['label' => 'Причина', 'value' => $gatewayDiagnostics?->description ?? '—'],
                 ],
             ],
             'latestMessageTables' => [
@@ -1578,14 +1632,56 @@ class ChannelResource extends Resource
 
     protected static function formatMessageReplyStatus(Message $message): string
     {
-        return $message->hasSuccessfulAutoReply()
-            ? 'Ответ отправлен'
-            : 'Ответ еще не отправлен';
+        if ($message->hasSuccessfulAutoReply()) {
+            return 'Ответ отправлен';
+        }
+
+        return static::resolveMessageAutoReplyBusinessStatus($message)
+            ?? 'Ответ еще не отправлен';
     }
 
     protected static function getMessageReplyStatusColor(Message $message): string
     {
-        return $message->hasSuccessfulAutoReply() ? 'success' : 'gray';
+        if ($message->hasSuccessfulAutoReply()) {
+            return 'success';
+        }
+
+        return static::resolveMessageAutoReplyBusinessStatus($message) !== null
+            ? 'warning'
+            : 'gray';
+    }
+
+    protected static function resolveMessageAutoReplyBusinessStatus(Message $message): ?string
+    {
+        if (! $message->exists || $message->direction !== Message::DIRECTION_INBOUND) {
+            return null;
+        }
+
+        if ($message->hasSuccessfulAutoReply()) {
+            return null;
+        }
+
+        $providerEventKey = $message->provider_event_key;
+        $log = ChannelActivityLog::query()
+            ->where('channel_id', $message->channel_id)
+            ->whereIn('event', array_keys(self::MESSAGE_AUTO_REPLY_BUSINESS_STATUS_LABELS))
+            ->orderByDesc('id')
+            ->limit(100)
+            ->get()
+            ->first(function (ChannelActivityLog $log) use ($message, $providerEventKey): bool {
+                if ((int) data_get($log->context, 'message_id') === (int) $message->id) {
+                    return true;
+                }
+
+                return filled($providerEventKey)
+                    && data_get($log->context, 'provider_event_key') === $providerEventKey;
+            });
+
+        if (! $log instanceof ChannelActivityLog) {
+            return null;
+        }
+
+        return self::MESSAGE_AUTO_REPLY_BUSINESS_STATUS_LABELS[$log->event] ?? null;
     }
 
     protected static function formatMessageKind(?string $messageKind): string

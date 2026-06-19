@@ -3530,29 +3530,26 @@
 
     .ac-channel-view-panel__summary {
         display: flex;
+        width: 100%;
         cursor: pointer;
         align-items: center;
         justify-content: space-between;
         gap: 1rem;
         list-style: none;
+        text-align: left;
     }
 
     .ac-channel-view-panel__summary::-webkit-details-marker {
         display: none;
     }
 
-    .ac-channel-view-panel__summary-state::before {
-        content: 'Развернуть';
+    .ac-channel-view-panel__summary-state {
         color: var(--ac-text-soft);
         font-size: 0.72rem;
         font-weight: 700;
     }
 
-    .ac-channel-view-panel[open] .ac-channel-view-panel__summary-state::before {
-        content: 'Свернуть';
-    }
-
-    .ac-channel-view-panel:not([open]) .ac-channel-view-panel__summary {
+    .ac-channel-view-panel[data-open="false"] .ac-channel-view-panel__summary {
         border-bottom: 0;
     }
 

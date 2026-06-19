@@ -598,6 +598,11 @@ class FilamentChannelsResourceTest extends TestCase
             'authorization_state' => ChannelRuntimeState::AUTHORIZATION_STATE_READY,
             'sync_status' => ChannelRuntimeState::SYNC_STATUS_LIVE,
             'last_gateway_heartbeat_at' => now(),
+            'runtime_payload' => [
+                'gateway_capabilities' => [
+                    'outgoing_replies' => true,
+                ],
+            ],
         ]);
 
         $summaryBuilder = new ReflectionMethod(ChannelResource::class, 'buildChannelTableSummary');
@@ -605,11 +610,11 @@ class FilamentChannelsResourceTest extends TestCase
 
         $summary = $summaryBuilder->invoke(null, $channel->fresh('runtimeState'));
 
-        $this->assertSame('Авторизация: Авторизован · Синхронизация: В реальном времени', $summary);
+        $this->assertSame('Авторизация: Авторизован · Синхронизация: В реальном времени · Исходящие: готовы', $summary);
         $this->assertSame('Работает', $channel->fresh('runtimeState')->getHealthStatusLabel());
     }
 
-    public function test_account_channel_view_modal_shows_unsupported_connection_status(): void
+    public function test_account_channel_view_modal_shows_gateway_diagnostics_instead_of_unsupported_connection_error(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -635,9 +640,30 @@ class FilamentChannelsResourceTest extends TestCase
             ->test(ManageChannels::class)
             ->mountTableAction('view', $channel)
             ->assertMountedActionModalSee('Состояние')
-            ->assertMountedActionModalSee('Не поддерживается')
+            ->assertMountedActionModalSee('Синхронизация')
             ->assertMountedActionModalSee('Webhook')
-            ->assertMountedActionModalSee('Проверка подключения для этого типа канала пока не поддерживается');
+            ->assertMountedActionModalSee('Не применяется')
+            ->assertMountedActionModalSee('Исходящие ответы')
+            ->assertMountedActionModalSee('Синхронизация Telegram account не в реальном времени')
+            ->assertMountedActionModalSee('Проверка подключения не применяется к Telegram account');
+    }
+
+    public function test_channel_view_modal_uses_clickable_disclosures_for_feed_and_activity_log(): void
+    {
+        $channel = Channel::factory()->account()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $html = view(
+            'filament.channels.partials.channel-view-overview',
+            ChannelResource::buildChannelViewModalData($channel),
+        )->render();
+
+        $this->assertSame(2, substr_count($html, 'class="ac-channel-view-panel__header ac-channel-view-panel__summary"'));
+        $this->assertSame(2, substr_count($html, 'x-show'));
+        $this->assertSame(2, substr_count($html, 'x-data="{ open: false }"'));
+        $this->assertStringContainsString('Лента сообщений', $html);
+        $this->assertStringContainsString('Техжурнал', $html);
     }
 
     public function test_stale_successful_connection_is_displayed_as_warning_in_table_and_modal(): void
@@ -1431,6 +1457,71 @@ class FilamentChannelsResourceTest extends TestCase
         $this->assertStringContainsString('Event key: telegram-update-901', $recentMessagesHtml);
         $this->assertStringContainsString('Автоответ: —', $recentMessagesHtml);
         $this->assertStringContainsString('Статус: Ответ еще не отправлен', $recentMessagesHtml);
+    }
+
+    public function test_recent_messages_renderer_shows_no_rule_skip_as_business_auto_reply_status(): void
+    {
+        $channel = Channel::factory()->account()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'name' => 'Telegram Account No Rule',
+        ]);
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'ext-no-rule',
+        ]);
+
+        $message = Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'provider_event_key' => 'telegram-account-no-rule-901',
+            'external_chat_id' => 'chat-no-rule-901',
+            'external_message_id' => 'msg-no-rule-901',
+            'text' => 'Нет подходящего правила',
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => Carbon::create(2026, 4, 23, 13, 0, 0),
+            'auto_reply_sent_at' => null,
+        ]);
+
+        ChannelActivityLog::query()->create([
+            'channel_id' => $channel->id,
+            'level' => 'info',
+            'event' => 'bot.reply_skipped_no_rule',
+            'message' => 'Автоответ не отправлен: правило не найдено.',
+            'context' => [
+                'message_id' => $message->id,
+                'provider_event_key' => $message->provider_event_key,
+                'auto_reply_source' => 'skipped_no_rule',
+            ],
+            'created_at' => Carbon::create(2026, 4, 23, 13, 0, 1),
+        ]);
+
+        $modalData = ChannelResource::buildChannelViewModalData($channel);
+
+        $this->assertSame('Автоответ пропущен: правило не найдено', $modalData['latestMessageTables'][3][1]['value']);
+        $this->assertSame('warning', $modalData['latestMessageTables'][3][1]['tone']);
+
+        $recentMessagesRenderer = new ReflectionMethod(ChannelResource::class, 'renderRecentSavedMessages');
+        $recentMessagesRenderer->setAccessible(true);
+
+        $recentMessagesHtml = $recentMessagesRenderer->invoke(null, $channel)->toHtml();
+
+        $this->assertStringContainsString('Статус: Автоответ пропущен: правило не найдено', $recentMessagesHtml);
+        $this->assertStringNotContainsString('Статус: Ответ еще не отправлен', $recentMessagesHtml);
+
+        $recentActivityRenderer = new ReflectionMethod(ChannelResource::class, 'renderRecentActivityLogs');
+        $recentActivityRenderer->setAccessible(true);
+
+        $recentActivityHtml = $recentActivityRenderer->invoke(null, $channel)->toHtml();
+
+        $this->assertStringContainsString('Автоответ пропущен', $recentActivityHtml);
+        $this->assertStringContainsString('Автоответ не отправлен: правило не найдено.', $recentActivityHtml);
+        $this->assertStringNotContainsString('Ошибка ответа', $recentActivityHtml);
     }
 
     public function test_channel_diagnostics_use_media_summary_for_media_only_account_message(): void

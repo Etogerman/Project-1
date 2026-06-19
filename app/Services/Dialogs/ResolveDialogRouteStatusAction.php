@@ -6,6 +6,7 @@ use App\Data\Dialogs\DialogRouteStatusData;
 use App\Models\Channel;
 use App\Models\Dialog;
 use App\Services\Bots\CheckChannelConnectionAction;
+use App\Services\TelegramAccount\ResolveTelegramAccountGatewayDiagnosticsAction;
 
 class ResolveDialogRouteStatusAction
 {
@@ -20,6 +21,7 @@ class ResolveDialogRouteStatusAction
     public function __construct(
         private readonly DialogRoutePredicate $dialogRoutePredicate,
         private readonly CheckChannelConnectionAction $checkChannelConnectionAction,
+        private readonly ResolveTelegramAccountGatewayDiagnosticsAction $resolveTelegramAccountGatewayDiagnosticsAction,
     ) {}
 
     public function handle(Dialog $dialog): DialogRouteStatusData
@@ -69,12 +71,15 @@ class ResolveDialogRouteStatusAction
                 );
             }
 
-            if (! $this->dialogRoutePredicate->hasReadyTelegramAccountRuntime($channel)) {
+            $gatewayDiagnostics = $this->resolveTelegramAccountGatewayDiagnosticsAction->handle($channel);
+
+            if (! $gatewayDiagnostics->isOutgoingReplyReady) {
                 return $this->make(
                     DialogRouteStatusData::CODE_ACCOUNT_NOT_READY,
-                    'Gateway не готов',
-                    'warning',
+                    'Gateway не готов к исходящим ответам',
+                    $gatewayDiagnostics->severity === 'success' ? 'warning' : $gatewayDiagnostics->severity,
                     false,
+                    $gatewayDiagnostics->description,
                 );
             }
 

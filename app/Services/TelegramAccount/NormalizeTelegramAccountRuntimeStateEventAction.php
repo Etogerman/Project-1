@@ -70,7 +70,7 @@ class NormalizeTelegramAccountRuntimeStateEventAction
             return null;
         }
 
-        return Carbon::parse((string) $value);
+        return Carbon::parse((string) $value)->setTimezone((string) config('app.timezone'));
     }
 
     private function normalizeNullableString(mixed $value): ?string
