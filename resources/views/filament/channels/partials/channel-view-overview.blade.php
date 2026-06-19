@@ -4,6 +4,16 @@
     $renderValue = static function (array $row): string {
         $value = (string) ($row['value'] ?? '—');
         $tone = $row['tone'] ?? null;
+        $url = $row['url'] ?? null;
+
+        if (filled($url) && $value !== '—') {
+            return sprintf(
+                '<a class="ac-link-reset ac-bitrix-cell-clip" href="%s" target="_blank" rel="noopener noreferrer" title="%s">%s</a>',
+                e((string) $url),
+                e($value),
+                e($value),
+            );
+        }
 
         if (filled($tone) && $value !== '—') {
             return sprintf(

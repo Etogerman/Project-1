@@ -418,8 +418,8 @@ class ChannelResource extends Resource
                     ->toggleable(),
                 TextColumn::make('bot_username')
                     ->label('Username')
-                    ->state(fn (Channel $record): string => $record->getBotUsernameLabel() ?? '—')
-                    ->url(fn (Channel $record): ?string => $record->getBotProfileUrl())
+                    ->state(fn (Channel $record): string => static::resolveChannelUsernameColumnLabel($record))
+                    ->url(fn (Channel $record): ?string => static::resolveChannelUsernameColumnUrl($record))
                     ->openUrlInNewTab()
                     ->searchable(['bot_username'])
                     ->sortable()
@@ -1440,6 +1440,24 @@ class ChannelResource extends Resource
         return 'Токен ещё не настроен';
     }
 
+    protected static function resolveChannelUsernameColumnLabel(Channel $record): string
+    {
+        if ($record->isAccountConnection()) {
+            return $record->getTelegramAccountIdentityLabel() ?? 'Аккаунт не передан';
+        }
+
+        return $record->getBotUsernameLabel() ?? '—';
+    }
+
+    protected static function resolveChannelUsernameColumnUrl(Channel $record): ?string
+    {
+        if ($record->isAccountConnection()) {
+            return $record->getTelegramAccountProfileUrl();
+        }
+
+        return $record->getBotProfileUrl();
+    }
+
     /**
      * @return array{connection_status: string, webhook_status: string, connection_error_message: ?string, provider_webhook_url: ?string, expected_webhook_url: ?string, connection_checked_at: mixed}
      */
@@ -1585,7 +1603,7 @@ class ChannelResource extends Resource
                 ],
                 [
                     ['label' => 'Платформа', 'value' => Channel::platformOptions()[$record->platform] ?? $record->platform, 'tone' => 'info'],
-                    ['label' => 'Имя бота', 'value' => $record->isBotConnection() ? $formatText($record->bot_name, 'Не загружено') : '—'],
+                    ['label' => $record->isAccountConnection() ? 'Имя аккаунта' : 'Имя бота', 'value' => $record->isAccountConnection() ? ($record->getTelegramAccountDisplayNameLabel() ?? 'Аккаунт не передан') : $formatText($record->bot_name, 'Не загружено')],
                     ['label' => 'Webhook', 'value' => static::resolveLiveWebhookStatusLabel($record, $connectionState), 'tone' => static::resolveLiveWebhookStatusColor($record, $connectionState)],
                     ['label' => 'Исходящие ответы', 'value' => $gatewayDiagnostics?->label ?? '—', 'tone' => $gatewayDiagnostics?->severity],
                     ['label' => 'Последний heartbeat gateway', 'value' => $formatDate($record->runtimeState?->last_gateway_heartbeat_at)],
@@ -1593,7 +1611,7 @@ class ChannelResource extends Resource
                 ],
                 [
                     ['label' => 'Тип', 'value' => $record->getConnectionTypeLabel(), 'tone' => 'warning'],
-                    ['label' => 'Username', 'value' => $record->isBotConnection() ? ($record->getBotUsernameLabel() ?? 'Не загружен') : '—'],
+                    ['label' => $record->isAccountConnection() ? 'Аккаунт' : 'Username', 'value' => $record->isAccountConnection() ? ($record->getTelegramAccountIdentityLabel() ?? 'Аккаунт не передан') : ($record->getBotUsernameLabel() ?? 'Не загружен'), 'url' => $record->isAccountConnection() ? $record->getTelegramAccountProfileUrl() : $record->getBotProfileUrl()],
                     ['label' => 'Авторизация', 'value' => $record->isAccountConnection() ? ($record->runtimeState?->getAuthStatusLabel() ?? 'Не авторизован') : '—', 'tone' => $record->isAccountConnection() ? ($record->runtimeState?->getAuthStatusColor() ?? 'gray') : null],
                     ['label' => 'Синхронизация', 'value' => $record->isAccountConnection() ? ($record->runtimeState?->getSyncStatusLabel() ?? 'Ожидает') : '—', 'tone' => $record->isAccountConnection() ? ($record->runtimeState?->getSyncStatusColor() ?? 'gray') : null],
                     ['label' => 'Последний webhook', 'value' => $record->isAccountConnection() ? '—' : $formatDate($record->last_webhook_received_at)],

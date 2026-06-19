@@ -723,6 +723,75 @@ class FilamentChannelsResourceTest extends TestCase
         $this->assertSame('Работает', $channel->getHealthStatusLabel());
     }
 
+    public function test_account_channel_username_column_shows_gateway_account_identity(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $channel = Channel::factory()->account()->create([
+            'name' => 'Telegram Account',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        ChannelRuntimeState::query()->create([
+            'channel_id' => $channel->id,
+            'auth_status' => ChannelRuntimeState::AUTH_STATUS_AUTHORIZED,
+            'authorization_state' => ChannelRuntimeState::AUTHORIZATION_STATE_READY,
+            'sync_status' => ChannelRuntimeState::SYNC_STATUS_LIVE,
+            'runtime_payload' => [
+                'account' => [
+                    'id' => '100001',
+                    'username' => 'gateway_account',
+                    'display_name' => 'Gateway Account',
+                ],
+            ],
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->assertTableColumnStateSet('bot_username', '@gateway_account', $channel->fresh('runtimeState'));
+
+        $channel = $channel->fresh('runtimeState');
+        $modalData = ChannelResource::buildChannelViewModalData($channel);
+        $flatRows = collect($modalData['summaryTables'])->flatten(1);
+        $overviewHtml = view(
+            'filament.channels.partials.channel-view-overview',
+            $modalData,
+        )->render();
+
+        $this->assertTrue($flatRows->contains(fn (array $row): bool => $row['label'] === 'Аккаунт' && $row['value'] === '@gateway_account'));
+        $this->assertTrue($flatRows->contains(fn (array $row): bool => $row['label'] === 'Имя аккаунта' && $row['value'] === 'Gateway Account'));
+        $this->assertSame('https://t.me/gateway_account', $channel->getTelegramAccountProfileUrl());
+        $this->assertTrue($flatRows->contains(fn (array $row): bool => $row['label'] === 'Аккаунт' && $row['url'] === 'https://t.me/gateway_account'));
+        $this->assertStringContainsString('href="https://t.me/gateway_account"', $overviewHtml);
+    }
+
+    public function test_account_channel_identity_falls_back_to_external_id_without_username(): void
+    {
+        $channel = Channel::factory()->account()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        ChannelRuntimeState::query()->create([
+            'channel_id' => $channel->id,
+            'runtime_payload' => [
+                'account' => [
+                    'id' => 100001,
+                    'username' => null,
+                    'display_name' => 'Gateway Account',
+                ],
+            ],
+        ]);
+
+        $channel = $channel->fresh('runtimeState');
+
+        $this->assertSame('ID 100001', $channel->getTelegramAccountIdentityLabel());
+        $this->assertSame('Gateway Account', $channel->getTelegramAccountDisplayNameLabel());
+        $this->assertSame('100001', $channel->getTelegramAccountExternalIdLabel());
+    }
+
     public function test_account_channel_view_modal_shows_gateway_diagnostics_instead_of_unsupported_connection_error(): void
     {
         $admin = User::factory()->create([
