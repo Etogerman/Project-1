@@ -660,7 +660,7 @@ class ChannelResource extends Resource
                     ->iconButton()
                     ->extraAttributes(['class' => 'ac-channel-table-operation'])
                     ->tooltip('Проверить подключение')
-                    ->visible(fn (Channel $record): bool => static::canUpdateChannel($record))
+                    ->visible(fn (Channel $record): bool => $record->supportsConnectionCheck() && static::canUpdateChannel($record))
                     ->action(function (Channel $record): void {
                         static::authorizeChannelUpdate($record);
 

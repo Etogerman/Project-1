@@ -937,6 +937,7 @@ class FilamentChannelsResourceTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ManageChannels::class)
             ->assertTableActionVisible('edit', $channel)
+            ->assertTableActionHidden('checkConnection', $channel)
             ->assertTableActionHidden('manageScenarios', $channel)
             ->assertTableActionHidden('syncBotMetadata', $channel)
             ->callTableAction('edit', $channel, [
