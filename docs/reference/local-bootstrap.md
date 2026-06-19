@@ -144,7 +144,7 @@ php artisan db:seed --class=AdminUserSeeder
 
 ## Ежедневный локальный runtime
 
-Предпочтительный локальный контур запуска:
+Предпочтительный локальный контур запуска без Docker:
 
 ```bash
 composer dev
@@ -158,6 +158,30 @@ composer dev
 4. queue workers для `bot-replies`, `bitrix-live` и `default`
 5. `php artisan pail --timeout=0`
 6. `npm run build -- --watch`
+
+Предпочтительный Docker-запуск:
+
+```bash
+composer docker:up
+```
+
+Он запускает тот же полный dev-runtime внутри сервиса `dev`. Для просмотра логов в
+foreground используй:
+
+```bash
+composer docker:dev
+```
+
+Нельзя считать локальный runtime готовым, если запущен только `php artisan serve`.
+Для интеграционных сценариев с каналами связи обязательно должны работать:
+
+1. web-server;
+2. `php artisan schedule:work`;
+3. queue workers для `bot-replies`, `bitrix-live` и `default`.
+
+Если scheduler не запущен, `channels:check-connections` не выполняется каждую
+минуту, и bot-каналы со статусом `connected/installed` переходят в
+`Проверка устарела` после истечения TTL проверки.
 
 Если нужен ручной запуск по процессам:
 

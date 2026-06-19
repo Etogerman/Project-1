@@ -134,6 +134,9 @@ class FilamentChannelsResourceTest extends TestCase
             ->assertTableActionHidden('checkConnection', $channel)
             ->assertTableActionHidden('syncBotMetadata', $channel)
             ->assertTableActionHidden('manageScenarios', $channel)
+            ->assertTableActionHidden('hideChannel', $channel)
+            ->assertTableActionHidden('showChannel', $channel)
+            ->assertTableActionHidden('edit', $channel)
             ->assertTableActionHidden('delete', $channel);
     }
 
@@ -163,7 +166,113 @@ class FilamentChannelsResourceTest extends TestCase
             ->assertTableActionVisible('checkConnection', $channel)
             ->assertTableActionVisible('syncBotMetadata', $channel)
             ->assertTableActionVisible('manageScenarios', $channel)
+            ->assertTableActionVisible('hideChannel', $channel)
+            ->assertTableActionHidden('showChannel', $channel)
+            ->assertTableActionVisible('edit', $channel)
             ->assertTableActionHidden('delete', $channel);
+    }
+
+    public function test_admin_can_hide_channel_from_table_without_disabling_it(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Old Smoke Bot',
+            'is_active' => true,
+            'is_hidden' => false,
+        ]);
+        $activeChannel = Channel::factory()->create([
+            'name' => 'Working Bot',
+            'is_active' => true,
+            'is_hidden' => false,
+        ]);
+        $inactiveButVisibleChannel = Channel::factory()->create([
+            'name' => 'Inactive But Visible Bot',
+            'is_active' => false,
+            'is_hidden' => false,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->assertCanSeeTableRecords([$channel, $activeChannel, $inactiveButVisibleChannel])
+            ->assertTableActionVisible('hideChannel', $channel)
+            ->assertTableActionHidden('showChannel', $channel)
+            ->callTableAction('hideChannel', $channel)
+            ->assertHasNoTableActionErrors();
+
+        $channel->refresh();
+
+        $this->assertTrue($channel->is_active);
+        $this->assertTrue($channel->is_hidden);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->assertCanSeeTableRecords([$activeChannel, $inactiveButVisibleChannel])
+            ->assertCanNotSeeTableRecords([$channel]);
+    }
+
+    public function test_admin_can_show_hidden_channels_without_enabling_them(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Hidden Smoke Bot',
+            'is_active' => false,
+            'is_hidden' => true,
+        ]);
+        $activeChannel = Channel::factory()->create([
+            'name' => 'Visible Bot',
+            'is_active' => true,
+            'is_hidden' => false,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->filterTable('visibility', 'hidden')
+            ->assertCanSeeTableRecords([$channel])
+            ->assertCanNotSeeTableRecords([$activeChannel])
+            ->assertTableActionVisible('showChannel', $channel)
+            ->assertTableActionHidden('hideChannel', $channel)
+            ->callTableAction('showChannel', $channel)
+            ->assertHasNoTableActionErrors();
+
+        $channel->refresh();
+
+        $this->assertFalse($channel->is_active);
+        $this->assertFalse($channel->is_hidden);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->assertCanSeeTableRecords([$channel, $activeChannel]);
+    }
+
+    public function test_admin_can_use_visibility_filter_to_show_all_channels(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $visibleChannel = Channel::factory()->create([
+            'name' => 'Visible Channel',
+            'is_active' => false,
+            'is_hidden' => false,
+        ]);
+        $hiddenChannel = Channel::factory()->create([
+            'name' => 'Hidden Channel',
+            'is_active' => true,
+            'is_hidden' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->assertCanSeeTableRecords([$visibleChannel])
+            ->assertCanNotSeeTableRecords([$hiddenChannel])
+            ->filterTable('visibility', 'all')
+            ->assertCanSeeTableRecords([$visibleChannel, $hiddenChannel]);
     }
 
     public function test_channel_delete_is_blocked_even_for_channel_editor(): void
@@ -346,6 +455,7 @@ class FilamentChannelsResourceTest extends TestCase
                 $this->assertTrue($table->hasColumnManager());
                 $this->assertFalse($table->hasDeferredColumnManager());
                 $this->assertFalse($table->getColumnManagerApplyAction()->isVisible());
+                $this->assertFalse($table->hasDeferredFilters());
                 $this->assertSame('Кнопки', $table->getRecordActionsColumnLabel());
             });
     }
@@ -585,7 +695,7 @@ class FilamentChannelsResourceTest extends TestCase
         );
     }
 
-    public function test_account_channel_table_summary_uses_runtime_state_labels(): void
+    public function test_account_channel_table_summary_is_hidden_to_keep_name_column_compact(): void
     {
         $channel = Channel::factory()->account()->create([
             'name' => 'Telegram Account',
@@ -598,18 +708,211 @@ class FilamentChannelsResourceTest extends TestCase
             'authorization_state' => ChannelRuntimeState::AUTHORIZATION_STATE_READY,
             'sync_status' => ChannelRuntimeState::SYNC_STATUS_LIVE,
             'last_gateway_heartbeat_at' => now(),
+            'runtime_payload' => [
+                'gateway_capabilities' => [
+                    'outgoing_replies' => true,
+                ],
+            ],
         ]);
 
         $summaryBuilder = new ReflectionMethod(ChannelResource::class, 'buildChannelTableSummary');
         $summaryBuilder->setAccessible(true);
 
-        $summary = $summaryBuilder->invoke(null, $channel->fresh('runtimeState'));
+        $channel = $channel->fresh('runtimeState');
+        $summary = $summaryBuilder->invoke(null, $channel);
 
-        $this->assertSame('Авторизация: Авторизован · Синхронизация: В реальном времени', $summary);
-        $this->assertSame('Работает', $channel->fresh('runtimeState')->getHealthStatusLabel());
+        $this->assertNull($summary);
+        $this->assertSame('Работает', $channel->getHealthStatusLabel());
     }
 
-    public function test_account_channel_view_modal_shows_unsupported_connection_status(): void
+    public function test_bot_channel_table_summary_does_not_duplicate_username_column(): void
+    {
+        $summaryBuilder = new ReflectionMethod(ChannelResource::class, 'buildChannelTableSummary');
+        $summaryBuilder->setAccessible(true);
+
+        $channel = Channel::factory()->create([
+            'name' => 'MAX локальный',
+            'platform' => Channel::PLATFORM_MAX,
+            'bot_username' => 'id262403882602_bot',
+            'bot_name' => null,
+        ]);
+
+        $this->assertNull($summaryBuilder->invoke(null, $channel));
+
+        $channel->forceFill([
+            'bot_name' => 'Bot profile name',
+        ])->saveQuietly();
+
+        $this->assertSame('Bot profile name', $summaryBuilder->invoke(null, $channel->fresh()));
+    }
+
+    public function test_account_channel_username_column_shows_gateway_account_identity(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $channel = Channel::factory()->account()->create([
+            'name' => 'Telegram Account',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        ChannelRuntimeState::query()->create([
+            'channel_id' => $channel->id,
+            'auth_status' => ChannelRuntimeState::AUTH_STATUS_AUTHORIZED,
+            'authorization_state' => ChannelRuntimeState::AUTHORIZATION_STATE_READY,
+            'sync_status' => ChannelRuntimeState::SYNC_STATUS_LIVE,
+            'runtime_payload' => [
+                'account' => [
+                    'id' => '100001',
+                    'username' => 'gateway_account',
+                    'display_name' => 'Gateway Account',
+                ],
+            ],
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->assertTableColumnStateSet('bot_username', '@gateway_account', $channel->fresh('runtimeState'));
+
+        $channel = $channel->fresh('runtimeState');
+        $modalData = ChannelResource::buildChannelViewModalData($channel);
+        $flatRows = collect($modalData['summaryTables'])->flatten(1);
+        $overviewHtml = view(
+            'filament.channels.partials.channel-view-overview',
+            $modalData,
+        )->render();
+
+        $this->assertTrue($flatRows->contains(fn (array $row): bool => $row['label'] === 'Аккаунт' && $row['value'] === '@gateway_account'));
+        $this->assertTrue($flatRows->contains(fn (array $row): bool => $row['label'] === 'Имя аккаунта' && $row['value'] === 'Gateway Account'));
+        $this->assertSame('https://t.me/gateway_account', $channel->getTelegramAccountProfileUrl());
+        $this->assertTrue($flatRows->contains(fn (array $row): bool => $row['label'] === 'Аккаунт' && $row['url'] === 'https://t.me/gateway_account'));
+        $this->assertStringContainsString('href="https://t.me/gateway_account"', $overviewHtml);
+    }
+
+    public function test_account_channel_username_column_is_searchable_by_gateway_account_username(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $matchingChannel = Channel::factory()->account()->create([
+            'name' => 'Matching Telegram Account',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        ChannelRuntimeState::query()->create([
+            'channel_id' => $matchingChannel->id,
+            'runtime_payload' => [
+                'account' => [
+                    'id' => '100001',
+                    'username' => 'gateway_account',
+                    'display_name' => 'Gateway Account',
+                ],
+            ],
+        ]);
+
+        $otherAccountChannel = Channel::factory()->account()->create([
+            'name' => 'Other Telegram Account',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        ChannelRuntimeState::query()->create([
+            'channel_id' => $otherAccountChannel->id,
+            'runtime_payload' => [
+                'account' => [
+                    'id' => '100002',
+                    'username' => 'other_account',
+                    'display_name' => 'Other Account',
+                ],
+            ],
+        ]);
+
+        $botChannel = Channel::factory()->create([
+            'name' => 'Classic Telegram Bot',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'bot_username' => 'classic_bot',
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->searchTable('@gateway_account')
+            ->assertCanSeeTableRecords([$matchingChannel])
+            ->assertCanNotSeeTableRecords([$otherAccountChannel, $botChannel]);
+    }
+
+    public function test_account_channel_username_column_sorts_by_gateway_account_identity(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $zetaAccountChannel = Channel::factory()->account()->create([
+            'name' => 'Zeta Telegram Account',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        ChannelRuntimeState::query()->create([
+            'channel_id' => $zetaAccountChannel->id,
+            'runtime_payload' => [
+                'account' => [
+                    'username' => 'zeta_account',
+                ],
+            ],
+        ]);
+
+        $botChannel = Channel::factory()->create([
+            'name' => 'Middle Telegram Bot',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'bot_username' => 'middle_bot',
+        ]);
+
+        $alphaAccountChannel = Channel::factory()->account()->create([
+            'name' => 'Alpha Telegram Account',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        ChannelRuntimeState::query()->create([
+            'channel_id' => $alphaAccountChannel->id,
+            'runtime_payload' => [
+                'account' => [
+                    'username' => 'alpha_account',
+                ],
+            ],
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->call('sortTable', 'bot_username', 'asc')
+            ->assertCanSeeTableRecords([$alphaAccountChannel, $botChannel, $zetaAccountChannel], inOrder: true)
+            ->call('sortTable', 'bot_username', 'desc')
+            ->assertCanSeeTableRecords([$zetaAccountChannel, $botChannel, $alphaAccountChannel], inOrder: true);
+    }
+
+    public function test_account_channel_identity_falls_back_to_external_id_without_username(): void
+    {
+        $channel = Channel::factory()->account()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        ChannelRuntimeState::query()->create([
+            'channel_id' => $channel->id,
+            'runtime_payload' => [
+                'account' => [
+                    'id' => 100001,
+                    'username' => null,
+                    'display_name' => 'Gateway Account',
+                ],
+            ],
+        ]);
+
+        $channel = $channel->fresh('runtimeState');
+
+        $this->assertSame('ID 100001', $channel->getTelegramAccountIdentityLabel());
+        $this->assertSame('Gateway Account', $channel->getTelegramAccountDisplayNameLabel());
+        $this->assertSame('100001', $channel->getTelegramAccountExternalIdLabel());
+    }
+
+    public function test_account_channel_view_modal_shows_gateway_diagnostics_instead_of_unsupported_connection_error(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -635,9 +938,31 @@ class FilamentChannelsResourceTest extends TestCase
             ->test(ManageChannels::class)
             ->mountTableAction('view', $channel)
             ->assertMountedActionModalSee('Состояние')
-            ->assertMountedActionModalSee('Не поддерживается')
+            ->assertMountedActionModalSee('Синхронизация')
             ->assertMountedActionModalSee('Webhook')
-            ->assertMountedActionModalSee('Проверка подключения для этого типа канала пока не поддерживается');
+            ->assertMountedActionModalSee('Не применяется')
+            ->assertMountedActionModalSee('Исходящие ответы')
+            ->assertMountedActionModalSee('Синхронизация Telegram account не в реальном времени')
+            ->assertMountedActionModalSee('Ошибок не было')
+            ->assertDontSee('Проверка подключения не применяется к Telegram account');
+    }
+
+    public function test_channel_view_modal_uses_clickable_disclosures_for_feed_and_activity_log(): void
+    {
+        $channel = Channel::factory()->account()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $html = view(
+            'filament.channels.partials.channel-view-overview',
+            ChannelResource::buildChannelViewModalData($channel),
+        )->render();
+
+        $this->assertSame(2, substr_count($html, 'class="ac-channel-view-panel__header ac-channel-view-panel__summary"'));
+        $this->assertSame(2, substr_count($html, 'x-show'));
+        $this->assertSame(2, substr_count($html, 'x-data="{ open: false }"'));
+        $this->assertStringContainsString('Лента сообщений', $html);
+        $this->assertStringContainsString('Техжурнал', $html);
     }
 
     public function test_stale_successful_connection_is_displayed_as_warning_in_table_and_modal(): void
@@ -688,7 +1013,7 @@ class FilamentChannelsResourceTest extends TestCase
         $this->assertSame('warning', $webhookColorResolver->invoke(null, $channel, $connectionState));
     }
 
-    public function test_account_channel_hides_bot_only_edit_and_manage_scenarios_actions(): void
+    public function test_account_channel_allows_safe_edit_and_hides_bot_only_actions(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -696,13 +1021,45 @@ class FilamentChannelsResourceTest extends TestCase
         ]);
 
         $channel = Channel::factory()->account()->create([
+            'name' => 'Local Telegram Account Gateway',
             'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_ACCOUNT,
+            'credentials' => [],
+            'bot_token_present' => false,
+            'is_active' => true,
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
         ]);
+        $originalChannelConnectionTypeId = $channel->channel_connection_type_id;
 
         Livewire::actingAs($admin)
             ->test(ManageChannels::class)
-            ->assertTableActionHidden('edit', $channel)
-            ->assertTableActionHidden('manageScenarios', $channel);
+            ->assertTableActionVisible('edit', $channel)
+            ->assertTableActionHidden('checkConnection', $channel)
+            ->assertTableActionHidden('manageScenarios', $channel)
+            ->assertTableActionHidden('syncBotMetadata', $channel)
+            ->callTableAction('edit', $channel, [
+                'name' => 'Аккаунт Telegram локальный',
+                'channel_connection_type_id' => 999,
+                'platform' => Channel::PLATFORM_MAX,
+                'connection_type' => Channel::CONNECTION_TYPE_BOT,
+                'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+                'credentials' => [
+                    'token' => 'should-not-be-saved',
+                ],
+                'is_active' => false,
+            ])
+            ->assertHasNoTableActionErrors();
+
+        $channel->refresh();
+
+        $this->assertSame('Аккаунт Telegram локальный', $channel->name);
+        $this->assertSame(Channel::PLATFORM_TELEGRAM, $channel->platform);
+        $this->assertSame(Channel::CONNECTION_TYPE_ACCOUNT, $channel->connection_type);
+        $this->assertSame($originalChannelConnectionTypeId, $channel->channel_connection_type_id);
+        $this->assertSame([], $channel->credentials);
+        $this->assertFalse($channel->bot_token_present);
+        $this->assertTrue($channel->is_active);
+        $this->assertSame(Channel::AUTO_REPLY_MODE_RULES_ONLY, $channel->auto_reply_mode);
     }
 
     public function test_account_channel_table_error_columns_use_runtime_state(): void
@@ -1431,6 +1788,71 @@ class FilamentChannelsResourceTest extends TestCase
         $this->assertStringContainsString('Event key: telegram-update-901', $recentMessagesHtml);
         $this->assertStringContainsString('Автоответ: —', $recentMessagesHtml);
         $this->assertStringContainsString('Статус: Ответ еще не отправлен', $recentMessagesHtml);
+    }
+
+    public function test_recent_messages_renderer_shows_no_rule_skip_as_business_auto_reply_status(): void
+    {
+        $channel = Channel::factory()->account()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'name' => 'Telegram Account No Rule',
+        ]);
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'ext-no-rule',
+        ]);
+
+        $message = Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'provider_event_key' => 'telegram-account-no-rule-901',
+            'external_chat_id' => 'chat-no-rule-901',
+            'external_message_id' => 'msg-no-rule-901',
+            'text' => 'Нет подходящего правила',
+            'raw_payload' => ['message' => 'payload'],
+            'received_at' => Carbon::create(2026, 4, 23, 13, 0, 0),
+            'auto_reply_sent_at' => null,
+        ]);
+
+        ChannelActivityLog::query()->create([
+            'channel_id' => $channel->id,
+            'level' => 'info',
+            'event' => 'bot.reply_skipped_no_rule',
+            'message' => 'Автоответ не отправлен: правило не найдено.',
+            'context' => [
+                'message_id' => $message->id,
+                'provider_event_key' => $message->provider_event_key,
+                'auto_reply_source' => 'skipped_no_rule',
+            ],
+            'created_at' => Carbon::create(2026, 4, 23, 13, 0, 1),
+        ]);
+
+        $modalData = ChannelResource::buildChannelViewModalData($channel);
+
+        $this->assertSame('Автоответ пропущен: правило не найдено', $modalData['latestMessageTables'][3][1]['value']);
+        $this->assertSame('warning', $modalData['latestMessageTables'][3][1]['tone']);
+
+        $recentMessagesRenderer = new ReflectionMethod(ChannelResource::class, 'renderRecentSavedMessages');
+        $recentMessagesRenderer->setAccessible(true);
+
+        $recentMessagesHtml = $recentMessagesRenderer->invoke(null, $channel)->toHtml();
+
+        $this->assertStringContainsString('Статус: Автоответ пропущен: правило не найдено', $recentMessagesHtml);
+        $this->assertStringNotContainsString('Статус: Ответ еще не отправлен', $recentMessagesHtml);
+
+        $recentActivityRenderer = new ReflectionMethod(ChannelResource::class, 'renderRecentActivityLogs');
+        $recentActivityRenderer->setAccessible(true);
+
+        $recentActivityHtml = $recentActivityRenderer->invoke(null, $channel)->toHtml();
+
+        $this->assertStringContainsString('Автоответ пропущен', $recentActivityHtml);
+        $this->assertStringContainsString('Автоответ не отправлен: правило не найдено.', $recentActivityHtml);
+        $this->assertStringNotContainsString('Ошибка ответа', $recentActivityHtml);
     }
 
     public function test_channel_diagnostics_use_media_summary_for_media_only_account_message(): void

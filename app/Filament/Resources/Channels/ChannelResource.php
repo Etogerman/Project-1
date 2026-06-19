@@ -2,12 +2,12 @@
 
 namespace App\Filament\Resources\Channels;
 
+use App\Data\TelegramAccount\TelegramAccountGatewayDiagnosticsData;
 use App\Filament\Resources\Channels\Pages\ManageChannels;
 use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Channel;
 use App\Models\ChannelActivityLog;
 use App\Models\ChannelConnectionType;
-use App\Models\ChannelRuntimeState;
 use App\Models\Message;
 use App\Models\ScenarioVersion;
 use App\Services\Bots\CheckChannelConnectionAction;
@@ -17,6 +17,7 @@ use App\Services\Dialogs\BuildConversationFeedViewDataAction;
 use App\Services\Dialogs\MessageChronology;
 use App\Services\Scenarios\ScenarioRegistry;
 use App\Services\Scenarios\SyncChannelScenarioBindingsAction;
+use App\Services\TelegramAccount\ResolveTelegramAccountGatewayDiagnosticsAction;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Actions\EditAction;
@@ -52,6 +53,14 @@ use UnitEnum;
 
 class ChannelResource extends Resource
 {
+    /**
+     * @var array<string, string>
+     */
+    private const MESSAGE_AUTO_REPLY_BUSINESS_STATUS_LABELS = [
+        'bot.reply_skipped_no_rule' => 'Автоответ пропущен: правило не найдено',
+        'bot.reply_skipped_contact_disabled' => 'Автоответ пропущен: отключён для контакта',
+    ];
+
     protected static ?string $model = Channel::class;
 
     protected static ?string $recordTitleAttribute = 'display_title';
@@ -109,6 +118,7 @@ class ChannelResource extends Resource
                             })
                             ->placeholder('Определить по платформе и режиму')
                             ->native(false)
+                            ->hidden(fn (?Channel $record): bool => $record?->isAccountConnection() ?? false)
                             ->helperText('Канал выбирает тип подключения. Платформа и режим ниже синхронизируются для совместимости.'),
                         Select::make('platform')
                             ->label('Платформа')
@@ -116,7 +126,8 @@ class ChannelResource extends Resource
                             ->options(Channel::platformOptions())
                             ->required()
                             ->selectablePlaceholder(false)
-                            ->native(false),
+                            ->native(false)
+                            ->hidden(fn (?Channel $record): bool => $record?->isAccountConnection() ?? false),
                         Select::make('connection_type')
                             ->label('Тип')
                             ->extraFieldWrapperAttributes(['class' => 'ac-channel-form-field'])
@@ -124,7 +135,8 @@ class ChannelResource extends Resource
                             ->default(Channel::CONNECTION_TYPE_BOT)
                             ->required()
                             ->selectablePlaceholder(false)
-                            ->native(false),
+                            ->native(false)
+                            ->hidden(fn (?Channel $record): bool => $record?->isAccountConnection() ?? false),
                     ])
                     ->columnSpanFull()
                     ->columns(3),
@@ -150,7 +162,8 @@ class ChannelResource extends Resource
                             ->required()
                             ->selectablePlaceholder(false)
                             ->native(false)
-                            ->dehydrateStateUsing(fn (string|int|bool|null $state): bool => (string) $state === '1'),
+                            ->dehydrateStateUsing(fn (string|int|bool|null $state): bool => (string) $state === '1')
+                            ->hidden(fn (?Channel $record): bool => $record?->isAccountConnection() ?? false),
                     ])
                     ->columnSpanFull()
                     ->columns(2),
@@ -174,7 +187,8 @@ class ChannelResource extends Resource
                             ->columnSpanFull(),
                     ])
                     ->columnSpanFull()
-                    ->columns(2),
+                    ->columns(2)
+                    ->hidden(fn (?Channel $record): bool => $record?->isAccountConnection() ?? false),
             ]);
     }
 
@@ -397,7 +411,7 @@ class ChannelResource extends Resource
                     ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('name')
                     ->label('Канал')
-                    ->description(fn (Channel $record): string => static::buildChannelTableSummary($record))
+                    ->description(fn (Channel $record): ?string => static::buildChannelTableSummary($record))
                     ->searchable()
                     ->sortable()
                     ->toggleable(),
@@ -409,11 +423,11 @@ class ChannelResource extends Resource
                     ->toggleable(),
                 TextColumn::make('bot_username')
                     ->label('Username')
-                    ->state(fn (Channel $record): string => $record->getBotUsernameLabel() ?? '—')
-                    ->url(fn (Channel $record): ?string => $record->getBotProfileUrl())
+                    ->state(fn (Channel $record): string => static::resolveChannelUsernameColumnLabel($record))
+                    ->url(fn (Channel $record): ?string => static::resolveChannelUsernameColumnUrl($record))
                     ->openUrlInNewTab()
-                    ->searchable(['bot_username'])
-                    ->sortable()
+                    ->searchable(query: fn (Builder $query, string $search): Builder => static::applyUsernameColumnSearch($query, $search))
+                    ->sortable(query: fn (Builder $query, string $direction): Builder => static::applyUsernameColumnSort($query, $direction))
                     ->toggleable(),
                 TextColumn::make('health_status')
                     ->label('Состояние')
@@ -502,7 +516,7 @@ class ChannelResource extends Resource
                     ->toggleable(),
                 TextColumn::make('connection_error_message')
                     ->label('Ошибка')
-                    ->state(fn (Channel $record): ?string => static::resolveConnectionState($record)['connection_error_message'])
+                    ->state(fn (Channel $record): ?string => static::resolveConnectionErrorDisplay($record, static::resolveConnectionState($record)))
                     ->limit(60)
                     ->wrap()
                     ->toggleable(),
@@ -547,12 +561,31 @@ class ChannelResource extends Resource
                 SelectFilter::make('platform')
                     ->label('Платформа')
                     ->options(Channel::platformOptions()),
+                SelectFilter::make('visibility')
+                    ->label('Видимость')
+                    ->options([
+                        'visible' => 'Только видимые',
+                        'hidden' => 'Только скрытые',
+                        'all' => 'Все каналы',
+                    ])
+                    ->placeholder('Выберите')
+                    ->selectablePlaceholder(false)
+                    ->query(function (Builder $query, array $data): void {
+                        $visibility = $data['value'] ?? 'visible';
+
+                        if (! is_string($visibility) || $visibility === '' || $visibility === 'all') {
+                            return;
+                        }
+
+                        $query->where('is_hidden', $visibility === 'hidden');
+                    }),
                 TernaryFilter::make('is_active')
-                    ->label('Статус')
+                    ->label('Активность')
                     ->placeholder('Все')
                     ->trueLabel('Только активные')
                     ->falseLabel('Только отключённые'),
             ])
+            ->deferFilters(false)
             ->filtersTriggerAction(
                 fn (Action $action): Action => $action
                     ->tooltip('Фильтры')
@@ -627,7 +660,7 @@ class ChannelResource extends Resource
                     ->iconButton()
                     ->extraAttributes(['class' => 'ac-channel-table-operation'])
                     ->tooltip('Проверить подключение')
-                    ->visible(fn (Channel $record): bool => static::canUpdateChannel($record))
+                    ->visible(fn (Channel $record): bool => $record->supportsConnectionCheck() && static::canUpdateChannel($record))
                     ->action(function (Channel $record): void {
                         static::authorizeChannelUpdate($record);
 
@@ -738,6 +771,56 @@ class ChannelResource extends Resource
                             ->body('Настройки сценариев для канала сохранены.')
                             ->send();
                     }),
+                Action::make('hideChannel')
+                    ->label('Скрыть')
+                    ->icon(Heroicon::OutlinedEyeSlash)
+                    ->iconButton()
+                    ->color('warning')
+                    ->extraAttributes(['class' => 'ac-channel-table-operation'])
+                    ->tooltip('Скрыть из списка')
+                    ->visible(fn (Channel $record): bool => ! $record->is_hidden && static::canUpdateChannel($record))
+                    ->requiresConfirmation()
+                    ->modalHeading(fn (Channel $record): string => "Скрыть канал «{$record->name}»?")
+                    ->modalDescription('Канал останется в системе вместе с историей, активностью и текущим состоянием, но будет скрыт из обычного списка. Вернуть его можно через фильтр “Только скрытые”.')
+                    ->modalSubmitActionLabel('Скрыть')
+                    ->action(function (Channel $record): void {
+                        static::authorizeChannelUpdate($record);
+
+                        $record->forceFill([
+                            'is_hidden' => true,
+                        ])->save();
+
+                        Notification::make()
+                            ->success()
+                            ->title('Канал скрыт')
+                            ->body('Он скрыт из обычного списка. Для возврата откройте фильтр “Только скрытые” и нажмите “Показать”.')
+                            ->send();
+                    }),
+                Action::make('showChannel')
+                    ->label('Показать')
+                    ->icon(Heroicon::OutlinedCheckCircle)
+                    ->iconButton()
+                    ->color('success')
+                    ->extraAttributes(['class' => 'ac-channel-table-operation'])
+                    ->tooltip('Показать в списке')
+                    ->visible(fn (Channel $record): bool => $record->is_hidden && static::canUpdateChannel($record))
+                    ->requiresConfirmation()
+                    ->modalHeading(fn (Channel $record): string => "Показать канал «{$record->name}»?")
+                    ->modalDescription('Канал снова появится в обычном списке. Его активность и состояние подключения не изменятся.')
+                    ->modalSubmitActionLabel('Показать')
+                    ->action(function (Channel $record): void {
+                        static::authorizeChannelUpdate($record);
+
+                        $record->forceFill([
+                            'is_hidden' => false,
+                        ])->save();
+
+                        Notification::make()
+                            ->success()
+                            ->title('Канал показан')
+                            ->body('Он снова отображается в обычном списке.')
+                            ->send();
+                    }),
                 ViewAction::make()
                     ->modalWidth(Width::SevenExtraLarge)
                     ->icon(Heroicon::OutlinedEye)
@@ -757,7 +840,7 @@ class ChannelResource extends Resource
                     ->iconButton()
                     ->color('gray')
                     ->extraAttributes(['class' => 'ac-channel-table-action'])
-                    ->visible(fn (Channel $record): bool => $record->isBotConnection())
+                    ->visible(fn (Channel $record): bool => static::canUpdateChannel($record))
                     ->modalFooterActionsAlignment(Alignment::End)
                     ->extraModalWindowAttributes(['class' => 'ac-channel-form-modal'])
                     ->tooltip('Изменить')
@@ -983,6 +1066,10 @@ class ChannelResource extends Resource
      */
     public static function mutateChannelData(array $data, ?Channel $record = null): array
     {
+        if ($record?->isAccountConnection()) {
+            return static::mutateAccountChannelData($data, $record);
+        }
+
         $data = static::syncChannelConnectionTypeData($data);
         $token = trim((string) data_get($data, 'credentials.token', ''));
         $credentials = $record?->readableCredentials() ?? [];
@@ -1001,6 +1088,28 @@ class ChannelResource extends Resource
         Arr::forget($data, 'credentials');
 
         return $data;
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    protected static function mutateAccountChannelData(array $data, Channel $record): array
+    {
+        $autoReplyMode = (string) data_get(
+            $data,
+            'auto_reply_mode',
+            $record->auto_reply_mode ?? Channel::AUTO_REPLY_MODE_RULES_ONLY,
+        );
+
+        if (! array_key_exists($autoReplyMode, Channel::autoReplyModeOptions())) {
+            $autoReplyMode = $record->auto_reply_mode ?? Channel::AUTO_REPLY_MODE_RULES_ONLY;
+        }
+
+        return [
+            'name' => (string) data_get($data, 'name', $record->name),
+            'auto_reply_mode' => $autoReplyMode,
+        ];
     }
 
     /**
@@ -1340,36 +1449,18 @@ class ChannelResource extends Resource
         };
     }
 
-    protected static function buildChannelTableSummary(Channel $record): string
+    protected static function buildChannelTableSummary(Channel $record): ?string
     {
         if ($record->isAccountConnection()) {
-            $runtimeState = $record->runtimeState;
+            return null;
+        }
 
-            if ($runtimeState === null) {
-                return 'Аккаунт ещё не авторизован';
-            }
-
-            if ($runtimeState->authorization_state === ChannelRuntimeState::AUTHORIZATION_STATE_READY) {
-                return sprintf(
-                    'Авторизация: %s · Синхронизация: %s',
-                    $runtimeState->getAuthStatusLabel(),
-                    $runtimeState->getSyncStatusLabel(),
-                );
-            }
-
-            return sprintf(
-                'Авторизация: %s · Шаг: %s',
-                $runtimeState->getAuthStatusLabel(),
-                $runtimeState->getAuthorizationStateLabel(),
-            );
+        if (filled($record->bot_name) && trim((string) $record->bot_name) !== trim((string) $record->name)) {
+            return (string) $record->bot_name;
         }
 
         if (filled($record->bot_username)) {
-            return $record->getBotUsernameLabel() ?? 'Данные бота синхронизированы';
-        }
-
-        if (filled($record->bot_name)) {
-            return (string) $record->bot_name;
+            return null;
         }
 
         if ($record->hasBotTokenConfigured()) {
@@ -1377,6 +1468,83 @@ class ChannelResource extends Resource
         }
 
         return 'Токен ещё не настроен';
+    }
+
+    protected static function resolveChannelUsernameColumnLabel(Channel $record): string
+    {
+        if ($record->isAccountConnection()) {
+            return $record->getTelegramAccountIdentityLabel() ?? 'Аккаунт не передан';
+        }
+
+        return $record->getBotUsernameLabel() ?? '—';
+    }
+
+    protected static function resolveChannelUsernameColumnUrl(Channel $record): ?string
+    {
+        if ($record->isAccountConnection()) {
+            return $record->getTelegramAccountProfileUrl();
+        }
+
+        return $record->getBotProfileUrl();
+    }
+
+    protected static function applyUsernameColumnSearch(Builder $query, string $search): Builder
+    {
+        $search = trim($search);
+
+        if ($search === '') {
+            return $query;
+        }
+
+        $likeSearch = "%{$search}%";
+        $usernameSearch = static::normalizeUsernameSearch($search);
+
+        return $query->where(function (Builder $query) use ($likeSearch, $usernameSearch): void {
+            $query
+                ->where('bot_username', 'ilike', $likeSearch)
+                ->orWhereHas('runtimeState', function (Builder $runtimeStateQuery) use ($likeSearch, $usernameSearch): void {
+                    $runtimeStateQuery
+                        ->whereRaw("runtime_payload #>> '{account,username}' ilike ?", [$likeSearch])
+                        ->orWhereRaw("runtime_payload #>> '{account,id}' ilike ?", [$likeSearch])
+                        ->orWhereRaw("runtime_payload #>> '{account,display_name}' ilike ?", [$likeSearch]);
+
+                    if ($usernameSearch !== null) {
+                        $runtimeStateQuery->orWhereRaw("runtime_payload #>> '{account,username}' ilike ?", ["%{$usernameSearch}%"]);
+                    }
+                });
+
+            if ($usernameSearch !== null) {
+                $query->orWhere('bot_username', 'ilike', "%{$usernameSearch}%");
+            }
+        });
+    }
+
+    protected static function applyUsernameColumnSort(Builder $query, string $direction): Builder
+    {
+        $direction = strtolower($direction) === 'desc' ? 'desc' : 'asc';
+        $accountIdentitySql = <<<'SQL'
+(
+    select coalesce(
+        nullif(channel_runtime_states.runtime_payload #>> '{account,username}', ''),
+        nullif(channel_runtime_states.runtime_payload #>> '{account,id}', ''),
+        nullif(channel_runtime_states.runtime_payload #>> '{account,display_name}', '')
+    )
+    from channel_runtime_states
+    where channel_runtime_states.channel_id = channels.id
+    limit 1
+)
+SQL;
+
+        return $query->orderByRaw(
+            "lower(coalesce(nullif(channels.bot_username, ''), {$accountIdentitySql}, '')) {$direction}",
+        );
+    }
+
+    protected static function normalizeUsernameSearch(string $search): ?string
+    {
+        $username = ltrim(trim($search), '@');
+
+        return $username === '' ? null : $username;
     }
 
     /**
@@ -1392,6 +1560,10 @@ class ChannelResource extends Resource
      */
     protected static function resolveConnectionStatusLabel(Channel $record, array $connectionState): string
     {
+        if ($record->isAccountConnection()) {
+            return $record->getHealthStatusLabel();
+        }
+
         if (static::isStaleConnectionState($connectionState)) {
             return 'Проверка устарела';
         }
@@ -1404,6 +1576,10 @@ class ChannelResource extends Resource
      */
     protected static function resolveConnectionStatusColor(Channel $record, array $connectionState): string
     {
+        if ($record->isAccountConnection()) {
+            return $record->getHealthStatusColor();
+        }
+
         if (static::isStaleConnectionState($connectionState)) {
             return 'warning';
         }
@@ -1416,6 +1592,10 @@ class ChannelResource extends Resource
      */
     protected static function resolveLiveWebhookStatusLabel(Channel $record, array $connectionState): string
     {
+        if ($record->isAccountConnection()) {
+            return 'Не применяется';
+        }
+
         if (static::isStaleConnectionState($connectionState)) {
             return 'Проверка устарела';
         }
@@ -1428,6 +1608,10 @@ class ChannelResource extends Resource
      */
     protected static function resolveLiveWebhookStatusColor(Channel $record, array $connectionState): string
     {
+        if ($record->isAccountConnection()) {
+            return 'gray';
+        }
+
         if (static::isStaleConnectionState($connectionState)) {
             return 'warning';
         }
@@ -1442,6 +1626,23 @@ class ChannelResource extends Resource
     {
         return ($connectionState['connection_status'] ?? null) === Channel::CONNECTION_STATUS_CONNECTED
             && ($connectionState['connection_error_message'] ?? null) === Channel::CONNECTION_ERROR_STALE;
+    }
+
+    protected static function resolveTelegramAccountGatewayDiagnostics(Channel $record): TelegramAccountGatewayDiagnosticsData
+    {
+        return app(ResolveTelegramAccountGatewayDiagnosticsAction::class)->handle($record);
+    }
+
+    /**
+     * @param  array{connection_status: string, webhook_status: string, connection_error_message: ?string, provider_webhook_url: ?string, expected_webhook_url: ?string, connection_checked_at: mixed}  $connectionState
+     */
+    protected static function resolveConnectionErrorDisplay(Channel $record, array $connectionState): ?string
+    {
+        if ($record->isAccountConnection()) {
+            return null;
+        }
+
+        return $connectionState['connection_error_message'];
     }
 
     /**
@@ -1465,6 +1666,10 @@ class ChannelResource extends Resource
         $lastErrorMessage = $record->isAccountConnection()
             ? $record->runtimeState?->last_error_message
             : $record->last_error_message;
+        $gatewayDiagnostics = $record->isAccountConnection()
+            ? static::resolveTelegramAccountGatewayDiagnostics($record)
+            : null;
+        $connectionErrorMessage = $formatText(static::resolveConnectionErrorDisplay($record, $connectionState), 'Ошибок не было');
 
         return [
             'record' => $record,
@@ -1482,20 +1687,25 @@ class ChannelResource extends Resource
                     ['label' => 'Состояние', 'value' => static::resolveConnectionStatusLabel($record, $connectionState), 'tone' => static::resolveConnectionStatusColor($record, $connectionState)],
                     ['label' => 'Включён', 'value' => $record->is_active ? 'Да' : 'Нет', 'tone' => $record->is_active ? 'success' : 'gray'],
                     ['label' => 'Последняя проверка', 'value' => $formatDate($connectionState['connection_checked_at'])],
-                    ['label' => 'Ошибка подключения', 'value' => $formatText($connectionState['connection_error_message'], 'Ошибок не было')],
+                    ['label' => 'Ошибка подключения', 'value' => $connectionErrorMessage],
                     ['label' => 'Обновлён', 'value' => $formatDate($record->updated_at)],
                 ],
                 [
                     ['label' => 'Платформа', 'value' => Channel::platformOptions()[$record->platform] ?? $record->platform, 'tone' => 'info'],
-                    ['label' => 'Имя бота', 'value' => $record->isBotConnection() ? $formatText($record->bot_name, 'Не загружено') : '—'],
+                    ['label' => $record->isAccountConnection() ? 'Имя аккаунта' : 'Имя бота', 'value' => $record->isAccountConnection() ? ($record->getTelegramAccountDisplayNameLabel() ?? 'Аккаунт не передан') : $formatText($record->bot_name, 'Не загружено')],
                     ['label' => 'Webhook', 'value' => static::resolveLiveWebhookStatusLabel($record, $connectionState), 'tone' => static::resolveLiveWebhookStatusColor($record, $connectionState)],
-                    ['label' => 'Ожидаемый URL', 'value' => $formatText($connectionState['expected_webhook_url'])],
+                    ['label' => 'Исходящие ответы', 'value' => $gatewayDiagnostics?->label ?? '—', 'tone' => $gatewayDiagnostics?->severity],
+                    ['label' => 'Последний heartbeat gateway', 'value' => $formatDate($record->runtimeState?->last_gateway_heartbeat_at)],
+                    ['label' => 'Ожидаемый URL', 'value' => $record->isAccountConnection() ? '—' : $formatText($connectionState['expected_webhook_url'])],
                 ],
                 [
                     ['label' => 'Тип', 'value' => $record->getConnectionTypeLabel(), 'tone' => 'warning'],
-                    ['label' => 'Username', 'value' => $record->isBotConnection() ? ($record->getBotUsernameLabel() ?? 'Не загружен') : '—'],
-                    ['label' => 'Последний webhook', 'value' => $formatDate($record->last_webhook_received_at)],
-                    ['label' => 'URL в Telegram', 'value' => $formatText($connectionState['provider_webhook_url'])],
+                    ['label' => $record->isAccountConnection() ? 'Аккаунт' : 'Username', 'value' => $record->isAccountConnection() ? ($record->getTelegramAccountIdentityLabel() ?? 'Аккаунт не передан') : ($record->getBotUsernameLabel() ?? 'Не загружен'), 'url' => $record->isAccountConnection() ? $record->getTelegramAccountProfileUrl() : $record->getBotProfileUrl()],
+                    ['label' => 'Авторизация', 'value' => $record->isAccountConnection() ? ($record->runtimeState?->getAuthStatusLabel() ?? 'Не авторизован') : '—', 'tone' => $record->isAccountConnection() ? ($record->runtimeState?->getAuthStatusColor() ?? 'gray') : null],
+                    ['label' => 'Синхронизация', 'value' => $record->isAccountConnection() ? ($record->runtimeState?->getSyncStatusLabel() ?? 'Ожидает') : '—', 'tone' => $record->isAccountConnection() ? ($record->runtimeState?->getSyncStatusColor() ?? 'gray') : null],
+                    ['label' => 'Последний webhook', 'value' => $record->isAccountConnection() ? '—' : $formatDate($record->last_webhook_received_at)],
+                    ['label' => 'URL в Telegram', 'value' => $record->isAccountConnection() ? '—' : $formatText($connectionState['provider_webhook_url'])],
+                    ['label' => 'Причина', 'value' => $gatewayDiagnostics?->description ?? '—'],
                 ],
             ],
             'latestMessageTables' => [
@@ -1578,14 +1788,56 @@ class ChannelResource extends Resource
 
     protected static function formatMessageReplyStatus(Message $message): string
     {
-        return $message->hasSuccessfulAutoReply()
-            ? 'Ответ отправлен'
-            : 'Ответ еще не отправлен';
+        if ($message->hasSuccessfulAutoReply()) {
+            return 'Ответ отправлен';
+        }
+
+        return static::resolveMessageAutoReplyBusinessStatus($message)
+            ?? 'Ответ еще не отправлен';
     }
 
     protected static function getMessageReplyStatusColor(Message $message): string
     {
-        return $message->hasSuccessfulAutoReply() ? 'success' : 'gray';
+        if ($message->hasSuccessfulAutoReply()) {
+            return 'success';
+        }
+
+        return static::resolveMessageAutoReplyBusinessStatus($message) !== null
+            ? 'warning'
+            : 'gray';
+    }
+
+    protected static function resolveMessageAutoReplyBusinessStatus(Message $message): ?string
+    {
+        if (! $message->exists || $message->direction !== Message::DIRECTION_INBOUND) {
+            return null;
+        }
+
+        if ($message->hasSuccessfulAutoReply()) {
+            return null;
+        }
+
+        $providerEventKey = $message->provider_event_key;
+        $log = ChannelActivityLog::query()
+            ->where('channel_id', $message->channel_id)
+            ->whereIn('event', array_keys(self::MESSAGE_AUTO_REPLY_BUSINESS_STATUS_LABELS))
+            ->orderByDesc('id')
+            ->limit(100)
+            ->get()
+            ->first(function (ChannelActivityLog $log) use ($message, $providerEventKey): bool {
+                if ((int) data_get($log->context, 'message_id') === (int) $message->id) {
+                    return true;
+                }
+
+                return filled($providerEventKey)
+                    && data_get($log->context, 'provider_event_key') === $providerEventKey;
+            });
+
+        if (! $log instanceof ChannelActivityLog) {
+            return null;
+        }
+
+        return self::MESSAGE_AUTO_REPLY_BUSINESS_STATUS_LABELS[$log->event] ?? null;
     }
 
     protected static function formatMessageKind(?string $messageKind): string

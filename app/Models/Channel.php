@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\TelegramAccount\ResolveTelegramAccountGatewayDiagnosticsAction;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -85,6 +86,7 @@ class Channel extends Model
         'last_error_at',
         'last_error_message',
         'is_active',
+        'is_hidden',
         'connection_status',
         'webhook_status',
         'connection_checked_at',
@@ -98,6 +100,7 @@ class Channel extends Model
      */
     protected $casts = [
         'is_active' => 'boolean',
+        'is_hidden' => 'boolean',
         'channel_connection_type_id' => 'integer',
         'bot_token_present' => 'boolean',
         'credentials' => 'encrypted:array',
@@ -333,6 +336,57 @@ class Channel extends Model
         }
 
         return '@'.ltrim((string) $this->bot_username, '@');
+    }
+
+    public function getTelegramAccountIdentityLabel(): ?string
+    {
+        if (! $this->isAccountConnection()) {
+            return null;
+        }
+
+        $username = $this->telegramAccountIdentityValue('username');
+
+        if ($username !== null) {
+            return '@'.ltrim($username, '@');
+        }
+
+        $id = $this->telegramAccountIdentityValue('id');
+
+        if ($id !== null) {
+            return 'ID '.$id;
+        }
+
+        return $this->telegramAccountIdentityValue('display_name');
+    }
+
+    public function getTelegramAccountDisplayNameLabel(): ?string
+    {
+        if (! $this->isAccountConnection()) {
+            return null;
+        }
+
+        return $this->telegramAccountIdentityValue('display_name')
+            ?? $this->getTelegramAccountIdentityLabel();
+    }
+
+    public function getTelegramAccountExternalIdLabel(): ?string
+    {
+        if (! $this->isAccountConnection()) {
+            return null;
+        }
+
+        return $this->telegramAccountIdentityValue('id');
+    }
+
+    public function getTelegramAccountProfileUrl(): ?string
+    {
+        if (! $this->isAccountConnection() || $this->platform !== self::PLATFORM_TELEGRAM) {
+            return null;
+        }
+
+        $username = $this->telegramAccountIdentityValue('username');
+
+        return $username === null ? null : 'https://t.me/'.ltrim($username, '@');
     }
 
     public function getBotProfileUrl(): ?string
@@ -585,23 +639,13 @@ class Channel extends Model
 
     public function hasReadyTelegramAccountGatewayOutgoingReplies(): bool
     {
-        if (! $this->exists || ! $this->is_active || ! $this->isAccountConnection() || $this->platform !== self::PLATFORM_TELEGRAM) {
+        if (! $this->exists) {
             return false;
         }
 
-        $this->loadMissing('runtimeState');
-
-        $runtimeState = $this->runtimeState;
-
-        if (! $runtimeState instanceof ChannelRuntimeState) {
-            return false;
-        }
-
-        return $runtimeState->auth_status === ChannelRuntimeState::AUTH_STATUS_AUTHORIZED
-            && $runtimeState->authorization_state === ChannelRuntimeState::AUTHORIZATION_STATE_READY
-            && $runtimeState->sync_status === ChannelRuntimeState::SYNC_STATUS_LIVE
-            && $this->hasFreshTelegramAccountGatewayHeartbeat()
-            && data_get($runtimeState->runtime_payload, 'gateway_capabilities.outgoing_replies') === true;
+        return app(ResolveTelegramAccountGatewayDiagnosticsAction::class)
+            ->handle($this)
+            ->isOutgoingReplyReady;
     }
 
     public function hasFreshConnectionCheck(): bool
@@ -677,6 +721,23 @@ class Channel extends Model
         return $runtimeState instanceof ChannelRuntimeState
             && $runtimeState->last_gateway_heartbeat_at !== null
             && $runtimeState->last_gateway_heartbeat_at->greaterThanOrEqualTo(now()->subMinutes(self::GATEWAY_HEARTBEAT_FRESH_FOR_MINUTES));
+    }
+
+    private function telegramAccountIdentityValue(string $key): ?string
+    {
+        $value = data_get($this->runtimeState?->runtime_payload, "account.{$key}");
+
+        if (is_int($value) || is_float($value)) {
+            $value = (string) $value;
+        }
+
+        if (! is_string($value)) {
+            return null;
+        }
+
+        $value = trim($value);
+
+        return $value === '' ? null : $value;
     }
 
     protected function getAccountHealthStatusLabel(): string

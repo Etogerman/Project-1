@@ -978,7 +978,7 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('Account inbox contact')
             ->assertSee('Telegram Account Inbox')
             ->assertSee('Требует ответа')
-            ->assertSee('Gateway не готов');
+            ->assertSee('Gateway не готов к исходящим ответам');
     }
 
     public function test_dialog_view_renders_media_badges_for_telegram_account_message(): void
