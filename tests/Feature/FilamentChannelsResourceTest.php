@@ -791,6 +791,103 @@ class FilamentChannelsResourceTest extends TestCase
         $this->assertStringContainsString('href="https://t.me/gateway_account"', $overviewHtml);
     }
 
+    public function test_account_channel_username_column_is_searchable_by_gateway_account_username(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $matchingChannel = Channel::factory()->account()->create([
+            'name' => 'Matching Telegram Account',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        ChannelRuntimeState::query()->create([
+            'channel_id' => $matchingChannel->id,
+            'runtime_payload' => [
+                'account' => [
+                    'id' => '100001',
+                    'username' => 'gateway_account',
+                    'display_name' => 'Gateway Account',
+                ],
+            ],
+        ]);
+
+        $otherAccountChannel = Channel::factory()->account()->create([
+            'name' => 'Other Telegram Account',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        ChannelRuntimeState::query()->create([
+            'channel_id' => $otherAccountChannel->id,
+            'runtime_payload' => [
+                'account' => [
+                    'id' => '100002',
+                    'username' => 'other_account',
+                    'display_name' => 'Other Account',
+                ],
+            ],
+        ]);
+
+        $botChannel = Channel::factory()->create([
+            'name' => 'Classic Telegram Bot',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'bot_username' => 'classic_bot',
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->searchTable('@gateway_account')
+            ->assertCanSeeTableRecords([$matchingChannel])
+            ->assertCanNotSeeTableRecords([$otherAccountChannel, $botChannel]);
+    }
+
+    public function test_account_channel_username_column_sorts_by_gateway_account_identity(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $zetaAccountChannel = Channel::factory()->account()->create([
+            'name' => 'Zeta Telegram Account',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        ChannelRuntimeState::query()->create([
+            'channel_id' => $zetaAccountChannel->id,
+            'runtime_payload' => [
+                'account' => [
+                    'username' => 'zeta_account',
+                ],
+            ],
+        ]);
+
+        $botChannel = Channel::factory()->create([
+            'name' => 'Middle Telegram Bot',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'bot_username' => 'middle_bot',
+        ]);
+
+        $alphaAccountChannel = Channel::factory()->account()->create([
+            'name' => 'Alpha Telegram Account',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        ChannelRuntimeState::query()->create([
+            'channel_id' => $alphaAccountChannel->id,
+            'runtime_payload' => [
+                'account' => [
+                    'username' => 'alpha_account',
+                ],
+            ],
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->call('sortTable', 'bot_username', 'asc')
+            ->assertCanSeeTableRecords([$alphaAccountChannel, $botChannel, $zetaAccountChannel], inOrder: true)
+            ->call('sortTable', 'bot_username', 'desc')
+            ->assertCanSeeTableRecords([$zetaAccountChannel, $botChannel, $alphaAccountChannel], inOrder: true);
+    }
+
     public function test_account_channel_identity_falls_back_to_external_id_without_username(): void
     {
         $channel = Channel::factory()->account()->create([

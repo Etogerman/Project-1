@@ -426,8 +426,8 @@ class ChannelResource extends Resource
                     ->state(fn (Channel $record): string => static::resolveChannelUsernameColumnLabel($record))
                     ->url(fn (Channel $record): ?string => static::resolveChannelUsernameColumnUrl($record))
                     ->openUrlInNewTab()
-                    ->searchable(['bot_username'])
-                    ->sortable()
+                    ->searchable(query: fn (Builder $query, string $search): Builder => static::applyUsernameColumnSearch($query, $search))
+                    ->sortable(query: fn (Builder $query, string $direction): Builder => static::applyUsernameColumnSort($query, $direction))
                     ->toggleable(),
                 TextColumn::make('health_status')
                     ->label('Состояние')
@@ -1486,6 +1486,65 @@ class ChannelResource extends Resource
         }
 
         return $record->getBotProfileUrl();
+    }
+
+    protected static function applyUsernameColumnSearch(Builder $query, string $search): Builder
+    {
+        $search = trim($search);
+
+        if ($search === '') {
+            return $query;
+        }
+
+        $likeSearch = "%{$search}%";
+        $usernameSearch = static::normalizeUsernameSearch($search);
+
+        return $query->where(function (Builder $query) use ($likeSearch, $usernameSearch): void {
+            $query
+                ->where('bot_username', 'ilike', $likeSearch)
+                ->orWhereHas('runtimeState', function (Builder $runtimeStateQuery) use ($likeSearch, $usernameSearch): void {
+                    $runtimeStateQuery
+                        ->whereRaw("runtime_payload #>> '{account,username}' ilike ?", [$likeSearch])
+                        ->orWhereRaw("runtime_payload #>> '{account,id}' ilike ?", [$likeSearch])
+                        ->orWhereRaw("runtime_payload #>> '{account,display_name}' ilike ?", [$likeSearch]);
+
+                    if ($usernameSearch !== null) {
+                        $runtimeStateQuery->orWhereRaw("runtime_payload #>> '{account,username}' ilike ?", ["%{$usernameSearch}%"]);
+                    }
+                });
+
+            if ($usernameSearch !== null) {
+                $query->orWhere('bot_username', 'ilike', "%{$usernameSearch}%");
+            }
+        });
+    }
+
+    protected static function applyUsernameColumnSort(Builder $query, string $direction): Builder
+    {
+        $direction = strtolower($direction) === 'desc' ? 'desc' : 'asc';
+        $accountIdentitySql = <<<'SQL'
+(
+    select coalesce(
+        nullif(channel_runtime_states.runtime_payload #>> '{account,username}', ''),
+        nullif(channel_runtime_states.runtime_payload #>> '{account,id}', ''),
+        nullif(channel_runtime_states.runtime_payload #>> '{account,display_name}', '')
+    )
+    from channel_runtime_states
+    where channel_runtime_states.channel_id = channels.id
+    limit 1
+)
+SQL;
+
+        return $query->orderByRaw(
+            "lower(coalesce(nullif(channels.bot_username, ''), {$accountIdentitySql}, '')) {$direction}",
+        );
+    }
+
+    protected static function normalizeUsernameSearch(string $search): ?string
+    {
+        $username = ltrim(trim($search), '@');
+
+        return $username === '' ? null : $username;
     }
 
     /**
