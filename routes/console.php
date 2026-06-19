@@ -2,6 +2,7 @@
 
 use App\Models\Channel;
 use App\Services\Bots\CheckChannelConnectionAction;
+use App\Services\Bots\RecordChannelConnectionCheckRunAction;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
@@ -23,6 +24,8 @@ Artisan::command('channels:check-connections {--channel= : ID одного ка�
     try {
         /** @var CheckChannelConnectionAction $checker */
         $checker = app(CheckChannelConnectionAction::class);
+        /** @var RecordChannelConnectionCheckRunAction $runRecorder */
+        $runRecorder = app(RecordChannelConnectionCheckRunAction::class);
         $channelId = $this->option('channel');
 
         if (filled($channelId)) {
@@ -34,13 +37,31 @@ Artisan::command('channels:check-connections {--channel= : ID одного ка�
                 return 1;
             }
 
-            $checker->handle($channel);
-            $this->info("Канал #{$channel->id} проверен.");
+            $run = $runRecorder->start();
 
-            return 0;
+            try {
+                $checker->handle($channel);
+                $runRecorder->finish($run, 1, 1, 0);
+                $this->info("Канал #{$channel->id} проверен.");
+
+                return 0;
+            } catch (Throwable $throwable) {
+                $runRecorder->fail($run, $throwable);
+                report($throwable);
+                $this->error("Не удалось проверить канал #{$channel->id}: {$throwable->getMessage()}");
+
+                return 1;
+            }
         }
 
         $limit = min(max((int) $this->option('limit'), 1), 100);
+        $run = $runRecorder->start();
+        $processedCount = 0;
+        $successCount = 0;
+        $failureCount = 0;
+        $lastErrorCode = null;
+        $lastErrorMessage = null;
+
         $channels = Channel::query()
             ->orderByRaw('CASE WHEN connection_checked_at IS NULL THEN 0 ELSE 1 END')
             ->orderBy('connection_checked_at')
@@ -49,10 +70,36 @@ Artisan::command('channels:check-connections {--channel= : ID одного ка�
             ->get();
 
         foreach ($channels as $channel) {
-            $checker->handle($channel);
+            $processedCount++;
+
+            try {
+                $checker->handle($channel);
+                $successCount++;
+            } catch (Throwable $throwable) {
+                $failureCount++;
+                $lastErrorCode = class_basename($throwable);
+                $lastErrorMessage = $throwable->getMessage();
+                report($throwable);
+                $this->warn("Канал #{$channel->id} не удалось проверить из-за ошибки checker-а.");
+            }
         }
 
-        $this->info("Проверено каналов: {$channels->count()}.");
+        $runRecorder->finish(
+            $run,
+            $processedCount,
+            $successCount,
+            $failureCount,
+            $lastErrorCode,
+            $lastErrorMessage,
+        );
+
+        $this->info("Проверено каналов: {$processedCount}.");
+
+        if ($failureCount > 0) {
+            $this->warn("Ошибок checker-а: {$failureCount}.");
+
+            return 1;
+        }
 
         return 0;
     } finally {

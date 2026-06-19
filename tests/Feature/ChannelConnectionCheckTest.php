@@ -3,8 +3,10 @@
 namespace Tests\Feature;
 
 use App\Models\Channel;
+use App\Models\ChannelConnectionCheckRun;
 use App\Services\Bots\ChannelWebhookUrlGenerator;
 use App\Services\Bots\CheckChannelConnectionAction;
+use App\Services\Bots\ResolveChannelConnectionCheckerHealthAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Artisan;
@@ -319,7 +321,7 @@ class ChannelConnectionCheckTest extends TestCase
             'is_active' => true,
             'connection_status' => Channel::CONNECTION_STATUS_CONNECTED,
             'webhook_status' => Channel::WEBHOOK_STATUS_INSTALLED,
-            'connection_checked_at' => now()->subMinutes(3),
+            'connection_checked_at' => now()->subMinutes(11),
             'expected_webhook_url' => 'https://connector.example/webhooks/telegram/1',
             'provider_webhook_url' => 'https://connector.example/webhooks/telegram/1',
         ]);
@@ -402,7 +404,83 @@ class ChannelConnectionCheckTest extends TestCase
         $this->assertSame(Channel::CONNECTION_STATUS_NOT_CONNECTED, $channel->fresh()->connection_status);
         $this->assertSame(Channel::CONNECTION_ERROR_NO_TOKEN, $channel->fresh()->connection_error_message);
 
+        $run = ChannelConnectionCheckRun::query()->latest('id')->first();
+
+        $this->assertInstanceOf(ChannelConnectionCheckRun::class, $run);
+        $this->assertSame(ChannelConnectionCheckRun::STATUS_SUCCESS, $run->status);
+        $this->assertSame(1, $run->processed_count);
+        $this->assertSame(1, $run->success_count);
+        $this->assertSame(0, $run->failure_count);
+        $this->assertNotNull($run->started_at);
+        $this->assertNotNull($run->finished_at);
+        $this->assertSame(app()->environment(), $run->environment);
+
         Http::assertNothingSent();
+    }
+
+    public function test_connection_checker_health_reports_missing_stale_and_fresh_scheduler_runs(): void
+    {
+        $resolver = app(ResolveChannelConnectionCheckerHealthAction::class);
+
+        $missing = $resolver->handle();
+
+        $this->assertSame('unknown', $missing['status']);
+        $this->assertSame('warning', $missing['tone']);
+        $this->assertTrue($missing['show_banner']);
+        $this->assertNotNull($missing['stale_channel_reason']);
+
+        $runningRun = ChannelConnectionCheckRun::query()->create([
+            'started_at' => now()->subMinute(),
+            'finished_at' => null,
+            'status' => ChannelConnectionCheckRun::STATUS_STARTED,
+            'processed_count' => 0,
+            'success_count' => 0,
+            'failure_count' => 0,
+            'environment' => app()->environment(),
+        ]);
+
+        $running = $resolver->handle();
+
+        $this->assertSame('running', $running['status']);
+        $this->assertSame('warning', $running['tone']);
+        $this->assertTrue($running['show_banner']);
+
+        $runningRun->delete();
+
+        ChannelConnectionCheckRun::query()->create([
+            'started_at' => now()->subMinutes(35),
+            'finished_at' => now()->subMinutes(31),
+            'status' => ChannelConnectionCheckRun::STATUS_SUCCESS,
+            'processed_count' => 2,
+            'success_count' => 2,
+            'failure_count' => 0,
+            'environment' => app()->environment(),
+        ]);
+
+        $critical = $resolver->handle();
+
+        $this->assertSame('critical', $critical['status']);
+        $this->assertSame('danger', $critical['tone']);
+        $this->assertTrue($critical['show_banner']);
+        $this->assertSame(2, $critical['processed_count']);
+
+        ChannelConnectionCheckRun::query()->create([
+            'started_at' => now()->subMinute(),
+            'finished_at' => now(),
+            'status' => ChannelConnectionCheckRun::STATUS_SUCCESS,
+            'processed_count' => 3,
+            'success_count' => 3,
+            'failure_count' => 0,
+            'environment' => app()->environment(),
+        ]);
+
+        $fresh = $resolver->handle();
+
+        $this->assertSame('ok', $fresh['status']);
+        $this->assertSame('success', $fresh['tone']);
+        $this->assertFalse($fresh['show_banner']);
+        $this->assertNull($fresh['stale_channel_reason']);
+        $this->assertSame(3, $fresh['processed_count']);
     }
 
     public function test_connection_check_migration_keeps_existing_active_supported_bots_sendable_until_first_check(): void
