@@ -723,6 +723,27 @@ class FilamentChannelsResourceTest extends TestCase
         $this->assertSame('Работает', $channel->getHealthStatusLabel());
     }
 
+    public function test_bot_channel_table_summary_does_not_duplicate_username_column(): void
+    {
+        $summaryBuilder = new ReflectionMethod(ChannelResource::class, 'buildChannelTableSummary');
+        $summaryBuilder->setAccessible(true);
+
+        $channel = Channel::factory()->create([
+            'name' => 'MAX локальный',
+            'platform' => Channel::PLATFORM_MAX,
+            'bot_username' => 'id262403882602_bot',
+            'bot_name' => null,
+        ]);
+
+        $this->assertNull($summaryBuilder->invoke(null, $channel));
+
+        $channel->forceFill([
+            'bot_name' => 'Bot profile name',
+        ])->saveQuietly();
+
+        $this->assertSame('Bot profile name', $summaryBuilder->invoke(null, $channel->fresh()));
+    }
+
     public function test_account_channel_username_column_shows_gateway_account_identity(): void
     {
         $admin = User::factory()->create([
@@ -823,7 +844,8 @@ class FilamentChannelsResourceTest extends TestCase
             ->assertMountedActionModalSee('Не применяется')
             ->assertMountedActionModalSee('Исходящие ответы')
             ->assertMountedActionModalSee('Синхронизация Telegram account не в реальном времени')
-            ->assertMountedActionModalSee('Проверка подключения не применяется к Telegram account');
+            ->assertMountedActionModalSee('Ошибок не было')
+            ->assertDontSee('Проверка подключения не применяется к Telegram account');
     }
 
     public function test_channel_view_modal_uses_clickable_disclosures_for_feed_and_activity_log(): void

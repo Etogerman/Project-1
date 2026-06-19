@@ -1425,12 +1425,12 @@ class ChannelResource extends Resource
             return null;
         }
 
-        if (filled($record->bot_username)) {
-            return $record->getBotUsernameLabel() ?? 'Данные бота синхронизированы';
+        if (filled($record->bot_name) && trim((string) $record->bot_name) !== trim((string) $record->name)) {
+            return (string) $record->bot_name;
         }
 
-        if (filled($record->bot_name)) {
-            return (string) $record->bot_name;
+        if (filled($record->bot_username)) {
+            return null;
         }
 
         if ($record->hasBotTokenConfigured()) {
@@ -1550,7 +1550,7 @@ class ChannelResource extends Resource
     protected static function resolveConnectionErrorDisplay(Channel $record, array $connectionState): ?string
     {
         if ($record->isAccountConnection()) {
-            return 'Проверка подключения не применяется к Telegram account';
+            return null;
         }
 
         return $connectionState['connection_error_message'];
