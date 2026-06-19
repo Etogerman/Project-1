@@ -8,7 +8,6 @@ use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Channel;
 use App\Models\ChannelActivityLog;
 use App\Models\ChannelConnectionType;
-use App\Models\ChannelRuntimeState;
 use App\Models\Message;
 use App\Models\ScenarioVersion;
 use App\Services\Bots\CheckChannelConnectionAction;
@@ -407,7 +406,7 @@ class ChannelResource extends Resource
                     ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('name')
                     ->label('Канал')
-                    ->description(fn (Channel $record): string => static::buildChannelTableSummary($record))
+                    ->description(fn (Channel $record): ?string => static::buildChannelTableSummary($record))
                     ->searchable()
                     ->sortable()
                     ->toggleable(),
@@ -557,12 +556,32 @@ class ChannelResource extends Resource
                 SelectFilter::make('platform')
                     ->label('Платформа')
                     ->options(Channel::platformOptions()),
+                SelectFilter::make('visibility')
+                    ->label('Видимость')
+                    ->options([
+                        'visible' => 'Только видимые',
+                        'hidden' => 'Только скрытые',
+                        'all' => 'Все каналы',
+                    ])
+                    ->placeholder('Выберите')
+                    ->selectablePlaceholder(false)
+                    ->default('visible')
+                    ->query(function (Builder $query, array $data): void {
+                        $visibility = $data['value'] ?? 'visible';
+
+                        if (! is_string($visibility) || $visibility === '' || $visibility === 'all') {
+                            return;
+                        }
+
+                        $query->where('is_hidden', $visibility === 'hidden');
+                    }),
                 TernaryFilter::make('is_active')
-                    ->label('Статус')
+                    ->label('Активность')
                     ->placeholder('Все')
                     ->trueLabel('Только активные')
                     ->falseLabel('Только отключённые'),
             ])
+            ->deferFilters(false)
             ->filtersTriggerAction(
                 fn (Action $action): Action => $action
                     ->tooltip('Фильтры')
@@ -746,6 +765,56 @@ class ChannelResource extends Resource
                             ->success()
                             ->title('Сценарии обновлены')
                             ->body('Настройки сценариев для канала сохранены.')
+                            ->send();
+                    }),
+                Action::make('hideChannel')
+                    ->label('Скрыть')
+                    ->icon(Heroicon::OutlinedEyeSlash)
+                    ->iconButton()
+                    ->color('warning')
+                    ->extraAttributes(['class' => 'ac-channel-table-operation'])
+                    ->tooltip('Скрыть из списка')
+                    ->visible(fn (Channel $record): bool => ! $record->is_hidden && static::canUpdateChannel($record))
+                    ->requiresConfirmation()
+                    ->modalHeading(fn (Channel $record): string => "Скрыть канал «{$record->name}»?")
+                    ->modalDescription('Канал останется в системе вместе с историей, активностью и текущим состоянием, но будет скрыт из обычного списка. Вернуть его можно через фильтр “Только скрытые”.')
+                    ->modalSubmitActionLabel('Скрыть')
+                    ->action(function (Channel $record): void {
+                        static::authorizeChannelUpdate($record);
+
+                        $record->forceFill([
+                            'is_hidden' => true,
+                        ])->save();
+
+                        Notification::make()
+                            ->success()
+                            ->title('Канал скрыт')
+                            ->body('Он скрыт из обычного списка. Для возврата откройте фильтр “Только скрытые” и нажмите “Показать”.')
+                            ->send();
+                    }),
+                Action::make('showChannel')
+                    ->label('Показать')
+                    ->icon(Heroicon::OutlinedCheckCircle)
+                    ->iconButton()
+                    ->color('success')
+                    ->extraAttributes(['class' => 'ac-channel-table-operation'])
+                    ->tooltip('Показать в списке')
+                    ->visible(fn (Channel $record): bool => $record->is_hidden && static::canUpdateChannel($record))
+                    ->requiresConfirmation()
+                    ->modalHeading(fn (Channel $record): string => "Показать канал «{$record->name}»?")
+                    ->modalDescription('Канал снова появится в обычном списке. Его активность и состояние подключения не изменятся.')
+                    ->modalSubmitActionLabel('Показать')
+                    ->action(function (Channel $record): void {
+                        static::authorizeChannelUpdate($record);
+
+                        $record->forceFill([
+                            'is_hidden' => false,
+                        ])->save();
+
+                        Notification::make()
+                            ->success()
+                            ->title('Канал показан')
+                            ->body('Он снова отображается в обычном списке.')
                             ->send();
                     }),
                 ViewAction::make()
@@ -1350,30 +1419,10 @@ class ChannelResource extends Resource
         };
     }
 
-    protected static function buildChannelTableSummary(Channel $record): string
+    protected static function buildChannelTableSummary(Channel $record): ?string
     {
         if ($record->isAccountConnection()) {
-            $runtimeState = $record->runtimeState;
-            $gatewayDiagnostics = static::resolveTelegramAccountGatewayDiagnostics($record);
-
-            if ($runtimeState === null) {
-                return $gatewayDiagnostics->label;
-            }
-
-            if ($runtimeState->authorization_state === ChannelRuntimeState::AUTHORIZATION_STATE_READY) {
-                return sprintf(
-                    'Авторизация: %s · Синхронизация: %s · Исходящие: %s',
-                    $runtimeState->getAuthStatusLabel(),
-                    $runtimeState->getSyncStatusLabel(),
-                    $gatewayDiagnostics->isOutgoingReplyReady ? 'готовы' : 'недоступны',
-                );
-            }
-
-            return sprintf(
-                'Авторизация: %s · Шаг: %s',
-                $runtimeState->getAuthStatusLabel(),
-                $runtimeState->getAuthorizationStateLabel(),
-            );
+            return null;
         }
 
         if (filled($record->bot_username)) {

@@ -86,6 +86,7 @@ class Channel extends Model
         'last_error_at',
         'last_error_message',
         'is_active',
+        'is_hidden',
         'connection_status',
         'webhook_status',
         'connection_checked_at',
@@ -99,6 +100,7 @@ class Channel extends Model
      */
     protected $casts = [
         'is_active' => 'boolean',
+        'is_hidden' => 'boolean',
         'channel_connection_type_id' => 'integer',
         'bot_token_present' => 'boolean',
         'credentials' => 'encrypted:array',
