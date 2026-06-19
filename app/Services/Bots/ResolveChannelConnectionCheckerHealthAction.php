@@ -48,6 +48,24 @@ class ResolveChannelConnectionCheckerHealthAction
 
         if ($run->finished_at === null) {
             $isCritical = $run->started_at?->lt(now()->subMinutes(self::CRITICAL_AFTER_MINUTES)) === true;
+            $lastFinishedRun = $this->latestFinishedRun($environment);
+
+            if (
+                ! $isCritical
+                && $lastFinishedRun instanceof ChannelConnectionCheckRun
+                && $lastFinishedRun->status === ChannelConnectionCheckRun::STATUS_SUCCESS
+                && $lastFinishedRun->hasFreshFinishedAt(self::FRESH_FOR_MINUTES)
+            ) {
+                return $this->makeFromRun(
+                    $lastFinishedRun,
+                    status: 'ok',
+                    label: 'Планировщик проверок работает',
+                    tone: 'success',
+                    description: 'Последний завершённый heartbeat свежий, новая проверка выполняется.',
+                    staleChannelReason: null,
+                    showBanner: false,
+                );
+            }
 
             return $this->makeFromRun(
                 $run,
@@ -201,5 +219,17 @@ class ResolveChannelConnectionCheckerHealthAction
             'app_rev' => $appRev,
             'environment' => $environment,
         ];
+    }
+
+    protected function latestFinishedRun(?string $environment): ?ChannelConnectionCheckRun
+    {
+        $run = ChannelConnectionCheckRun::query()
+            ->when($environment !== null, fn ($query) => $query->where('environment', $environment))
+            ->whereNotNull('finished_at')
+            ->latest('finished_at')
+            ->latest('id')
+            ->first();
+
+        return $run instanceof ChannelConnectionCheckRun ? $run : null;
     }
 }
