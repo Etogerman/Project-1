@@ -565,7 +565,6 @@ class ChannelResource extends Resource
                     ])
                     ->placeholder('Выберите')
                     ->selectablePlaceholder(false)
-                    ->default('visible')
                     ->query(function (Builder $query, array $data): void {
                         $visibility = $data['value'] ?? 'visible';
 
