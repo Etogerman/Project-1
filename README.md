@@ -13,8 +13,8 @@ collector flow и Bitrix24 integration.
 ```bash
 composer dev                     # локальный dev-runtime вне Docker
 composer docker:build           # собрать docker-образы
-composer docker:up              # поднять контейнеры в фоне
-composer docker:dev             # запустить composer dev внутри контейнера dev
+composer docker:up              # поднять полный Docker dev-runtime в фоне
+composer docker:dev             # запустить Docker dev-runtime в foreground
 composer docker:down            # остановить контейнеры
 composer docker:remove          # остановить контейнеры и удалить volumes
 composer test:feature:ui        # UI feature shard
@@ -46,7 +46,7 @@ NGROK_AUTHTOKEN=your_token
 APP_URL=https://your-name.ngrok-free.app
 ```
 
-### 3. Запусти контейнер
+### 3. Запусти локальный runtime
 
 **VS Code Dev Container** — нужны [Docker Desktop](https://www.docker.com/products/docker-desktop/) и расширение [Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers):
 
@@ -62,34 +62,22 @@ composer docker:up
 
 Прямой эквивалент: `docker compose up -d`.
 
-Контейнер автоматически копирует `.env`, ставит зависимости и применяет миграции.
+Контейнер автоматически ставит зависимости, применяет миграции и запускает полный dev-runtime:
+web-server, scheduler, queue workers, логи и frontend watcher.
 
-### 4. Запусти dev-сервер
+Не запускай отдельно только `php artisan serve`: без `php artisan schedule:work`
+статусы каналов через пару минут станут `Проверка устарела`.
 
-**VS Code Dev Container** — в терминале контейнера:
-
-```bash
-composer dev
-```
-
-**Чистый Docker:**
-
-Удобнее сначала войти в контейнер и работать внутри него:
-
-```bash
-docker compose exec dev bash
-```
-
-Затем в той же сессии:
-
-```bash
-composer dev
-```
-
-Или одной командой без входа в контейнер:
+Если нужен foreground-режим с логами:
 
 ```bash
 composer docker:dev
+```
+
+Если нужно войти в контейнер:
+
+```bash
+docker compose exec dev bash
 ```
 
 | Сервис   | Адрес                       |

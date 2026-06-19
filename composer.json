@@ -78,10 +78,7 @@
         "docker:build": "docker compose build",
         "docker:up": "docker compose up -d",
         "docker:down": "docker compose down",
-        "docker:dev": [
-            "Composer\\Config::disableProcessTimeout",
-            "docker compose exec -it dev composer dev"
-        ],
+        "docker:dev": "docker compose up dev",
         "docker:remove": "docker compose down -v"
     },
     "extra": {
