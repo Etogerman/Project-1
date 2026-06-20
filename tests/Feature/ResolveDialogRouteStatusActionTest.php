@@ -73,7 +73,7 @@ class ResolveDialogRouteStatusActionTest extends TestCase
                 'credentials' => ['token' => 'telegram-token'],
                 'connection_status' => Channel::CONNECTION_STATUS_CONNECTED,
                 'webhook_status' => Channel::WEBHOOK_STATUS_INSTALLED,
-                'connection_checked_at' => now()->subMinutes(3),
+                'connection_checked_at' => now()->subMinutes(11),
                 'connection_error_message' => null,
             ],
             dialogAttributes: [
@@ -315,8 +315,9 @@ class ResolveDialogRouteStatusActionTest extends TestCase
         $status = app(ResolveDialogRouteStatusAction::class)->handle($dialog->fresh(['channel.runtimeState', 'currentContactIdentity']));
 
         $this->assertSame(DialogRouteStatusData::CODE_ACCOUNT_NOT_READY, $status->code);
-        $this->assertSame('Gateway не готов', $status->label);
+        $this->assertSame('Gateway не готов к исходящим ответам', $status->label);
         $this->assertFalse($status->isSendable);
+        $this->assertSame('Gateway не подтвердил отправку исходящих ответов для этого Telegram account.', $status->blockedReason);
         $this->assertFalse(app(CanSendThroughDialogAction::class)->handle($dialog->fresh(['channel.runtimeState', 'currentContactIdentity'])));
     }
 
@@ -345,9 +346,9 @@ class ResolveDialogRouteStatusActionTest extends TestCase
         $status = app(ResolveDialogRouteStatusAction::class)->handle($dialog->fresh(['channel.runtimeState', 'currentContactIdentity']));
 
         $this->assertSame(DialogRouteStatusData::CODE_ACCOUNT_NOT_READY, $status->code);
-        $this->assertSame('Gateway не готов', $status->label);
+        $this->assertSame('Gateway не готов к исходящим ответам', $status->label);
         $this->assertFalse($status->isSendable);
-        $this->assertSame('У этого диалога сейчас нет рабочего маршрута для отправки ответа.', $status->blockedReason);
+        $this->assertSame('Telegram account не авторизован, поэтому gateway не может отправлять исходящие ответы.', $status->blockedReason);
     }
 
     public function test_resolve_dialog_route_status_marks_unsupported_platform(): void

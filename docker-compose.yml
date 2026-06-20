@@ -5,6 +5,7 @@ services:
     build:
       context: .devcontainer
       dockerfile: Dockerfile
+    command: composer dev
     volumes:
       - .:/var/www/html
     extra_hosts:
