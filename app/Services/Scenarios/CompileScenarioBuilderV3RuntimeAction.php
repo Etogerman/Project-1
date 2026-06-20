@@ -395,6 +395,12 @@ class CompileScenarioBuilderV3RuntimeAction
                     ];
                 }
 
+                if ($type === 'complete_data_collection') {
+                    return [
+                        'type' => 'complete_data_collection',
+                    ];
+                }
+
                 if ($type === 'bitrix24_sync') {
                     return [
                         'type' => 'bitrix24_sync',
@@ -451,6 +457,7 @@ class CompileScenarioBuilderV3RuntimeAction
                 'simulate_start_parameter' => ($item['source_scope'] ?? '') === 'dialog'
                     && ($item['source_field_key'] ?? '') !== '',
                 'tag_effects' => (($item['assign_tag_ids'] ?? []) !== [] || ($item['remove_tag_ids'] ?? []) !== []),
+                'complete_data_collection' => true,
                 'bitrix24_sync' => in_array($item['operation'] ?? '', [
                     'contact_sync',
                     'deal_sync',
