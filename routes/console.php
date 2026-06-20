@@ -24,8 +24,6 @@ Artisan::command('channels:check-connections {--channel= : ID одного ка�
     try {
         /** @var CheckChannelConnectionAction $checker */
         $checker = app(CheckChannelConnectionAction::class);
-        /** @var RecordChannelConnectionCheckRunAction $runRecorder */
-        $runRecorder = app(RecordChannelConnectionCheckRunAction::class);
         $channelId = $this->option('channel');
 
         if (filled($channelId)) {
@@ -37,16 +35,12 @@ Artisan::command('channels:check-connections {--channel= : ID одного ка�
                 return 1;
             }
 
-            $run = $runRecorder->start();
-
             try {
                 $checker->handle($channel);
-                $runRecorder->finish($run, 1, 1, 0);
                 $this->info("Канал #{$channel->id} проверен.");
 
                 return 0;
             } catch (Throwable $throwable) {
-                $runRecorder->fail($run, $throwable);
                 report($throwable);
                 $this->error("Не удалось проверить канал #{$channel->id}: {$throwable->getMessage()}");
 
@@ -55,6 +49,8 @@ Artisan::command('channels:check-connections {--channel= : ID одного ка�
         }
 
         $limit = min(max((int) $this->option('limit'), 1), 100);
+        /** @var RecordChannelConnectionCheckRunAction $runRecorder */
+        $runRecorder = app(RecordChannelConnectionCheckRunAction::class);
         $run = $runRecorder->start();
         $processedCount = 0;
         $successCount = 0;
