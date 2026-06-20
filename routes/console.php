@@ -119,6 +119,10 @@ Schedule::command('channels:check-connections --limit=100')
     ->everyMinute()
     ->withoutOverlapping();
 
+Schedule::command('channels:prune-connection-check-runs --days=30')
+    ->daily()
+    ->withoutOverlapping();
+
 Schedule::command('bot-constructor:run-scheduled-arrows')
     ->everyFiveMinutes()
     ->withoutOverlapping();
