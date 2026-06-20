@@ -561,6 +561,43 @@ class ChannelConnectionCheckTest extends TestCase
         $this->assertSame(3, $health['processed_count']);
     }
 
+    public function test_prune_connection_check_runs_command_deletes_only_records_older_than_retention(): void
+    {
+        $oldRun = ChannelConnectionCheckRun::query()->create([
+            'started_at' => now()->subDays(45),
+            'finished_at' => now()->subDays(45)->addMinute(),
+            'status' => ChannelConnectionCheckRun::STATUS_SUCCESS,
+            'processed_count' => 1,
+            'success_count' => 1,
+            'failure_count' => 0,
+            'environment' => app()->environment(),
+        ]);
+        $oldRun->forceFill([
+            'created_at' => now()->subDays(45),
+            'updated_at' => now()->subDays(45),
+        ])->saveQuietly();
+        $recentRun = ChannelConnectionCheckRun::query()->create([
+            'started_at' => now()->subDays(2),
+            'finished_at' => now()->subDays(2)->addMinute(),
+            'status' => ChannelConnectionCheckRun::STATUS_SUCCESS,
+            'processed_count' => 2,
+            'success_count' => 2,
+            'failure_count' => 0,
+            'environment' => app()->environment(),
+        ]);
+        $recentRun->forceFill([
+            'created_at' => now()->subDays(2),
+            'updated_at' => now()->subDays(2),
+        ])->saveQuietly();
+
+        $exitCode = Artisan::call('channels:prune-connection-check-runs', ['--days' => 30]);
+
+        $this->assertSame(0, $exitCode);
+        $this->assertDatabaseMissing('channel_connection_check_runs', ['id' => $oldRun->id]);
+        $this->assertDatabaseHas('channel_connection_check_runs', ['id' => $recentRun->id]);
+        $this->assertStringContainsString('Удалено heartbeat-запусков проверки каналов: 1.', Artisan::output());
+    }
+
     public function test_connection_check_migration_keeps_existing_active_supported_bots_sendable_until_first_check(): void
     {
         $migration = require database_path('migrations/2026_04_30_000000_add_connection_check_fields_to_channels_table.php');
