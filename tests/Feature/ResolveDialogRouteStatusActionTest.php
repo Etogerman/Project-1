@@ -73,7 +73,7 @@ class ResolveDialogRouteStatusActionTest extends TestCase
                 'credentials' => ['token' => 'telegram-token'],
                 'connection_status' => Channel::CONNECTION_STATUS_CONNECTED,
                 'webhook_status' => Channel::WEBHOOK_STATUS_INSTALLED,
-                'connection_checked_at' => now()->subMinutes(3),
+                'connection_checked_at' => now()->subMinutes(11),
                 'connection_error_message' => null,
             ],
             dialogAttributes: [
