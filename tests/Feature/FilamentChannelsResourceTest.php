@@ -26,6 +26,7 @@ use Filament\Facades\Filament;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Encryption\Encrypter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
@@ -1066,6 +1067,38 @@ class FilamentChannelsResourceTest extends TestCase
             ->assertMountedActionModalSee('Планировщик проверок каналов ещё не записывал heartbeat.');
 
         $this->assertNull($errorResolver->invoke(null, $channel, $connectionState));
+    }
+
+    public function test_connection_checker_health_is_cached_for_current_request(): void
+    {
+        ChannelConnectionCheckRun::query()->create([
+            'started_at' => now()->subMinute(),
+            'finished_at' => now(),
+            'status' => ChannelConnectionCheckRun::STATUS_SUCCESS,
+            'processed_count' => 5,
+            'success_count' => 5,
+            'failure_count' => 0,
+            'environment' => app()->environment(),
+        ]);
+
+        $healthResolver = new ReflectionMethod(ChannelResource::class, 'resolveConnectionCheckerHealth');
+        $healthResolver->setAccessible(true);
+        $healthQueries = 0;
+
+        DB::listen(function (QueryExecuted $query) use (&$healthQueries): void {
+            if (str_contains($query->sql, 'channel_connection_check_runs')) {
+                $healthQueries++;
+            }
+        });
+
+        $firstHealth = $healthResolver->invoke(null);
+        $secondHealth = $healthResolver->invoke(null);
+        $thirdHealth = $healthResolver->invoke(null);
+
+        $this->assertSame('ok', $firstHealth['status']);
+        $this->assertSame($firstHealth, $secondHealth);
+        $this->assertSame($firstHealth, $thirdHealth);
+        $this->assertSame(1, $healthQueries);
     }
 
     public function test_account_channel_allows_safe_edit_and_hides_bot_only_actions(): void

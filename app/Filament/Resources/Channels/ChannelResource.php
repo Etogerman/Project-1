@@ -54,6 +54,8 @@ use UnitEnum;
 
 class ChannelResource extends Resource
 {
+    private const CONNECTION_CHECKER_HEALTH_REQUEST_CACHE_KEY = 'filament.channels.connection_checker_health';
+
     /**
      * @var array<string, string>
      */
@@ -1565,7 +1567,15 @@ SQL;
      */
     protected static function resolveConnectionCheckerHealth(): array
     {
-        return app(ResolveChannelConnectionCheckerHealthAction::class)->handle();
+        if (request()->attributes->has(self::CONNECTION_CHECKER_HEALTH_REQUEST_CACHE_KEY)) {
+            return request()->attributes->get(self::CONNECTION_CHECKER_HEALTH_REQUEST_CACHE_KEY);
+        }
+
+        $health = app(ResolveChannelConnectionCheckerHealthAction::class)->handle();
+
+        request()->attributes->set(self::CONNECTION_CHECKER_HEALTH_REQUEST_CACHE_KEY, $health);
+
+        return $health;
     }
 
     /**
