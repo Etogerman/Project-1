@@ -404,17 +404,40 @@ class ChannelConnectionCheckTest extends TestCase
         $this->assertSame(0, $exitCode);
         $this->assertSame(Channel::CONNECTION_STATUS_NOT_CONNECTED, $channel->fresh()->connection_status);
         $this->assertSame(Channel::CONNECTION_ERROR_NO_TOKEN, $channel->fresh()->connection_error_message);
+        $this->assertSame(0, ChannelConnectionCheckRun::query()->count());
 
-        $run = ChannelConnectionCheckRun::query()->latest('id')->first();
+        Http::assertNothingSent();
+    }
 
-        $this->assertInstanceOf(ChannelConnectionCheckRun::class, $run);
-        $this->assertSame(ChannelConnectionCheckRun::STATUS_SUCCESS, $run->status);
-        $this->assertSame(1, $run->processed_count);
-        $this->assertSame(1, $run->success_count);
-        $this->assertSame(0, $run->failure_count);
-        $this->assertNotNull($run->started_at);
-        $this->assertNotNull($run->finished_at);
-        $this->assertSame(app()->environment(), $run->environment);
+    public function test_single_channel_console_check_does_not_refresh_scheduler_health(): void
+    {
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => [],
+            'bot_token_present' => false,
+            'is_active' => true,
+        ]);
+        ChannelConnectionCheckRun::query()->create([
+            'started_at' => now()->subMinutes(35),
+            'finished_at' => now()->subMinutes(31),
+            'status' => ChannelConnectionCheckRun::STATUS_SUCCESS,
+            'processed_count' => 10,
+            'success_count' => 10,
+            'failure_count' => 0,
+            'environment' => app()->environment(),
+        ]);
+
+        $exitCode = Artisan::call('channels:check-connections', ['--channel' => $channel->id]);
+        $health = app(ResolveChannelConnectionCheckerHealthAction::class)->handle();
+
+        $this->assertSame(0, $exitCode);
+        $this->assertSame(1, ChannelConnectionCheckRun::query()->count());
+        $this->assertSame('critical', $health['status']);
+        $this->assertSame('danger', $health['tone']);
+        $this->assertTrue($health['show_banner']);
 
         Http::assertNothingSent();
     }
