@@ -3505,6 +3505,82 @@
         border-block-end: 0;
     }
 
+    .ac-channel-check-health {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: var(--ac-sp-4);
+        margin-bottom: var(--ac-sp-3);
+        border: 1px solid color-mix(in srgb, var(--ac-warning) 30%, var(--ac-border));
+        border-radius: var(--ac-radius-lg);
+        background: var(--ac-warning-soft);
+        padding: var(--ac-sp-3) var(--ac-sp-4);
+        color: var(--ac-warning);
+    }
+
+    .ac-channel-check-health[data-tone="danger"] {
+        border-color: color-mix(in srgb, var(--ac-danger) 30%, var(--ac-border));
+        background: var(--ac-danger-soft);
+        color: var(--ac-danger);
+    }
+
+    .ac-channel-check-health[data-tone="success"] {
+        border-color: color-mix(in srgb, var(--ac-success) 30%, var(--ac-border));
+        background: var(--ac-success-soft);
+        color: var(--ac-success);
+    }
+
+    .ac-channel-check-health__main {
+        display: grid;
+        gap: var(--ac-sp-1);
+        min-width: 0;
+    }
+
+    .ac-channel-check-health__badge {
+        font-size: var(--ac-fs-13);
+        font-weight: var(--ac-fw-bold);
+        line-height: 1.25;
+    }
+
+    .ac-channel-check-health__description {
+        color: var(--ac-text-muted);
+        font-size: var(--ac-fs-12);
+        font-weight: var(--ac-fw-medium);
+        line-height: 1.35;
+    }
+
+    .ac-channel-check-health__meta {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: var(--ac-sp-3);
+        margin: 0;
+        flex-wrap: wrap;
+        text-align: right;
+    }
+
+    .ac-channel-check-health__meta div {
+        display: grid;
+        gap: 2px;
+    }
+
+    .ac-channel-check-health__meta dt {
+        color: var(--ac-text-soft);
+        font-size: var(--ac-fs-10);
+        font-weight: var(--ac-fw-bold);
+        line-height: 1;
+        text-transform: uppercase;
+    }
+
+    .ac-channel-check-health__meta dd {
+        margin: 0;
+        color: var(--ac-text);
+        font-size: var(--ac-fs-12);
+        font-weight: var(--ac-fw-semi);
+        line-height: 1.2;
+        white-space: nowrap;
+    }
+
     @media (max-width: 900px) {
         .ac-channel-form-modal .ac-channel-form-field {
             grid-template-columns: minmax(0, 1fr);
@@ -3517,6 +3593,15 @@
 
         .ac-channel-form-modal .ac-channel-form-field:last-child {
             border-block-end: 0;
+        }
+
+        .ac-channel-check-health {
+            display: grid;
+        }
+
+        .ac-channel-check-health__meta {
+            justify-content: flex-start;
+            text-align: left;
         }
     }
 

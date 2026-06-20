@@ -62,7 +62,7 @@ class Channel extends Model
 
     public const CONNECTION_ERROR_EXPECTED_URL_CHANGED = 'Ожидаемый webhook URL изменился. Нужно выполнить проверку или переустановить webhook.';
 
-    public const CONNECTION_CHECK_FRESH_FOR_MINUTES = 2;
+    public const CONNECTION_CHECK_FRESH_FOR_MINUTES = 10;
 
     public const GATEWAY_HEARTBEAT_FRESH_FOR_MINUTES = 2;
 

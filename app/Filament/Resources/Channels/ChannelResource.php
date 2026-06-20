@@ -12,6 +12,7 @@ use App\Models\Message;
 use App\Models\ScenarioVersion;
 use App\Services\Bots\CheckChannelConnectionAction;
 use App\Services\Bots\RegisterChannelWebhookAction;
+use App\Services\Bots\ResolveChannelConnectionCheckerHealthAction;
 use App\Services\Bots\SyncChannelBotMetadataAction;
 use App\Services\Dialogs\BuildConversationFeedViewDataAction;
 use App\Services\Dialogs\MessageChronology;
@@ -53,6 +54,8 @@ use UnitEnum;
 
 class ChannelResource extends Resource
 {
+    private const CONNECTION_CHECKER_HEALTH_REQUEST_CACHE_KEY = 'filament.channels.connection_checker_health';
+
     /**
      * @var array<string, string>
      */
@@ -402,6 +405,10 @@ class ChannelResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
+            ->poll('30s')
+            ->header(view('filament.channels.partials.connection-health-header', [
+                'health' => static::resolveConnectionCheckerHealth(),
+            ]))
             ->columns([
                 TextColumn::make('id')
                     ->label('ID')
@@ -1556,12 +1563,34 @@ SQL;
     }
 
     /**
+     * @return array<string, mixed>
+     */
+    protected static function resolveConnectionCheckerHealth(): array
+    {
+        if (request()->attributes->has(self::CONNECTION_CHECKER_HEALTH_REQUEST_CACHE_KEY)) {
+            return request()->attributes->get(self::CONNECTION_CHECKER_HEALTH_REQUEST_CACHE_KEY);
+        }
+
+        $health = app(ResolveChannelConnectionCheckerHealthAction::class)->handle();
+
+        request()->attributes->set(self::CONNECTION_CHECKER_HEALTH_REQUEST_CACHE_KEY, $health);
+
+        return $health;
+    }
+
+    /**
      * @param  array{connection_status: string, webhook_status: string, connection_error_message: ?string, provider_webhook_url: ?string, expected_webhook_url: ?string, connection_checked_at: mixed}  $connectionState
      */
     protected static function resolveConnectionStatusLabel(Channel $record, array $connectionState): string
     {
         if ($record->isAccountConnection()) {
             return $record->getHealthStatusLabel();
+        }
+
+        $schedulerHealth = static::resolveStaleConnectionSchedulerHealth($connectionState);
+
+        if ($schedulerHealth !== null) {
+            return static::formatSchedulerAffectedConnectionStatusLabel($schedulerHealth);
         }
 
         if (static::isStaleConnectionState($connectionState)) {
@@ -1580,6 +1609,12 @@ SQL;
             return $record->getHealthStatusColor();
         }
 
+        $schedulerHealth = static::resolveStaleConnectionSchedulerHealth($connectionState);
+
+        if ($schedulerHealth !== null) {
+            return (string) ($schedulerHealth['tone'] ?? 'warning');
+        }
+
         if (static::isStaleConnectionState($connectionState)) {
             return 'warning';
         }
@@ -1596,6 +1631,14 @@ SQL;
             return 'Не применяется';
         }
 
+        $schedulerHealth = static::resolveStaleConnectionSchedulerHealth($connectionState);
+
+        if ($schedulerHealth !== null) {
+            return $connectionState['webhook_status'] === Channel::WEBHOOK_STATUS_INSTALLED
+                ? 'Был установлен'
+                : $record->getLiveWebhookStatusLabel($connectionState['webhook_status']);
+        }
+
         if (static::isStaleConnectionState($connectionState)) {
             return 'Проверка устарела';
         }
@@ -1609,6 +1652,10 @@ SQL;
     protected static function resolveLiveWebhookStatusColor(Channel $record, array $connectionState): string
     {
         if ($record->isAccountConnection()) {
+            return 'gray';
+        }
+
+        if (static::resolveStaleConnectionSchedulerHealth($connectionState) !== null) {
             return 'gray';
         }
 
@@ -1628,6 +1675,42 @@ SQL;
             && ($connectionState['connection_error_message'] ?? null) === Channel::CONNECTION_ERROR_STALE;
     }
 
+    /**
+     * @param  array{connection_status: string, webhook_status: string, connection_error_message: ?string, provider_webhook_url: ?string, expected_webhook_url: ?string, connection_checked_at: mixed}  $connectionState
+     * @return array<string, mixed>|null
+     */
+    protected static function resolveStaleConnectionSchedulerHealth(array $connectionState): ?array
+    {
+        if (! static::isStaleConnectionState($connectionState)) {
+            return null;
+        }
+
+        $health = static::resolveConnectionCheckerHealth();
+
+        if (($health['show_banner'] ?? false) !== true || ! filled($health['stale_channel_reason'] ?? null)) {
+            return null;
+        }
+
+        return $health;
+    }
+
+    /**
+     * @param  array<string, mixed>  $schedulerHealth
+     */
+    protected static function formatSchedulerAffectedConnectionStatusLabel(array $schedulerHealth): string
+    {
+        return match ($schedulerHealth['status'] ?? null) {
+            'critical' => 'Планировщик не работает',
+            'failed' => 'Проверка падает',
+            'stuck' => 'Проверка зависла',
+            'running' => 'Проверка выполняется',
+            'partial' => 'Частичная проверка',
+            'stale' => 'Проверка задержана',
+            'unknown' => 'Нет heartbeat',
+            default => 'Проверка задержана',
+        };
+    }
+
     protected static function resolveTelegramAccountGatewayDiagnostics(Channel $record): TelegramAccountGatewayDiagnosticsData
     {
         return app(ResolveTelegramAccountGatewayDiagnosticsAction::class)->handle($record);
@@ -1639,6 +1722,10 @@ SQL;
     protected static function resolveConnectionErrorDisplay(Channel $record, array $connectionState): ?string
     {
         if ($record->isAccountConnection()) {
+            return null;
+        }
+
+        if (static::resolveStaleConnectionSchedulerHealth($connectionState) !== null) {
             return null;
         }
 
@@ -1669,7 +1756,14 @@ SQL;
         $gatewayDiagnostics = $record->isAccountConnection()
             ? static::resolveTelegramAccountGatewayDiagnostics($record)
             : null;
+        $connectionCheckerHealth = static::resolveConnectionCheckerHealth();
         $connectionErrorMessage = $formatText(static::resolveConnectionErrorDisplay($record, $connectionState), 'Ошибок не было');
+        $connectionReason = $record->isAccountConnection()
+            ? ($gatewayDiagnostics?->description ?? '—')
+            : $formatText(
+                static::resolveConnectionErrorDisplay($record, $connectionState)
+                    ?? ($connectionCheckerHealth['stale_channel_reason'] ?? null),
+            );
 
         return [
             'record' => $record,
@@ -1687,6 +1781,7 @@ SQL;
                     ['label' => 'Состояние', 'value' => static::resolveConnectionStatusLabel($record, $connectionState), 'tone' => static::resolveConnectionStatusColor($record, $connectionState)],
                     ['label' => 'Включён', 'value' => $record->is_active ? 'Да' : 'Нет', 'tone' => $record->is_active ? 'success' : 'gray'],
                     ['label' => 'Последняя проверка', 'value' => $formatDate($connectionState['connection_checked_at'])],
+                    ['label' => 'Планировщик', 'value' => $connectionCheckerHealth['label'] ?? '—', 'tone' => $connectionCheckerHealth['tone'] ?? null],
                     ['label' => 'Ошибка подключения', 'value' => $connectionErrorMessage],
                     ['label' => 'Обновлён', 'value' => $formatDate($record->updated_at)],
                 ],
@@ -1695,7 +1790,7 @@ SQL;
                     ['label' => $record->isAccountConnection() ? 'Имя аккаунта' : 'Имя бота', 'value' => $record->isAccountConnection() ? ($record->getTelegramAccountDisplayNameLabel() ?? 'Аккаунт не передан') : $formatText($record->bot_name, 'Не загружено')],
                     ['label' => 'Webhook', 'value' => static::resolveLiveWebhookStatusLabel($record, $connectionState), 'tone' => static::resolveLiveWebhookStatusColor($record, $connectionState)],
                     ['label' => 'Исходящие ответы', 'value' => $gatewayDiagnostics?->label ?? '—', 'tone' => $gatewayDiagnostics?->severity],
-                    ['label' => 'Последний heartbeat gateway', 'value' => $formatDate($record->runtimeState?->last_gateway_heartbeat_at)],
+                    ['label' => $record->isAccountConnection() ? 'Последний heartbeat gateway' : 'Последний heartbeat проверки', 'value' => $record->isAccountConnection() ? $formatDate($record->runtimeState?->last_gateway_heartbeat_at) : $formatDate($connectionCheckerHealth['last_finished_at'] ?? null)],
                     ['label' => 'Ожидаемый URL', 'value' => $record->isAccountConnection() ? '—' : $formatText($connectionState['expected_webhook_url'])],
                 ],
                 [
@@ -1705,7 +1800,7 @@ SQL;
                     ['label' => 'Синхронизация', 'value' => $record->isAccountConnection() ? ($record->runtimeState?->getSyncStatusLabel() ?? 'Ожидает') : '—', 'tone' => $record->isAccountConnection() ? ($record->runtimeState?->getSyncStatusColor() ?? 'gray') : null],
                     ['label' => 'Последний webhook', 'value' => $record->isAccountConnection() ? '—' : $formatDate($record->last_webhook_received_at)],
                     ['label' => 'URL в Telegram', 'value' => $record->isAccountConnection() ? '—' : $formatText($connectionState['provider_webhook_url'])],
-                    ['label' => 'Причина', 'value' => $gatewayDiagnostics?->description ?? '—'],
+                    ['label' => 'Причина', 'value' => $connectionReason],
                 ],
             ],
             'latestMessageTables' => [
