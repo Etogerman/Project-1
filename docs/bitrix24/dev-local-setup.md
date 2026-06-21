@@ -55,6 +55,9 @@ live export, contact/deal sync и других Bitrix24 runtime-path дейст�
    профиля.
 5. Если tunnel URL сменился, нужно снова прогнать bootstrap для того же
    `profile_key`.
+6. После смены tunnel URL, `LINE_ID`, `connector_code` или callback owner нужно
+   заново опубликовать OpenLines registry и проверить Doctor до теста
+   операторского ответа из Bitrix24.
 
 ## Шаг 1. Выберите имя профиля
 
@@ -200,7 +203,11 @@ Dev-profile готов к full_live handoff и verify-контуру.
 2. снова запустите bootstrap с новым URL;
 3. обновите callback URL в Bitrix app;
 4. снова добейтесь нового install callback на новый ingress;
-5. повторно прогоните команду до зелёного результата.
+5. опубликуйте OpenLines registry;
+6. запустите Doctor и получите `synced` без diff-ов;
+7. повторно прогоните команду до зелёного результата;
+8. отправьте новое операторское smoke-сообщение из Bitrix24 и проверьте, что оно
+   дошло клиенту.
 
 Пример:
 
@@ -229,6 +236,9 @@ php artisan bitrix24:dev-profile-bootstrap dev-german-main https://new-german-ma
 4. `client_id` и `application_code` записаны от правильного Bitrix app.
 5. Telegram и MAX используют разные Open Lines.
 6. После последних изменений в Bitrix был заново отправлен install callback.
+7. OpenLines registry заново опубликован после последней смены tunnel URL,
+   `LINE_ID`, `connector_code` или callback owner.
+8. Doctor показывает `synced` и `Diffs 0`.
 
 ## Связанные документы
 
