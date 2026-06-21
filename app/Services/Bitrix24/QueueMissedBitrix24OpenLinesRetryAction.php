@@ -8,6 +8,7 @@ use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Services\Contacts\ResolveRootContactAction;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 
 class QueueMissedBitrix24OpenLinesRetryAction
@@ -24,10 +25,20 @@ class QueueMissedBitrix24OpenLinesRetryAction
     {
         $rootContact = $this->resolveRootContactAction->handle($contact);
 
+        $queuedInbound = $this->queueFirstReadyCandidate($rootContact, 'inbound');
+        $queuedOutbound = $this->queueFirstReadyCandidate($rootContact, 'outbound');
+
+        return $queuedInbound || $queuedOutbound;
+    }
+
+    private function queueFirstReadyCandidate(Contact $rootContact, string $direction): bool
+    {
         $page = 1;
 
         do {
-            $candidates = $this->findMissedInboundCandidates($rootContact, $page);
+            $candidates = $direction === 'outbound'
+                ? $this->findMissedOutboundCandidates($rootContact, $page)
+                : $this->findMissedInboundCandidates($rootContact, $page);
 
             foreach ($candidates as $message) {
                 if (! $this->isMessageReadyForBitrix24LiveExportAction->handle($message)) {
@@ -50,6 +61,43 @@ class QueueMissedBitrix24OpenLinesRetryAction
      */
     private function findMissedInboundCandidates(Contact $rootContact, int $page): Collection
     {
+        return $this->missedCandidateQuery($rootContact)
+            ->whereIn('messages.message_kind', [
+                Message::KIND_INBOUND_USER,
+                Message::KIND_INBOUND_CONTACT_SHARE,
+                Message::KIND_INBOUND_SYSTEM_EVENT,
+            ])
+            ->orderByDesc('messages.received_at')
+            ->orderByDesc('messages.id')
+            ->forPage($page, self::CANDIDATE_BATCH_SIZE)
+            ->get();
+    }
+
+    /**
+     * @return Collection<int, Message>
+     */
+    private function findMissedOutboundCandidates(Contact $rootContact, int $page): Collection
+    {
+        return $this->missedCandidateQuery($rootContact)
+            ->whereIn('messages.message_kind', [
+                Message::KIND_OUTBOUND_AUTO_REPLY,
+                Message::KIND_OUTBOUND_SCENARIO_MESSAGE,
+                Message::KIND_OUTBOUND_MANUAL_REPLY,
+                Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION,
+                Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
+                Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION,
+            ])
+            ->orderBy('messages.received_at')
+            ->orderBy('messages.id')
+            ->forPage($page, self::CANDIDATE_BATCH_SIZE)
+            ->get();
+    }
+
+    /**
+     * @return Builder<Message>
+     */
+    private function missedCandidateQuery(Contact $rootContact): Builder
+    {
         return Message::query()
             ->select('messages.*')
             ->join('dialogs', 'dialogs.id', '=', 'messages.dialog_id')
@@ -66,11 +114,6 @@ class QueueMissedBitrix24OpenLinesRetryAction
             ->whereIn('dialogs.bitrix24_live_status', [
                 Dialog::BITRIX24_LIVE_STATUS_NOT_LINKED,
                 Dialog::BITRIX24_LIVE_STATUS_FAILED,
-            ])
-            ->whereIn('messages.message_kind', [
-                Message::KIND_INBOUND_USER,
-                Message::KIND_INBOUND_CONTACT_SHARE,
-                Message::KIND_INBOUND_SYSTEM_EVENT,
             ])
             ->where(function ($query): void {
                 $query->whereNull('live_export.id')
@@ -106,10 +149,6 @@ class QueueMissedBitrix24OpenLinesRetryAction
                             });
                     });
             })
-            ->with(['dialog.channel', 'contact'])
-            ->orderByDesc('messages.received_at')
-            ->orderByDesc('messages.id')
-            ->forPage($page, self::CANDIDATE_BATCH_SIZE)
-            ->get();
+            ->with(['dialog.channel', 'contact']);
     }
 }

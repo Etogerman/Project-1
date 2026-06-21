@@ -2,11 +2,11 @@
 
 namespace Tests\Feature;
 
+use App\Models\AutoReplyRule;
 use App\Models\Channel;
 use App\Models\Dialog;
 use App\Models\FieldDictionaryField;
 use App\Models\Message;
-use App\Models\AutoReplyRule;
 use App\Models\Scenario;
 use App\Models\ScenarioBuilderBlock;
 use App\Models\ScenarioBuilderCondition;
@@ -4666,6 +4666,80 @@ class ScenarioBuilderV3StateTest extends TestCase
         );
     }
 
+    public function test_publish_keeps_legacy_complete_data_collection_before_bitrix24_sync_in_runtime_snapshot(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['name' => 'Telegram Complete Data Bitrix24']);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_complete_data_collection_then_bitrix24_sync',
+            'name' => 'V3 Complete Data Collection Then Bitrix24 Sync',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $blocks = [
+            [
+                'id' => null,
+                'client_key' => 'tmp_start',
+                'type' => 'state',
+                'title' => 'Старт',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->startSettings('/start', [$channel->id]),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_bitrix',
+                'type' => 'state',
+                'title' => 'Завершить анкету и Bitrix24',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $this->completeDataCollectionThenBitrix24ActionSettings(),
+            ],
+        ];
+        $edgePayload = $this->edgePayload(null, 'Дальше');
+        $edgePayload['mode'] = 'automatic';
+        $edges = [[
+            'id' => null,
+            'client_key' => 'tmp_start_edge',
+            'source' => ['block_id' => null, 'client_key' => 'tmp_start', 'output_id' => null],
+            'target' => ['block_id' => null, 'client_key' => 'tmp_bitrix'],
+            'condition_payload' => $edgePayload,
+        ]];
+
+        $saved = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, $blocks, $edges))
+            ->assertOk()
+            ->assertJsonPath('builder.blocks.1.settings_payload.modules.0.payload.actions.0.type', 'complete_data_collection')
+            ->assertJsonPath('builder.blocks.1.settings_payload.modules.0.payload.actions.1.type', 'bitrix24_sync')
+            ->assertJsonPath('builder.blocks.1.settings_payload.modules.0.payload.actions.1.operation', 'contact_sync_with_followups')
+            ->assertJsonPath('builder.blocks.1.settings_payload.outputs', [])
+            ->json();
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $saved['scenario']['draft_version_id'],
+                'base_revision' => $saved['builder']['revision'],
+            ])
+            ->assertOk();
+
+        $scenario->refresh()->load('publishedVersion');
+        $bitrixBlockId = (string) $saved['id_map']['blocks']['tmp_bitrix'];
+
+        $this->assertSame(
+            'complete_data_collection',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$bitrixBlockId.actions.0.type"),
+        );
+        $this->assertSame(
+            'bitrix24_sync',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$bitrixBlockId.actions.1.type"),
+        );
+        $this->assertSame(
+            'contact_sync_with_followups',
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$bitrixBlockId.actions.1.operation"),
+        );
+        $this->assertSame(
+            [],
+            data_get($scenario->publishedVersion?->schema_payload, "builder_v3_runtime.blocks.$bitrixBlockId.action_result_edges"),
+        );
+    }
+
     public function test_publish_keeps_geo_city_ai_data_source_in_runtime_snapshot(): void
     {
         $admin = $this->adminUser();
@@ -5155,7 +5229,7 @@ class ScenarioBuilderV3StateTest extends TestCase
      */
     private function autoReplyWorkbookFile(array $rules): UploadedFile
     {
-        $spreadsheet = new Spreadsheet();
+        $spreadsheet = new Spreadsheet;
 
         try {
             $sheet = $spreadsheet->getActiveSheet();
@@ -5511,6 +5585,37 @@ class ScenarioBuilderV3StateTest extends TestCase
                             [
                                 'type' => 'bitrix24_sync',
                                 'operation' => $operation,
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+            'outputs' => [],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function completeDataCollectionThenBitrix24ActionSettings(): array
+    {
+        return [
+            'schema_version' => 3,
+            'kind' => 'state',
+            'ui' => ['sheet_id' => 'main', 'width' => 320, 'collapsed' => false],
+            'modules' => [
+                [
+                    'id' => 'mod_action',
+                    'type' => 'action',
+                    'enabled' => true,
+                    'payload' => [
+                        'actions' => [
+                            [
+                                'type' => 'complete_data_collection',
+                            ],
+                            [
+                                'type' => 'bitrix24_sync',
+                                'operation' => 'contact_sync_with_followups',
                             ],
                         ],
                     ],
