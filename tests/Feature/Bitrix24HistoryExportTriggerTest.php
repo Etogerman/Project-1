@@ -35,7 +35,6 @@ class Bitrix24HistoryExportTriggerTest extends TestCase
         config()->set('bitrix24.application.client_secret', 'local.secret');
         config()->set('bitrix24.sources.telegram_id', 'ABRIKOSOFF_TELEGRAM');
         config()->set('bitrix24.features.deals_sync_enabled', false);
-        config()->set('bitrix24.features.timeline_history_import_enabled', true);
         config()->set('bitrix24.http.retry_sleep_milliseconds', 0);
     }
 

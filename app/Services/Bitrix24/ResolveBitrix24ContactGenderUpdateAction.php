@@ -25,6 +25,11 @@ class ResolveBitrix24ContactGenderUpdateAction
         $fields = $this->resolveProfileSchemaAction->fields();
         $values = $this->resolveProfileSchemaAction->values();
         $unknownGenderId = (string) $values['gender']['unknown_id'];
+        $knownGenderIds = array_filter([
+            (string) $values['gender']['male_id'],
+            (string) $values['gender']['female_id'],
+            (string) $values['gender']['unknown_id'],
+        ], static fn (string $id): bool => $id !== '');
 
         if ($localGenderId === null) {
             return [
@@ -34,7 +39,12 @@ class ResolveBitrix24ContactGenderUpdateAction
             ];
         }
 
-        if ($remoteGenderId === null || $remoteGenderId === '' || $remoteGenderId === $unknownGenderId) {
+        if (
+            $remoteGenderId === null
+            || $remoteGenderId === ''
+            || $remoteGenderId === $unknownGenderId
+            || ! in_array($remoteGenderId, $knownGenderIds, true)
+        ) {
             return [
                 'fields' => [
                     $fields['gender'] => (int) $localGenderId,
