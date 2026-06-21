@@ -1,0 +1,246 @@
+#!/usr/bin/env node
+import assert from "node:assert/strict";
+
+const PROCESS_ONLY_FILE_PATTERNS = [
+  /^AGENTS\.md$/,
+  /^README\.md$/,
+  /^docs\//,
+  /^\.github\/copilot-instructions\.md$/,
+  /^\.github\/instructions\/.*\.instructions\.md$/,
+  /^\.github\/scripts\/release-process-guard\.mjs$/,
+  /^\.github\/workflows\/release-process-guard\.ya?ml$/,
+  /(^|\/)[^/]+\.md$/,
+];
+
+function isProcessOnlyFile(filename) {
+  return PROCESS_ONLY_FILE_PATTERNS.some((pattern) => pattern.test(filename));
+}
+
+function extractStagingPrNumber(body) {
+  const patterns = [
+    /(?:^|\n)\s*Staging\s+PR\s*:\s*(?:https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/)?#?(\d+)\b/i,
+    /(?:^|\n)\s*staging-pr\s*:\s*#?(\d+)\b/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = body.match(pattern);
+
+    if (match) {
+      return Number.parseInt(match[1], 10);
+    }
+  }
+
+  return null;
+}
+
+function hasStagingSmokeEvidence(body) {
+  return /(?:^|\n)\s*Staging\s+smoke\s*:\s*https?:\/\/\S+/i.test(body);
+}
+
+function summarizeFiles(files) {
+  const runtimeFiles = files.filter((file) => !isProcessOnlyFile(file.filename));
+
+  return {
+    runtimeFiles,
+    processOnlyFiles: files.filter((file) => isProcessOnlyFile(file.filename)),
+  };
+}
+
+function evaluatePullRequest({ baseRef, body, files, stagingPr = null }) {
+  const failures = [];
+  const { runtimeFiles } = summarizeFiles(files);
+  const stagingPrNumber = extractStagingPrNumber(body);
+
+  if (baseRef === "staging") {
+    return { failures, runtimeFiles, stagingPrNumber };
+  }
+
+  if (baseRef !== "main") {
+    failures.push("Release Process Guard supports PRs to `staging` or `main` only.");
+    return { failures, runtimeFiles, stagingPrNumber };
+  }
+
+  if (runtimeFiles.length === 0) {
+    return { failures, runtimeFiles, stagingPrNumber };
+  }
+
+  if (!stagingPrNumber) {
+    failures.push("Main PRs with runtime changes must include `Staging PR: #NNN` in the PR body.");
+  }
+
+  if (!hasStagingSmokeEvidence(body)) {
+    failures.push("Main PRs with runtime changes must include `Staging smoke: https://...` in the PR body.");
+  }
+
+  if (stagingPr) {
+    if (stagingPr.base?.ref !== "staging") {
+      failures.push(`Referenced staging PR #${stagingPr.number} must target \`staging\`.`);
+    }
+
+    if (!stagingPr.merged_at) {
+      failures.push(`Referenced staging PR #${stagingPr.number} must be merged before opening a runtime PR to \`main\`.`);
+    }
+  }
+
+  return { failures, runtimeFiles, stagingPrNumber };
+}
+
+async function githubRequest(path, token) {
+  const response = await fetch(`https://api.github.com${path}`, {
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${token}`,
+      "User-Agent": "project-1-release-process-guard",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`GitHub API request failed: ${response.status} ${response.statusText}\n${body}`);
+  }
+
+  return response.json();
+}
+
+async function listPullRequestFiles({ owner, repo, pullNumber, token }) {
+  const files = [];
+
+  for (let page = 1; ; page += 1) {
+    const batch = await githubRequest(
+      `/repos/${owner}/${repo}/pulls/${pullNumber}/files?per_page=100&page=${page}`,
+      token,
+    );
+
+    files.push(...batch.map((file) => ({ filename: file.filename })));
+
+    if (batch.length < 100) {
+      return files;
+    }
+  }
+}
+
+function parseRepository(repository) {
+  const [owner, repo] = repository.split("/");
+
+  if (!owner || !repo) {
+    throw new Error(`Invalid GITHUB_REPOSITORY value: ${repository}`);
+  }
+
+  return { owner, repo };
+}
+
+function printFailure(message) {
+  console.error(`::error::${message}`);
+}
+
+function runSelfTest() {
+  assert.equal(isProcessOnlyFile("docs/release.md"), true);
+  assert.equal(isProcessOnlyFile(".github/copilot-instructions.md"), true);
+  assert.equal(isProcessOnlyFile(".github/workflows/release-process-guard.yml"), true);
+  assert.equal(isProcessOnlyFile("app/Services/Bitrix24ContactSyncService.php"), false);
+
+  const runtimeFiles = [{ filename: "app/Services/Bitrix24ContactSyncService.php" }];
+
+  assert.deepEqual(
+    evaluatePullRequest({ baseRef: "staging", body: "", files: runtimeFiles }).failures,
+    [],
+  );
+
+  assert.match(
+    evaluatePullRequest({ baseRef: "main", body: "", files: runtimeFiles }).failures.join("\n"),
+    /Staging PR/,
+  );
+
+  assert.deepEqual(
+    evaluatePullRequest({
+      baseRef: "main",
+      body: "Staging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
+      files: runtimeFiles,
+      stagingPr: {
+        number: 614,
+        base: { ref: "staging" },
+        merged_at: "2026-06-21T20:00:00Z",
+      },
+    }).failures,
+    [],
+  );
+
+  assert.match(
+    evaluatePullRequest({
+      baseRef: "main",
+      body: "Staging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
+      files: runtimeFiles,
+      stagingPr: {
+        number: 614,
+        base: { ref: "staging" },
+        merged_at: null,
+      },
+    }).failures.join("\n"),
+    /must be merged/,
+  );
+
+  console.log("release-process-guard self-test passed");
+}
+
+async function run() {
+  const token = process.env.GITHUB_TOKEN;
+  const repository = process.env.GITHUB_REPOSITORY;
+  const pullNumber = Number.parseInt(process.env.PR_NUMBER || "", 10);
+
+  if (!token) {
+    throw new Error("GITHUB_TOKEN is required.");
+  }
+
+  if (!repository) {
+    throw new Error("GITHUB_REPOSITORY is required.");
+  }
+
+  if (!Number.isInteger(pullNumber)) {
+    throw new Error("PR_NUMBER is required.");
+  }
+
+  const { owner, repo } = parseRepository(repository);
+  const pullRequest = await githubRequest(`/repos/${owner}/${repo}/pulls/${pullNumber}`, token);
+  const files = await listPullRequestFiles({ owner, repo, pullNumber, token });
+  const initialResult = evaluatePullRequest({
+    baseRef: pullRequest.base.ref,
+    body: pullRequest.body || "",
+    files,
+  });
+
+  let stagingPr = null;
+
+  if (pullRequest.base.ref === "main" && initialResult.runtimeFiles.length > 0 && initialResult.stagingPrNumber) {
+    stagingPr = await githubRequest(`/repos/${owner}/${repo}/pulls/${initialResult.stagingPrNumber}`, token);
+  }
+
+  const result = evaluatePullRequest({
+    baseRef: pullRequest.base.ref,
+    body: pullRequest.body || "",
+    files,
+    stagingPr,
+  });
+
+  if (result.failures.length > 0) {
+    console.error("Release process guard failed.");
+    console.error(`Base branch: ${pullRequest.base.ref}`);
+    console.error(`Runtime files: ${result.runtimeFiles.map((file) => file.filename).join(", ") || "none"}`);
+    result.failures.forEach(printFailure);
+    process.exit(1);
+  }
+
+  console.log("Release process guard passed.");
+  console.log(`Base branch: ${pullRequest.base.ref}`);
+  console.log(`Runtime files: ${result.runtimeFiles.length}`);
+
+  if (result.stagingPrNumber) {
+    console.log(`Staging PR: #${result.stagingPrNumber}`);
+  }
+}
+
+if (process.argv.includes("--self-test")) {
+  runSelfTest();
+} else {
+  await run();
+}

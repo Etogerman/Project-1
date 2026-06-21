@@ -1,0 +1,48 @@
+name: Release Process Guard
+
+on:
+  pull_request:
+    branches:
+      - staging
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+      - edited
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Pull request number to check"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  release-process-guard:
+    name: release-process-guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Run self-test
+        run: node .github/scripts/release-process-guard.mjs --self-test
+
+      - name: Check release process
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+        run: node .github/scripts/release-process-guard.mjs
