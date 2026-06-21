@@ -3,9 +3,11 @@
 namespace App\Services\Scenarios;
 
 use App\Data\AI\AiGenerationContext;
+use App\Data\AI\AiStructuredGenerationResult;
 use App\Data\Bitrix24\Bitrix24ContactSyncQueueResultData;
 use App\Data\Bitrix24\Bitrix24DealSyncQueueResultData;
 use App\Data\Bitrix24\Bitrix24HistoryExportQueueResultData;
+use App\Data\Contacts\ContactDataCollectionCompletionResult;
 use App\Data\Contacts\FirstNameResolutionWriteContext;
 use App\Data\Scenarios\ScenarioInboundResult;
 use App\Jobs\InferContactGenderFromFirstNameJob;
@@ -46,6 +48,7 @@ use App\Services\Bots\StoreOutboundScenarioMessageAction;
 use App\Services\Bots\TelegramBotApiService;
 use App\Services\Contacts\AddContactPhoneAction;
 use App\Services\Contacts\ApplyContactFirstNameAction;
+use App\Services\Contacts\CompleteContactDataCollectionIfReadyAction;
 use App\Services\Contacts\NormalizePhoneNumberAction;
 use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\Contacts\SyncContactDistanceToMoscowAction;
@@ -211,6 +214,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         private readonly ExtractFirstNameAction $extractFirstNameAction,
         private readonly ApplyContactFirstNameAction $applyContactFirstNameAction,
         private readonly AddContactPhoneAction $addContactPhoneAction,
+        private readonly CompleteContactDataCollectionIfReadyAction $completeContactDataCollectionIfReadyAction,
         private readonly ResolveRootContactAction $resolveRootContactAction,
         private readonly QueueBitrix24ContactSyncAction $queueBitrix24ContactSyncAction,
         private readonly QueueBitrix24DealSyncAction $queueBitrix24DealSyncAction,
@@ -3319,66 +3323,14 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         }
 
         try {
-            $diagnostic = DB::transaction(function () use ($contactId, $message, $run, $blockId, $actionIndex): array {
-                $rootContact = $this->resolveRootContactAction->handle($contactId);
-                $lockedContact = Contact::query()
-                    ->whereKey($rootContact->id)
-                    ->lockForUpdate()
-                    ->first();
-
-                if (! $lockedContact instanceof Contact) {
-                    return $this->v3DataCollectionCompletionDiagnostic(
-                        status: 'missing_contact',
-                        blockId: $blockId,
-                        actionIndex: $actionIndex,
-                        message: $message,
-                        run: $run,
-                        completed: false,
-                        rootContactId: null,
-                        reason: 'missing_root_contact',
-                    );
-                }
-
-                if ($lockedContact->data_collection_status === Contact::DATA_COLLECTION_STATUS_COMPLETED) {
-                    return $this->v3DataCollectionCompletionDiagnostic(
-                        status: 'already_completed',
-                        blockId: $blockId,
-                        actionIndex: $actionIndex,
-                        message: $message,
-                        run: $run,
-                        completed: true,
-                        rootContactId: $lockedContact->id,
-                    );
-                }
-
-                $missingRequirements = $this->v3DataCollectionCompletionMissingRequirements($lockedContact);
-
-                if ($missingRequirements !== []) {
-                    return $this->v3DataCollectionCompletionDiagnostic(
-                        status: 'not_ready',
-                        blockId: $blockId,
-                        actionIndex: $actionIndex,
-                        message: $message,
-                        run: $run,
-                        completed: false,
-                        rootContactId: $lockedContact->id,
-                        missingRequirements: $missingRequirements,
-                        reason: 'profile_not_ready',
-                    );
-                }
-
-                $lockedContact->completeDataCollection();
-
-                return $this->v3DataCollectionCompletionDiagnostic(
-                    status: 'completed',
-                    blockId: $blockId,
-                    actionIndex: $actionIndex,
-                    message: $message,
-                    run: $run,
-                    completed: true,
-                    rootContactId: $lockedContact->id,
-                );
-            });
+            $completionResult = $this->completeContactDataCollectionIfReadyAction->handle($contactId);
+            $diagnostic = $this->v3DataCollectionCompletionDiagnosticFromResult(
+                $completionResult,
+                blockId: $blockId,
+                actionIndex: $actionIndex,
+                message: $message,
+                run: $run,
+            );
 
             Log::info('scenario.v3_complete_data_collection_done', [
                 'scenario_code' => $this->code(),
@@ -3423,44 +3375,6 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
     }
 
     /**
-     * @return list<string>
-     */
-    private function v3DataCollectionCompletionMissingRequirements(Contact $rootContact): array
-    {
-        $missing = [];
-
-        if (! $rootContact->isRoot()) {
-            $missing[] = 'root_contact';
-        }
-
-        foreach ([
-            'first_name' => $rootContact->first_name,
-            'country' => $rootContact->country,
-            'city' => $rootContact->city,
-            'age_range' => $rootContact->age_range,
-        ] as $field => $value) {
-            if (! filled($value)) {
-                $missing[] = $field;
-            }
-        }
-
-        if (! $rootContact->phoneNumbers()
-            ->whereNotNull('phone_normalized')
-            ->where('phone_normalized', '!=', '')
-            ->exists()) {
-            $missing[] = 'phone';
-        }
-
-        $primaryIdentity = $rootContact->primaryIdentity()->with('channel')->first();
-
-        if ($primaryIdentity === null || $primaryIdentity->channel === null) {
-            $missing[] = 'primary_identity';
-        }
-
-        return $missing;
-    }
-
-    /**
      * @param  list<string>  $missingRequirements
      * @return array<string, mixed>
      */
@@ -3487,6 +3401,26 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
             'reason' => $reason,
             'executed_at' => now()->toISOString(),
         ], fn (mixed $value): bool => $value !== null);
+    }
+
+    private function v3DataCollectionCompletionDiagnosticFromResult(
+        ContactDataCollectionCompletionResult $result,
+        ?string $blockId,
+        int $actionIndex,
+        Message $message,
+        ?ScenarioRun $run,
+    ): array {
+        return $this->v3DataCollectionCompletionDiagnostic(
+            status: $result->status,
+            blockId: $blockId,
+            actionIndex: $actionIndex,
+            message: $message,
+            run: $run,
+            completed: $result->completed,
+            rootContactId: $result->rootContactId,
+            missingRequirements: $result->missingRequirements,
+            reason: $result->reason,
+        );
     }
 
     /**
@@ -3567,6 +3501,57 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
         try {
             $rootContact = $this->resolveRootContactAction->handle($contactId);
+            $completionResult = $this->completeContactDataCollectionIfReadyAction->handle($rootContact);
+            $completionDiagnostic = $this->v3DataCollectionCompletionDiagnosticFromResult(
+                $completionResult,
+                blockId: $blockId,
+                actionIndex: $actionIndex,
+                message: $message,
+                run: $run,
+            );
+            $statePayload = $this->storeV3DataCollectionCompletionDiagnostic(
+                $statePayload,
+                $blockId,
+                $actionIndex,
+                $completionDiagnostic,
+            );
+
+            if (! $completionResult->completed) {
+                $diagnostic = $this->v3Bitrix24SyncDiagnostic(
+                    operation: $operation,
+                    status: 'not_ready',
+                    blockId: $blockId,
+                    actionIndex: $actionIndex,
+                    message: $message,
+                    run: $run,
+                    queued: false,
+                    alreadyPending: false,
+                    ready: false,
+                    rootContactId: $completionResult->rootContactId,
+                    reason: 'data_collection_not_ready',
+                );
+
+                Log::info('scenario.v3_bitrix24_sync_skipped_until_data_collection_ready', [
+                    'scenario_code' => $this->code(),
+                    'scenario_run_id' => $run?->id,
+                    'block_id' => $blockId,
+                    'action_index' => $actionIndex,
+                    'message_id' => $message->id,
+                    'operation' => $operation,
+                    'root_contact_id' => $completionResult->rootContactId,
+                    'missing_requirements' => $completionResult->missingRequirements,
+                ]);
+
+                return [
+                    'state_payload' => $this->storeV3Bitrix24SyncDiagnostic($statePayload, $blockId, $actionIndex, $diagnostic),
+                    'output_id' => null,
+                ];
+            }
+
+            if (is_numeric($completionResult->rootContactId)) {
+                $rootContact = Contact::query()->findOrFail((int) $completionResult->rootContactId);
+            }
+
             $queueResult = match ($operation) {
                 'deal_sync' => $this->queueBitrix24DealSyncAction->handle($rootContact),
                 'history_export' => $this->queueBitrix24HistoryExportAction->handle($rootContact),
@@ -3595,6 +3580,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 'operation' => $operation,
                 'status' => $diagnostic['status'],
                 'root_contact_id' => $queueResult->rootContactId,
+                'data_collection_completion_status' => $completionResult->status,
             ]);
 
             return [
@@ -6093,7 +6079,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
                 $aiResult = $cycleResult['result'] ?? null;
 
-                if (! $aiResult instanceof \App\Data\AI\AiStructuredGenerationResult) {
+                if (! $aiResult instanceof AiStructuredGenerationResult) {
                     throw new RuntimeException('AI cycle did not return a structured result.');
                 }
 

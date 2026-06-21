@@ -7141,7 +7141,9 @@ function ActionFields({ action, blocks = [], tags = [], blockKey, onUpdateModule
                                 <option value="resolve_geo_city">Распознать географию</option>
                                 <option value="simulate_start_parameter">Имитировать старт с параметром</option>
                                 <option value="tag_effects">Изменить теги</option>
-                                <option value="complete_data_collection">Завершить сбор данных</option>
+                                {item.type === ACTION_TYPE_COMPLETE_DATA_COLLECTION ? (
+                                    <option value="complete_data_collection">Системное: завершить сбор данных</option>
+                                ) : null}
                                 <option value="bitrix24_sync">Bitrix24</option>
                             </select>
                         </label>
@@ -7507,11 +7509,11 @@ function CompleteDataCollectionActionFields() {
         <>
             <label>
                 <span>Что сделать</span>
-                <input value="Завершить сбор данных контакта" readOnly />
+                <input value="Системно завершить сбор данных контакта" readOnly />
             </label>
             <label>
                 <span>Настройки</span>
-                <input value="Не требуются" readOnly />
+                <input value="Legacy: в новых сценариях используйте Bitrix24" readOnly />
             </label>
         </>
     );

@@ -42,7 +42,7 @@ test('keeps legacy contact phone write action as legacy payload', async () => {
     assert.equal(normalized.manual_value, undefined);
 });
 
-test('keeps complete data collection action without field payload', async () => {
+test('keeps legacy complete data collection action without field payload', async () => {
     const { normalizeActionItemForType } = await viteServer.ssrLoadModule('/resources/js/scenario-builder-v3/App.jsx');
     const normalized = normalizeActionItemForType({
         type: 'complete_data_collection',
