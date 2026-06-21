@@ -38,6 +38,7 @@
 - staging smoke завершён, но тот же validated diff ещё не проведён отдельным PR в `main`
 - смерженный PR в `main`, который ещё не выкачен в production, если production входит в release flow
 - завершившийся production deploy без закрытого production smoke-check
+- незакрытый branch hygiene tail: merged remote/local ветки, stale worktree или локальные ветки без upstream, не классифицированные как допустимый остаток
 
 Пока такой хвост существует, допустимы только три действия:
 
@@ -50,11 +51,13 @@
 1. проверить, есть ли активный PR по предыдущему шагу
 2. проверить, есть ли незавершённый staging deploy или staging smoke
 3. проверить, есть ли незавершённый production deploy или production smoke
-4. если хвост найден, остановить новую реализацию и явно сообщить об этом
+4. проверить branch hygiene tail: merged remote/local ветки, stale worktree и локальные ветки без upstream
+5. если хвост найден, остановить новую реализацию и явно сообщить об этом
    пользователю
 
-Переход к следующему implementation step разрешён только если выполнено одно
-из условий:
+Переход к следующему implementation step разрешён только если branch hygiene
+tail закрыт cleanup-ом или явно принят пользователем как временное исключение
+с перечислением веток, и выполнено одно из условий:
 
 - предыдущий шаг прошёл staging deploy и staging smoke, а если production входит
   в release flow, то ещё и проведён в `main`, выкачен и проверен production smoke-check
