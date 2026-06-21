@@ -2,11 +2,11 @@
 
 namespace Tests\Feature;
 
+use App\Models\AutoReplyRule;
 use App\Models\Channel;
 use App\Models\Dialog;
 use App\Models\FieldDictionaryField;
 use App\Models\Message;
-use App\Models\AutoReplyRule;
 use App\Models\Scenario;
 use App\Models\ScenarioBuilderBlock;
 use App\Models\ScenarioBuilderCondition;
@@ -4666,7 +4666,7 @@ class ScenarioBuilderV3StateTest extends TestCase
         );
     }
 
-    public function test_publish_keeps_complete_data_collection_before_bitrix24_sync_in_runtime_snapshot(): void
+    public function test_publish_keeps_legacy_complete_data_collection_before_bitrix24_sync_in_runtime_snapshot(): void
     {
         $admin = $this->adminUser();
         $channel = Channel::factory()->create(['name' => 'Telegram Complete Data Bitrix24']);
@@ -5229,7 +5229,7 @@ class ScenarioBuilderV3StateTest extends TestCase
      */
     private function autoReplyWorkbookFile(array $rules): UploadedFile
     {
-        $spreadsheet = new Spreadsheet();
+        $spreadsheet = new Spreadsheet;
 
         try {
             $sheet = $spreadsheet->getActiveSheet();

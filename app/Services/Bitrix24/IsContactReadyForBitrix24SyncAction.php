@@ -3,12 +3,14 @@
 namespace App\Services\Bitrix24;
 
 use App\Models\Contact;
+use App\Services\Contacts\ResolveContactDataCollectionCompletionRequirementsAction;
 use App\Services\Contacts\ResolveRootContactAction;
 
 class IsContactReadyForBitrix24SyncAction
 {
     public function __construct(
         private readonly ResolveRootContactAction $resolveRootContactAction,
+        private readonly ResolveContactDataCollectionCompletionRequirementsAction $completionRequirementsAction,
     ) {}
 
     public function handle(Contact|int $contact): bool
@@ -23,21 +25,6 @@ class IsContactReadyForBitrix24SyncAction
             return false;
         }
 
-        foreach ([$rootContact->first_name, $rootContact->city, $rootContact->country, $rootContact->age_range] as $value) {
-            if (! filled($value)) {
-                return false;
-            }
-        }
-
-        if (! $rootContact->phoneNumbers()
-            ->whereNotNull('phone_normalized')
-            ->where('phone_normalized', '!=', '')
-            ->exists()) {
-            return false;
-        }
-
-        $primaryIdentity = $rootContact->primaryIdentity()->with('channel')->first();
-
-        return $primaryIdentity !== null && $primaryIdentity->channel !== null;
+        return $this->completionRequirementsAction->handle($rootContact) === [];
     }
 }
