@@ -1104,6 +1104,63 @@ class Bitrix24ContactSyncJobTest extends TestCase
         ]);
     }
 
+    public function test_legacy_training_verified_name_source_preserves_remote_name_and_migrates_source_id(): void
+    {
+        Queue::fake();
+
+        $this->makeActiveConnection();
+        $channel = $this->makeTelegramChannel();
+        $contact = $this->createSyncReadyContact([
+            'bitrix24_contact_id' => '999',
+            'bitrix24_sync_pending' => true,
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_PENDING,
+            'first_name' => 'Герман',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_AUTO,
+            'last_name' => 'Абрикосов',
+        ], channel: $channel);
+
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
+                'result' => $this->makeBitrix24ContactSnapshot($contact, $channel, [
+                    'ID' => '999',
+                    'NAME' => 'Максим',
+                    'LAST_NAME' => 'Петров',
+                    'UF_CRM_64D7457E4DC07' => '7180',
+                    'UF_CRM_ABRIKOSOFF_ALT_FIRST_NAME' => null,
+                    'UF_CRM_ABRIKOSOFF_ALT_LAST_NAME' => null,
+                ]),
+            ], 200),
+            'https://client-endpoint.example/rest/crm.contact.update.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        $this->runSyncJob($contact);
+
+        Http::assertSent(function ($request): bool {
+            if ($request->url() !== 'https://client-endpoint.example/rest/crm.contact.update.json') {
+                return false;
+            }
+
+            $fields = $request['fields'];
+
+            return is_array($fields)
+                && ! array_key_exists('NAME', $fields)
+                && ! array_key_exists('LAST_NAME', $fields)
+                && ($fields['UF_CRM_64D7457E4DC07'] ?? null) === (int) config('bitrix24.values.name_source.training_verified_id')
+                && ($fields['UF_CRM_ABRIKOSOFF_ALT_FIRST_NAME'] ?? null) === 'Герман'
+                && ($fields['UF_CRM_ABRIKOSOFF_ALT_LAST_NAME'] ?? null) === 'Абрикосов';
+        });
+
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'contact_sync_name_conflict_warning',
+            'status' => Bitrix24SyncLog::STATUS_SKIPPED,
+            'entity_type' => 'contact',
+            'entity_id' => (string) $contact->id,
+        ]);
+    }
+
     public function test_trusted_remote_gender_is_preserved(): void
     {
         Queue::fake();

@@ -6,6 +6,21 @@ use App\Models\Contact;
 
 class ResolveBitrix24ContactNameUpdateAction
 {
+    /**
+     * @var list<string>
+     */
+    private const LEGACY_AUTOMATIC_SOURCE_IDS = ['7178'];
+
+    /**
+     * @var list<string>
+     */
+    private const LEGACY_SELF_REPORTED_SOURCE_IDS = ['7179'];
+
+    /**
+     * @var list<string>
+     */
+    private const LEGACY_TRAINING_VERIFIED_SOURCE_IDS = ['7180'];
+
     public function __construct(
         private readonly ResolveBitrix24ProfileSchemaAction $resolveProfileSchemaAction,
     ) {}
@@ -35,19 +50,20 @@ class ResolveBitrix24ContactNameUpdateAction
         $automaticId = (string) $values['name_source']['automatic_information_id'];
         $selfReportedId = (string) $values['name_source']['self_reported_id'];
         $trainingVerifiedId = (string) $values['name_source']['training_verified_id'];
-        $knownSourceIds = array_filter([
+        $remoteSemanticSourceId = $this->resolveRemoteSemanticSourceId(
+            $nameSourceId,
             $automaticId,
             $selfReportedId,
             $trainingVerifiedId,
-        ], static fn (string $id): bool => $id !== '');
+        );
         $resolvedLocalNameSourceId = $this->resolveLocalNameSourceId($localFirstNameSource);
 
         $canOverwriteName = $this->canOverwriteRemoteName(
             $localFirstNameSource,
             $nameSourceId,
+            $remoteSemanticSourceId,
             $automaticId,
             $selfReportedId,
-            $knownSourceIds,
         );
         $fields = [];
         $warnings = [];
@@ -81,9 +97,13 @@ class ResolveBitrix24ContactNameUpdateAction
             ];
         }
 
-        $hasTrainingVerifiedConflict = $nameSourceId === $trainingVerifiedId
+        $hasTrainingVerifiedConflict = $remoteSemanticSourceId === $trainingVerifiedId
             && (($localFirstName !== null && $localFirstName !== $remoteFirstName)
                 || ($localLastName !== null && $localLastName !== $remoteLastName));
+
+        if ($remoteSemanticSourceId === $trainingVerifiedId && $nameSourceId !== $trainingVerifiedId) {
+            $fields[$schemaFields['name_source']] = (int) $trainingVerifiedId;
+        }
 
         if ($hasTrainingVerifiedConflict) {
             $altFirstName = $localFirstName;
@@ -136,19 +156,48 @@ class ResolveBitrix24ContactNameUpdateAction
     private function canOverwriteRemoteName(
         ?string $localSource,
         ?string $remoteSourceId,
+        ?string $remoteSemanticSourceId,
         string $automaticId,
         string $selfReportedId,
-        array $knownSourceIds,
     ): bool {
-        if ($remoteSourceId !== null && $remoteSourceId !== '' && ! in_array($remoteSourceId, $knownSourceIds, true)) {
+        if ($remoteSourceId !== null && $remoteSourceId !== '' && $remoteSemanticSourceId === null) {
             return true;
         }
 
         return match ($localSource) {
-            Contact::FIRST_NAME_SOURCE_AUTO => in_array($remoteSourceId, [null, '', $automaticId], true),
-            Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED => in_array($remoteSourceId, [null, '', $automaticId, $selfReportedId], true),
+            Contact::FIRST_NAME_SOURCE_AUTO => $remoteSourceId === null
+                || $remoteSourceId === ''
+                || $remoteSemanticSourceId === $automaticId,
+            Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED => $remoteSourceId === null
+                || $remoteSourceId === ''
+                || in_array($remoteSemanticSourceId, [$automaticId, $selfReportedId], true),
             Contact::FIRST_NAME_SOURCE_MANUAL => true,
             default => false,
         };
+    }
+
+    private function resolveRemoteSemanticSourceId(
+        ?string $remoteSourceId,
+        string $automaticId,
+        string $selfReportedId,
+        string $trainingVerifiedId,
+    ): ?string {
+        if ($remoteSourceId === null || $remoteSourceId === '') {
+            return null;
+        }
+
+        if ($remoteSourceId === $automaticId || in_array($remoteSourceId, self::LEGACY_AUTOMATIC_SOURCE_IDS, true)) {
+            return $automaticId;
+        }
+
+        if ($remoteSourceId === $selfReportedId || in_array($remoteSourceId, self::LEGACY_SELF_REPORTED_SOURCE_IDS, true)) {
+            return $selfReportedId;
+        }
+
+        if ($remoteSourceId === $trainingVerifiedId || in_array($remoteSourceId, self::LEGACY_TRAINING_VERIFIED_SOURCE_IDS, true)) {
+            return $trainingVerifiedId;
+        }
+
+        return null;
     }
 }
