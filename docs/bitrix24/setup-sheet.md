@@ -34,7 +34,7 @@
 | `BITRIX24_OPENLINES_RUNTIME_APPLICATION_TOKEN_HASH` | required, from current Bitrix box `application_token` |
 | `BITRIX24_OPENLINES_RUNTIME_APPLICATION_TOKEN_HASHES` | optional multi-token replacement for the single hash |
 | `BITRIX24_FAKE_HAPPY_PATH_ENABLED` | `false` |
-| `BITRIX24_TIMELINE_HISTORY_IMPORT_ENABLED` | `false` |
+| `BITRIX24_TIMELINE_HISTORY_IMPORT_ENABLED` | `true` |
 | `BITRIX24_REVERSE_SYNC_ENABLED` | `false` |
 | `BITRIX24_DUPLICATE_PHONE_DIAGNOSTIC_ENABLED` | `false` |
 | `BITRIX24_DUPLICATE_PHONE_DIAGNOSTIC_DELAY_SECONDS` | `90` |
@@ -73,6 +73,21 @@ base URL, а не этим именем profile.
 | Name source | `UF_CRM_64D7457E4DC07` |
 | Exact age | `UF_CRM_1606901533` |
 | Gender | `UF_CRM_5EEB7355C13B1` |
+
+### Current Bitrix24 contact enum IDs
+
+Эти значения должны совпадать с текущим справочником Bitrix24. Старые enum ID
+вроде `7178/7179/7180` и `4653/4655/5815` считаются legacy-значениями и
+должны быть заменены при синхронизации контакта.
+
+| Purpose | Bitrix24 enum ID |
+| --- | --- |
+| Name source: automatic information | `26` |
+| Name source: self reported | `27` |
+| Name source: training verified | `28` |
+| Gender: male | `29` |
+| Gender: female | `30` |
+| Gender: unknown | `31` |
 
 ### Required contact fields
 
@@ -114,7 +129,7 @@ setup-runbook на staging или другом real integration target:
 | MAX LINE_ID | stored in the active MAX channel route in admin |
 | Telegram connector_code | `abrikosoff_telegram`, stored in Bitrix24 profile settings in admin |
 | MAX connector_code | `abrikosoff_max`, stored in Bitrix24 profile settings in admin |
-| `BITRIX24_TIMELINE_HISTORY_IMPORT_ENABLED` | `false` |
+| `BITRIX24_TIMELINE_HISTORY_IMPORT_ENABLED` | `true` |
 | `BITRIX24_REVERSE_SYNC_ENABLED` | `false` |
 | `BITRIX24_DUPLICATE_PHONE_DIAGNOSTIC_ENABLED` | `false` |
 | `BITRIX24_DUPLICATE_PHONE_DIAGNOSTIC_DELAY_SECONDS` | `90` |

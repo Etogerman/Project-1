@@ -42,7 +42,10 @@ return [
             env('BITRIX24_OPENLINES_FAST_INBOUND_EXPORT_ENABLED', env('APP_ENV') === 'local'),
             FILTER_VALIDATE_BOOL,
         ),
-        'timeline_history_import_enabled' => (bool) env('BITRIX24_TIMELINE_HISTORY_IMPORT_ENABLED', false),
+        'timeline_history_import_enabled' => filter_var(
+            env('BITRIX24_TIMELINE_HISTORY_IMPORT_ENABLED', true),
+            FILTER_VALIDATE_BOOL,
+        ),
         'reverse_sync_enabled' => (bool) env('BITRIX24_REVERSE_SYNC_ENABLED', false),
     ],
 
@@ -123,14 +126,14 @@ return [
 
     'values' => [
         'name_source' => [
-            'automatic_information_id' => (int) env('BITRIX24_NAME_SOURCE_AUTOMATIC_ID', 7178),
-            'self_reported_id' => (int) env('BITRIX24_NAME_SOURCE_SELF_REPORTED_ID', 7179),
-            'training_verified_id' => (int) env('BITRIX24_NAME_SOURCE_TRAINING_VERIFIED_ID', 7180),
+            'automatic_information_id' => (int) env('BITRIX24_NAME_SOURCE_AUTOMATIC_ID', 26),
+            'self_reported_id' => (int) env('BITRIX24_NAME_SOURCE_SELF_REPORTED_ID', 27),
+            'training_verified_id' => (int) env('BITRIX24_NAME_SOURCE_TRAINING_VERIFIED_ID', 28),
         ],
         'gender' => [
-            'male_id' => (int) env('BITRIX24_GENDER_MALE_ID', 4653),
-            'female_id' => (int) env('BITRIX24_GENDER_FEMALE_ID', 4655),
-            'unknown_id' => (int) env('BITRIX24_GENDER_UNKNOWN_ID', 5815),
+            'male_id' => (int) env('BITRIX24_GENDER_MALE_ID', 29),
+            'female_id' => (int) env('BITRIX24_GENDER_FEMALE_ID', 30),
+            'unknown_id' => (int) env('BITRIX24_GENDER_UNKNOWN_ID', 31),
         ],
     ],
 ];

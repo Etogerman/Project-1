@@ -35,6 +35,11 @@ class ResolveBitrix24ContactNameUpdateAction
         $automaticId = (string) $values['name_source']['automatic_information_id'];
         $selfReportedId = (string) $values['name_source']['self_reported_id'];
         $trainingVerifiedId = (string) $values['name_source']['training_verified_id'];
+        $knownSourceIds = array_filter([
+            $automaticId,
+            $selfReportedId,
+            $trainingVerifiedId,
+        ], static fn (string $id): bool => $id !== '');
         $resolvedLocalNameSourceId = $this->resolveLocalNameSourceId($localFirstNameSource);
 
         $canOverwriteName = $this->canOverwriteRemoteName(
@@ -42,6 +47,7 @@ class ResolveBitrix24ContactNameUpdateAction
             $nameSourceId,
             $automaticId,
             $selfReportedId,
+            $knownSourceIds,
         );
         $fields = [];
         $warnings = [];
@@ -132,7 +138,12 @@ class ResolveBitrix24ContactNameUpdateAction
         ?string $remoteSourceId,
         string $automaticId,
         string $selfReportedId,
+        array $knownSourceIds,
     ): bool {
+        if ($remoteSourceId !== null && $remoteSourceId !== '' && ! in_array($remoteSourceId, $knownSourceIds, true)) {
+            return true;
+        }
+
         return match ($localSource) {
             Contact::FIRST_NAME_SOURCE_AUTO => in_array($remoteSourceId, [null, '', $automaticId], true),
             Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED => in_array($remoteSourceId, [null, '', $automaticId, $selfReportedId], true),
