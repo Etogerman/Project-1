@@ -115,6 +115,7 @@ const ACTION_TYPE_RESOLVE_GEO_CITY = 'resolve_geo_city';
 const ACTION_TYPE_VARIABLES = 'variables';
 const ACTION_TYPE_SIMULATE_START_PARAMETER = 'simulate_start_parameter';
 const ACTION_TYPE_TAG_EFFECTS = 'tag_effects';
+const ACTION_TYPE_COMPLETE_DATA_COLLECTION = 'complete_data_collection';
 const ACTION_TYPE_BITRIX24_SYNC = 'bitrix24_sync';
 const BITRIX24_SYNC_OPERATION_OPTIONS = [
     ['contact_sync', 'Синхронизировать контакт'],
@@ -7140,6 +7141,9 @@ function ActionFields({ action, blocks = [], tags = [], blockKey, onUpdateModule
                                 <option value="resolve_geo_city">Распознать географию</option>
                                 <option value="simulate_start_parameter">Имитировать старт с параметром</option>
                                 <option value="tag_effects">Изменить теги</option>
+                                {item.type === ACTION_TYPE_COMPLETE_DATA_COLLECTION ? (
+                                    <option value="complete_data_collection">Системное: завершить сбор данных</option>
+                                ) : null}
                                 <option value="bitrix24_sync">Bitrix24</option>
                             </select>
                         </label>
@@ -7194,6 +7198,8 @@ function ActionFields({ action, blocks = [], tags = [], blockKey, onUpdateModule
                                 ...patch,
                             }))}
                         />
+                    ) : item.type === ACTION_TYPE_COMPLETE_DATA_COLLECTION ? (
+                        <CompleteDataCollectionActionFields />
                     ) : item.type === ACTION_TYPE_BITRIX24_SYNC ? (
                         <Bitrix24SyncActionFields
                             item={item}
@@ -7493,6 +7499,21 @@ function TagEffectsActionFields({ item, tags = [], onChange }) {
                         </option>
                     ))}
                 </select>
+            </label>
+        </>
+    );
+}
+
+function CompleteDataCollectionActionFields() {
+    return (
+        <>
+            <label>
+                <span>Что сделать</span>
+                <input value="Системно завершить сбор данных контакта" readOnly />
+            </label>
+            <label>
+                <span>Настройки</span>
+                <input value="Legacy: в новых сценариях используйте Bitrix24" readOnly />
             </label>
         </>
     );
@@ -10932,6 +10953,10 @@ function actionItemSummary(item) {
         return `Теги → ${count} ${pluralActions(count)}`;
     }
 
+    if (item.type === ACTION_TYPE_COMPLETE_DATA_COLLECTION) {
+        return 'Контакт → сбор данных завершён';
+    }
+
     if (item.type === ACTION_TYPE_BITRIX24_SYNC) {
         const label = BITRIX24_SYNC_OPERATION_OPTIONS
             .find(([value]) => value === normalizeBitrix24SyncOperation(item.operation))?.[1] ?? 'Синхронизация';
@@ -11196,6 +11221,7 @@ function actionItems(actionModule) {
             || item.type === ACTION_TYPE_VARIABLES
             || item.type === ACTION_TYPE_SIMULATE_START_PARAMETER
             || item.type === ACTION_TYPE_TAG_EFFECTS
+            || item.type === ACTION_TYPE_COMPLETE_DATA_COLLECTION
             || item.type === ACTION_TYPE_BITRIX24_SYNC
             || item.type === ACTION_TYPE_CHANGE_FIELD
             || item.target_field !== ''
@@ -11212,6 +11238,7 @@ export function normalizeActionItemForType(item) {
         ACTION_TYPE_VARIABLES,
         ACTION_TYPE_SIMULATE_START_PARAMETER,
         ACTION_TYPE_TAG_EFFECTS,
+        ACTION_TYPE_COMPLETE_DATA_COLLECTION,
         ACTION_TYPE_BITRIX24_SYNC,
         ACTION_TYPE_WRITE_CONTACT_FIELD,
         ACTION_TYPE_CHANGE_FIELD,
@@ -11281,6 +11308,10 @@ export function normalizeActionItemForType(item) {
             assign_tag_ids: normalizeIntegerList(item.assign_tag_ids),
             remove_tag_ids: normalizeIntegerList(item.remove_tag_ids),
         };
+    }
+
+    if (type === ACTION_TYPE_COMPLETE_DATA_COLLECTION) {
+        return { type };
     }
 
     if (type === ACTION_TYPE_BITRIX24_SYNC) {

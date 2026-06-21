@@ -52,7 +52,7 @@ class Bitrix24ContactSyncJobTest extends TestCase
         config()->set('bitrix24.http.retry_sleep_milliseconds', 0);
     }
 
-    public function test_first_successful_contact_sync_queues_retry_for_latest_missed_inbound_live_message(): void
+    public function test_first_successful_contact_sync_queues_retry_for_missed_inbound_and_constructor_outbound_live_messages(): void
     {
         Queue::fake();
 
@@ -74,19 +74,22 @@ class Bitrix24ContactSyncJobTest extends TestCase
             'text' => 'Первое сообщение до sync',
             'received_at' => now()->subMinute(),
         ]);
-        $outboundAutoReply = $this->makeMessage($dialog, [
+        $missedConstructorOutbound = $this->makeMessage($dialog, [
             'direction' => Message::DIRECTION_OUTBOUND,
             'message_kind' => Message::KIND_OUTBOUND_AUTO_REPLY,
             'sent_by_type' => Message::SENT_BY_TYPE_AUTO_REPLY,
-            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_AUTO_REPLY_RULE,
-            'text' => 'Служебный автоответ',
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_BOT_CONSTRUCTOR_BLOCK,
+            'text' => 'Сообщение конструктора до sync',
             'received_at' => now(),
         ]);
 
         $initialQueueResult = app(QueueBitrix24LiveMessageExportAction::class)->handle($missedInbound);
+        $initialOutboundQueueResult = app(QueueBitrix24LiveMessageExportAction::class)->handle($missedConstructorOutbound);
 
         $this->assertFalse($initialQueueResult->queued);
         $this->assertFalse($initialQueueResult->ready);
+        $this->assertFalse($initialOutboundQueueResult->queued);
+        $this->assertFalse($initialOutboundQueueResult->ready);
 
         $contact->forceFill([
             'bitrix24_sync_pending' => true,
@@ -108,8 +111,9 @@ class Bitrix24ContactSyncJobTest extends TestCase
             return $job->messageId === $missedInbound->id
                 && $job->retryAfterSync === true;
         });
-        Queue::assertNotPushed(ExportMessageToBitrix24OpenLinesJob::class, function (ExportMessageToBitrix24OpenLinesJob $job) use ($outboundAutoReply): bool {
-            return $job->messageId === $outboundAutoReply->id;
+        Queue::assertPushed(ExportMessageToBitrix24OpenLinesJob::class, function (ExportMessageToBitrix24OpenLinesJob $job) use ($missedConstructorOutbound): bool {
+            return $job->messageId === $missedConstructorOutbound->id
+                && $job->retryAfterSync === true;
         });
 
         $this->assertDatabaseHas('bitrix24_message_exports', [
@@ -117,14 +121,17 @@ class Bitrix24ContactSyncJobTest extends TestCase
             'export_mode' => Bitrix24MessageExport::MODE_LIVE,
             'export_status' => Bitrix24MessageExport::STATUS_PENDING,
         ]);
-        $this->assertDatabaseMissing('bitrix24_message_exports', [
-            'message_id' => $outboundAutoReply->id,
+        $this->assertDatabaseHas('bitrix24_message_exports', [
+            'message_id' => $missedConstructorOutbound->id,
             'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_PENDING,
         ]);
     }
 
     public function test_contact_sync_uses_current_runtime_profile_connection_when_multiple_active_connections_exist(): void
     {
+        Queue::fake();
+
         $this->makeActiveConnection([
             'client_endpoint' => 'https://selected-client.example/rest/',
             'server_endpoint' => 'https://selected-server.example/rest/',
@@ -565,6 +572,8 @@ class Bitrix24ContactSyncJobTest extends TestCase
 
     public function test_job_creates_bitrix24_contact_when_duplicate_search_returns_no_matches(): void
     {
+        Queue::fake();
+
         $this->makeActiveConnection();
         $channel = $this->makeTelegramChannel();
         $contact = $this->createSyncReadyContact(
@@ -625,6 +634,8 @@ class Bitrix24ContactSyncJobTest extends TestCase
 
     public function test_contact_create_payload_uses_current_profile_crm_schema_settings(): void
     {
+        Queue::fake();
+
         $connection = $this->makeProfileLinkedActiveBitrix24Connection(
             profileOverrides: [
                 'telegram_source_id' => 'ABC_TELEGRAM_PROFILE',
@@ -692,6 +703,8 @@ class Bitrix24ContactSyncJobTest extends TestCase
 
     public function test_job_links_existing_unique_match_without_creating_new_contact(): void
     {
+        Queue::fake();
+
         $this->makeActiveConnection();
         $channel = $this->makeTelegramChannel();
         $contact = $this->createSyncReadyContact(channel: $channel);
@@ -860,6 +873,8 @@ class Bitrix24ContactSyncJobTest extends TestCase
 
     public function test_linked_contact_with_matching_remote_snapshot_is_a_noop_sync(): void
     {
+        Queue::fake();
+
         $this->makeActiveConnection();
         $channel = $this->makeTelegramChannel();
         $contact = $this->createSyncReadyContact([
@@ -892,6 +907,8 @@ class Bitrix24ContactSyncJobTest extends TestCase
 
     public function test_linked_contact_with_diff_runs_safe_update(): void
     {
+        Queue::fake();
+
         $this->makeActiveConnection();
         $channel = $this->makeTelegramChannel();
         $contact = $this->createSyncReadyContact([
@@ -938,6 +955,8 @@ class Bitrix24ContactSyncJobTest extends TestCase
 
     public function test_training_verified_name_preserves_remote_name_and_updates_alt_fields(): void
     {
+        Queue::fake();
+
         $this->makeActiveConnection();
         $channel = $this->makeTelegramChannel();
         $contact = $this->createSyncReadyContact([
@@ -991,6 +1010,8 @@ class Bitrix24ContactSyncJobTest extends TestCase
 
     public function test_automatic_name_source_allows_remote_name_overwrite(): void
     {
+        Queue::fake();
+
         $this->makeActiveConnection();
         $channel = $this->makeTelegramChannel();
         $contact = $this->createSyncReadyContact([
@@ -1031,8 +1052,119 @@ class Bitrix24ContactSyncJobTest extends TestCase
         });
     }
 
+    public function test_legacy_remote_name_source_id_is_migrated_to_current_profile_id(): void
+    {
+        Queue::fake();
+
+        $this->makeActiveConnection();
+        $channel = $this->makeTelegramChannel();
+        $contact = $this->createSyncReadyContact([
+            'bitrix24_contact_id' => '999',
+            'bitrix24_sync_pending' => true,
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_PENDING,
+            'first_name' => 'Герман',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_CONTACT_CONFIRMED,
+            'last_name' => 'Абрикосов',
+        ], channel: $channel);
+
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
+                'result' => $this->makeBitrix24ContactSnapshot($contact, $channel, [
+                    'ID' => '999',
+                    'NAME' => 'Герман',
+                    'LAST_NAME' => 'Абрикосов',
+                    'UF_CRM_64D7457E4DC07' => '7179',
+                ]),
+            ], 200),
+            'https://client-endpoint.example/rest/crm.contact.update.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        $this->runSyncJob($contact);
+
+        Http::assertSent(function ($request): bool {
+            if ($request->url() !== 'https://client-endpoint.example/rest/crm.contact.update.json') {
+                return false;
+            }
+
+            $fields = $request['fields'];
+
+            return is_array($fields)
+                && ($fields['UF_CRM_64D7457E4DC07'] ?? null) === (int) config('bitrix24.values.name_source.self_reported_id')
+                && ! array_key_exists('UF_CRM_ABRIKOSOFF_ALT_FIRST_NAME', $fields)
+                && ! array_key_exists('UF_CRM_ABRIKOSOFF_ALT_LAST_NAME', $fields);
+        });
+
+        $this->assertDatabaseMissing('bitrix24_sync_logs', [
+            'operation' => 'contact_sync_name_conflict_warning',
+            'entity_type' => 'contact',
+            'entity_id' => (string) $contact->id,
+        ]);
+    }
+
+    public function test_legacy_training_verified_name_source_preserves_remote_name_and_migrates_source_id(): void
+    {
+        Queue::fake();
+
+        $this->makeActiveConnection();
+        $channel = $this->makeTelegramChannel();
+        $contact = $this->createSyncReadyContact([
+            'bitrix24_contact_id' => '999',
+            'bitrix24_sync_pending' => true,
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_PENDING,
+            'first_name' => 'Герман',
+            'first_name_source' => Contact::FIRST_NAME_SOURCE_AUTO,
+            'last_name' => 'Абрикосов',
+        ], channel: $channel);
+
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
+                'result' => $this->makeBitrix24ContactSnapshot($contact, $channel, [
+                    'ID' => '999',
+                    'NAME' => 'Максим',
+                    'LAST_NAME' => 'Петров',
+                    'UF_CRM_64D7457E4DC07' => '7180',
+                    'UF_CRM_ABRIKOSOFF_ALT_FIRST_NAME' => null,
+                    'UF_CRM_ABRIKOSOFF_ALT_LAST_NAME' => null,
+                ]),
+            ], 200),
+            'https://client-endpoint.example/rest/crm.contact.update.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        $this->runSyncJob($contact);
+
+        Http::assertSent(function ($request): bool {
+            if ($request->url() !== 'https://client-endpoint.example/rest/crm.contact.update.json') {
+                return false;
+            }
+
+            $fields = $request['fields'];
+
+            return is_array($fields)
+                && ! array_key_exists('NAME', $fields)
+                && ! array_key_exists('LAST_NAME', $fields)
+                && ($fields['UF_CRM_64D7457E4DC07'] ?? null) === (int) config('bitrix24.values.name_source.training_verified_id')
+                && ($fields['UF_CRM_ABRIKOSOFF_ALT_FIRST_NAME'] ?? null) === 'Герман'
+                && ($fields['UF_CRM_ABRIKOSOFF_ALT_LAST_NAME'] ?? null) === 'Абрикосов';
+        });
+
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'contact_sync_name_conflict_warning',
+            'status' => Bitrix24SyncLog::STATUS_SKIPPED,
+            'entity_type' => 'contact',
+            'entity_id' => (string) $contact->id,
+        ]);
+    }
+
     public function test_trusted_remote_gender_is_preserved(): void
     {
+        Queue::fake();
+
         $this->makeActiveConnection();
         $channel = $this->makeTelegramChannel();
         $contact = $this->createSyncReadyContact([
@@ -1068,6 +1200,8 @@ class Bitrix24ContactSyncJobTest extends TestCase
 
     public function test_unknown_remote_gender_can_be_updated(): void
     {
+        Queue::fake();
+
         $this->makeActiveConnection();
         $channel = $this->makeTelegramChannel();
         $contact = $this->createSyncReadyContact([
@@ -1103,8 +1237,56 @@ class Bitrix24ContactSyncJobTest extends TestCase
         });
     }
 
+    public function test_legacy_remote_gender_id_is_migrated_to_current_profile_id(): void
+    {
+        Queue::fake();
+
+        $this->makeActiveConnection();
+        $channel = $this->makeTelegramChannel();
+        $contact = $this->createSyncReadyContact([
+            'bitrix24_contact_id' => '999',
+            'bitrix24_sync_pending' => true,
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_PENDING,
+            'gender' => 'male',
+        ], channel: $channel);
+
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://client-endpoint.example/rest/crm.contact.get.json' => Http::response([
+                'result' => $this->makeBitrix24ContactSnapshot($contact, $channel, [
+                    'ID' => '999',
+                    'UF_CRM_5EEB7355C13B1' => '4653',
+                ]),
+            ], 200),
+            'https://client-endpoint.example/rest/crm.contact.update.json' => Http::response([
+                'result' => true,
+            ], 200),
+        ]);
+
+        $this->runSyncJob($contact);
+
+        Http::assertSent(function ($request): bool {
+            if ($request->url() !== 'https://client-endpoint.example/rest/crm.contact.update.json') {
+                return false;
+            }
+
+            $fields = $request['fields'];
+
+            return is_array($fields)
+                && ($fields['UF_CRM_5EEB7355C13B1'] ?? null) === (int) config('bitrix24.values.gender.male_id');
+        });
+
+        $this->assertDatabaseMissing('bitrix24_sync_logs', [
+            'operation' => 'contact_sync_gender_preserved',
+            'entity_type' => 'contact',
+            'entity_id' => (string) $contact->id,
+        ]);
+    }
+
     public function test_update_normalizes_matching_local_phone_and_preserves_remote_only_phone(): void
     {
+        Queue::fake();
+
         $this->makeActiveConnection();
         $channel = $this->makeTelegramChannel();
         $contact = $this->createSyncReadyContact([
@@ -1149,6 +1331,8 @@ class Bitrix24ContactSyncJobTest extends TestCase
 
     public function test_repeated_identical_sync_is_idempotent_and_skips_update(): void
     {
+        Queue::fake();
+
         $this->makeActiveConnection();
         $channel = $this->makeTelegramChannel();
         $contact = $this->createSyncReadyContact([
@@ -1227,6 +1411,8 @@ class Bitrix24ContactSyncJobTest extends TestCase
 
     public function test_unique_match_is_linked_and_safely_updated_when_remote_diff_exists(): void
     {
+        Queue::fake();
+
         $this->makeActiveConnection();
         $channel = $this->makeTelegramChannel();
         $contact = $this->createSyncReadyContact(channel: $channel);
@@ -1267,6 +1453,8 @@ class Bitrix24ContactSyncJobTest extends TestCase
 
     public function test_second_run_links_existing_remote_contact_instead_of_creating_duplicate(): void
     {
+        Queue::fake();
+
         $this->makeActiveConnection();
         $contact = $this->createSyncReadyContact();
 

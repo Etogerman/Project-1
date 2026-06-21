@@ -69,6 +69,7 @@ class ValidateScenarioBuilderV3StateAction
         'variables',
         'simulate_start_parameter',
         'tag_effects',
+        'complete_data_collection',
         'bitrix24_sync',
     ];
 
@@ -1077,6 +1078,14 @@ class ValidateScenarioBuilderV3StateAction
                     'type' => $type,
                     'assign_tag_ids' => $assignTagIds,
                     'remove_tag_ids' => $removeTagIds,
+                ];
+
+                continue;
+            }
+
+            if ($type === 'complete_data_collection') {
+                $normalized[] = [
+                    'type' => $type,
                 ];
 
                 continue;

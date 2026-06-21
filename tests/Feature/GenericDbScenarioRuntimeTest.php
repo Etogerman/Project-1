@@ -17,8 +17,9 @@ use App\Jobs\ProcessScenarioV3AiAnalysisJob;
 use App\Jobs\ProcessScenarioV3OutboundMessageJob;
 use App\Jobs\ProcessScenarioV3ScheduledTransitionJob;
 use App\Jobs\RetryScenarioV3AiAnalysisJob;
-use App\Models\AiRequest;
+use App\Jobs\SyncContactToBitrix24Job;
 use App\Models\AiProcessor;
+use App\Models\AiRequest;
 use App\Models\AiTask;
 use App\Models\AutoReplyRule;
 use App\Models\Channel;
@@ -1421,15 +1422,15 @@ class GenericDbScenarioRuntimeTest extends TestCase
             ->twice()
             ->andReturn(
                 new AiProviderStructuredResult(
-                provider: 'gemini',
-                model: 'primary-model',
-                parsedPayload: ['output_id' => 'unexpected', 'data' => ['geo_city' => 'Москва']],
-                requestBodyRaw: '{}',
-                responseBodyRaw: '{}',
-                httpStatus: 200,
-                inputTokens: 10,
-                outputTokens: 5,
-                totalTokens: 15,
+                    provider: 'gemini',
+                    model: 'primary-model',
+                    parsedPayload: ['output_id' => 'unexpected', 'data' => ['geo_city' => 'Москва']],
+                    requestBodyRaw: '{}',
+                    responseBodyRaw: '{}',
+                    httpStatus: 200,
+                    inputTokens: 10,
+                    outputTokens: 5,
+                    totalTokens: 15,
                 ),
                 new AiProviderStructuredResult(
                     provider: 'gemini',
@@ -2248,6 +2249,158 @@ class GenericDbScenarioRuntimeTest extends TestCase
             && $request['text'] === 'Попытка записана');
     }
 
+    public function test_v3_complete_data_collection_action_completes_ready_contact_and_continues_block(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9716],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel, [
+            'first_name' => 'Герман',
+            'country' => 'Украина',
+            'region' => 'Житомирская область',
+            'city' => 'Житомир',
+            'age_range' => '30_39',
+            'data_collection_status' => null,
+            'data_collection_completed_at' => null,
+        ], dialogOverrides: [
+            'stage' => Dialog::STAGE_PHONE_RECEIVED,
+        ]);
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 926 352 71 11',
+            'phone_normalized' => '+79263527111',
+            'is_primary' => true,
+        ]);
+
+        $schema = $this->v3VariablesRuntimeSchema($channel->id);
+        data_set($schema, 'builder_v3_runtime.blocks.variables.actions', [
+            [
+                'type' => 'complete_data_collection',
+            ],
+            [
+                'type' => 'variables',
+                'operations' => [[
+                    'operation' => 'increment',
+                    'field_key' => 'after_completion',
+                    'amount' => 1,
+                ]],
+            ],
+        ]);
+        $scenario = $this->createPublishedScenario('v3_complete_data_collection_ready', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $contact->refresh();
+        $dialog->refresh();
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_COMPLETED, $contact->data_collection_status);
+        $this->assertNotNull($contact->data_collection_completed_at);
+        $this->assertSame(Dialog::STAGE_QUESTIONNAIRE_COMPLETED, $dialog->stage);
+        $this->assertSame(1, data_get($dialog->fields_payload, 'after_completion'));
+        $this->assertSame('completed', data_get($run->state_payload, 'v3.data_collection_completion.last.status'));
+        $this->assertTrue(data_get($run->state_payload, 'v3.data_collection_completion.last.completed'));
+        $this->assertSame($contact->id, data_get($run->state_payload, 'v3.data_collection_completion.last.root_contact_id'));
+    }
+
+    public function test_v3_complete_data_collection_action_does_not_complete_incomplete_profile(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9717],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel, [
+            'first_name' => 'Герман',
+            'country' => 'Украина',
+            'city' => null,
+            'age_range' => '30_39',
+            'data_collection_status' => null,
+            'data_collection_completed_at' => null,
+        ]);
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 926 352 71 11',
+            'phone_normalized' => '+79263527111',
+            'is_primary' => true,
+        ]);
+
+        $schema = $this->v3VariablesRuntimeSchema($channel->id);
+        data_set($schema, 'builder_v3_runtime.blocks.variables.actions', [
+            [
+                'type' => 'complete_data_collection',
+            ],
+            [
+                'type' => 'variables',
+                'operations' => [[
+                    'operation' => 'increment',
+                    'field_key' => 'after_completion',
+                    'amount' => 1,
+                ]],
+            ],
+        ]);
+        $scenario = $this->createPublishedScenario('v3_complete_data_collection_not_ready', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $contact->refresh();
+        $dialog->refresh();
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->assertNull($contact->data_collection_status);
+        $this->assertNull($contact->data_collection_completed_at);
+        $this->assertSame(1, data_get($dialog->fields_payload, 'after_completion'));
+        $this->assertSame('not_ready', data_get($run->state_payload, 'v3.data_collection_completion.last.status'));
+        $this->assertFalse(data_get($run->state_payload, 'v3.data_collection_completion.last.completed'));
+        $this->assertContains('city', data_get($run->state_payload, 'v3.data_collection_completion.last.missing_requirements'));
+    }
+
     #[DataProvider('v3Bitrix24SyncOperationProvider')]
     public function test_v3_bitrix24_sync_action_queues_operation_and_continues_block(
         string $operation,
@@ -2261,7 +2414,20 @@ class GenericDbScenarioRuntimeTest extends TestCase
         ]);
 
         $channel = $this->createTelegramChannel();
-        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel, [
+            'first_name' => 'Герман',
+            'country' => 'Украина',
+            'city' => 'Житомир',
+            'age_range' => '30_39',
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_COMPLETED,
+            'data_collection_completed_at' => now(),
+        ]);
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 926 352 71 11',
+            'phone_normalized' => '+79263527111',
+            'is_primary' => true,
+        ]);
         $schema = $this->v3VariablesRuntimeSchema($channel->id);
         data_set($schema, 'builder_v3_runtime.blocks.variables.actions', [
             [
@@ -2380,6 +2546,237 @@ class GenericDbScenarioRuntimeTest extends TestCase
             'history export' => ['history_export', 'history'],
             'contact sync with followups' => ['contact_sync_with_followups', 'contact'],
         ];
+    }
+
+    public function test_v3_bitrix24_sync_action_completes_ready_contact_before_real_bitrix24_sync(): void
+    {
+        Queue::fake([SyncContactToBitrix24Job::class]);
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9781],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel, [
+            'first_name' => 'Герман',
+            'country' => 'Украина',
+            'region' => 'Житомирская область',
+            'city' => 'Житомир',
+            'age_range' => '30_39',
+            'data_collection_status' => null,
+            'data_collection_completed_at' => null,
+        ], dialogOverrides: [
+            'stage' => Dialog::STAGE_PHONE_RECEIVED,
+        ]);
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 926 352 71 11',
+            'phone_normalized' => '+79263527111',
+            'is_primary' => true,
+        ]);
+
+        $schema = $this->v3VariablesRuntimeSchema($channel->id);
+        data_set($schema, 'builder_v3_runtime.blocks.variables.actions', [
+            [
+                'type' => 'bitrix24_sync',
+                'operation' => 'contact_sync',
+            ],
+            [
+                'type' => 'variables',
+                'operations' => [[
+                    'operation' => 'increment',
+                    'field_key' => 'bitrix_after_completion',
+                    'amount' => 1,
+                ]],
+            ],
+        ]);
+        $scenario = $this->createPublishedScenario('v3_bitrix24_sync_completes_data_collection', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $contact->refresh();
+        $dialog->refresh();
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_COMPLETED, $contact->data_collection_status);
+        $this->assertNotNull($contact->data_collection_completed_at);
+        $this->assertSame(Dialog::STAGE_QUESTIONNAIRE_COMPLETED, $dialog->stage);
+        $this->assertTrue($contact->bitrix24_sync_pending);
+        $this->assertSame(Contact::BITRIX24_SYNC_STATUS_PENDING, $contact->bitrix24_sync_status);
+        $this->assertSame(1, data_get($dialog->fields_payload, 'bitrix_after_completion'));
+        $this->assertSame('completed', data_get($run->state_payload, 'v3.data_collection_completion.last.status'));
+        $this->assertTrue(data_get($run->state_payload, 'v3.data_collection_completion.last.completed'));
+        $this->assertSame('queued', data_get($run->state_payload, 'v3.bitrix24_sync.last.status'));
+        $this->assertSame($contact->id, data_get($run->state_payload, 'v3.bitrix24_sync.last.root_contact_id'));
+
+        Queue::assertPushed(SyncContactToBitrix24Job::class, function (SyncContactToBitrix24Job $job) use ($contact): bool {
+            return $job->contactId === $contact->id;
+        });
+    }
+
+    public function test_v3_bitrix24_sync_action_does_not_complete_incomplete_profile(): void
+    {
+        Queue::fake([SyncContactToBitrix24Job::class]);
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9782],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel, [
+            'first_name' => 'Герман',
+            'country' => 'Украина',
+            'city' => null,
+            'age_range' => '30_39',
+            'data_collection_status' => null,
+            'data_collection_completed_at' => null,
+        ]);
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 926 352 71 11',
+            'phone_normalized' => '+79263527111',
+            'is_primary' => true,
+        ]);
+
+        $schema = $this->v3VariablesRuntimeSchema($channel->id);
+        data_set($schema, 'builder_v3_runtime.blocks.variables.actions', [
+            [
+                'type' => 'bitrix24_sync',
+                'operation' => 'contact_sync',
+            ],
+        ]);
+        $scenario = $this->createPublishedScenario('v3_bitrix24_sync_data_collection_not_ready', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $contact->refresh();
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->assertNull($contact->data_collection_status);
+        $this->assertNull($contact->data_collection_completed_at);
+        $this->assertFalse($contact->bitrix24_sync_pending);
+        $this->assertSame(Contact::BITRIX24_SYNC_STATUS_NOT_SYNCED, $contact->bitrix24_sync_status);
+        $this->assertSame('not_ready', data_get($run->state_payload, 'v3.data_collection_completion.last.status'));
+        $this->assertContains('city', data_get($run->state_payload, 'v3.data_collection_completion.last.missing_requirements'));
+        $this->assertSame('not_ready', data_get($run->state_payload, 'v3.bitrix24_sync.last.status'));
+
+        Queue::assertNotPushed(SyncContactToBitrix24Job::class);
+    }
+
+    public function test_v3_bitrix24_sync_action_rechecks_completed_contact_before_deal_sync(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 9783],
+            ]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel, [
+            'first_name' => 'Герман',
+            'country' => 'Украина',
+            'city' => null,
+            'age_range' => '30_39',
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_COMPLETED,
+            'data_collection_completed_at' => now(),
+            'bitrix24_contact_id' => '123',
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_SYNCED,
+            'bitrix24_sync_pending' => false,
+        ]);
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+7 926 352 71 11',
+            'phone_normalized' => '+79263527111',
+            'is_primary' => true,
+        ]);
+
+        $schema = $this->v3VariablesRuntimeSchema($channel->id);
+        data_set($schema, 'builder_v3_runtime.blocks.variables.actions', [
+            [
+                'type' => 'bitrix24_sync',
+                'operation' => 'deal_sync',
+            ],
+        ]);
+        $scenario = $this->createPublishedScenario('v3_bitrix24_sync_completed_but_not_ready', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $dealQueueAction = Mockery::mock(QueueBitrix24DealSyncAction::class);
+        $dealQueueAction->shouldReceive('handle')->never();
+        app()->instance(QueueBitrix24DealSyncAction::class, $dealQueueAction);
+
+        $startMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+        ]);
+
+        (new ProcessScenarioStartJob($startMessage->id, $dialog->id, $scenario->code))
+            ->handle(app(ScenarioRegistry::class));
+
+        $contact->refresh();
+        $run = ScenarioRun::query()->where('scenario_code', $scenario->code)->firstOrFail();
+
+        $this->assertSame(Contact::DATA_COLLECTION_STATUS_COMPLETED, $contact->data_collection_status);
+        $this->assertFalse($contact->bitrix24_deal_sync_pending);
+        $this->assertSame('not_ready', data_get($run->state_payload, 'v3.data_collection_completion.last.status'));
+        $this->assertFalse(data_get($run->state_payload, 'v3.data_collection_completion.last.completed'));
+        $this->assertContains('city', data_get($run->state_payload, 'v3.data_collection_completion.last.missing_requirements'));
+        $this->assertSame('not_ready', data_get($run->state_payload, 'v3.bitrix24_sync.last.status'));
+        $this->assertSame('data_collection_not_ready', data_get($run->state_payload, 'v3.bitrix24_sync.last.reason'));
     }
 
     public function test_v3_variables_action_can_store_start_parameter(): void
@@ -4438,7 +4835,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $storeAction
             ->shouldReceive('handle')
             ->once()
-            ->andThrow(new \RuntimeException('local store failed after provider accepted'));
+            ->andThrow(new RuntimeException('local store failed after provider accepted'));
         $this->app->instance(StoreOutboundScenarioMessageAction::class, $storeAction);
 
         (new ProcessScenarioV3OutboundMessageJob($outbound->id))
@@ -6054,7 +6451,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $addContactPhoneAction
             ->shouldReceive('handle')
             ->once()
-            ->andThrow(new \RuntimeException('SQL failed for phone +79263527111'));
+            ->andThrow(new RuntimeException('SQL failed for phone +79263527111'));
         $this->app->instance(AddContactPhoneAction::class, $addContactPhoneAction);
 
         $channel = $this->createTelegramChannel();
@@ -6110,7 +6507,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
             ->with('scenario.v3_contact_phone_capture_failed', Mockery::on(function (array $context): bool {
                 $encoded = json_encode($context, JSON_UNESCAPED_UNICODE) ?: '';
 
-                return ($context['exception'] ?? null) === \RuntimeException::class
+                return ($context['exception'] ?? null) === RuntimeException::class
                     && ($context['error_message'] ?? null) === 'Не удалось сохранить телефон из V3-сценария.'
                     && ! array_key_exists('error', $context)
                     && ! str_contains($encoded, '+79263527111')
@@ -11807,8 +12204,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         int $channelId,
         bool $clearAfterReroute = false,
         bool $targetWritesNewParameter = false,
-    ): array
-    {
+    ): array {
         $afterNoopEdge = [
             'id' => '20',
             'edge_key' => 'edge_after_noop',
