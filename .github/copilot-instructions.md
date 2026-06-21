@@ -9,6 +9,7 @@
 - Если PR направлен в `main` и меняет код, тесты, маршруты, миграции, сборку, Docker, frontend/backend runtime или сценарии, проверь, что описание PR содержит:
   - `Staging PR: #NNN`
   - `Staging smoke: https://...`
+- Для `main` PR с runtime-изменениями проверь, что указанный `Staging PR` уже смержен, его merge commit входит в текущий `main` PR, а ссылка `Staging smoke` ведет на успешный GitHub Actions run для этого staging merge commit.
 - Если staging-доказательств нет, явно напиши, что PR нарушает release process и должен сначала пройти через `staging`.
 - При ревью всегда проверяй статус GitHub Actions job `release-process-guard`.
 

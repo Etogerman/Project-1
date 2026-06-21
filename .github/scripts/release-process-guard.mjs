@@ -12,6 +12,8 @@ const PROCESS_ONLY_FILE_PATTERNS = [
   /(^|\/)[^/]+\.md$/,
 ];
 
+const STAGING_SMOKE_WORKFLOW_NAME = "Staging Post-Deploy Smoke";
+
 function isProcessOnlyFile(filename) {
   return PROCESS_ONLY_FILE_PATTERNS.some((pattern) => pattern.test(filename));
 }
@@ -33,8 +35,37 @@ function extractStagingPrNumber(body) {
   return null;
 }
 
-function hasStagingSmokeEvidence(body) {
-  return /(?:^|\n)\s*Staging\s+smoke\s*:\s*https?:\/\/\S+/i.test(body);
+function extractStagingSmokeRunUrl(body) {
+  const lineMatch = body.match(/(?:^|\n)\s*Staging\s+smoke\s*:\s*(.+)/i);
+
+  if (!lineMatch) {
+    return null;
+  }
+
+  const value = lineMatch[1].trim();
+  const markdownMatch = value.match(/\]\((https?:\/\/[^)\s]+)\)/i);
+  const directMatch = value.match(/https?:\/\/[^\s>)]+/i);
+  const url = markdownMatch?.[1] || directMatch?.[0] || null;
+
+  return url ? url.replace(/[.,;]+$/, "") : null;
+}
+
+function parseGitHubActionsRunUrl(url) {
+  if (!url) {
+    return null;
+  }
+
+  const match = url.match(/^https:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/actions\/runs\/(\d+)(?:\/.*)?(?:[?#].*)?$/i);
+
+  if (!match) {
+    return null;
+  }
+
+  return {
+    owner: match[1],
+    repo: match[2],
+    runId: Number.parseInt(match[3], 10),
+  };
 }
 
 function summarizeFiles(files) {
@@ -46,30 +77,50 @@ function summarizeFiles(files) {
   };
 }
 
-function evaluatePullRequest({ baseRef, body, files, stagingPr = null }) {
+function evaluatePullRequest({
+  baseRef,
+  body,
+  files,
+  repository = null,
+  stagingPr = null,
+  stagingPrFetchError = null,
+  currentPrCommitShas = [],
+  stagingSmokeRun = null,
+  stagingSmokeRunFetchError = null,
+}) {
   const failures = [];
   const { runtimeFiles } = summarizeFiles(files);
   const stagingPrNumber = extractStagingPrNumber(body);
+  const stagingSmokeRunUrl = extractStagingSmokeRunUrl(body);
+  const stagingSmokeRunReference = parseGitHubActionsRunUrl(stagingSmokeRunUrl);
 
   if (baseRef === "staging") {
-    return { failures, runtimeFiles, stagingPrNumber };
+    return { failures, runtimeFiles, stagingPrNumber, stagingSmokeRunReference };
   }
 
   if (baseRef !== "main") {
     failures.push("Release Process Guard supports PRs to `staging` or `main` only.");
-    return { failures, runtimeFiles, stagingPrNumber };
+    return { failures, runtimeFiles, stagingPrNumber, stagingSmokeRunReference };
   }
 
   if (runtimeFiles.length === 0) {
-    return { failures, runtimeFiles, stagingPrNumber };
+    return { failures, runtimeFiles, stagingPrNumber, stagingSmokeRunReference };
   }
 
   if (!stagingPrNumber) {
     failures.push("Main PRs with runtime changes must include `Staging PR: #NNN` in the PR body.");
   }
 
-  if (!hasStagingSmokeEvidence(body)) {
+  if (!stagingSmokeRunUrl) {
     failures.push("Main PRs with runtime changes must include `Staging smoke: https://...` in the PR body.");
+  } else if (!stagingSmokeRunReference) {
+    failures.push("`Staging smoke` must link to a GitHub Actions run URL.");
+  } else if (repository && (stagingSmokeRunReference.owner !== repository.owner || stagingSmokeRunReference.repo !== repository.repo)) {
+    failures.push("`Staging smoke` must link to a GitHub Actions run in this repository.");
+  }
+
+  if (stagingPrFetchError) {
+    failures.push(`Referenced staging PR #${stagingPrNumber} could not be loaded: ${stagingPrFetchError.message}`);
   }
 
   if (stagingPr) {
@@ -80,9 +131,41 @@ function evaluatePullRequest({ baseRef, body, files, stagingPr = null }) {
     if (!stagingPr.merged_at) {
       failures.push(`Referenced staging PR #${stagingPr.number} must be merged before opening a runtime PR to \`main\`.`);
     }
+
+    if (!stagingPr.merge_commit_sha) {
+      failures.push(`Referenced staging PR #${stagingPr.number} must expose a merge commit SHA.`);
+    } else if (!currentPrCommitShas.includes(stagingPr.merge_commit_sha)) {
+      failures.push(
+        `Current main PR must include staging merge commit ${stagingPr.merge_commit_sha} from PR #${stagingPr.number}.`,
+      );
+    }
   }
 
-  return { failures, runtimeFiles, stagingPrNumber };
+  if (stagingSmokeRunFetchError) {
+    failures.push(`Referenced staging smoke run could not be loaded: ${stagingSmokeRunFetchError.message}`);
+  }
+
+  if (stagingSmokeRun) {
+    if (stagingSmokeRun.name !== STAGING_SMOKE_WORKFLOW_NAME) {
+      failures.push(`Staging smoke run must use workflow \`${STAGING_SMOKE_WORKFLOW_NAME}\`.`);
+    }
+
+    if (stagingSmokeRun.head_branch !== "staging") {
+      failures.push("Staging smoke run must execute on the `staging` branch.");
+    }
+
+    if (stagingSmokeRun.status !== "completed" || stagingSmokeRun.conclusion !== "success") {
+      failures.push("Staging smoke run must be completed successfully.");
+    }
+
+    if (stagingPr?.merge_commit_sha && stagingSmokeRun.head_sha !== stagingPr.merge_commit_sha) {
+      failures.push(
+        `Staging smoke run must verify staging merge commit ${stagingPr.merge_commit_sha}, got ${stagingSmokeRun.head_sha}.`,
+      );
+    }
+  }
+
+  return { failures, runtimeFiles, stagingPrNumber, stagingSmokeRunReference };
 }
 
 async function githubRequest(path, token) {
@@ -120,6 +203,23 @@ async function listPullRequestFiles({ owner, repo, pullNumber, token }) {
   }
 }
 
+async function listPullRequestCommitShas({ owner, repo, pullNumber, token }) {
+  const commitShas = [];
+
+  for (let page = 1; ; page += 1) {
+    const batch = await githubRequest(
+      `/repos/${owner}/${repo}/pulls/${pullNumber}/commits?per_page=100&page=${page}`,
+      token,
+    );
+
+    commitShas.push(...batch.map((commit) => commit.sha));
+
+    if (batch.length < 100) {
+      return commitShas;
+    }
+  }
+}
+
 function parseRepository(repository) {
   const [owner, repo] = repository.split("/");
 
@@ -139,8 +239,27 @@ function runSelfTest() {
   assert.equal(isProcessOnlyFile(".github/copilot-instructions.md"), true);
   assert.equal(isProcessOnlyFile(".github/workflows/release-process-guard.yml"), true);
   assert.equal(isProcessOnlyFile("app/Services/Bitrix24ContactSyncService.php"), false);
+  assert.deepEqual(parseGitHubActionsRunUrl("https://github.com/Etogerman/Project-1/actions/runs/123"), {
+    owner: "Etogerman",
+    repo: "Project-1",
+    runId: 123,
+  });
+  assert.equal(extractStagingSmokeRunUrl("Staging smoke: [run](https://github.com/Etogerman/Project-1/actions/runs/123)"), "https://github.com/Etogerman/Project-1/actions/runs/123");
 
   const runtimeFiles = [{ filename: "app/Services/Bitrix24ContactSyncService.php" }];
+  const stagingPr = {
+    number: 614,
+    base: { ref: "staging" },
+    merged_at: "2026-06-21T20:00:00Z",
+    merge_commit_sha: "2c2097fd20d0aede9124c99fdec293f17c4d7eb1",
+  };
+  const successfulSmokeRun = {
+    name: STAGING_SMOKE_WORKFLOW_NAME,
+    head_branch: "staging",
+    head_sha: stagingPr.merge_commit_sha,
+    status: "completed",
+    conclusion: "success",
+  };
 
   assert.deepEqual(
     evaluatePullRequest({ baseRef: "staging", body: "", files: runtimeFiles }).failures,
@@ -157,11 +276,10 @@ function runSelfTest() {
       baseRef: "main",
       body: "Staging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
       files: runtimeFiles,
-      stagingPr: {
-        number: 614,
-        base: { ref: "staging" },
-        merged_at: "2026-06-21T20:00:00Z",
-      },
+      repository: { owner: "Etogerman", repo: "Project-1" },
+      stagingPr,
+      currentPrCommitShas: [stagingPr.merge_commit_sha],
+      stagingSmokeRun: successfulSmokeRun,
     }).failures,
     [],
   );
@@ -172,12 +290,52 @@ function runSelfTest() {
       body: "Staging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
       files: runtimeFiles,
       stagingPr: {
-        number: 614,
-        base: { ref: "staging" },
+        ...stagingPr,
         merged_at: null,
       },
+      currentPrCommitShas: [stagingPr.merge_commit_sha],
+      stagingSmokeRun: successfulSmokeRun,
     }).failures.join("\n"),
     /must be merged/,
+  );
+
+  assert.match(
+    evaluatePullRequest({
+      baseRef: "main",
+      body: "Staging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
+      files: runtimeFiles,
+      stagingPr,
+      currentPrCommitShas: ["1111111111111111111111111111111111111111"],
+      stagingSmokeRun: successfulSmokeRun,
+    }).failures.join("\n"),
+    /must include staging merge commit/,
+  );
+
+  assert.match(
+    evaluatePullRequest({
+      baseRef: "main",
+      body: "Staging PR: #614\nStaging smoke: https://example.com/run",
+      files: runtimeFiles,
+      stagingPr,
+      currentPrCommitShas: [stagingPr.merge_commit_sha],
+      stagingSmokeRun: successfulSmokeRun,
+    }).failures.join("\n"),
+    /GitHub Actions run URL/,
+  );
+
+  assert.match(
+    evaluatePullRequest({
+      baseRef: "main",
+      body: "Staging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
+      files: runtimeFiles,
+      stagingPr,
+      currentPrCommitShas: [stagingPr.merge_commit_sha],
+      stagingSmokeRun: {
+        ...successfulSmokeRun,
+        head_sha: "1111111111111111111111111111111111111111",
+      },
+    }).failures.join("\n"),
+    /must verify staging merge commit/,
   );
 
   console.log("release-process-guard self-test passed");
@@ -207,19 +365,52 @@ async function run() {
     baseRef: pullRequest.base.ref,
     body: pullRequest.body || "",
     files,
+    repository: { owner, repo },
   });
 
   let stagingPr = null;
+  let stagingPrFetchError = null;
+  let currentPrCommitShas = [];
+  let stagingSmokeRun = null;
+  let stagingSmokeRunFetchError = null;
 
-  if (pullRequest.base.ref === "main" && initialResult.runtimeFiles.length > 0 && initialResult.stagingPrNumber) {
-    stagingPr = await githubRequest(`/repos/${owner}/${repo}/pulls/${initialResult.stagingPrNumber}`, token);
+  if (pullRequest.base.ref === "main" && initialResult.runtimeFiles.length > 0) {
+    currentPrCommitShas = await listPullRequestCommitShas({ owner, repo, pullNumber, token });
+
+    if (initialResult.stagingPrNumber) {
+      try {
+        stagingPr = await githubRequest(`/repos/${owner}/${repo}/pulls/${initialResult.stagingPrNumber}`, token);
+      } catch (error) {
+        stagingPrFetchError = error;
+      }
+    }
+
+    if (
+      initialResult.stagingSmokeRunReference &&
+      initialResult.stagingSmokeRunReference.owner === owner &&
+      initialResult.stagingSmokeRunReference.repo === repo
+    ) {
+      try {
+        stagingSmokeRun = await githubRequest(
+          `/repos/${owner}/${repo}/actions/runs/${initialResult.stagingSmokeRunReference.runId}`,
+          token,
+        );
+      } catch (error) {
+        stagingSmokeRunFetchError = error;
+      }
+    }
   }
 
   const result = evaluatePullRequest({
     baseRef: pullRequest.base.ref,
     body: pullRequest.body || "",
     files,
+    repository: { owner, repo },
     stagingPr,
+    stagingPrFetchError,
+    currentPrCommitShas,
+    stagingSmokeRun,
+    stagingSmokeRunFetchError,
   });
 
   if (result.failures.length > 0) {
