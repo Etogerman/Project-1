@@ -9,9 +9,15 @@
 - Если PR направлен в `main` и меняет код, тесты, маршруты, миграции, сборку, Docker, frontend/backend runtime или сценарии, проверь, что описание PR содержит:
   - `Staging PR: #NNN`
   - `Staging smoke: https://...`
-- Для `main` PR с runtime-изменениями проверь, что указанный `Staging PR` уже смержен, его merge commit входит в текущий `main` PR, а ссылка `Staging smoke` ведет на успешный GitHub Actions run для этого staging merge commit.
+- Для `main` PR с runtime-изменениями проверь, что указанный `Staging PR` уже смержен, текущий `main` PR содержит validated diff из этого staging PR, а не накопленное состояние ветки `staging`, и ссылка `Staging smoke` ведет на успешный GitHub Actions run для staging merge commit.
 - Если staging-доказательств нет, явно напиши, что PR нарушает release process и должен сначала пройти через `staging`.
 - При ревью всегда проверяй статус GitHub Actions job `release-process-guard`.
+
+## Language policy
+
+- Заголовки PR, описания PR и человекочитаемые GitHub-комментарии должны быть на русском языке.
+- Технические исключения допустимы только для команд, имён веток, путей файлов, названий workflow, дословных логов и обязательных внешних меток вроде `Staging PR` и `Staging smoke`.
+- Не используй английские секции PR вроде `Summary`, `Why`, `Validation`, `Testing`, `Delivery note`; пиши `Что изменено`, `Почему`, `Проверки`, `Примечание по доставке`.
 
 ## Review focus
 

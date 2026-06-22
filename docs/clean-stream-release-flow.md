@@ -38,11 +38,14 @@
 - staging smoke завершён, но тот же validated diff ещё не проведён отдельным PR в `main`
 - смерженный PR в `main`, который ещё не выкачен в production, если production входит в release flow
 - завершившийся production deploy без закрытого production smoke-check
+- незакрытый branch hygiene tail: merged remote/local ветки, stale worktree или локальные ветки без upstream, не классифицированные как допустимый остаток
 
-Пока такой хвост существует, допустимы только три действия:
+Пока такой хвост существует, допустимы только четыре действия:
 
 - доводить тот же самый шаг до завершения
 - делать read-only анализ без новых изменений
+- выполнять docs-only/spec/admin follow-up, если он не меняет runtime/code diff
+  и не маскирует незакрытый release-хвост
 - по явной команде пользователя закрыть, отменить или отложить текущий шаг
 
 Перед запуском нового clean stream обязателен preflight-check:
@@ -50,16 +53,21 @@
 1. проверить, есть ли активный PR по предыдущему шагу
 2. проверить, есть ли незавершённый staging deploy или staging smoke
 3. проверить, есть ли незавершённый production deploy или production smoke
-4. если хвост найден, остановить новую реализацию и явно сообщить об этом
+4. проверить branch hygiene tail: merged remote/local ветки, stale worktree и локальные ветки без upstream
+5. если хвост найден, остановить новую реализацию и явно сообщить об этом
    пользователю
 
-Переход к следующему implementation step разрешён только если выполнено одно
-из условий:
+Переход к следующему code implementation step разрешён только если branch hygiene
+tail закрыт cleanup-ом или явно принят пользователем как временное исключение
+с перечислением веток, и выполнено одно из условий:
 
 - предыдущий шаг прошёл staging deploy и staging smoke, а если production входит
   в release flow, то ещё и проведён в `main`, выкачен и проверен production smoke-check
 - предыдущий PR закрыт без merge
 - пользователь явно подтвердил, что предыдущий шаг отменяется или откладывается
+
+Docs-only/spec/admin follow-up не считается новым code implementation step,
+если он не затрагивает runtime/code diff и не расширяет текущий release scope.
 
 ## Residual diff audit
 
@@ -101,14 +109,15 @@ scope с drift относительно `origin/main`.
 
 1. push отдельной ветки
 2. открытие отдельного draft PR в `staging`
-3. GitHub checks внутри PR в `staging`
-4. внутренний review внутри PR в `staging`
-5. перевод staging PR в `Ready for review` только по отдельному выбору пользователя
-6. merge staging PR только по отдельному выбору пользователя
-7. staging deploy и staging smoke
-8. отдельный PR в `main` из проверенного diff
-9. GitHub checks и внутренний review уже в PR в `main`
-10. merge в `main` только по отдельному выбору пользователя
+3. контрольная точка: агент сообщает ссылку на PR, целевую ветку и статус
+4. GitHub checks и review внутри PR проверяет пользователь самостоятельно или с помощью Copilot / другого ревьюера
+5. агент проверяет CI или выполняет внутренний review только по отдельной команде пользователя
+6. перевод staging PR в `Ready for review` только по отдельному выбору пользователя
+7. merge staging PR только по отдельному выбору пользователя
+8. staging deploy и staging smoke
+9. отдельный PR в `main` из проверенного diff
+10. GitHub checks и review в PR в `main` проверяет пользователь самостоятельно или с помощью Copilot / другого ревьюера
+11. merge в `main` только по отдельному выбору пользователя
 
 Правило оформления:
 
@@ -199,12 +208,12 @@ scope с drift относительно `origin/main`.
 - отдельный commit
 - отдельный push
 - отдельный draft PR
-- GitHub checks
-- внутренний review
+- пользовательская проверка GitHub checks и review самостоятельно или с помощью Copilot / другого ревьюера
 
 Только потом:
 
 - `Ready for review`
+- внутренний review агентом, если пользователь отдельно поручил его выполнить
 - merge
 - deploy
 - post-deploy smoke-check

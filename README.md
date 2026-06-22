@@ -1,6 +1,6 @@
-# Abrikosoff Connector
+# AB Connector
 
-Abrikosoff Connector — операторская Laravel-платформа для работы с входящими
+AB Connector — операторская Laravel-платформа для работы с входящими
 сообщениями из Telegram и MAX, с админкой на Filament, rule-based автоответами,
 collector flow и Bitrix24 integration.
 

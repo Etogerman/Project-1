@@ -1,0 +1,4 @@
+interface:
+  display_name: "AB Connector Skill Authoring"
+  short_description: "Create AB Connector project skills"
+  default_prompt: "Use $ab-connector-skill-authoring to design a focused AB Connector repo skill."
