@@ -1,4 +1,4 @@
 interface:
-  display_name: "Контекст Laravel Boost"
-  short_description: "Используй Laravel Boost для контекста проекта"
-  default_prompt: "Используй $laravel-boost-context, чтобы проверить версии Laravel, схему базы данных, логи и документацию перед изменением этого проекта."
+  display_name: "Laravel Boost Context"
+  short_description: "Use Laravel Boost for project context"
+  default_prompt: "Use $laravel-boost-context to inspect Laravel versions, database schema, logs, and docs before changing this project."

@@ -1,49 +1,49 @@
 ---
 name: laravel-boost-context
-description: Используй Laravel Boost MCP для контекста AB Connector по Laravel/Filament/Livewire. Срабатывает перед изменениями кода Laravel-экосистемы, работой с базой данных, моделями, миграциями, Filament actions/tables/forms, диагностикой routes/config/logs, поиском документации по версиям Laravel-пакетов или локальными runtime-проверками, если Boost доступен.
+description: Use Laravel Boost MCP for AB Connector Laravel/Filament/Livewire context. Trigger before Laravel ecosystem code changes, database/model/migration work, Filament actions/tables/forms work, route/config/log diagnostics, version-specific Laravel docs lookup, or local runtime checks when Boost is available.
 ---
 
-# Контекст Laravel Boost
+# Laravel Boost Context
 
-Используй Laravel Boost как первый источник фактов о Laravel-экосистеме в этом репозитории. По умолчанию работай read-only и сохраняй все правила доставки AB Connector из `AGENTS.md`.
+Use Laravel Boost as the first context source for Laravel ecosystem facts in this repo. Keep it read-only by default and preserve all AB Connector delivery rules from `AGENTS.md`.
 
-## Рабочий порядок
+## Workflow
 
-1. Подтверждай факты проекта через Boost до выводов по памяти.
-   - Используй `application-info` в начале Laravel/Filament/Livewire-задачи, чтобы зафиксировать версии PHP, Laravel, пакетов и базы данных.
-   - Если Boost MCP недоступен, явно скажи об этом и переходи к локальным файлам и обычным командам.
+1. Confirm project facts with Boost before reasoning from memory.
+   - Use `application-info` at the start of a Laravel/Filament/Livewire task to capture PHP, Laravel, package, and database versions.
+   - If Boost MCP is unavailable, state that and fall back to local files and normal commands.
 
-2. Используй точечные инструменты Boost под задачу.
-   - Структура базы данных: `database-schema`, сначала в режиме `summary`, затем с узким `filter`.
-   - Просмотр данных: `database-query` только с read-only SQL (`select`, `show`, `explain`, `describe`).
-   - Runtime-проблемы: `last-error`, `read-log-entries` и `browser-logs` до широкого поиска по логам.
-   - URL и маршруты: `get-absolute-url` до догадок о сгенерированных URL.
-   - Документация: `search-docs` по пакетам Laravel-экосистемы до поиска в интернете или утверждений об API по памяти.
+2. Use targeted Boost tools for the task.
+   - Database shape: `database-schema`, first in `summary` mode, then with a narrow `filter`.
+   - Data inspection: `database-query` with read-only SQL only (`select`, `show`, `explain`, `describe`).
+   - Runtime issues: `last-error`, `read-log-entries`, and `browser-logs` before broad log searching.
+   - URLs/routes: `get-absolute-url` before guessing generated URLs.
+   - Documentation: `search-docs` for Laravel ecosystem packages before web search or memory-based API claims.
 
-3. Держи рамки безопасными.
-   - Не используй Boost, чтобы обходить тесты, этапы ревью, правила Spec repo, PR checkpoints, staging-first rollout, пользовательские merge-правила, deploy gates или smoke checks.
-   - Не запускай через Boost mutating SQL, изменяющий Tinker-код, миграции, seeders, действия queue/scheduler, вызовы внешних интеграций или изменения config/env без явной делегации пользователя именно на эту операцию.
-   - Bitrix24, Open Lines, Telegram, MAX, queues, scheduler и production/staging runtime checks считай integration/runtime-работой по `AGENTS.md`.
+3. Keep the scope safe.
+   - Do not use Boost to bypass tests, review gates, Spec repo rules, PR checkpoints, staging-first rollout, user-owned merge rules, deploy gates, or smoke checks.
+   - Do not run mutating SQL, mutating Tinker code, migrations, seeders, queue/scheduler actions, external integration calls, or config/env changes through Boost unless the user explicitly delegated that specific operation.
+   - Treat Bitrix24, Open Lines, Telegram, MAX, queues, scheduler, and production/staging runtime checks as integration/runtime work under `AGENTS.md`.
 
-4. Явно сообщай факты, полученные через Boost.
-   - Указывай, какой инструмент Boost дал факт, если он влияет на реализацию или рекомендацию.
-   - Отделяй проверенные факты от выводов.
-   - Если поиск Boost docs даёт шумные результаты, уточняй запрос, а не считай первый результат авторитетным.
+4. Report Boost-derived facts explicitly.
+   - Mention which Boost tool provided the fact when it affects an implementation or recommendation.
+   - Separate verified facts from inferences.
+   - If a Boost docs search is noisy, refine the query instead of treating the first result as authoritative.
 
-## Заметки по локальному runtime
+## Local Runtime Notes
 
-Эта ветка настраивает Boost через `.mcp.json` и `.codex/config.toml` командой:
+This branch configures Boost through `.mcp.json` and `.codex/config.toml` with:
 
 ```bash
 docker compose exec -T dev php artisan boost:mcp
 ```
 
-Локальный контейнер `dev` должен монтировать текущий worktree в `/var/www/html`. Если Docker показывает несовпадение path/mount, сначала исправь local runtime identity, и только потом используй результаты Boost для операторской приёмки.
+The local `dev` container must mount the current worktree at `/var/www/html`. If Docker reports a path/mount mismatch, fix the local runtime identity before using Boost results for operator acceptance.
 
-## Передача результата
+## Handoff
 
-При передаче результата укажи:
-- использовался ли Boost;
-- какие инструменты использовались;
-- все ли Boost-операции были read-only;
-- были ли найдены несовпадение локального runtime или проблемы зависимостей при работе с Boost.
+At handoff, include:
+- whether Boost was used;
+- which tools were used;
+- whether all Boost operations were read-only;
+- any local runtime mismatch or dependency issue discovered while using Boost.
