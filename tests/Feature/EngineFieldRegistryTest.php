@@ -377,6 +377,32 @@ class EngineFieldRegistryTest extends TestCase
         $this->assertFalse($this->evaluateCondition('{{dialog.vip_level}} == "silver"', $message));
     }
 
+    public function test_runtime_field_condition_reads_dialog_system_and_user_fields(): void
+    {
+        $message = $this->createInboundMessage(dialogOverrides: [
+            'stage' => Dialog::STAGE_PHONE_RECEIVED,
+            'confirmed_phone_raw' => '+7 999 111 22 33',
+            'confirmed_phone_normalized' => '+79991112233',
+            'fields_payload' => ['vip_level' => 'gold'],
+        ]);
+
+        $this->assertSame(Dialog::STAGE_PHONE_RECEIVED, $this->runtimeFieldConditionValue($message, 'dialog', 'stage'));
+        $this->assertSame('+7 999 111 22 33', $this->runtimeFieldConditionValue($message, 'dialog', 'phone'));
+        $this->assertSame('telegram_user_500', $this->runtimeFieldConditionValue($message, 'dialog', 'external_username'));
+        $this->assertSame('gold', $this->runtimeFieldConditionValue($message, 'dialog', 'vip_level'));
+    }
+
+    public function test_runtime_dialog_field_string_value_reads_system_field_for_simulated_start(): void
+    {
+        $message = $this->createInboundMessage(dialogOverrides: [
+            'external_chat_id' => 'start-parameter-chat',
+            'fields_payload' => ['start_param' => '/fallback'],
+        ]);
+
+        $this->assertSame('start-parameter-chat', $this->runtimeDialogFieldStringValue($message, 'external_chat_id'));
+        $this->assertSame('/fallback', $this->runtimeDialogFieldStringValue($message, 'start_param'));
+    }
+
     public function test_text_substitution_uses_listed_contact_field(): void
     {
         $message = $this->createInboundMessage(contactOverrides: ['city' => 'Казань']);
@@ -481,6 +507,20 @@ class EngineFieldRegistryTest extends TestCase
         $method = new ReflectionMethod(GenericDbScenarioRuntime::class, 'v3TextWithVariables');
 
         return (string) $method->invoke(app(GenericDbScenarioRuntime::class), $message, $text, [], 'snapshot-block');
+    }
+
+    private function runtimeFieldConditionValue(Message $message, string $fieldScope, string $fieldKey): mixed
+    {
+        $method = new ReflectionMethod(GenericDbScenarioRuntime::class, 'v3FieldConditionValue');
+
+        return $method->invoke(app(GenericDbScenarioRuntime::class), $message, $fieldScope, $fieldKey);
+    }
+
+    private function runtimeDialogFieldStringValue(Message $message, string $fieldKey): string
+    {
+        $method = new ReflectionMethod(GenericDbScenarioRuntime::class, 'v3DialogFieldStringValue');
+
+        return (string) $method->invoke(app(GenericDbScenarioRuntime::class), $message, $fieldKey);
     }
 
     private function applyChangeContactField(Message $message, string $fieldKey, string $value): bool

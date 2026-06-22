@@ -14,7 +14,7 @@
 
 ## Goal
 
-Get a stable HTTPS staging domain for Abrikosoff Connector so Telegram and MAX webhooks can target a permanent URL instead of a temporary tunnel.
+Get a stable HTTPS staging domain for AB Connector so Telegram and MAX webhooks can target a permanent URL instead of a temporary tunnel.
 
 ## Recommended path
 
