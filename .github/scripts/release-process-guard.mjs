@@ -9,6 +9,7 @@ const PROCESS_ONLY_FILE_PATTERNS = [
   /^\.github\/instructions\/.*\.instructions\.md$/,
   /^\.github\/scripts\/release-process-guard\.mjs$/,
   /^\.github\/workflows\/release-process-guard\.ya?ml$/,
+  /^\.agents\/skills\//,
   /(^|\/)[^/]+\.md$/,
 ];
 
@@ -238,6 +239,7 @@ function runSelfTest() {
   assert.equal(isProcessOnlyFile("docs/release.md"), true);
   assert.equal(isProcessOnlyFile(".github/copilot-instructions.md"), true);
   assert.equal(isProcessOnlyFile(".github/workflows/release-process-guard.yml"), true);
+  assert.equal(isProcessOnlyFile(".agents/skills/ab-connector-skill-authoring/agents/openai.yaml"), true);
   assert.equal(isProcessOnlyFile("app/Services/Bitrix24ContactSyncService.php"), false);
   assert.deepEqual(parseGitHubActionsRunUrl("https://github.com/Etogerman/Project-1/actions/runs/123"), {
     owner: "Etogerman",
