@@ -15,8 +15,11 @@ const PROCESS_ONLY_FILE_PATTERNS = [
 
 const STAGING_SMOKE_WORKFLOW_NAME = "Staging Post-Deploy Smoke";
 const CYRILLIC_PATTERN = /[А-Яа-яЁё]/;
+const LATIN_PATTERN = /[A-Za-z]/;
 const ENGLISH_PR_HEADING_PATTERN =
   /^\s{0,3}#{1,6}\s*(Summary|Overview|Description|Why|Validation|Testing|Tests|Checks|Delivery note|Implementation|Changes|Root cause|Impact)\s*$/gim;
+const ALLOWED_TECHNICAL_TERMS_PATTERN =
+  /\b(codex|PR|MCP|CI|UI|URL|API|JSON|YAML|TOML|PHP|SQL|HTTP|HTTPS|Docker|Laravel|Boost|Filament|Livewire|Bitrix24|AB Connector|Staging PR|Staging smoke|Staging Post-Deploy Smoke|rev-check|public smoke|admin smoke|dev-only|validated diff|clean-main-PR|workflow|runtime|main|staging|draft|ready|merge|commit|branch|pull request|release-process-guard|php-artisan-test)\b/gi;
 
 function isProcessOnlyFile(filename) {
   return PROCESS_ONLY_FILE_PATTERNS.some((pattern) => pattern.test(filename));
@@ -81,10 +84,28 @@ function summarizeFiles(files) {
   };
 }
 
+function normalizePatch(patch = "") {
+  return patch
+    .split("\n")
+    .filter((line) => {
+      if (line.startsWith("+++ ") || line.startsWith("--- ")) {
+        return true;
+      }
+
+      if (line.startsWith("+") || line.startsWith("-")) {
+        return true;
+      }
+
+      return false;
+    })
+    .join("\n")
+    .trim();
+}
+
 function fileFingerprint(file) {
   return {
     status: file.status || "modified",
-    sha: file.status === "removed" ? "" : file.sha || "",
+    patch: normalizePatch(file.patch || ""),
     previousFilename: file.previous_filename || "",
   };
 }
@@ -114,8 +135,8 @@ function compareValidatedFiles(currentFiles, stagingFiles) {
       );
     }
 
-    if (currentFingerprint.sha !== stagingFingerprint.sha) {
-      failures.push(`content mismatch for ${filename}`);
+    if (currentFingerprint.patch !== stagingFingerprint.patch) {
+      failures.push(`patch mismatch for ${filename}`);
     }
 
     if (currentFingerprint.previousFilename !== stagingFingerprint.previousFilename) {
@@ -130,14 +151,23 @@ function stripTechnicalMarkdown(text) {
   return text
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/`[^`]*`/g, " ")
-    .replace(/https?:\/\/\S+/g, " ");
+    .replace(/https?:\/\/\S+/g, " ")
+    .replace(/(?:^|\s)[\w./-]+\.[A-Za-z0-9]+(?=\s|$)/g, " ")
+    .replace(ALLOWED_TECHNICAL_TERMS_PATTERN, " ");
+}
+
+function countMatches(text, pattern) {
+  return [...text.matchAll(pattern)].length;
 }
 
 function validatePublishLanguage({ title, body }) {
   const failures = [];
   const readableTitle = title.replace(/^\s*\[codex\]\s*/i, "").trim();
   const readableBody = stripTechnicalMarkdown(body);
+  const readableText = `${stripTechnicalMarkdown(readableTitle)}\n${readableBody}`;
   const englishHeadings = [...body.matchAll(ENGLISH_PR_HEADING_PATTERN)].map((match) => match[1]);
+  const cyrillicCount = countMatches(readableText, /[А-Яа-яЁё]/g);
+  const latinCount = countMatches(readableText, /[A-Za-z]/g);
 
   if (!CYRILLIC_PATTERN.test(readableTitle)) {
     failures.push("PR title must be written in Russian, except technical tokens such as `[codex]`.");
@@ -149,6 +179,10 @@ function validatePublishLanguage({ title, body }) {
 
   if (englishHeadings.length > 0) {
     failures.push(`PR body must use Russian section headings, got: ${englishHeadings.join(", ")}.`);
+  }
+
+  if (LATIN_PATTERN.test(readableText) && latinCount > Math.max(20, cyrillicCount * 0.25)) {
+    failures.push("PR title/body contain too much English prose outside allowed technical tokens.");
   }
 
   return failures;
@@ -296,8 +330,8 @@ async function listPullRequestFiles({ owner, repo, pullNumber, token }) {
     files.push(
       ...batch.map((file) => ({
         filename: file.filename,
+        patch: file.patch || "",
         previous_filename: file.previous_filename || "",
-        sha: file.sha || "",
         status: file.status || "modified",
       })),
     );
@@ -351,11 +385,15 @@ function runSelfTest() {
     runId: 123,
   });
   assert.equal(extractStagingSmokeRunUrl("Staging smoke: [run](https://github.com/Etogerman/Project-1/actions/runs/123)"), "https://github.com/Etogerman/Project-1/actions/runs/123");
+  assert.equal(
+    normalizePatch("index aaa..bbb 100644\n@@ -1,3 +1,3 @@\n context\n-old\n+new"),
+    "-old\n+new",
+  );
 
   assert.deepEqual(
     validatePublishLanguage({
       title: "[codex] Исправить проверку процесса релиза",
-      body: "## Что изменено\n\n- Проверка описания PR работает на русском языке.\n\nStaging PR: #614",
+      body: "## Что изменено\n\n- Проверка описания PR работает на русском языке.\n\nStaging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123\n- `node .github/scripts/release-process-guard.mjs --self-test`",
     }),
     [],
   );
@@ -368,10 +406,18 @@ function runSelfTest() {
     /PR title must be written in Russian.*Russian section headings/s,
   );
 
+  assert.match(
+    validatePublishLanguage({
+      title: "[codex] Исправить release guard",
+      body: "## Что изменено\n\n- This guard now validates pull request metadata and blocks bad descriptions with English prose.",
+    }).join("\n"),
+    /too much English prose/,
+  );
+
   const runtimeFiles = [
     {
       filename: "app/Services/Bitrix24ContactSyncService.php",
-      sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      patch: "index aaa..bbb 100644\n@@ -10,7 +10,7 @@\n context from main\n-old\n+new",
       status: "modified",
     },
   ];
@@ -379,7 +425,13 @@ function runSelfTest() {
   const mismatchingStagingFiles = [
     {
       ...runtimeFiles[0],
-      sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      patch: "index ccc..ddd 100644\n@@ -99,7 +99,7 @@\n context from staging\n-old\n+different",
+    },
+  ];
+  const matchingStagingFilesWithDifferentContext = [
+    {
+      ...runtimeFiles[0],
+      patch: "index ccc..ddd 100644\n@@ -99,7 +99,7 @@\n context from staging\n-old\n+new",
     },
   ];
   const stagingPr = {
@@ -424,7 +476,7 @@ function runSelfTest() {
       files: runtimeFiles,
       repository: { owner: "Etogerman", repo: "Project-1" },
       stagingPr,
-      stagingPrFiles: matchingStagingFiles,
+      stagingPrFiles: matchingStagingFilesWithDifferentContext,
       currentPrCommitShas: ["1111111111111111111111111111111111111111"],
       stagingSmokeRun: successfulSmokeRun,
     }).failures,
