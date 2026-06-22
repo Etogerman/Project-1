@@ -461,7 +461,7 @@ Helper-review не заменяет `author self-check` и не заменяет
    - acceptance текущей точки не закрыт
    - следующий шаг выходит за согласованный execution ceiling
    - пользователь сам хочет паузу
-8. Для Abrikosoff Connector после `merge` в `main` следующим шагом процесса считается `Ручной production deploy`, если текущий stream является code/release stream.
+8. Для AB Connector после `merge` в `main` следующим шагом процесса считается `Ручной production deploy`, если текущий stream является code/release stream.
 9. После production deploy следующим шагом процесса считается `Production Post-Deploy Smoke`, если текущий stream является code/release stream.
 10. Статус dangerous op ограничивает исполнение, но не подменяет собой рекомендацию следующего шага процесса.
 
@@ -549,7 +549,7 @@ Helper-review не заменяет `author self-check` и не заменяет
 - после успешного этапа `через staging` открывать отдельный `draft PR` в `main`
 - строить этот `PR` только из `validated diff` текущего active stream
 
-Для Abrikosoff Connector после `merge` в `main` следующим шагом release-flow считается `Ручной production deploy` только для code/release stream.
+Для AB Connector после `merge` в `main` следующим шагом release-flow считается `Ручной production deploy` только для code/release stream.
 
 Результат:
 - validated diff доведён до `merge` в `main` в рамках отдельной явной делегации и передан в production handoff.
@@ -679,7 +679,7 @@ Stream считается полностью закрытым только ко�
 Статус `planned` для уже материализованного acceptance считается process-error и не является допустимым состоянием закрытия stream-а.
 Незакрытый `spec/admin tail` нужно явно перечислять перед стартом нового substantial code stream-а, но он сам по себе не запрещает unrelated `docs-only` шаг или малый локальный maintenance step.
 
-Для Abrikosoff Connector `merge` в `main` остаётся только handoff-точкой для code/release stream.
+Для AB Connector `merge` в `main` остаётся только handoff-точкой для code/release stream.
 Для code/release stream хвост остаётся открытым до ручного production deploy и успешного production smoke по правилам `docs/post-deploy-smoke.md`.
 Для `docs-only` path после `merge` в `main` следующим шагом считается cleanup временных артефактов или переход к следующей задаче.
 

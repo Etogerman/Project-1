@@ -1,6 +1,6 @@
 <!-- ABRIKOSOFF CONNECTOR PROJECT START -->
 
-# Abrikosoff Connector
+# AB Connector
 
 ## Критичные правила для агента
 
@@ -69,7 +69,7 @@
    - для продолжения не хватает данных
    - пользователь сам хочет паузу
 36. Если следующий шаг требует отдельной команды пользователя, агент рекомендует именно этот следующий шаг процесса и отдельной строкой указывает: `Для исполнения нужна команда пользователя.`
-37. Для Abrikosoff Connector production release code/runtime stream-а включает ручной production deploy после `merge` в `main`.
+37. Для AB Connector production release code/runtime stream-а включает ручной production deploy после `merge` в `main`.
 38. Если пользователь спрашивает о следующем логичном и правильном шаге после `merge` в `main` для code/release stream, агент рекомендует `Ручной production deploy`.
 39. После завершённого production deploy для code/release stream следующим шагом процесса считается `Production Post-Deploy Smoke` по `docs/post-deploy-smoke.md`.
 40. Статус dangerous op ограничивает исполнение, но не подменяет собой рекомендацию следующего шага процесса.

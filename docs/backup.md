@@ -2,7 +2,7 @@
 
 ## Цель
 
-Этот runbook описывает базовый backup-контур для Abrikosoff Connector.
+Этот runbook описывает базовый backup-контур для AB Connector.
 Первый слой покрывает PostgreSQL через внешние `pg_dump` / `pg_restore`
 и не зависит от работоспособности Laravel runtime.
 
