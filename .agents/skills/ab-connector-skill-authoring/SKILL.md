@@ -40,6 +40,7 @@ Use this skill to design focused repo-scoped skills for AB Connector. Keep the w
    - New code/runtime streams are staging-first after local MVP and operator decision.
    - Docs-only/policy-only skills may use the docs-only path from clean `origin/main`.
    - Skills must not create shortcuts around Spec repo, Spec doc, Spec revision, PR checkpoints, CI, ready, merge, deploy, or smoke gates.
+   - If a skill describes PR handoff, it must label `merge` in `staging` or `main` as user-performed; Codex only verifies before/after and handles cleanup after the user's merge.
    - If a skill could touch Bitrix24, Open Lines, Telegram, MAX, queues, scheduler, env, config, or runtime, classify it as code/runtime unless proven otherwise.
 
 6. Write the files.
