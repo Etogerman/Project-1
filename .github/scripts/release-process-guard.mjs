@@ -14,6 +14,12 @@ const PROCESS_ONLY_FILE_PATTERNS = [
 ];
 
 const STAGING_SMOKE_WORKFLOW_NAME = "Staging Post-Deploy Smoke";
+const CYRILLIC_PATTERN = /[А-Яа-яЁё]/;
+const LATIN_PATTERN = /[A-Za-z]/;
+const ENGLISH_PR_HEADING_PATTERN =
+  /^\s{0,3}#{1,6}\s*(Summary|Overview|Description|Why|Validation|Testing|Tests|Checks|Delivery note|Implementation|Changes|Root cause|Impact)\s*$/gim;
+const ALLOWED_TECHNICAL_TERMS_PATTERN =
+  /\b(codex|PR|MCP|CI|UI|URL|API|JSON|YAML|TOML|PHP|SQL|HTTP|HTTPS|Docker|Laravel|Boost|Filament|Livewire|Bitrix24|AB Connector|Staging PR|Staging smoke|Staging Post-Deploy Smoke|rev-check|public smoke|admin smoke|dev-only|validated diff|clean-main-PR|workflow|runtime|main|staging|draft|ready|merge|commit|branch|pull request|release-process-guard|php-artisan-test)\b/gi;
 
 function isProcessOnlyFile(filename) {
   return PROCESS_ONLY_FILE_PATTERNS.some((pattern) => pattern.test(filename));
@@ -78,13 +84,120 @@ function summarizeFiles(files) {
   };
 }
 
+function normalizePatch(patch = "") {
+  return patch
+    .split("\n")
+    .filter((line) => {
+      if (line.startsWith("+++ ") || line.startsWith("--- ")) {
+        return true;
+      }
+
+      if (line.startsWith("+") || line.startsWith("-")) {
+        return true;
+      }
+
+      return false;
+    })
+    .join("\n")
+    .trim();
+}
+
+function fileFingerprint(file) {
+  return {
+    status: file.status || "modified",
+    patch: normalizePatch(file.patch || ""),
+    previousFilename: file.previous_filename || "",
+  };
+}
+
+function compareValidatedFiles(currentFiles, stagingFiles) {
+  const current = new Map(currentFiles.map((file) => [file.filename, fileFingerprint(file)]));
+  const staging = new Map(stagingFiles.map((file) => [file.filename, fileFingerprint(file)]));
+  const failures = [];
+
+  for (const filename of current.keys()) {
+    if (!staging.has(filename)) {
+      failures.push(`unexpected file in main PR: ${filename}`);
+    }
+  }
+
+  for (const [filename, stagingFingerprint] of staging.entries()) {
+    const currentFingerprint = current.get(filename);
+
+    if (!currentFingerprint) {
+      failures.push(`missing file from staging PR: ${filename}`);
+      continue;
+    }
+
+    if (currentFingerprint.status !== stagingFingerprint.status) {
+      failures.push(
+        `status mismatch for ${filename}: expected ${stagingFingerprint.status}, got ${currentFingerprint.status}`,
+      );
+    }
+
+    if (currentFingerprint.patch !== stagingFingerprint.patch) {
+      failures.push(`patch mismatch for ${filename}`);
+    }
+
+    if (currentFingerprint.previousFilename !== stagingFingerprint.previousFilename) {
+      failures.push(`rename source mismatch for ${filename}`);
+    }
+  }
+
+  return failures;
+}
+
+function stripTechnicalMarkdown(text) {
+  return text
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`[^`]*`/g, " ")
+    .replace(/https?:\/\/\S+/g, " ")
+    .replace(/(?:^|\s)[\w./-]+\.[A-Za-z0-9]+(?=\s|$)/g, " ")
+    .replace(ALLOWED_TECHNICAL_TERMS_PATTERN, " ");
+}
+
+function countMatches(text, pattern) {
+  return [...text.matchAll(pattern)].length;
+}
+
+function validatePublishLanguage({ title, body }) {
+  const failures = [];
+  const readableTitle = title.replace(/^\s*\[codex\]\s*/i, "").trim();
+  const readableBody = stripTechnicalMarkdown(body);
+  const readableText = `${stripTechnicalMarkdown(readableTitle)}\n${readableBody}`;
+  const englishHeadings = [...body.matchAll(ENGLISH_PR_HEADING_PATTERN)].map((match) => match[1]);
+  const cyrillicCount = countMatches(readableText, /[А-Яа-яЁё]/g);
+  const latinCount = countMatches(readableText, /[A-Za-z]/g);
+
+  if (!CYRILLIC_PATTERN.test(readableTitle)) {
+    failures.push("PR title must be written in Russian, except technical tokens such as `[codex]`.");
+  }
+
+  if (!CYRILLIC_PATTERN.test(readableBody)) {
+    failures.push("PR body must contain Russian human-readable prose.");
+  }
+
+  if (englishHeadings.length > 0) {
+    failures.push(`PR body must use Russian section headings, got: ${englishHeadings.join(", ")}.`);
+  }
+
+  if (LATIN_PATTERN.test(readableText) && latinCount > Math.max(20, cyrillicCount * 0.25)) {
+    failures.push("PR title/body contain too much English prose outside allowed technical tokens.");
+  }
+
+  return failures;
+}
+
 function evaluatePullRequest({
   baseRef,
+  title = "",
   body,
   files,
   repository = null,
   stagingPr = null,
   stagingPrFetchError = null,
+  stagingPrFiles = [],
+  stagingPrFilesFetchError = null,
   currentPrCommitShas = [],
   stagingSmokeRun = null,
   stagingSmokeRunFetchError = null,
@@ -94,6 +207,8 @@ function evaluatePullRequest({
   const stagingPrNumber = extractStagingPrNumber(body);
   const stagingSmokeRunUrl = extractStagingSmokeRunUrl(body);
   const stagingSmokeRunReference = parseGitHubActionsRunUrl(stagingSmokeRunUrl);
+
+  failures.push(...validatePublishLanguage({ title, body }));
 
   if (baseRef === "staging") {
     return { failures, runtimeFiles, stagingPrNumber, stagingSmokeRunReference };
@@ -135,10 +250,26 @@ function evaluatePullRequest({
 
     if (!stagingPr.merge_commit_sha) {
       failures.push(`Referenced staging PR #${stagingPr.number} must expose a merge commit SHA.`);
-    } else if (!currentPrCommitShas.includes(stagingPr.merge_commit_sha)) {
+    } else if (currentPrCommitShas.includes(stagingPr.merge_commit_sha)) {
       failures.push(
-        `Current main PR must include staging merge commit ${stagingPr.merge_commit_sha} from PR #${stagingPr.number}.`,
+        `Current main PR must use validated diff from staging PR #${stagingPr.number}, not include staging merge commit ${stagingPr.merge_commit_sha}.`,
       );
+    }
+
+    if (stagingPrFilesFetchError) {
+      failures.push(
+        `Files from staging PR #${stagingPr.number} could not be loaded: ${stagingPrFilesFetchError.message}`,
+      );
+    } else if (stagingPrFiles.length === 0) {
+      failures.push(`Referenced staging PR #${stagingPr.number} must expose changed files.`);
+    } else {
+      const fileFailures = compareValidatedFiles(files, stagingPrFiles);
+
+      if (fileFailures.length > 0) {
+        failures.push(
+          `Current main PR must match validated file content from staging PR #${stagingPr.number}: ${fileFailures.join("; ")}`,
+        );
+      }
     }
   }
 
@@ -196,7 +327,14 @@ async function listPullRequestFiles({ owner, repo, pullNumber, token }) {
       token,
     );
 
-    files.push(...batch.map((file) => ({ filename: file.filename })));
+    files.push(
+      ...batch.map((file) => ({
+        filename: file.filename,
+        patch: file.patch || "",
+        previous_filename: file.previous_filename || "",
+        status: file.status || "modified",
+      })),
+    );
 
     if (batch.length < 100) {
       return files;
@@ -247,8 +385,55 @@ function runSelfTest() {
     runId: 123,
   });
   assert.equal(extractStagingSmokeRunUrl("Staging smoke: [run](https://github.com/Etogerman/Project-1/actions/runs/123)"), "https://github.com/Etogerman/Project-1/actions/runs/123");
+  assert.equal(
+    normalizePatch("index aaa..bbb 100644\n@@ -1,3 +1,3 @@\n context\n-old\n+new"),
+    "-old\n+new",
+  );
 
-  const runtimeFiles = [{ filename: "app/Services/Bitrix24ContactSyncService.php" }];
+  assert.deepEqual(
+    validatePublishLanguage({
+      title: "[codex] Исправить проверку процесса релиза",
+      body: "## Что изменено\n\n- Проверка описания PR работает на русском языке.\n\nStaging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123\n- `node .github/scripts/release-process-guard.mjs --self-test`",
+    }),
+    [],
+  );
+
+  assert.match(
+    validatePublishLanguage({
+      title: "[codex] Fix release guard",
+      body: "## Summary\n\n- Update release guard.\n\n## Validation\n\n- `node test.js`",
+    }).join("\n"),
+    /PR title must be written in Russian.*Russian section headings/s,
+  );
+
+  assert.match(
+    validatePublishLanguage({
+      title: "[codex] Исправить release guard",
+      body: "## Что изменено\n\n- This guard now validates pull request metadata and blocks bad descriptions with English prose.",
+    }).join("\n"),
+    /too much English prose/,
+  );
+
+  const runtimeFiles = [
+    {
+      filename: "app/Services/Bitrix24ContactSyncService.php",
+      patch: "index aaa..bbb 100644\n@@ -10,7 +10,7 @@\n context from main\n-old\n+new",
+      status: "modified",
+    },
+  ];
+  const matchingStagingFiles = [{ ...runtimeFiles[0] }];
+  const mismatchingStagingFiles = [
+    {
+      ...runtimeFiles[0],
+      patch: "index ccc..ddd 100644\n@@ -99,7 +99,7 @@\n context from staging\n-old\n+different",
+    },
+  ];
+  const matchingStagingFilesWithDifferentContext = [
+    {
+      ...runtimeFiles[0],
+      patch: "index ccc..ddd 100644\n@@ -99,7 +99,7 @@\n context from staging\n-old\n+new",
+    },
+  ];
   const stagingPr = {
     number: 614,
     base: { ref: "staging" },
@@ -264,23 +449,35 @@ function runSelfTest() {
   };
 
   assert.deepEqual(
-    evaluatePullRequest({ baseRef: "staging", body: "", files: runtimeFiles }).failures,
+    evaluatePullRequest({
+      baseRef: "staging",
+      title: "[codex] Исправить синхронизацию Bitrix24",
+      body: "Описание PR на русском языке.",
+      files: runtimeFiles,
+    }).failures,
     [],
   );
 
   assert.match(
-    evaluatePullRequest({ baseRef: "main", body: "", files: runtimeFiles }).failures.join("\n"),
+    evaluatePullRequest({
+      baseRef: "main",
+      title: "[codex] Исправить синхронизацию Bitrix24",
+      body: "Описание PR на русском языке.",
+      files: runtimeFiles,
+    }).failures.join("\n"),
     /Staging PR/,
   );
 
   assert.deepEqual(
     evaluatePullRequest({
       baseRef: "main",
-      body: "Staging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
+      title: "[codex] Исправить синхронизацию Bitrix24",
+      body: "Описание PR на русском языке.\n\nStaging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
       files: runtimeFiles,
       repository: { owner: "Etogerman", repo: "Project-1" },
       stagingPr,
-      currentPrCommitShas: [stagingPr.merge_commit_sha],
+      stagingPrFiles: matchingStagingFilesWithDifferentContext,
+      currentPrCommitShas: ["1111111111111111111111111111111111111111"],
       stagingSmokeRun: successfulSmokeRun,
     }).failures,
     [],
@@ -289,13 +486,15 @@ function runSelfTest() {
   assert.match(
     evaluatePullRequest({
       baseRef: "main",
-      body: "Staging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
+      title: "[codex] Исправить синхронизацию Bitrix24",
+      body: "Описание PR на русском языке.\n\nStaging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
       files: runtimeFiles,
       stagingPr: {
         ...stagingPr,
         merged_at: null,
       },
-      currentPrCommitShas: [stagingPr.merge_commit_sha],
+      stagingPrFiles: matchingStagingFiles,
+      currentPrCommitShas: ["1111111111111111111111111111111111111111"],
       stagingSmokeRun: successfulSmokeRun,
     }).failures.join("\n"),
     /must be merged/,
@@ -304,22 +503,40 @@ function runSelfTest() {
   assert.match(
     evaluatePullRequest({
       baseRef: "main",
-      body: "Staging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
+      title: "[codex] Исправить синхронизацию Bitrix24",
+      body: "Описание PR на русском языке.\n\nStaging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
       files: runtimeFiles,
       stagingPr,
+      stagingPrFiles: mismatchingStagingFiles,
       currentPrCommitShas: ["1111111111111111111111111111111111111111"],
       stagingSmokeRun: successfulSmokeRun,
     }).failures.join("\n"),
-    /must include staging merge commit/,
+    /must match validated file content/,
   );
 
   assert.match(
     evaluatePullRequest({
       baseRef: "main",
-      body: "Staging PR: #614\nStaging smoke: https://example.com/run",
+      title: "[codex] Исправить синхронизацию Bitrix24",
+      body: "Описание PR на русском языке.\n\nStaging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
       files: runtimeFiles,
       stagingPr,
+      stagingPrFiles: matchingStagingFiles,
       currentPrCommitShas: [stagingPr.merge_commit_sha],
+      stagingSmokeRun: successfulSmokeRun,
+    }).failures.join("\n"),
+    /must use validated diff/,
+  );
+
+  assert.match(
+    evaluatePullRequest({
+      baseRef: "main",
+      title: "[codex] Исправить синхронизацию Bitrix24",
+      body: "Описание PR на русском языке.\n\nStaging PR: #614\nStaging smoke: https://example.com/run",
+      files: runtimeFiles,
+      stagingPr,
+      stagingPrFiles: matchingStagingFiles,
+      currentPrCommitShas: ["1111111111111111111111111111111111111111"],
       stagingSmokeRun: successfulSmokeRun,
     }).failures.join("\n"),
     /GitHub Actions run URL/,
@@ -328,10 +545,12 @@ function runSelfTest() {
   assert.match(
     evaluatePullRequest({
       baseRef: "main",
-      body: "Staging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
+      title: "[codex] Исправить синхронизацию Bitrix24",
+      body: "Описание PR на русском языке.\n\nStaging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
       files: runtimeFiles,
       stagingPr,
-      currentPrCommitShas: [stagingPr.merge_commit_sha],
+      stagingPrFiles: matchingStagingFiles,
+      currentPrCommitShas: ["1111111111111111111111111111111111111111"],
       stagingSmokeRun: {
         ...successfulSmokeRun,
         head_sha: "1111111111111111111111111111111111111111",
@@ -365,6 +584,7 @@ async function run() {
   const files = await listPullRequestFiles({ owner, repo, pullNumber, token });
   const initialResult = evaluatePullRequest({
     baseRef: pullRequest.base.ref,
+    title: pullRequest.title || "",
     body: pullRequest.body || "",
     files,
     repository: { owner, repo },
@@ -372,6 +592,8 @@ async function run() {
 
   let stagingPr = null;
   let stagingPrFetchError = null;
+  let stagingPrFiles = [];
+  let stagingPrFilesFetchError = null;
   let currentPrCommitShas = [];
   let stagingSmokeRun = null;
   let stagingSmokeRunFetchError = null;
@@ -384,6 +606,14 @@ async function run() {
         stagingPr = await githubRequest(`/repos/${owner}/${repo}/pulls/${initialResult.stagingPrNumber}`, token);
       } catch (error) {
         stagingPrFetchError = error;
+      }
+
+      if (stagingPr) {
+        try {
+          stagingPrFiles = await listPullRequestFiles({ owner, repo, pullNumber: stagingPr.number, token });
+        } catch (error) {
+          stagingPrFilesFetchError = error;
+        }
       }
     }
 
@@ -405,11 +635,14 @@ async function run() {
 
   const result = evaluatePullRequest({
     baseRef: pullRequest.base.ref,
+    title: pullRequest.title || "",
     body: pullRequest.body || "",
     files,
     repository: { owner, repo },
     stagingPr,
     stagingPrFetchError,
+    stagingPrFiles,
+    stagingPrFilesFetchError,
     currentPrCommitShas,
     stagingSmokeRun,
     stagingSmokeRunFetchError,
