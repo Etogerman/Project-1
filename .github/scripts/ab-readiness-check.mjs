@@ -25,6 +25,7 @@ const ALLOWED_TECHNICAL_TERMS_PATTERN =
 
 const REQUIRED_FIELDS = [
   { key: "changeType", label: "Тип изменения" },
+  { key: "substantialStream", label: "Существенный stream" },
   { key: "deliveryLevel", label: "Уровень доставки" },
   { key: "localMvp", label: "Локальный MVP" },
   { key: "operatorAcceptance", label: "Операторская приёмка" },
@@ -85,7 +86,7 @@ function extractField(body, label) {
 }
 
 function extractFields(body) {
-  return [...REQUIRED_FIELDS, ...SPEC_FIELDS, { key: "substantialStream", label: "Существенный stream" }].reduce(
+  return [...REQUIRED_FIELDS, ...SPEC_FIELDS].reduce(
     (fields, field) => ({
       ...fields,
       [field.key]: extractField(body, field.label),
@@ -128,7 +129,7 @@ function hasStagingEvidence(body) {
 }
 
 function isSubstantialStream(fields) {
-  return /^(да|yes|true)$/i.test(fields.substantialStream || "")
+  return /^(да)$/i.test(fields.substantialStream || "")
     || SPEC_FIELDS.some((field) => Boolean(fields[field.key]));
 }
 
@@ -178,7 +179,7 @@ function evaluateReadiness({ baseRef, title = "", body = "", files = [], isDraft
   }
 
   if (fields.blockers && !/^отсутствуют$/i.test(fields.blockers)) {
-    failures.push("Поле `Блокеры:` должно быть `отсутствуют` перед Ready.");
+    readinessIssues.push("Поле `Блокеры:` должно быть `отсутствуют` перед Ready.");
   }
 
   if (fields.authorSelfCheck && !/^выполнен[ао]?$/i.test(fields.authorSelfCheck)) {
@@ -187,6 +188,10 @@ function evaluateReadiness({ baseRef, title = "", body = "", files = [], isDraft
 
   if (fields.changeType && !/^(кодовое|документационное|процессное|hotfix)$/i.test(fields.changeType)) {
     readinessIssues.push("Поле `Тип изменения:` должно быть `кодовое`, `документационное`, `процессное` или `hotfix`.");
+  }
+
+  if (fields.substantialStream && !/^(да|нет)$/i.test(fields.substantialStream)) {
+    readinessIssues.push("Поле `Существенный stream:` должно быть `да` или `нет`.");
   }
 
   if (
@@ -316,6 +321,7 @@ function runSelfTest() {
     "## Примечание по доставке",
     "",
     "- Тип изменения: процессное",
+    "- Существенный stream: нет",
     "- Уровень доставки: документационный путь",
     "- Локальный MVP: не требуется",
     "- Операторская приёмка: не требуется",
@@ -355,6 +361,56 @@ function runSelfTest() {
       isDraft: true,
     }).warnings.length > 0,
     true,
+  );
+
+  assert.match(
+    evaluateReadiness({
+      baseRef: "staging",
+      title: "[codex] Исправить синхронизацию Bitrix24",
+      body: readyProcessBody
+        .replace("процессное", "кодовое")
+        .replace("- Существенный stream: нет\n", "")
+        .replace("документационный путь", "PR в staging"),
+      files: [{ filename: "app/Services/Bitrix24ContactSyncService.php" }],
+      isDraft: false,
+    }).failures.join("\n"),
+    /Существенный stream/,
+  );
+
+  assert.match(
+    evaluateReadiness({
+      baseRef: "staging",
+      title: "[codex] Исправить синхронизацию Bitrix24",
+      body: readyProcessBody
+        .replace("процессное", "кодовое")
+        .replace("Существенный stream: нет", "Существенный stream: да")
+        .replace("документационный путь", "PR в staging"),
+      files: [{ filename: "app/Services/Bitrix24ContactSyncService.php" }],
+      isDraft: false,
+    }).failures.join("\n"),
+    /Spec repo/,
+  );
+
+  assert.match(
+    evaluateReadiness({
+      baseRef: "staging",
+      title: "[codex] Исправить синхронизацию Bitrix24",
+      body: readyProcessBody.replace("Блокеры: отсутствуют", "Блокеры: ждём тестовую среду"),
+      files: [{ filename: "app/Services/Bitrix24ContactSyncService.php" }],
+      isDraft: true,
+    }).warnings.join("\n"),
+    /Блокеры/,
+  );
+
+  assert.match(
+    evaluateReadiness({
+      baseRef: "staging",
+      title: "[codex] Исправить синхронизацию Bitrix24",
+      body: readyProcessBody.replace("Блокеры: отсутствуют", "Блокеры: ждём тестовую среду"),
+      files: [{ filename: "app/Services/Bitrix24ContactSyncService.php" }],
+      isDraft: false,
+    }).failures.join("\n"),
+    /Блокеры/,
   );
 
   assert.match(
