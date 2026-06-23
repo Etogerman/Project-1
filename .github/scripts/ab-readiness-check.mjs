@@ -21,7 +21,7 @@ const LATIN_PATTERN = /[A-Za-z]/;
 const ENGLISH_PR_HEADING_PATTERN =
   /^\s{0,3}#{1,6}\s*(Summary|Overview|Description|Why|Validation|Testing|Tests|Checks|Delivery note|Implementation|Changes|Root cause|Impact|Risks|Rollout)\s*$/gim;
 const ALLOWED_TECHNICAL_TERMS_PATTERN =
-  /\b(codex|PR|MCP|CI|UI|URL|API|JSON|YAML|TOML|PHP|SQL|HTTP|HTTPS|Docker|Laravel|Boost|Filament|Livewire|Bitrix24|AB Connector|Spec repo|Spec doc|Spec revision|MVP|Staging PR|Staging smoke|Staging Post-Deploy Smoke|rev-check|public smoke|admin smoke|dev-only|validated diff|clean-main-PR|workflow|runtime|main|staging|draft|ready|merge|commit|branch|pull request|hotfix|release-process-guard|ab-readiness-check|php-artisan-test)\b/gi;
+  /\b(codex|PR|MCP|CI|UI|URL|API|JSON|YAML|TOML|PHP|SQL|HTTP|HTTPS|Docker|Laravel|Boost|Filament|Livewire|Bitrix24|AB Connector|Spec repo|Spec doc|Spec revision|MVP|Staging PRs|Staging PR|Staging smoke|Staging Post-Deploy Smoke|rev-check|public smoke|admin smoke|dev-only|validated diff|clean-main-PR|workflow|runtime|main|staging|draft|ready|merge|commit|branch|pull request|hotfix|release-process-guard|ab-readiness-check|php-artisan-test)\b/gi;
 
 const REQUIRED_FIELDS = [
   { key: "changeType", label: "Тип изменения" },
@@ -128,7 +128,7 @@ function validatePublishLanguage({ title, body }) {
 }
 
 function hasStagingEvidence(body) {
-  return /(?:^|\n)\s*Staging\s+PR\s*:\s*(?:https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/)?#?\d+\b/i.test(body)
+  return /(?:^|\n)\s*Staging\s+PRs?\s*:\s*(?:.*(?:https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/)?#?\d+\b)/i.test(body)
     && /(?:^|\n)\s*Staging\s+smoke\s*:\s*(?:.*https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/actions\/runs\/\d+)/i.test(body);
 }
 
@@ -173,7 +173,7 @@ function evaluateReadiness({ baseRef, title = "", body = "", files = [], isDraft
   }
 
   if (baseRef === "main" && hasRuntimeFiles && !hasStagingEvidence(body)) {
-    failures.push("Runtime PR в `main` должен содержать `Staging PR: #NNN` и `Staging smoke: https://github.com/.../actions/runs/...`.");
+    failures.push("Runtime PR в `main` должен содержать `Staging PR: #NNN` или `Staging PRs: #NNN, #MMM`, а также `Staging smoke: https://github.com/.../actions/runs/...`.");
   }
 
   for (const field of REQUIRED_FIELDS) {
@@ -520,6 +520,17 @@ function runSelfTest() {
       baseRef: "main",
       title: "[codex] Исправить синхронизацию Bitrix24",
       body: `${readyProcessBody.replace("процессное", "кодовое").replace("документационный путь", "до merge в main")}\n\nStaging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123`,
+      files: [{ filename: "app/Services/Bitrix24ContactSyncService.php" }],
+      isDraft: false,
+    }).failures,
+    [],
+  );
+
+  assert.deepEqual(
+    evaluateReadiness({
+      baseRef: "main",
+      title: "[codex] Исправить синхронизацию Bitrix24",
+      body: `${readyProcessBody.replace("процессное", "кодовое").replace("документационный путь", "до merge в main")}\n\nStaging PRs: #614, #615\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123`,
       files: [{ filename: "app/Services/Bitrix24ContactSyncService.php" }],
       isDraft: false,
     }).failures,
