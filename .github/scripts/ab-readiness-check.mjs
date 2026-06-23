@@ -303,6 +303,22 @@ function parseRepository(repository) {
   return { owner, repo };
 }
 
+function parsePullNumber(value) {
+  const normalized = String(value || "").trim();
+
+  if (!/^[1-9]\d*$/.test(normalized)) {
+    throw new Error("PR_NUMBER must be a positive integer.");
+  }
+
+  const pullNumber = Number(normalized);
+
+  if (!Number.isSafeInteger(pullNumber)) {
+    throw new Error("PR_NUMBER must be a safe positive integer.");
+  }
+
+  return pullNumber;
+}
+
 function printFailure(message) {
   console.log(`::error::${message}`);
 }
@@ -316,6 +332,11 @@ function runSelfTest() {
   assert.equal(isProcessOnlyFile(".github/workflows/ab-readiness-check.yml"), true);
   assert.equal(isProcessOnlyFile(".github/PULL_REQUEST_TEMPLATE.md"), true);
   assert.equal(isProcessOnlyFile("app/Services/Bitrix24ContactSyncService.php"), false);
+  assert.equal(parsePullNumber("627"), 627);
+  assert.equal(parsePullNumber(" 627 "), 627);
+  assert.throws(() => parsePullNumber("123abc"), /positive integer/);
+  assert.throws(() => parsePullNumber("0"), /positive integer/);
+  assert.throws(() => parsePullNumber(""), /positive integer/);
 
   const readyProcessBody = [
     "## Что изменено",
@@ -522,7 +543,6 @@ function runSelfTest() {
 async function run() {
   const token = process.env.GITHUB_TOKEN;
   const repository = process.env.GITHUB_REPOSITORY;
-  const pullNumber = Number.parseInt(process.env.PR_NUMBER || "", 10);
 
   if (!token) {
     throw new Error("GITHUB_TOKEN is required.");
@@ -532,9 +552,7 @@ async function run() {
     throw new Error("GITHUB_REPOSITORY is required.");
   }
 
-  if (!Number.isInteger(pullNumber)) {
-    throw new Error("PR_NUMBER is required.");
-  }
+  const pullNumber = parsePullNumber(process.env.PR_NUMBER);
 
   const { owner, repo } = parseRepository(repository);
   const pullRequest = await githubRequest(`/repos/${owner}/${repo}/pulls/${pullNumber}`, token);
