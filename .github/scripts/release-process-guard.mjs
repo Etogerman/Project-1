@@ -9,6 +9,8 @@ const PROCESS_ONLY_FILE_PATTERNS = [
   /^\.github\/instructions\/.*\.instructions\.md$/,
   /^\.github\/scripts\/release-process-guard\.mjs$/,
   /^\.github\/workflows\/release-process-guard\.ya?ml$/,
+  /^\.github\/scripts\/ab-readiness-check\.mjs$/,
+  /^\.github\/workflows\/ab-readiness-check\.ya?ml$/,
   /^\.agents\/skills\//,
   /(^|\/)[^/]+\.md$/,
 ];
@@ -19,7 +21,7 @@ const LATIN_PATTERN = /[A-Za-z]/;
 const ENGLISH_PR_HEADING_PATTERN =
   /^\s{0,3}#{1,6}\s*(Summary|Overview|Description|Why|Validation|Testing|Tests|Checks|Delivery note|Implementation|Changes|Root cause|Impact)\s*$/gim;
 const ALLOWED_TECHNICAL_TERMS_PATTERN =
-  /\b(codex|PR|MCP|CI|UI|URL|API|JSON|YAML|TOML|PHP|SQL|HTTP|HTTPS|Docker|Laravel|Boost|Filament|Livewire|Bitrix24|AB Connector|Staging PR|Staging smoke|Staging Post-Deploy Smoke|rev-check|public smoke|admin smoke|dev-only|validated diff|clean-main-PR|workflow|runtime|main|staging|draft|ready|merge|commit|branch|pull request|release-process-guard|php-artisan-test)\b/gi;
+  /\b(codex|PR|MCP|CI|UI|URL|API|JSON|YAML|TOML|PHP|SQL|HTTP|HTTPS|Docker|Laravel|Boost|Filament|Livewire|Bitrix24|AB Connector|Spec repo|Spec doc|Spec revision|Staging PR|Staging smoke|Staging Post-Deploy Smoke|rev-check|public smoke|admin smoke|dev-only|validated diff|clean-main-PR|workflow|runtime|main|staging|draft|ready|merge|commit|branch|pull request|release-process-guard|ab-readiness-check|php-artisan-test)\b/gi;
 
 function isProcessOnlyFile(filename) {
   return PROCESS_ONLY_FILE_PATTERNS.some((pattern) => pattern.test(filename));
@@ -377,6 +379,8 @@ function runSelfTest() {
   assert.equal(isProcessOnlyFile("docs/release.md"), true);
   assert.equal(isProcessOnlyFile(".github/copilot-instructions.md"), true);
   assert.equal(isProcessOnlyFile(".github/workflows/release-process-guard.yml"), true);
+  assert.equal(isProcessOnlyFile(".github/scripts/ab-readiness-check.mjs"), true);
+  assert.equal(isProcessOnlyFile(".github/workflows/ab-readiness-check.yml"), true);
   assert.equal(isProcessOnlyFile(".agents/skills/ab-connector-skill-authoring/agents/openai.yaml"), true);
   assert.equal(isProcessOnlyFile("app/Services/Bitrix24ContactSyncService.php"), false);
   assert.deepEqual(parseGitHubActionsRunUrl("https://github.com/Etogerman/Project-1/actions/runs/123"), {
