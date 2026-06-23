@@ -7,12 +7,17 @@ use App\Jobs\ProcessAutoReplyJob;
 use App\Jobs\ProcessDataCollectionQuestionJob;
 use App\Jobs\ProcessDataCollectionResponseJob;
 use App\Jobs\ProcessPhoneCaptureFollowUpJob;
+use App\Jobs\ProcessScenarioStartJob;
 use App\Jobs\SyncContactIdentityAvatarJob;
+use App\Models\AutoReplyRule;
 use App\Models\Channel;
 use App\Models\ChannelPeerSyncState;
 use App\Models\ChannelRuntimeState;
 use App\Models\Dialog;
 use App\Models\Message;
+use App\Models\Scenario;
+use App\Models\ScenarioChannelBinding;
+use App\Models\ScenarioVersion;
 use App\Models\TelegramAccountOutgoingMessage;
 use App\Models\User;
 use App\Services\Bots\SendManualDialogReplyAction;
@@ -146,6 +151,52 @@ class TelegramAccountGatewayControllerTest extends TestCase
 
         $this->assertDatabaseCount('messages', 1);
         Queue::assertNotPushed(ProcessAutoReplyJob::class);
+    }
+
+    public function test_gateway_live_event_starts_matching_published_v3_scenario_before_auto_reply(): void
+    {
+        Queue::fake();
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel([
+            'name' => 'Telegram Account Scenario',
+        ]);
+        $scenario = $this->createPublishedV3StartScenario($channel, 'Маркетолог');
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(
+            route('internal.telegram-account.messages.handle', ['channel' => $channel]),
+            $this->payload(
+                channel: $channel,
+                externalChatId: '700013',
+                externalUserId: 'tg-account-user-13',
+                externalMessageId: '900013',
+                text: 'Маркетолог',
+                historySource: 'live',
+            ),
+        )->assertOk()
+            ->assertJsonPath('stored', true);
+
+        $message = Message::query()->firstOrFail();
+
+        Queue::assertPushed(ProcessScenarioStartJob::class, function (ProcessScenarioStartJob $job) use ($message, $scenario): bool {
+            return $job->inboundMessageId === $message->id
+                && $job->dialogId === $message->dialog_id
+                && $job->scenarioCode === $scenario->code
+                && $job->queue === ProcessScenarioStartJob::queueName();
+        });
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        $this->assertDatabaseMissing('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'bot.reply_queued',
+        ]);
     }
 
     public function test_gateway_persists_pending_media_download_placeholder_for_account_message(): void
@@ -840,6 +891,70 @@ class TelegramAccountGatewayControllerTest extends TestCase
             'platform' => Channel::PLATFORM_TELEGRAM,
             'is_active' => true,
         ], $attributes));
+    }
+
+    private function createPublishedV3StartScenario(Channel $channel, string $keyword): Scenario
+    {
+        $scenario = Scenario::query()->create([
+            'code' => 'telegram_account_v3_start',
+            'name' => 'Telegram Account V3 Start',
+            'is_active' => true,
+            'is_archived' => false,
+        ]);
+
+        ScenarioVersion::query()->create([
+            'scenario_id' => $scenario->id,
+            'version_number' => 1,
+            'status' => ScenarioVersion::STATUS_PUBLISHED,
+            'schema_payload' => [
+                'version' => 3,
+                'builder_v3_runtime' => [
+                    'schema_version' => 3,
+                    'source_revision' => 'v3:test',
+                    'compiled_at' => now()->toISOString(),
+                    'entrypoints' => [
+                        [
+                            'block_id' => 'start',
+                            'channel_ids' => [$channel->id],
+                            'match' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                            'values' => [$keyword],
+                            'contact_phone_condition' => '',
+                            'dialog_phone_condition' => '',
+                            'expression' => '',
+                            'tag_condition' => [
+                                'enabled' => false,
+                                'mode' => 'has_all',
+                                'tag_ids' => [],
+                            ],
+                            'priority' => 10,
+                        ],
+                    ],
+                    'blocks' => [
+                        'start' => [
+                            'id' => 'start',
+                            'db_id' => 1,
+                            'kind' => 'state',
+                            'title' => 'Старт',
+                            'message' => [
+                                'text' => 'Здравствуйте! Спасибо за отклик.',
+                                'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                            ],
+                            'buttons' => [
+                                'placement' => 'auto',
+                                'rows' => [],
+                            ],
+                            'actions' => [],
+                            'wait_reply_edges' => [],
+                            'automatic_edges' => [],
+                            'action_result_edges' => [],
+                        ],
+                    ],
+                    'edges' => [],
+                ],
+            ],
+        ]);
+
+        return $scenario->fresh('publishedVersion');
     }
 
     /**
