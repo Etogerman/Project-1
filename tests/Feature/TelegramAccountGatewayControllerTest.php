@@ -17,10 +17,12 @@ use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\Scenario;
 use App\Models\ScenarioChannelBinding;
+use App\Models\ScenarioV3OutboundMessage;
 use App\Models\ScenarioVersion;
 use App\Models\TelegramAccountOutgoingMessage;
 use App\Models\User;
 use App\Services\Bots\SendManualDialogReplyAction;
+use App\Services\Scenarios\ScenarioRegistry;
 use App\Services\TelegramAccount\ResolveTelegramAccountGatewayDiagnosticsAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
@@ -197,6 +199,95 @@ class TelegramAccountGatewayControllerTest extends TestCase
             'channel_id' => $channel->id,
             'event' => 'bot.reply_queued',
         ]);
+    }
+
+    public function test_gateway_v3_scenario_queues_outbound_text_through_telegram_account_gateway(): void
+    {
+        Queue::fake();
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel([
+            'name' => 'Telegram Account Scenario Delivery',
+        ]);
+        $scenario = $this->createPublishedV3StartScenario($channel, 'Маркетолог');
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(
+            route('internal.telegram-account.messages.handle', ['channel' => $channel]),
+            $this->payload(
+                channel: $channel,
+                externalChatId: '700014',
+                externalUserId: 'tg-account-user-14',
+                externalMessageId: '900014',
+                text: 'Маркетолог',
+                historySource: 'live',
+            ),
+        )->assertOk()
+            ->assertJsonPath('stored', true);
+
+        $message = Message::query()
+            ->where('direction', Message::DIRECTION_INBOUND)
+            ->firstOrFail();
+
+        ChannelRuntimeState::query()->updateOrCreate(
+            ['channel_id' => $channel->id],
+            [
+                'auth_status' => ChannelRuntimeState::AUTH_STATUS_AUTHORIZED,
+                'authorization_state' => ChannelRuntimeState::AUTHORIZATION_STATE_READY,
+                'sync_status' => ChannelRuntimeState::SYNC_STATUS_LIVE,
+                'last_gateway_heartbeat_at' => now(),
+                'runtime_payload' => [
+                    'gateway_capabilities' => [
+                        'outgoing_replies' => true,
+                    ],
+                ],
+            ],
+        );
+
+        app()->call([
+            new ProcessScenarioStartJob((int) $message->id, (int) $message->dialog_id, (string) $scenario->code),
+            'handle',
+        ]);
+
+        $outbound = ScenarioV3OutboundMessage::query()->firstOrFail();
+        $runtime = app(ScenarioRegistry::class)->makeRuntimeForVersion(
+            (string) $scenario->code,
+            (int) $scenario->publishedVersion->id,
+        );
+
+        $this->assertNotNull($runtime);
+
+        $runtime->handleV3OutboundMessage((int) $outbound->id);
+
+        $outbound->refresh();
+        $sentMessage = Message::query()->findOrFail($outbound->outbound_message_id);
+        $outgoing = TelegramAccountOutgoingMessage::query()->firstOrFail();
+
+        $this->assertSame(ScenarioV3OutboundMessage::STATUS_SENT, $outbound->status);
+        $this->assertSame(Message::DIRECTION_OUTBOUND, $sentMessage->direction);
+        $this->assertSame(Message::KIND_OUTBOUND_SCENARIO_MESSAGE, $sentMessage->message_kind);
+        $this->assertSame(Message::SENT_BY_TYPE_SYSTEM, $sentMessage->sent_by_type);
+        $this->assertSame('scenario_'.$scenario->code, $sentMessage->sent_by_system_code);
+        $this->assertSame('Здравствуйте! Спасибо за отклик.', $sentMessage->text);
+        $this->assertSame(Message::TEXT_FORMAT_PLAIN_TEXT, $sentMessage->text_format);
+        $this->assertSame($message->id, $sentMessage->reply_to_message_id);
+        $this->assertSame('telegram_account_gateway', data_get($sentMessage->raw_payload, 'provider'));
+        $this->assertSame(TelegramAccountOutgoingMessage::STATUS_PENDING, data_get($sentMessage->raw_payload, 'delivery_status'));
+
+        $this->assertSame($channel->id, $outgoing->channel_id);
+        $this->assertSame($message->dialog_id, $outgoing->dialog_id);
+        $this->assertSame($sentMessage->id, $outgoing->message_id);
+        $this->assertSame('700014', $outgoing->external_chat_id);
+        $this->assertSame('Здравствуйте! Спасибо за отклик.', $outgoing->text);
+        $this->assertSame(Message::TEXT_FORMAT_PLAIN_TEXT, $outgoing->text_format);
+        $this->assertSame(TelegramAccountOutgoingMessage::STATUS_PENDING, $outgoing->status);
     }
 
     public function test_gateway_persists_pending_media_download_placeholder_for_account_message(): void

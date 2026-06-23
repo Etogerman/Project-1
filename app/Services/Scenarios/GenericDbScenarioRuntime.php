@@ -58,6 +58,7 @@ use App\Services\Geo\ApplyGeoResolutionToContactAction;
 use App\Services\Geo\ResolveAndApplyGeoCityAction;
 use App\Services\Geo\ResolveGeoCityAction;
 use App\Services\Messages\PrepareMessageContentAction;
+use App\Services\TelegramAccount\QueueTelegramAccountSystemReplyAction;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -205,6 +206,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         private readonly ApplyScenarioTagEffectsAction $applyScenarioTagEffectsAction,
         private readonly StoreOutboundScenarioMessageAction $storeOutboundScenarioMessageAction,
         private readonly SendBotDialogTextAction $sendBotDialogTextAction,
+        private readonly QueueTelegramAccountSystemReplyAction $queueTelegramAccountSystemReplyAction,
         private readonly TelegramBotApiService $telegramBotApiService,
         private readonly DeleteLastOutboundDialogMessageAction $deleteLastOutboundDialogMessageAction,
         private readonly PrepareMessageContentAction $prepareMessageContentAction,
@@ -8835,6 +8837,22 @@ TEXT;
 
         $content = $this->prepareMessageContentAction->handle($text, $textFormat);
 
+        if ($this->shouldQueueV3ScenarioThroughTelegramAccountGateway($channel)) {
+            return [
+                'sent_message' => $this->queueTelegramAccountV3ScenarioMessage(
+                    $message,
+                    $content->transportText,
+                    $content->textFormat,
+                    $requestPhone,
+                    $removeTelegramKeyboard,
+                    $replyButtonRows,
+                    $removeTelegramKeyboardBeforeMessage,
+                ),
+                'delivery_accepted' => true,
+                'error' => null,
+            ];
+        }
+
         if ($removeTelegramKeyboardBeforeMessage) {
             $this->removeTelegramReplyKeyboardBeforeScenarioMessage($message, $channel);
         }
@@ -8887,6 +8905,54 @@ TEXT;
             'delivery_accepted' => true,
             'error' => null,
         ];
+    }
+
+    private function shouldQueueV3ScenarioThroughTelegramAccountGateway(Channel $channel): bool
+    {
+        return $channel->platform === Channel::PLATFORM_TELEGRAM
+            && $channel->isAccountConnection();
+    }
+
+    /**
+     * @param  list<list<array<string, mixed>>>|null  $replyButtonRows
+     */
+    private function queueTelegramAccountV3ScenarioMessage(
+        Message $message,
+        string $text,
+        string $textFormat,
+        bool $requestPhone,
+        bool $removeTelegramKeyboard,
+        ?array $replyButtonRows,
+        bool $removeTelegramKeyboardBeforeMessage,
+    ): Message {
+        if (
+            $requestPhone
+            || $removeTelegramKeyboard
+            || $removeTelegramKeyboardBeforeMessage
+            || ($replyButtonRows !== null && $replyButtonRows !== [])
+        ) {
+            throw new RuntimeException('Telegram Account Gateway пока поддерживает только текстовые V3-сообщения без кнопок.');
+        }
+
+        if ($textFormat !== Message::TEXT_FORMAT_PLAIN_TEXT) {
+            throw new RuntimeException('Telegram Account Gateway пока поддерживает только простой текст в V3-сообщениях.');
+        }
+
+        $message->loadMissing(['dialog.channel', 'dialog.currentContactIdentity']);
+
+        if (! $message->dialog instanceof Dialog) {
+            throw new RuntimeException("Scenario [{$this->code()}] message does not have an active dialog.");
+        }
+
+        return $this->queueTelegramAccountSystemReplyAction->handle(
+            $message->dialog,
+            $text,
+            $message,
+            $this->systemCode(),
+            Message::KIND_OUTBOUND_SCENARIO_MESSAGE,
+            Message::SENT_BY_TYPE_SYSTEM,
+            $textFormat,
+        );
     }
 
     private function removeTelegramReplyKeyboardBeforeScenarioMessage(Message $message, Channel $channel): void
