@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 
 const PROCESS_ONLY_FILE_PATTERNS = [
   /^AGENTS\.md$/,
@@ -158,6 +160,86 @@ function stripTechnicalMarkdown(text) {
 
 function countMatches(text, pattern) {
   return [...text.matchAll(pattern)].length;
+}
+
+function argValue(name) {
+  const index = process.argv.indexOf(name);
+
+  if (index === -1) {
+    return null;
+  }
+
+  const value = process.argv[index + 1];
+
+  if (!value || value.startsWith("--")) {
+    throw new Error(`${name} requires a value.`);
+  }
+
+  return value;
+}
+
+function requiredArgValue(name) {
+  const value = argValue(name);
+
+  if (value === null || value.trim() === "") {
+    throw new Error(`${name} is required.`);
+  }
+
+  return value;
+}
+
+function git(args) {
+  return execFileSync("git", args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+}
+
+function fileStatusFromNameStatus(statusCode) {
+  if (statusCode.startsWith("R")) {
+    return "renamed";
+  }
+
+  return {
+    A: "added",
+    D: "removed",
+    M: "modified",
+  }[statusCode[0]] || "modified";
+}
+
+function localDiffPatch(diffBase, filename) {
+  try {
+    return git(["diff", "--find-renames", `${diffBase}...HEAD`, "--", filename]);
+  } catch {
+    return "";
+  }
+}
+
+function listLocalDiffFiles(diffBase) {
+  const nameStatus = git(["diff", "--name-status", "--find-renames", `${diffBase}...HEAD`]);
+
+  if (nameStatus === "") {
+    return [];
+  }
+
+  return nameStatus.split("\n").map((line) => {
+    const parts = line.split("\t");
+    const statusCode = parts[0] || "M";
+    const isRename = statusCode.startsWith("R");
+    const filename = isRename ? parts[2] : parts[1];
+    const previousFilename = isRename ? parts[1] : "";
+
+    return {
+      filename,
+      patch: localDiffPatch(diffBase, filename),
+      previous_filename: previousFilename,
+      status: fileStatusFromNameStatus(statusCode),
+    };
+  });
+}
+
+function worktreeStatus() {
+  return git(["status", "--porcelain"]);
 }
 
 function validatePublishLanguage({ title, body }) {
@@ -373,6 +455,43 @@ function printFailure(message) {
   console.error(`::error::${message}`);
 }
 
+function runLocalPr() {
+  const baseRef = requiredArgValue("--base");
+  const title = readFileSync(requiredArgValue("--title-file"), "utf8").trim();
+  const body = readFileSync(requiredArgValue("--body-file"), "utf8");
+  const diffBase = argValue("--diff-base") || `origin/${baseRef}`;
+  const dirtyStatus = worktreeStatus();
+
+  if (dirtyStatus !== "" && !process.argv.includes("--allow-dirty")) {
+    console.error("Local release process guard failed.");
+    console.error("Working tree has uncommitted changes. Commit or stash them before PR preflight.");
+    console.error(dirtyStatus);
+    process.exit(1);
+  }
+
+  const files = listLocalDiffFiles(diffBase);
+  const result = evaluatePullRequest({
+    baseRef,
+    title,
+    body,
+    files,
+  });
+
+  if (result.failures.length > 0) {
+    console.error("Local release process guard failed.");
+    console.error(`Base branch: ${baseRef}`);
+    console.error(`Diff base: ${diffBase}`);
+    console.error(`Runtime files: ${result.runtimeFiles.map((file) => file.filename).join(", ") || "none"}`);
+    result.failures.forEach(printFailure);
+    process.exit(1);
+  }
+
+  console.log("Local release process guard passed.");
+  console.log(`Base branch: ${baseRef}`);
+  console.log(`Diff base: ${diffBase}`);
+  console.log(`Runtime files: ${result.runtimeFiles.length}`);
+}
+
 function runSelfTest() {
   assert.equal(isProcessOnlyFile("docs/release.md"), true);
   assert.equal(isProcessOnlyFile(".github/copilot-instructions.md"), true);
@@ -389,6 +508,10 @@ function runSelfTest() {
     normalizePatch("index aaa..bbb 100644\n@@ -1,3 +1,3 @@\n context\n-old\n+new"),
     "-old\n+new",
   );
+  assert.equal(fileStatusFromNameStatus("A"), "added");
+  assert.equal(fileStatusFromNameStatus("M"), "modified");
+  assert.equal(fileStatusFromNameStatus("D"), "removed");
+  assert.equal(fileStatusFromNameStatus("R100"), "renamed");
 
   assert.deepEqual(
     validatePublishLanguage({
@@ -667,6 +790,8 @@ async function run() {
 
 if (process.argv.includes("--self-test")) {
   runSelfTest();
+} else if (process.argv.includes("--local-pr")) {
+  runLocalPr();
 } else {
   await run();
 }
