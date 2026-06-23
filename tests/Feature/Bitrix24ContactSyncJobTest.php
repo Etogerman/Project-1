@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Data\Bitrix24\Bitrix24DealSyncQueueResultData;
 use App\Data\Bitrix24\Bitrix24HistoryExportQueueResultData;
 use App\Jobs\ExportMessageToBitrix24OpenLinesJob;
+use App\Jobs\ProcessDeferredParameterAutoReplyJob;
 use App\Jobs\SyncContactToBitrix24Job;
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24MessageExport;
@@ -16,12 +17,14 @@ use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Services\Bitrix24\IsContactReadyForBitrix24SyncAction;
+use App\Services\Bitrix24\IsDialogBitrix24OpenLinesRetryRequiredAction;
 use App\Services\Bitrix24\LogBitrix24RawContactPhoneSnapshotAction;
 use App\Services\Bitrix24\QueueBitrix24DealSyncAction;
 use App\Services\Bitrix24\QueueBitrix24HistoryExportAction;
 use App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction;
 use App\Services\Bitrix24\QueueMissedBitrix24OpenLinesRetryAction;
 use App\Services\Bitrix24\SyncContactToBitrix24Action;
+use App\Services\Bots\QueueDeferredParameterAutoReplyAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -1610,6 +1613,113 @@ class Bitrix24ContactSyncJobTest extends TestCase
         $this->assertSame('501', $contact->bitrix24_contact_id);
         $this->assertSame(Contact::BITRIX24_SYNC_STATUS_SYNCED, $contact->bitrix24_sync_status);
         $this->assertFalse($contact->bitrix24_sync_pending);
+    }
+
+    public function test_quiet_contact_sync_skips_dialog_continuation_but_keeps_crm_followups(): void
+    {
+        Queue::fake();
+
+        $channel = $this->makeTelegramChannel();
+        $contact = $this->createSyncReadyContact([
+            'bitrix24_contact_id' => null,
+            'bitrix24_sync_pending' => true,
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_PENDING,
+            'bitrix24_last_synced_at' => null,
+            'bitrix24_linked_at' => null,
+        ], channel: $channel);
+        $dialog = $this->makeDialog($contact, $channel, [
+            'bitrix24_live_status' => Dialog::BITRIX24_LIVE_STATUS_ACTIVE,
+        ]);
+        $pendingSource = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Параметрический inbound перед rescue sync',
+        ]);
+
+        $dialog->forceFill([
+            'pending_auto_reply_source_message_id' => $pendingSource->id,
+        ])->save();
+
+        $readyAction = Mockery::mock(IsContactReadyForBitrix24SyncAction::class);
+        $readyAction->shouldReceive('handle')
+            ->once()
+            ->andReturn(true);
+        $this->app->instance(IsContactReadyForBitrix24SyncAction::class, $readyAction);
+
+        $syncAction = Mockery::mock(SyncContactToBitrix24Action::class);
+        $syncAction->shouldReceive('handle')
+            ->once()
+            ->withArgs(function (Contact $rootContact) use ($contact): bool {
+                $rootContact->forceFill([
+                    'bitrix24_contact_id' => '501',
+                    'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_SYNCED,
+                    'bitrix24_linked_at' => now(),
+                    'bitrix24_last_synced_at' => now(),
+                ])->save();
+
+                return $rootContact->id === $contact->id;
+            });
+        $this->app->instance(SyncContactToBitrix24Action::class, $syncAction);
+
+        $rawSnapshotAction = Mockery::mock(LogBitrix24RawContactPhoneSnapshotAction::class);
+        $rawSnapshotAction->shouldReceive('handle')
+            ->once()
+            ->withArgs(fn (Contact $rootContact, string $stage): bool => $rootContact->id === $contact->id && $stage === 'after_contact_sync');
+        $this->app->instance(LogBitrix24RawContactPhoneSnapshotAction::class, $rawSnapshotAction);
+
+        $retryAction = Mockery::mock(QueueMissedBitrix24OpenLinesRetryAction::class);
+        $retryAction->shouldNotReceive('handle');
+        $this->app->instance(QueueMissedBitrix24OpenLinesRetryAction::class, $retryAction);
+
+        $retryRequiredAction = Mockery::mock(IsDialogBitrix24OpenLinesRetryRequiredAction::class);
+        $retryRequiredAction->shouldNotReceive('handle');
+        $this->app->instance(IsDialogBitrix24OpenLinesRetryRequiredAction::class, $retryRequiredAction);
+
+        $deferredAction = Mockery::mock(QueueDeferredParameterAutoReplyAction::class);
+        $deferredAction->shouldNotReceive('handle');
+        $this->app->instance(QueueDeferredParameterAutoReplyAction::class, $deferredAction);
+
+        $dealAction = Mockery::mock(QueueBitrix24DealSyncAction::class);
+        $dealAction->shouldReceive('handle')
+            ->once()
+            ->withArgs(fn (Contact $rootContact): bool => $rootContact->id === $contact->id)
+            ->andReturn(new Bitrix24DealSyncQueueResultData(
+                queued: true,
+                alreadyPending: false,
+                ready: true,
+                rootContactId: $contact->id,
+            ));
+        $this->app->instance(QueueBitrix24DealSyncAction::class, $dealAction);
+
+        $historyAction = Mockery::mock(QueueBitrix24HistoryExportAction::class);
+        $historyAction->shouldReceive('handle')
+            ->once()
+            ->withArgs(fn (Contact $rootContact): bool => $rootContact->id === $contact->id)
+            ->andReturn(new Bitrix24HistoryExportQueueResultData(
+                queued: true,
+                alreadyPending: false,
+                ready: true,
+                rootContactId: $contact->id,
+            ));
+        $this->app->instance(QueueBitrix24HistoryExportAction::class, $historyAction);
+
+        $job = new SyncContactToBitrix24Job($contact->id, suppressDialogContinuation: true);
+        app()->call([$job, 'handle']);
+
+        $contact->refresh();
+        $dialog->refresh();
+
+        $this->assertSame('501', $contact->bitrix24_contact_id);
+        $this->assertSame(Contact::BITRIX24_SYNC_STATUS_SYNCED, $contact->bitrix24_sync_status);
+        $this->assertFalse($contact->bitrix24_sync_pending);
+        $this->assertSame($pendingSource->id, $dialog->pending_auto_reply_source_message_id);
+        $this->assertSame(0, Message::query()
+            ->where('dialog_id', $dialog->id)
+            ->where('direction', Message::DIRECTION_OUTBOUND)
+            ->count());
+        Queue::assertNotPushed(ProcessDeferredParameterAutoReplyJob::class);
+        Queue::assertNotPushed(ExportMessageToBitrix24OpenLinesJob::class);
     }
 
     public function test_job_logs_critical_and_skips_follow_up_actions_when_sync_throws(): void

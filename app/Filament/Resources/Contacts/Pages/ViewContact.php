@@ -2,11 +2,17 @@
 
 namespace App\Filament\Resources\Contacts\Pages;
 
+use App\Data\Bitrix24\Bitrix24RescueSyncDiagnosticData;
+use App\Data\Bitrix24\Bitrix24RescueSyncQueueResultData;
 use App\Filament\Resources\Contacts\ContactResource;
 use App\Filament\Resources\Contacts\Pages\Concerns\InteractsWithContactWorkspace;
 use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\FieldDictionaryField;
+use App\Models\User;
+use App\Services\Bitrix24\BuildBitrix24CrmEntityUrlAction;
+use App\Services\Bitrix24\DiagnoseBitrix24RescueSyncAction;
+use App\Services\Bitrix24\QueueBitrix24RescueSyncAction;
 use App\Services\Contacts\AddContactTimelineCommentAction;
 use App\Services\Contacts\BuildContactCardViewLayoutAction;
 use App\Services\Contacts\ContactCardViewBlockRegistry;
@@ -141,6 +147,60 @@ class ViewContact extends ViewRecord
                 ->body($throwable->getMessage())
                 ->send();
         }
+    }
+
+    public function requestBitrix24RescueSync(): void
+    {
+        if (! $this->canCurrentEmployeeRequestBitrix24RescueSync()) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось запустить синхронизацию')
+                ->body('Для ручной синхронизации с Bitrix24 нужно право bitrix24.edit.')
+                ->send();
+
+            return;
+        }
+
+        $record = $this->resolveWorkspaceContactOrNotify('Не удалось запустить синхронизацию');
+
+        if (! $record instanceof Contact) {
+            return;
+        }
+
+        try {
+            $employee = $this->resolveCurrentEmployee();
+            $result = app(QueueBitrix24RescueSyncAction::class)->handle($record, $employee);
+            $rootContact = Contact::query()->find($result->rootContactId);
+
+            if ($rootContact instanceof Contact) {
+                $this->replaceWorkspaceContactWithEffectiveContact($rootContact);
+            } else {
+                $this->syncWorkspaceContact($record);
+            }
+
+            $this->sendBitrix24RescueSyncNotification($result);
+        } catch (Throwable $throwable) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось запустить синхронизацию')
+                ->body($throwable->getMessage())
+                ->send();
+        }
+    }
+
+    public function refreshBitrix24SyncState(): void
+    {
+        if ($this->activeTab !== self::TAB_BITRIX24) {
+            return;
+        }
+
+        $record = $this->resolveWorkspaceContact();
+
+        if (! $record instanceof Contact) {
+            return;
+        }
+
+        $this->replaceWorkspaceContactWithEffectiveContact($record);
     }
 
     public function updatedActiveTab(string $value): void
@@ -300,6 +360,7 @@ class ViewContact extends ViewRecord
             'workRows' => $generalCardSections['work']['rows'] ?? [],
             'generalBlocks' => $generalBlocks,
             'bitrixSections' => $isBitrix24Tab ? $this->buildBitrixSections($record) : [],
+            'bitrixRescueSyncViewData' => $isBitrix24Tab ? $this->buildBitrixRescueSyncViewData($record) : null,
             'systemFieldSections' => $isSystemFieldsTab ? $this->buildSystemFieldSections($record) : [],
             'customTabSections' => $customTabSections,
             'dialogBlocks' => $dialogBlocks,
@@ -323,11 +384,271 @@ class ViewContact extends ViewRecord
                     'hasMore' => false,
                     'visibleCount' => 0,
                     'totalCount' => 0,
-            ],
+                ],
             'historyCommentViewData' => [
                 'canAddComment' => ($historyBlockVisible || $customHistoryBlockVisible) && $canAddHistoryComment,
             ],
         ];
+    }
+
+    /**
+     * @return array{
+     *     canRequest:bool,
+     *     isActionable:bool,
+     *     statusLabel:string,
+     *     statusTone:string,
+     *     description:string,
+     *     reasons:list<string>,
+     *     errors:list<string>,
+     *     shouldAutoRefresh:bool,
+     *     compact:bool,
+     *     rootContactId:int|null,
+     *     requestedContactId:int
+     * }
+     */
+    protected function buildBitrixRescueSyncViewData(Contact $record): array
+    {
+        $canRequest = $this->canCurrentEmployeeRequestBitrix24RescueSync();
+
+        try {
+            $diagnostics = app(DiagnoseBitrix24RescueSyncAction::class)->handle($record);
+            $status = $this->formatBitrixRescueSyncDiagnosticStatus($diagnostics);
+
+            return [
+                'canRequest' => $canRequest,
+                'isActionable' => $canRequest && ($diagnostics->canQueueContact || $diagnostics->canQueueDeal || $diagnostics->canQueueHistory),
+                'statusLabel' => $status['label'],
+                'statusTone' => $status['tone'],
+                'description' => $status['description'],
+                'reasons' => $this->formatBitrixRescueSyncReasons($diagnostics->reasons),
+                'errors' => $this->formatBitrixRescueSyncErrors($diagnostics),
+                'shouldAutoRefresh' => $this->shouldAutoRefreshBitrix24SyncState($diagnostics),
+                'compact' => $this->shouldRenderCompactBitrix24RescueSyncState($diagnostics),
+                'rootContactId' => $diagnostics->rootContactId,
+                'requestedContactId' => $diagnostics->requestedContactId,
+            ];
+        } catch (Throwable $throwable) {
+            Log::warning('contact_bitrix_rescue_sync_diagnostics_failed', [
+                'contact_id' => $record->id,
+                'error' => $throwable->getMessage(),
+            ]);
+
+            return [
+                'canRequest' => $canRequest,
+                'isActionable' => false,
+                'statusLabel' => 'Диагностика недоступна',
+                'statusTone' => 'danger',
+                'description' => 'Не удалось проверить состояние синхронизации.',
+                'reasons' => [],
+                'errors' => [],
+                'shouldAutoRefresh' => false,
+                'compact' => false,
+                'rootContactId' => null,
+                'requestedContactId' => (int) $record->id,
+            ];
+        }
+    }
+
+    protected function shouldAutoRefreshBitrix24SyncState(Bitrix24RescueSyncDiagnosticData $diagnostics): bool
+    {
+        return $diagnostics->contactPending
+            || $diagnostics->dealPending
+            || $diagnostics->historyPending;
+    }
+
+    protected function shouldRenderCompactBitrix24RescueSyncState(Bitrix24RescueSyncDiagnosticData $diagnostics): bool
+    {
+        return in_array('already_fully_synced', $diagnostics->reasons, true)
+            && ! $diagnostics->canQueueContact
+            && ! $diagnostics->canQueueDeal
+            && ! $diagnostics->canQueueHistory
+            && ! $diagnostics->contactPending
+            && ! $diagnostics->dealPending
+            && ! $diagnostics->historyPending
+            && ! $diagnostics->needsManualReview;
+    }
+
+    /**
+     * @return array{label:string,tone:string,description:string}
+     */
+    protected function formatBitrixRescueSyncDiagnosticStatus(Bitrix24RescueSyncDiagnosticData $diagnostics): array
+    {
+        if ($diagnostics->canQueueContact) {
+            return [
+                'label' => 'Можно синхронизировать контакт',
+                'tone' => 'success',
+                'description' => 'Контакт будет поставлен в очередь без продолжения диалога.',
+            ];
+        }
+
+        if ($diagnostics->canQueueDeal || $diagnostics->canQueueHistory) {
+            $parts = array_filter([
+                $diagnostics->canQueueDeal ? 'сделка' : null,
+                $diagnostics->canQueueHistory ? 'история' : null,
+            ]);
+
+            return [
+                'label' => 'Можно досинхронизировать Bitrix24',
+                'tone' => 'success',
+                'description' => 'В очередь будет поставлено: '.implode(', ', $parts).'.',
+            ];
+        }
+
+        if ($diagnostics->needsManualReview) {
+            return [
+                'label' => 'Нужна ручная проверка',
+                'tone' => 'warning',
+                'description' => 'Автоматический запуск остановлен до разбора состояния Bitrix24.',
+            ];
+        }
+
+        if (! $diagnostics->ready) {
+            return [
+                'label' => 'Контакт не готов',
+                'tone' => 'warning',
+                'description' => 'Перед синхронизацией нужно закрыть обязательные данные контакта.',
+            ];
+        }
+
+        if ($diagnostics->contactPending || $diagnostics->dealPending || $diagnostics->historyPending) {
+            return [
+                'label' => 'Синхронизация выполняется',
+                'tone' => 'warning',
+                'description' => 'ID и статусы обновятся здесь после завершения очереди.',
+            ];
+        }
+
+        if (in_array('already_fully_synced', $diagnostics->reasons, true)) {
+            return [
+                'label' => 'Bitrix24 синхронизирован',
+                'tone' => 'success',
+                'description' => 'Дополнительный запуск сейчас не требуется.',
+            ];
+        }
+
+        return [
+            'label' => 'Нет доступного действия',
+            'tone' => 'warning',
+            'description' => 'Состояние не требует ручного запуска.',
+        ];
+    }
+
+    /**
+     * @param  list<string>  $reasons
+     * @return list<string>
+     */
+    protected function formatBitrixRescueSyncReasons(array $reasons): array
+    {
+        return array_values(array_filter(array_map(
+            fn (string $reason): ?string => $this->formatBitrixRescueSyncReason($reason),
+            $reasons,
+        )));
+    }
+
+    /**
+     * @return list<string>
+     */
+    protected function formatBitrixRescueSyncErrors(Bitrix24RescueSyncDiagnosticData $diagnostics): array
+    {
+        $errors = [];
+
+        if (filled($diagnostics->lastContactError)) {
+            $errors[] = 'Контакт: '.$diagnostics->lastContactError;
+        }
+
+        if (filled($diagnostics->lastDealError)) {
+            $errors[] = 'Сделка: '.$diagnostics->lastDealError;
+        }
+
+        if (filled($diagnostics->lastHistoryError)) {
+            $errors[] = 'История: '.$diagnostics->lastHistoryError;
+        }
+
+        return $errors;
+    }
+
+    protected function formatBitrixRescueSyncReason(string $reason): ?string
+    {
+        return match ($reason) {
+            'using_root_contact' => 'будет использован основной контакт',
+            'data_collection_not_completed' => 'анкета не завершена',
+            'missing_root_contact' => 'контакт не является основным',
+            'missing_first_name' => 'нет имени',
+            'missing_country' => 'нет страны',
+            'missing_city' => 'нет города',
+            'missing_age_range' => 'нет возраста',
+            'missing_phone' => 'нет телефона',
+            'missing_primary_identity' => 'нет канала связи',
+            'contact_needs_manual_review' => 'контакт требует ручной проверки',
+            'deal_needs_manual_review' => 'сделка требует ручной проверки',
+            'contact_already_pending' => 'контакт уже в очереди',
+            'deal_already_pending' => 'сделка уже в очереди',
+            'history_already_pending' => 'история уже в очереди',
+            'deals_sync_disabled' => 'синхронизация сделок отключена',
+            'history_sync_disabled' => 'выгрузка истории отключена',
+            'already_fully_synced' => 'всё уже синхронизировано',
+            default => null,
+        };
+    }
+
+    protected function canCurrentEmployeeRequestBitrix24RescueSync(): bool
+    {
+        $employee = auth()->user();
+
+        return $employee instanceof User
+            && $employee->hasRolePermission('bitrix24.edit');
+    }
+
+    protected function sendBitrix24RescueSyncNotification(Bitrix24RescueSyncQueueResultData $result): void
+    {
+        $notification = Notification::make()
+            ->title($this->bitrix24RescueSyncNotificationTitle($result->status))
+            ->body($this->bitrix24RescueSyncNotificationBody($result));
+
+        match ($result->status) {
+            'queued', 'synced' => $notification->success(),
+            'needs_manual_review', 'not_ready', 'already_pending' => $notification->warning(),
+            default => $notification->warning(),
+        };
+
+        $notification->send();
+    }
+
+    protected function bitrix24RescueSyncNotificationTitle(string $status): string
+    {
+        return match ($status) {
+            'queued' => 'Синхронизация поставлена в очередь',
+            'needs_manual_review' => 'Нужна ручная проверка',
+            'not_ready' => 'Контакт не готов',
+            'already_pending' => 'Задача уже в очереди',
+            'synced' => 'Bitrix24 уже синхронизирован',
+            default => 'Синхронизация не запущена',
+        };
+    }
+
+    protected function bitrix24RescueSyncNotificationBody(Bitrix24RescueSyncQueueResultData $result): string
+    {
+        if ($result->status === 'queued') {
+            $queuedParts = array_filter([
+                $result->queuedContact ? 'контакт' : null,
+                $result->queuedDeal ? 'сделка' : null,
+                $result->queuedHistory ? 'история' : null,
+            ]);
+
+            return 'В очередь поставлено: '.implode(', ', $queuedParts).'. ID и статусы появятся на вкладке Bitrix24 после выполнения очереди.';
+        }
+
+        $reasons = $this->formatBitrixRescueSyncReasons($result->skippedReasons);
+
+        if ($reasons !== []) {
+            return 'Причины: '.implode(', ', array_slice($reasons, 0, 4)).'.';
+        }
+
+        return match ($result->status) {
+            'synced' => 'Дополнительный запуск сейчас не требуется.',
+            'already_pending' => 'Дождитесь завершения текущей задачи.',
+            default => 'Проверьте состояние контакта на вкладке Bitrix24.',
+        };
     }
 
     /**
@@ -1428,7 +1749,7 @@ class ViewContact extends ViewRecord
     }
 
     /**
-     * @return list<array{title:string,subtitle:string,rows:list<array{label:string,key:string,value:string}>}>
+     * @return list<array{title:string,subtitle:string,rows:list<array<string, mixed>>}>
      */
     protected function buildBitrixSections(Contact $record): array
     {
@@ -1468,6 +1789,8 @@ class ViewContact extends ViewRecord
                     $rows[] = $row;
                 }
 
+                $rows = $this->injectBitrix24CrmEntityUrlRows($rows, $record);
+
                 $sections[] = [
                     'title' => (string) ($section['title'] ?? $sectionKey),
                     'subtitle' => $this->contactBitrixSectionSubtitle($sectionKey),
@@ -1491,7 +1814,7 @@ class ViewContact extends ViewRecord
     }
 
     /**
-     * @return list<array{title:string,subtitle:string,rows:list<array{label:string,key:string,value:string}>}>
+     * @return list<array{title:string,subtitle:string,rows:list<array<string, mixed>>}>
      */
     protected function buildFallbackBitrixSections(Contact $record): array
     {
@@ -1499,25 +1822,49 @@ class ViewContact extends ViewRecord
             [
                 'title' => 'Контакт в Bitrix24',
                 'subtitle' => 'Состояние синхронизации карточки контакта в CRM.',
-                'rows' => [
-                    $this->makeRow('ID контакта в Bitrix24', 'bitrix24_contact_id', $record->bitrix24_contact_id ?? '—'),
+                'rows' => array_values(array_filter([
+                    $this->makeRow(
+                        'ID контакта в Bitrix24',
+                        'bitrix24_contact_id',
+                        $record->bitrix24_contact_id ?? '—',
+                    ),
+                    $this->makeBitrix24CrmEntityUrlRow(
+                        'Ссылка на карточку контакта',
+                        'bitrix24_contact_url',
+                        BuildBitrix24CrmEntityUrlAction::ENTITY_CONTACT,
+                        $record->bitrix24_contact_id,
+                        'Открыть контакт в Bitrix24',
+                        'contact-bitrix24-contact-link',
+                    ),
                     $this->makeRow('Статус синхронизации контакта', 'bitrix24_sync_status', $this->formatBitrixSyncStatus($record->bitrix24_sync_status)),
                     $this->makeRow('Контакт синхронизирован', 'bitrix24_last_synced_at', $this->formatDateTime($record->bitrix24_last_synced_at)),
                     $this->makeRow('Контакт привязан к Bitrix24', 'bitrix24_linked_at', $this->formatDateTime($record->bitrix24_linked_at)),
                     $this->makeRow('Синхронизация контакта в очереди', 'bitrix24_sync_pending', $this->formatBoolean($record->bitrix24_sync_pending)),
                     $this->makeRow('Fingerprint синхронизации', 'bitrix24_sync_fingerprint', $record->bitrix24_sync_fingerprint ?? '—'),
-                ],
+                ])),
             ],
             [
                 'title' => 'Сделка в Bitrix24',
                 'subtitle' => 'Состояние привязки и синхронизации связанной сделки.',
-                'rows' => [
-                    $this->makeRow('ID сделки в Bitrix24', 'bitrix24_deal_id', $record->bitrix24_deal_id ?? '—'),
+                'rows' => array_values(array_filter([
+                    $this->makeRow(
+                        'ID сделки в Bitrix24',
+                        'bitrix24_deal_id',
+                        $record->bitrix24_deal_id ?? '—',
+                    ),
+                    $this->makeBitrix24CrmEntityUrlRow(
+                        'Ссылка на сделку',
+                        'bitrix24_deal_url',
+                        BuildBitrix24CrmEntityUrlAction::ENTITY_DEAL,
+                        $record->bitrix24_deal_id,
+                        'Открыть сделку в Bitrix24',
+                        'contact-bitrix24-deal-link',
+                    ),
                     $this->makeRow('Статус синхронизации сделки', 'bitrix24_deal_sync_status', $this->formatBitrixDealStatus($record->bitrix24_deal_sync_status)),
                     $this->makeRow('Сделка синхронизирована', 'bitrix24_deal_last_synced_at', $this->formatDateTime($record->bitrix24_deal_last_synced_at)),
                     $this->makeRow('Сделка привязана к Bitrix24', 'bitrix24_deal_linked_at', $this->formatDateTime($record->bitrix24_deal_linked_at)),
                     $this->makeRow('Синхронизация сделки в очереди', 'bitrix24_deal_sync_pending', $this->formatBoolean($record->bitrix24_deal_sync_pending)),
-                ],
+                ])),
             ],
             [
                 'title' => 'История в Bitrix24',
@@ -1532,7 +1879,7 @@ class ViewContact extends ViewRecord
     }
 
     /**
-     * @return ?array{label:string,key:string,value:string}
+     * @return ?array<string, mixed>
      */
     protected function buildBitrixRowForField(string $fieldKey, Contact $record): ?array
     {
@@ -1545,6 +1892,114 @@ class ViewContact extends ViewRecord
         }
 
         return null;
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $rows
+     * @return list<array<string, mixed>>
+     */
+    protected function injectBitrix24CrmEntityUrlRows(array $rows, Contact $record): array
+    {
+        $rows = $this->insertBitrix24CrmEntityUrlRowAfter(
+            $rows,
+            'bitrix24_contact_id',
+            $this->makeBitrix24CrmEntityUrlRow(
+                'Ссылка на карточку контакта',
+                'bitrix24_contact_url',
+                BuildBitrix24CrmEntityUrlAction::ENTITY_CONTACT,
+                $record->bitrix24_contact_id,
+                'Открыть контакт в Bitrix24',
+                'contact-bitrix24-contact-link',
+            ),
+        );
+
+        return $this->insertBitrix24CrmEntityUrlRowAfter(
+            $rows,
+            'bitrix24_deal_id',
+            $this->makeBitrix24CrmEntityUrlRow(
+                'Ссылка на сделку',
+                'bitrix24_deal_url',
+                BuildBitrix24CrmEntityUrlAction::ENTITY_DEAL,
+                $record->bitrix24_deal_id,
+                'Открыть сделку в Bitrix24',
+                'contact-bitrix24-deal-link',
+            ),
+        );
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $rows
+     * @param  ?array<string, mixed>  $urlRow
+     * @return list<array<string, mixed>>
+     */
+    protected function insertBitrix24CrmEntityUrlRowAfter(array $rows, string $afterKey, ?array $urlRow): array
+    {
+        if ($urlRow === null) {
+            return $rows;
+        }
+
+        $urlRowKey = (string) ($urlRow['key'] ?? '');
+        $keys = array_map(static fn (array $row): string => (string) ($row['key'] ?? ''), $rows);
+
+        if (! in_array($afterKey, $keys, true) || in_array($urlRowKey, $keys, true)) {
+            return $rows;
+        }
+
+        $injectedRows = [];
+
+        foreach ($rows as $row) {
+            $injectedRows[] = $row;
+
+            if ((string) ($row['key'] ?? '') === $afterKey) {
+                $injectedRows[] = $urlRow;
+            }
+        }
+
+        return $injectedRows;
+    }
+
+    /**
+     * @return ?array<string, mixed>
+     */
+    protected function makeBitrix24CrmEntityUrlRow(
+        string $label,
+        string $key,
+        string $entityType,
+        mixed $entityId,
+        string $linkTitle,
+        string $dataRole,
+    ): ?array {
+        $link = $this->makeBitrix24CrmEntityLink($entityType, $entityId, $linkTitle, $dataRole);
+
+        if ($link === null) {
+            return null;
+        }
+
+        return $this->makeRow(
+            $label,
+            $key,
+            $link['url'],
+            link: array_merge($link, ['replaceValue' => true]),
+        );
+    }
+
+    /**
+     * @return ?array{url:string,label:string,title:string,dataRole:string}
+     */
+    protected function makeBitrix24CrmEntityLink(string $entityType, mixed $entityId, string $label, string $dataRole): ?array
+    {
+        $url = app(BuildBitrix24CrmEntityUrlAction::class)->handle($entityType, $entityId);
+
+        if ($url === null) {
+            return null;
+        }
+
+        return [
+            'url' => $url,
+            'label' => $url,
+            'title' => $label,
+            'dataRole' => $dataRole,
+        ];
     }
 
     protected function contactBitrixSectionSubtitle(string $sectionKey): string
@@ -1735,6 +2190,7 @@ class ViewContact extends ViewRecord
         array $items = [],
         ?array $edit = null,
         bool $wide = false,
+        ?array $link = null,
     ): array {
         return [
             'label' => $label,
@@ -1744,6 +2200,7 @@ class ViewContact extends ViewRecord
             'items' => $items,
             'edit' => $edit,
             'wide' => $wide,
+            'link' => $link,
         ];
     }
 
