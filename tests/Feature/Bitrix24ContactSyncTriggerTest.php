@@ -65,7 +65,27 @@ class Bitrix24ContactSyncTriggerTest extends TestCase
         $this->assertSame(Contact::BITRIX24_SYNC_STATUS_PENDING, $contact->bitrix24_sync_status);
 
         Queue::assertPushed(SyncContactToBitrix24Job::class, function (SyncContactToBitrix24Job $job) use ($contact): bool {
-            return $job->contactId === $contact->id;
+            return $job->contactId === $contact->id
+                && $job->suppressDialogContinuation === false;
+        });
+    }
+
+    public function test_queue_action_can_queue_quiet_contact_sync(): void
+    {
+        Queue::fake();
+
+        $contact = $this->createSyncReadyContact();
+
+        $result = app(QueueBitrix24ContactSyncAction::class)->handle($contact, suppressDialogContinuation: true);
+
+        $contact->refresh();
+
+        $this->assertTrue($result->queued);
+        $this->assertTrue($contact->bitrix24_sync_pending);
+
+        Queue::assertPushed(SyncContactToBitrix24Job::class, function (SyncContactToBitrix24Job $job) use ($contact): bool {
+            return $job->contactId === $contact->id
+                && $job->suppressDialogContinuation === true;
         });
     }
 
@@ -148,6 +168,16 @@ class Bitrix24ContactSyncTriggerTest extends TestCase
         $this->assertSame('bitrix24:contact-sync:123', $middleware[0]->key);
         $this->assertSame(10, $middleware[0]->releaseAfter);
         $this->assertSame(180, $middleware[0]->expiresAfter);
+    }
+
+    public function test_sync_contact_job_dialog_continuation_flag_has_default_for_old_queue_payloads(): void
+    {
+        $property = new \ReflectionProperty(SyncContactToBitrix24Job::class, 'suppressDialogContinuation');
+
+        $this->assertTrue($property->hasDefaultValue());
+        $this->assertFalse($property->getDefaultValue());
+        $this->assertFalse((new SyncContactToBitrix24Job(123))->suppressDialogContinuation);
+        $this->assertTrue((new SyncContactToBitrix24Job(123, suppressDialogContinuation: true))->suppressDialogContinuation);
     }
 
     public function test_queue_action_preserves_pending_review_status(): void
