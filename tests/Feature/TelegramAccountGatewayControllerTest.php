@@ -7,15 +7,22 @@ use App\Jobs\ProcessAutoReplyJob;
 use App\Jobs\ProcessDataCollectionQuestionJob;
 use App\Jobs\ProcessDataCollectionResponseJob;
 use App\Jobs\ProcessPhoneCaptureFollowUpJob;
+use App\Jobs\ProcessScenarioStartJob;
 use App\Jobs\SyncContactIdentityAvatarJob;
+use App\Models\AutoReplyRule;
 use App\Models\Channel;
 use App\Models\ChannelPeerSyncState;
 use App\Models\ChannelRuntimeState;
 use App\Models\Dialog;
 use App\Models\Message;
+use App\Models\Scenario;
+use App\Models\ScenarioChannelBinding;
+use App\Models\ScenarioV3OutboundMessage;
+use App\Models\ScenarioVersion;
 use App\Models\TelegramAccountOutgoingMessage;
 use App\Models\User;
 use App\Services\Bots\SendManualDialogReplyAction;
+use App\Services\Scenarios\ScenarioRegistry;
 use App\Services\TelegramAccount\ResolveTelegramAccountGatewayDiagnosticsAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
@@ -146,6 +153,141 @@ class TelegramAccountGatewayControllerTest extends TestCase
 
         $this->assertDatabaseCount('messages', 1);
         Queue::assertNotPushed(ProcessAutoReplyJob::class);
+    }
+
+    public function test_gateway_live_event_starts_matching_published_v3_scenario_before_auto_reply(): void
+    {
+        Queue::fake();
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel([
+            'name' => 'Telegram Account Scenario',
+        ]);
+        $scenario = $this->createPublishedV3StartScenario($channel, 'Маркетолог');
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(
+            route('internal.telegram-account.messages.handle', ['channel' => $channel]),
+            $this->payload(
+                channel: $channel,
+                externalChatId: '700013',
+                externalUserId: 'tg-account-user-13',
+                externalMessageId: '900013',
+                text: 'Маркетолог',
+                historySource: 'live',
+            ),
+        )->assertOk()
+            ->assertJsonPath('stored', true);
+
+        $message = Message::query()->firstOrFail();
+
+        Queue::assertPushed(ProcessScenarioStartJob::class, function (ProcessScenarioStartJob $job) use ($message, $scenario): bool {
+            return $job->inboundMessageId === $message->id
+                && $job->dialogId === $message->dialog_id
+                && $job->scenarioCode === $scenario->code
+                && $job->queue === ProcessScenarioStartJob::queueName();
+        });
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        $this->assertDatabaseMissing('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'bot.reply_queued',
+        ]);
+    }
+
+    public function test_gateway_v3_scenario_queues_outbound_text_through_telegram_account_gateway(): void
+    {
+        Queue::fake();
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel([
+            'name' => 'Telegram Account Scenario Delivery',
+        ]);
+        $scenario = $this->createPublishedV3StartScenario($channel, 'Маркетолог');
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(
+            route('internal.telegram-account.messages.handle', ['channel' => $channel]),
+            $this->payload(
+                channel: $channel,
+                externalChatId: '700014',
+                externalUserId: 'tg-account-user-14',
+                externalMessageId: '900014',
+                text: 'Маркетолог',
+                historySource: 'live',
+            ),
+        )->assertOk()
+            ->assertJsonPath('stored', true);
+
+        $message = Message::query()
+            ->where('direction', Message::DIRECTION_INBOUND)
+            ->firstOrFail();
+
+        ChannelRuntimeState::query()->updateOrCreate(
+            ['channel_id' => $channel->id],
+            [
+                'auth_status' => ChannelRuntimeState::AUTH_STATUS_AUTHORIZED,
+                'authorization_state' => ChannelRuntimeState::AUTHORIZATION_STATE_READY,
+                'sync_status' => ChannelRuntimeState::SYNC_STATUS_LIVE,
+                'last_gateway_heartbeat_at' => now(),
+                'runtime_payload' => [
+                    'gateway_capabilities' => [
+                        'outgoing_replies' => true,
+                    ],
+                ],
+            ],
+        );
+
+        app()->call([
+            new ProcessScenarioStartJob((int) $message->id, (int) $message->dialog_id, (string) $scenario->code),
+            'handle',
+        ]);
+
+        $outbound = ScenarioV3OutboundMessage::query()->firstOrFail();
+        $runtime = app(ScenarioRegistry::class)->makeRuntimeForVersion(
+            (string) $scenario->code,
+            (int) $scenario->publishedVersion->id,
+        );
+
+        $this->assertNotNull($runtime);
+
+        $runtime->handleV3OutboundMessage((int) $outbound->id);
+
+        $outbound->refresh();
+        $sentMessage = Message::query()->findOrFail($outbound->outbound_message_id);
+        $outgoing = TelegramAccountOutgoingMessage::query()->firstOrFail();
+
+        $this->assertSame(ScenarioV3OutboundMessage::STATUS_SENT, $outbound->status);
+        $this->assertSame(Message::DIRECTION_OUTBOUND, $sentMessage->direction);
+        $this->assertSame(Message::KIND_OUTBOUND_SCENARIO_MESSAGE, $sentMessage->message_kind);
+        $this->assertSame(Message::SENT_BY_TYPE_SYSTEM, $sentMessage->sent_by_type);
+        $this->assertSame('scenario_'.$scenario->code, $sentMessage->sent_by_system_code);
+        $this->assertSame('Здравствуйте! Спасибо за отклик.', $sentMessage->text);
+        $this->assertSame(Message::TEXT_FORMAT_PLAIN_TEXT, $sentMessage->text_format);
+        $this->assertSame($message->id, $sentMessage->reply_to_message_id);
+        $this->assertSame('telegram_account_gateway', data_get($sentMessage->raw_payload, 'provider'));
+        $this->assertSame(TelegramAccountOutgoingMessage::STATUS_PENDING, data_get($sentMessage->raw_payload, 'delivery_status'));
+
+        $this->assertSame($channel->id, $outgoing->channel_id);
+        $this->assertSame($message->dialog_id, $outgoing->dialog_id);
+        $this->assertSame($sentMessage->id, $outgoing->message_id);
+        $this->assertSame('700014', $outgoing->external_chat_id);
+        $this->assertSame('Здравствуйте! Спасибо за отклик.', $outgoing->text);
+        $this->assertSame(Message::TEXT_FORMAT_PLAIN_TEXT, $outgoing->text_format);
+        $this->assertSame(TelegramAccountOutgoingMessage::STATUS_PENDING, $outgoing->status);
     }
 
     public function test_gateway_persists_pending_media_download_placeholder_for_account_message(): void
@@ -840,6 +982,70 @@ class TelegramAccountGatewayControllerTest extends TestCase
             'platform' => Channel::PLATFORM_TELEGRAM,
             'is_active' => true,
         ], $attributes));
+    }
+
+    private function createPublishedV3StartScenario(Channel $channel, string $keyword): Scenario
+    {
+        $scenario = Scenario::query()->create([
+            'code' => 'telegram_account_v3_start',
+            'name' => 'Telegram Account V3 Start',
+            'is_active' => true,
+            'is_archived' => false,
+        ]);
+
+        ScenarioVersion::query()->create([
+            'scenario_id' => $scenario->id,
+            'version_number' => 1,
+            'status' => ScenarioVersion::STATUS_PUBLISHED,
+            'schema_payload' => [
+                'version' => 3,
+                'builder_v3_runtime' => [
+                    'schema_version' => 3,
+                    'source_revision' => 'v3:test',
+                    'compiled_at' => now()->toISOString(),
+                    'entrypoints' => [
+                        [
+                            'block_id' => 'start',
+                            'channel_ids' => [$channel->id],
+                            'match' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
+                            'values' => [$keyword],
+                            'contact_phone_condition' => '',
+                            'dialog_phone_condition' => '',
+                            'expression' => '',
+                            'tag_condition' => [
+                                'enabled' => false,
+                                'mode' => 'has_all',
+                                'tag_ids' => [],
+                            ],
+                            'priority' => 10,
+                        ],
+                    ],
+                    'blocks' => [
+                        'start' => [
+                            'id' => 'start',
+                            'db_id' => 1,
+                            'kind' => 'state',
+                            'title' => 'Старт',
+                            'message' => [
+                                'text' => 'Здравствуйте! Спасибо за отклик.',
+                                'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                            ],
+                            'buttons' => [
+                                'placement' => 'auto',
+                                'rows' => [],
+                            ],
+                            'actions' => [],
+                            'wait_reply_edges' => [],
+                            'automatic_edges' => [],
+                            'action_result_edges' => [],
+                        ],
+                    ],
+                    'edges' => [],
+                ],
+            ],
+        ]);
+
+        return $scenario->fresh('publishedVersion');
     }
 
     /**
