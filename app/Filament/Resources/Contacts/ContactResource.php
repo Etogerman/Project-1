@@ -508,6 +508,7 @@ class ContactResource extends Resource
             ->deferColumnManager(false)
             ->reorderableColumns()
             ->defaultSort(fn (Builder $query, string $direction): Builder => static::applyLatestMessageActivitySort($query, $direction), 'desc')
+            ->persistFiltersInSession()
             ->persistSortInSession()
             ->emptyStateHeading('Контактов ещё нет')
             ->emptyStateDescription('Контакты появятся после первых входящих сообщений от внешней аудитории.')

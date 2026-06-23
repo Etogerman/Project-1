@@ -3875,6 +3875,8 @@ class FilamentContactsResourceTest extends TestCase
             ->assertCanSeeTableRecords([$contactWithPhone])
             ->assertCanNotSeeTableRecords([$contactWithoutPhone]);
 
+        $this->forgetContactsTableFiltersSession();
+
         Livewire::actingAs($admin)
             ->test(ManageContacts::class)
             ->filterTable('without_phone')
@@ -4891,6 +4893,46 @@ class FilamentContactsResourceTest extends TestCase
             ->assertCanSeeTableRecords([$secondContact, $firstContact], inOrder: true);
     }
 
+    public function test_contacts_table_persists_selected_filters_in_session(): void
+    {
+        config()->set('bitrix24.features.deals_sync_enabled', true);
+        config()->set('bitrix24.features.timeline_history_import_enabled', true);
+
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'role' => User::ROLE_SUPERADMIN,
+        ]);
+        $needsSync = $this->createBitrix24RescueReadyContact([
+            'name' => 'Нужна синхронизация Bitrix24',
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_NOT_SYNCED,
+        ]);
+        $alreadySynced = $this->createBitrix24RescueReadyContact([
+            'name' => 'Уже есть в Bitrix24',
+            'bitrix24_contact_id' => '71456',
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_SYNCED,
+            'bitrix24_deal_sync_status' => Contact::BITRIX24_DEAL_SYNC_STATUS_SYNCED,
+            'bitrix24_history_sync_status' => Contact::BITRIX24_HISTORY_SYNC_STATUS_SYNCED,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->filterTable('bitrix24_rescue_required')
+            ->assertSet('tableFilters.bitrix24_rescue_required.isActive', true)
+            ->assertCanSeeTableRecords([$needsSync])
+            ->assertCanNotSeeTableRecords([$alreadySynced]);
+
+        $this->assertTrue((bool) data_get(
+            session()->get('tables.'.md5(ManageContacts::class).'_filters'),
+            'bitrix24_rescue_required.isActive',
+        ));
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->assertSet('tableFilters.bitrix24_rescue_required.isActive', true)
+            ->assertCanSeeTableRecords([$needsSync])
+            ->assertCanNotSeeTableRecords([$alreadySynced]);
+    }
+
     public function test_contact_modal_can_assign_current_employee_via_responsible_dialog(): void
     {
         $admin = User::factory()->create([
@@ -5023,6 +5065,8 @@ class FilamentContactsResourceTest extends TestCase
             ->filterTable('assigned_to_me')
             ->assertCanSeeTableRecords([$myContact])
             ->assertCanNotSeeTableRecords([$otherContact, $freeContact]);
+
+        $this->forgetContactsTableFiltersSession();
 
         Livewire::actingAs($admin)
             ->test(ManageContacts::class)
@@ -5268,6 +5312,11 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertFalse($employee->canEditExistingContactPhones());
         $this->assertFalse($employee->canDeleteExistingContactPhones());
         $this->assertFalse($employee->canDeleteContacts());
+    }
+
+    private function forgetContactsTableFiltersSession(): void
+    {
+        session()->forget('tables.'.md5(ManageContacts::class).'_filters');
     }
 
     /**
