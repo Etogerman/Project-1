@@ -57,10 +57,14 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function stripTechnicalMarkdown(text) {
+function stripMarkdownCode(text) {
   return text
     .replace(/```[\s\S]*?```/g, " ")
-    .replace(/`[^`]*`/g, " ")
+    .replace(/`[^`]*`/g, " ");
+}
+
+function stripTechnicalMarkdown(text) {
+  return stripMarkdownCode(text)
     .replace(/https?:\/\/\S+/g, " ")
     .replace(/(?:^|\s)[\w./-]+\.[A-Za-z0-9]+(?=\s|$)/g, " ")
     .replace(ALLOWED_TECHNICAL_TERMS_PATTERN, " ");
@@ -100,7 +104,7 @@ function validatePublishLanguage({ title, body }) {
   const readableTitle = title.replace(/^\s*\[codex\]\s*/i, "").trim();
   const readableBody = stripTechnicalMarkdown(body);
   const readableText = `${stripTechnicalMarkdown(readableTitle)}\n${readableBody}`;
-  const englishHeadings = [...body.matchAll(ENGLISH_PR_HEADING_PATTERN)].map((match) => match[1]);
+  const englishHeadings = [...stripMarkdownCode(body).matchAll(ENGLISH_PR_HEADING_PATTERN)].map((match) => match[1]);
   const cyrillicCount = countMatches(readableText, /[А-Яа-яЁё]/g);
   const latinCount = countMatches(readableText, /[A-Za-z]/g);
 
@@ -182,7 +186,7 @@ function evaluateReadiness({ baseRef, title = "", body = "", files = [], isDraft
     readinessIssues.push("Поле `Блокеры:` должно быть `отсутствуют` перед Ready.");
   }
 
-  if (fields.authorSelfCheck && !/^выполнен[ао]?$/i.test(fields.authorSelfCheck)) {
+  if (fields.authorSelfCheck && !/^выполнена$/i.test(fields.authorSelfCheck)) {
     readinessIssues.push("Поле `Авторская самопроверка:` должно быть `выполнена`.");
   }
 
@@ -211,15 +215,15 @@ function evaluateReadiness({ baseRef, title = "", body = "", files = [], isDraft
     readinessIssues.push("Runtime PR не может использовать `документационный путь`.");
   }
 
-  if (fields.localMvp && !/^(принят|принята|не требуется)$/i.test(fields.localMvp)) {
+  if (fields.localMvp && !/^(принят|не требуется)$/i.test(fields.localMvp)) {
     readinessIssues.push("Поле `Локальный MVP:` должно быть `принят` или `не требуется` перед Ready.");
   }
 
-  if (fields.operatorAcceptance && !/^(принят|принята|не требуется)$/i.test(fields.operatorAcceptance)) {
+  if (fields.operatorAcceptance && !/^(принята|не требуется)$/i.test(fields.operatorAcceptance)) {
     readinessIssues.push("Поле `Операторская приёмка:` должно быть `принята` или `не требуется` перед Ready.");
   }
 
-  if (fields.acceptedRisk && !/^(отсутствует|принят[ао]?:\s*.+)$/i.test(fields.acceptedRisk)) {
+  if (fields.acceptedRisk && !/^(отсутствует|принят:\s*.+)$/i.test(fields.acceptedRisk)) {
     readinessIssues.push("Поле `Принятый риск:` должно быть `отсутствует` или `принят: <краткая причина>`.");
   }
 
@@ -341,6 +345,17 @@ function runSelfTest() {
     [],
   );
 
+  assert.deepEqual(
+    evaluateReadiness({
+      baseRef: "main",
+      title: "[codex] Уточнить процесс ревью",
+      body: `${readyProcessBody}\n\nПример markdown:\n\n\`\`\`md\n## Summary\n\n- Example text.\n\`\`\``,
+      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
+      isDraft: false,
+    }).failures,
+    [],
+  );
+
   assert.match(
     evaluateReadiness({
       baseRef: "main",
@@ -400,6 +415,50 @@ function runSelfTest() {
       isDraft: true,
     }).warnings.join("\n"),
     /Блокеры/,
+  );
+
+  assert.match(
+    evaluateReadiness({
+      baseRef: "main",
+      title: "[codex] Уточнить процесс ревью",
+      body: readyProcessBody.replace("Авторская самопроверка: выполнена", "Авторская самопроверка: выполнено"),
+      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
+      isDraft: false,
+    }).failures.join("\n"),
+    /Авторская самопроверка/,
+  );
+
+  assert.match(
+    evaluateReadiness({
+      baseRef: "main",
+      title: "[codex] Уточнить процесс ревью",
+      body: readyProcessBody.replace("Локальный MVP: не требуется", "Локальный MVP: принята"),
+      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
+      isDraft: false,
+    }).failures.join("\n"),
+    /Локальный MVP/,
+  );
+
+  assert.match(
+    evaluateReadiness({
+      baseRef: "main",
+      title: "[codex] Уточнить процесс ревью",
+      body: readyProcessBody.replace("Операторская приёмка: не требуется", "Операторская приёмка: принят"),
+      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
+      isDraft: false,
+    }).failures.join("\n"),
+    /Операторская приёмка/,
+  );
+
+  assert.match(
+    evaluateReadiness({
+      baseRef: "main",
+      title: "[codex] Уточнить процесс ревью",
+      body: readyProcessBody.replace("Принятый риск: отсутствует", "Принятый риск: принято: временно"),
+      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
+      isDraft: false,
+    }).failures.join("\n"),
+    /Принятый риск/,
   );
 
   assert.match(
