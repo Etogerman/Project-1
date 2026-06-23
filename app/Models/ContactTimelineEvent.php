@@ -16,6 +16,8 @@ class ContactTimelineEvent extends Model
 
     public const EVENT_MERGE_NAME_CONFLICT = 'contact.merge_name_conflict';
 
+    public const EVENT_BITRIX24_RESCUE_SYNC_REQUESTED = 'bitrix24.rescue_sync_requested';
+
     /**
      * @var list<string>
      */

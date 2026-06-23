@@ -139,6 +139,7 @@ class BuildContactHistoryTimelineAction
                 ContactTimelineEvent::EVENT_OPERATOR_COMMENT => $this->buildOperatorCommentItem($timelineEvent),
                 ContactTimelineEvent::EVENT_FIRST_NAME_CHANGED => $this->buildFirstNameChangedItem($timelineEvent),
                 ContactTimelineEvent::EVENT_MERGE_NAME_CONFLICT => $this->buildMergeNameConflictItem($timelineEvent),
+                ContactTimelineEvent::EVENT_BITRIX24_RESCUE_SYNC_REQUESTED => $this->buildBitrix24RescueSyncRequestedItem($timelineEvent),
                 default => null,
             };
 
@@ -432,6 +433,66 @@ class BuildContactHistoryTimelineAction
             body: $body,
             timestamp: $timelineEvent->occurred_at,
             sortPriority: 70,
+            sortId: (int) $timelineEvent->id,
+        );
+    }
+
+    /**
+     * @return array{
+     *     type:string,
+     *     title:string,
+     *     description:?string,
+     *     body:?string,
+     *     actorName:?string,
+     *     timestampLabel:string,
+     *     sortTimestamp:int,
+     *     sortPriority:int,
+     *     sortId:int
+     * }
+     */
+    private function buildBitrix24RescueSyncRequestedItem(ContactTimelineEvent $timelineEvent): array
+    {
+        $payload = is_array($timelineEvent->payload) ? $timelineEvent->payload : [];
+        $status = $this->normalizeTimelineValue($payload['result_status'] ?? null) ?? 'skipped';
+        $description = match ($status) {
+            'queued' => 'Ручная синхронизация поставлена в очередь.',
+            'needs_manual_review' => 'Ручная синхронизация остановлена: нужна ручная проверка.',
+            'not_ready' => 'Ручная синхронизация не запущена: контакт не готов.',
+            'already_pending' => 'Ручная синхронизация не запущена: задача уже в очереди.',
+            'synced' => 'Ручная синхронизация не нужна: контакт уже синхронизирован.',
+            default => 'Ручная синхронизация не запущена.',
+        };
+
+        $bodyLines = [];
+
+        foreach ([
+            'queued_contact' => 'Контакт поставлен в очередь',
+            'queued_deal' => 'Сделка поставлена в очередь',
+            'queued_history' => 'История поставлена в очередь',
+            'already_pending' => 'Уже была задача в очереди',
+            'needs_manual_review' => 'Нужна ручная проверка',
+        ] as $key => $label) {
+            if (($payload[$key] ?? false) === true) {
+                $bodyLines[] = $label;
+            }
+        }
+
+        $reasons = is_array($payload['skipped_reasons'] ?? null)
+            ? array_values(array_filter($payload['skipped_reasons'], 'is_string'))
+            : [];
+
+        if ($reasons !== []) {
+            $bodyLines[] = 'Причины: '.implode(', ', $reasons);
+        }
+
+        return $this->makeItem(
+            type: ContactTimelineEvent::EVENT_BITRIX24_RESCUE_SYNC_REQUESTED,
+            title: 'Запрошена ручная синхронизация Bitrix24',
+            description: $description,
+            body: $bodyLines === [] ? null : implode(PHP_EOL, $bodyLines),
+            actorName: $this->formatCommentActorName($timelineEvent),
+            timestamp: $timelineEvent->occurred_at,
+            sortPriority: 75,
             sortId: (int) $timelineEvent->id,
         );
     }

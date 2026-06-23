@@ -5,8 +5,8 @@ namespace App\Jobs;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Contact;
 use App\Models\Dialog;
-use App\Services\Bitrix24\IsDialogBitrix24OpenLinesRetryRequiredAction;
 use App\Services\Bitrix24\IsContactReadyForBitrix24SyncAction;
+use App\Services\Bitrix24\IsDialogBitrix24OpenLinesRetryRequiredAction;
 use App\Services\Bitrix24\LogBitrix24ApiCallAction;
 use App\Services\Bitrix24\LogBitrix24RawContactPhoneSnapshotAction;
 use App\Services\Bitrix24\QueueBitrix24DealSyncAction;
@@ -28,12 +28,19 @@ class SyncContactToBitrix24Job implements ShouldQueue
     use Queueable;
 
     public int $timeout = 60;
+
     public int $tries = 3;
+
     public int $backoff = 60;
+
+    public bool $suppressDialogContinuation = false;
 
     public function __construct(
         public readonly int $contactId,
-    ) {}
+        bool $suppressDialogContinuation = false,
+    ) {
+        $this->suppressDialogContinuation = $suppressDialogContinuation;
+    }
 
     /**
      * @return array<int, object>
@@ -147,7 +154,7 @@ class SyncContactToBitrix24Job implements ShouldQueue
             $logBitrix24RawContactPhoneSnapshotAction->handle($rootContact, 'after_contact_sync');
         }
 
-        if ($becameLinkedAfterSync || $hasPendingDialogs) {
+        if (! $this->suppressDialogContinuation && ($becameLinkedAfterSync || $hasPendingDialogs)) {
             $queueMissedBitrix24OpenLinesRetryAction->handle($rootContact);
 
             $pendingDialogs->each(function (Dialog $dialog) use (

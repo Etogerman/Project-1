@@ -182,6 +182,70 @@
             </div>
         @elseif ($activeTab === 'bitrix24')
             <div data-role="contact-bitrix-tab" class="ac-contact-page__stack">
+                @if (is_array($bitrixRescueSyncViewData ?? null))
+                    <section
+                        data-role="contact-bitrix-rescue-sync"
+                        data-tone="{{ $bitrixRescueSyncViewData['statusTone'] ?? 'warning' }}"
+                        data-auto-refresh="{{ ($bitrixRescueSyncViewData['shouldAutoRefresh'] ?? false) ? 'true' : 'false' }}"
+                        @if ($bitrixRescueSyncViewData['shouldAutoRefresh'] ?? false)
+                            wire:poll.2s.visible="refreshBitrix24SyncState"
+                        @endif
+                        @class([
+                            'ac-surface',
+                            'ac-surface--secondary',
+                            'ac-bitrix-rescue-sync',
+                            'ac-bitrix-rescue-sync--compact' => $bitrixRescueSyncViewData['compact'] ?? false,
+                        ])
+                    >
+                        <div class="ac-surface__header">
+                            <div class="ac-surface__title-group">
+                                <p class="ac-surface__eyebrow">Битрикс24</p>
+                                <h3 class="ac-surface__title">Ручная синхронизация</h3>
+                                <p class="ac-surface__subtitle" data-role="contact-bitrix-rescue-sync-status">
+                                    {{ $bitrixRescueSyncViewData['statusLabel'] }}
+                                </p>
+                            </div>
+
+                            @if ($bitrixRescueSyncViewData['canRequest'])
+                                <button
+                                    type="button"
+                                    data-role="contact-bitrix-rescue-sync-button"
+                                    wire:click="requestBitrix24RescueSync"
+                                    wire:loading.attr="disabled"
+                                    wire:target="requestBitrix24RescueSync"
+                                    @disabled(! $bitrixRescueSyncViewData['isActionable'])
+                                    class="ac-button ac-button--primary"
+                                >
+                                    <span wire:loading.remove wire:target="requestBitrix24RescueSync">
+                                        Синхронизировать
+                                    </span>
+                                    <span wire:loading wire:target="requestBitrix24RescueSync">
+                                        Запускаем...
+                                    </span>
+                                </button>
+                            @endif
+                        </div>
+
+                        @if (! ($bitrixRescueSyncViewData['compact'] ?? false))
+                            <p class="ac-copy" data-role="contact-bitrix-rescue-sync-description">
+                                {{ $bitrixRescueSyncViewData['description'] }}
+                            </p>
+                        @endif
+
+                        @if (! ($bitrixRescueSyncViewData['compact'] ?? false) && ! empty($bitrixRescueSyncViewData['reasons']))
+                            <p class="ac-copy" data-role="contact-bitrix-rescue-sync-reasons">
+                                {{ implode(' · ', array_slice($bitrixRescueSyncViewData['reasons'], 0, 4)) }}
+                            </p>
+                        @endif
+
+                        @if (! ($bitrixRescueSyncViewData['compact'] ?? false) && ! empty($bitrixRescueSyncViewData['errors']))
+                            <p class="ac-copy" data-role="contact-bitrix-rescue-sync-errors">
+                                {{ implode(' · ', array_slice($bitrixRescueSyncViewData['errors'], 0, 3)) }}
+                            </p>
+                        @endif
+                    </section>
+                @endif
+
                 @foreach ($bitrixSections as $section)
                     <section class="ac-surface ac-surface--secondary">
                         <div class="ac-surface__header ac-surface__header--centered">

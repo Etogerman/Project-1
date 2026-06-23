@@ -17,6 +17,7 @@ use App\Models\FieldDictionaryField;
 use App\Models\Message;
 use App\Models\Tag;
 use App\Models\User;
+use App\Services\Bitrix24\QueueBitrix24RescueSyncAction;
 use App\Services\Contacts\BuildContactHistoryTimelineAction;
 use App\Services\Contacts\DeleteContactAction;
 use App\Services\Contacts\FindOpenCrossChannelIdentityAmbiguityReviewForContactsAction;
@@ -28,10 +29,12 @@ use App\Services\Dialogs\MessageChronology;
 use BackedEnum;
 use Closure;
 use Filament\Actions\Action;
+use Filament\Actions\BulkAction;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\ViewAction;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Infolists\Components\ViewEntry;
+use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
@@ -48,6 +51,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\HtmlString;
 use JsonException;
+use Throwable;
 use UnitEnum;
 
 class ContactResource extends Resource
@@ -475,6 +479,9 @@ class ContactResource extends Resource
                 Filter::make('without_phone')
                     ->label('Без телефона')
                     ->query(fn (Builder $query): Builder => $query->whereDoesntHave('phoneNumbers')),
+                Filter::make('bitrix24_rescue_required')
+                    ->label('Требуют синхронизации Bitrix24')
+                    ->query(fn (Builder $query): Builder => static::applyBitrix24RescueSyncRequiredFilter($query)),
                 SelectFilter::make('tags')
                     ->label('Теги')
                     ->multiple()
@@ -555,7 +562,20 @@ class ContactResource extends Resource
                         return true;
                     }),
             ])
-            ->toolbarActions([]);
+            ->selectable()
+            ->toolbarActions([
+                BulkAction::make('queueBitrix24RescueSync')
+                    ->label('Поставить выбранных в очередь Bitrix24')
+                    ->icon(Heroicon::OutlinedArrowPath)
+                    ->color('primary')
+                    ->requiresConfirmation()
+                    ->modalHeading('Поставить выбранных в очередь Bitrix24')
+                    ->modalDescription('Готовые контакты будут поставлены в очередь без сообщений клиентам. Контакты на ручной проверке и неготовые контакты будут пропущены.')
+                    ->visible(fn (): bool => static::canCurrentUserRequestBitrix24RescueSync())
+                    ->action(function (Collection $records): void {
+                        static::queueSelectedContactsForBitrix24RescueSync($records);
+                    }),
+            ]);
     }
 
     public static function getPages(): array
@@ -786,6 +806,190 @@ class ContactResource extends Resource
         }
 
         return $query->where('assigned_user_id', $currentUserId);
+    }
+
+    protected static function applyBitrix24RescueSyncRequiredFilter(Builder $query): Builder
+    {
+        $dealsSyncEnabled = (bool) config('bitrix24.features.deals_sync_enabled', false);
+        $historySyncEnabled = (bool) config('bitrix24.features.timeline_history_import_enabled', false);
+
+        return $query
+            ->whereNull('contacts.merged_into_contact_id')
+            ->where('data_collection_status', Contact::DATA_COLLECTION_STATUS_COMPLETED)
+            ->whereNotNull('first_name')
+            ->where('first_name', '!=', '')
+            ->whereNotNull('country')
+            ->where('country', '!=', '')
+            ->whereNotNull('city')
+            ->where('city', '!=', '')
+            ->whereNotNull('age_range')
+            ->where('age_range', '!=', '')
+            ->whereHas('phoneNumbers')
+            ->whereHas('identities')
+            ->where(function (Builder $query) use ($dealsSyncEnabled, $historySyncEnabled): void {
+                $query
+                    ->where(function (Builder $query): void {
+                        $query
+                            ->whereIn('bitrix24_sync_status', [
+                                Contact::BITRIX24_SYNC_STATUS_NOT_SYNCED,
+                                Contact::BITRIX24_SYNC_STATUS_FAILED,
+                                Contact::BITRIX24_SYNC_STATUS_PENDING_REVIEW,
+                            ])
+                            ->where('bitrix24_sync_pending', false);
+                    })
+                    ->orWhere(function (Builder $query) use ($dealsSyncEnabled): void {
+                        if (! $dealsSyncEnabled) {
+                            $query->whereRaw('1 = 0');
+
+                            return;
+                        }
+
+                        $query
+                            ->whereNotNull('bitrix24_contact_id')
+                            ->where('bitrix24_contact_id', '!=', '')
+                            ->where('bitrix24_sync_status', Contact::BITRIX24_SYNC_STATUS_SYNCED)
+                            ->where('bitrix24_sync_pending', false)
+                            ->whereIn('bitrix24_deal_sync_status', [
+                                Contact::BITRIX24_DEAL_SYNC_STATUS_NOT_SYNCED,
+                                Contact::BITRIX24_DEAL_SYNC_STATUS_FAILED,
+                                Contact::BITRIX24_DEAL_SYNC_STATUS_PENDING_REVIEW,
+                            ])
+                            ->where('bitrix24_deal_sync_pending', false);
+                    })
+                    ->orWhere(function (Builder $query) use ($historySyncEnabled): void {
+                        if (! $historySyncEnabled) {
+                            $query->whereRaw('1 = 0');
+
+                            return;
+                        }
+
+                        $query
+                            ->whereNotNull('bitrix24_contact_id')
+                            ->where('bitrix24_contact_id', '!=', '')
+                            ->where('bitrix24_sync_status', Contact::BITRIX24_SYNC_STATUS_SYNCED)
+                            ->where('bitrix24_sync_pending', false)
+                            ->whereIn('bitrix24_history_sync_status', [
+                                Contact::BITRIX24_HISTORY_SYNC_STATUS_NOT_SYNCED,
+                                Contact::BITRIX24_HISTORY_SYNC_STATUS_FAILED,
+                            ])
+                            ->where('bitrix24_history_sync_pending', false);
+                    });
+            });
+    }
+
+    protected static function canCurrentUserRequestBitrix24RescueSync(): bool
+    {
+        $user = auth()->user();
+
+        return $user instanceof User
+            && $user->hasRolePermission('bitrix24.edit');
+    }
+
+    protected static function queueSelectedContactsForBitrix24RescueSync(Collection $records): void
+    {
+        $user = auth()->user();
+
+        if (! $user instanceof User || ! $user->hasRolePermission('bitrix24.edit')) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось запустить синхронизацию')
+                ->body('Для ручной синхронизации с Bitrix24 нужно право bitrix24.edit.')
+                ->send();
+
+            return;
+        }
+
+        $summary = [
+            'queued' => 0,
+            'already_pending' => 0,
+            'not_ready' => 0,
+            'needs_manual_review' => 0,
+            'synced' => 0,
+            'feature_disabled' => 0,
+            'skipped' => 0,
+            'errors' => 0,
+        ];
+
+        $details = [];
+
+        foreach ($records as $record) {
+            if (! $record instanceof Contact) {
+                continue;
+            }
+
+            try {
+                $result = app(QueueBitrix24RescueSyncAction::class)->handle($record, $user);
+                $summary[$result->status] = ($summary[$result->status] ?? 0) + 1;
+
+                if (
+                    ! $result->queuedContact
+                    && ! $result->queuedDeal
+                    && ! $result->queuedHistory
+                    && (
+                        in_array('deals_sync_disabled', $result->skippedReasons, true)
+                        || in_array('history_sync_disabled', $result->skippedReasons, true)
+                    )
+                ) {
+                    $summary['feature_disabled']++;
+                }
+            } catch (Throwable $throwable) {
+                $summary['errors']++;
+
+                if (count($details) < 3) {
+                    $details[] = '#'.$record->id.': '.$throwable->getMessage();
+                }
+            }
+        }
+
+        $lines = static::formatBitrix24RescueSyncBulkSummary($summary);
+
+        if ($details !== []) {
+            $lines[] = 'Ошибки: '.implode(' · ', $details);
+        }
+
+        $notification = Notification::make()
+            ->title($summary['errors'] > 0 ? 'Синхронизация выполнена частично' : 'Синхронизация поставлена в очередь')
+            ->body(implode("\n", $lines));
+
+        if ($summary['errors'] > 0) {
+            $notification->warning();
+        } elseif (($summary['queued'] ?? 0) > 0) {
+            $notification->success();
+        } else {
+            $notification->warning();
+        }
+
+        $notification->send();
+    }
+
+    /**
+     * @param  array<string, int>  $summary
+     * @return list<string>
+     */
+    protected static function formatBitrix24RescueSyncBulkSummary(array $summary): array
+    {
+        $labels = [
+            'queued' => 'Поставлено в очередь',
+            'already_pending' => 'Уже было в очереди',
+            'not_ready' => 'Не готово',
+            'needs_manual_review' => 'Нужна ручная проверка',
+            'synced' => 'Уже полностью синхронизировано',
+            'feature_disabled' => 'Функция отключена',
+            'skipped' => 'Пропущено',
+            'errors' => 'Ошибки',
+        ];
+
+        $lines = [];
+
+        foreach ($labels as $key => $label) {
+            $count = (int) ($summary[$key] ?? 0);
+
+            if ($count > 0) {
+                $lines[] = $label.': '.$count;
+            }
+        }
+
+        return $lines === [] ? ['Нет выбранных контактов для обработки.'] : $lines;
     }
 
     protected static function applyTableSearch(Builder $query, string $search): Builder

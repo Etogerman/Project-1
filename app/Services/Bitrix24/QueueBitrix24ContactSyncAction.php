@@ -14,7 +14,7 @@ class QueueBitrix24ContactSyncAction
         private readonly IsContactReadyForBitrix24SyncAction $isContactReadyForBitrix24SyncAction,
     ) {}
 
-    public function handle(Contact|int $contact): Bitrix24ContactSyncQueueResultData
+    public function handle(Contact|int $contact, bool $suppressDialogContinuation = false): Bitrix24ContactSyncQueueResultData
     {
         $rootContact = $this->resolveRootContactAction->handle($contact);
         $ready = $this->isContactReadyForBitrix24SyncAction->handle($rootContact);
@@ -47,7 +47,7 @@ class QueueBitrix24ContactSyncAction
 
         $rootContact->forceFill($attributes)->save();
 
-        SyncContactToBitrix24Job::dispatch($rootContact->id);
+        SyncContactToBitrix24Job::dispatch($rootContact->id, $suppressDialogContinuation);
 
         return new Bitrix24ContactSyncQueueResultData(
             queued: true,
