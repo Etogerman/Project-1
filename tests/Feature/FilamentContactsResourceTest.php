@@ -6,7 +6,11 @@ use App\Filament\Resources\Contacts\ContactResource;
 use App\Filament\Resources\Contacts\Pages\ManageContacts;
 use App\Filament\Resources\Contacts\Pages\ViewContact;
 use App\Filament\Resources\Dialogs\DialogResource;
+use App\Jobs\EnsureBitrix24DealJob;
 use App\Jobs\ProcessDataCollectionQuestionJob;
+use App\Jobs\SyncChatHistoryToBitrix24Job;
+use App\Jobs\SyncContactToBitrix24Job;
+use App\Models\Bitrix24SyncLog;
 use App\Models\BotConstructorArrow;
 use App\Models\BotConstructorArrowRun;
 use App\Models\BotConstructorBlock;
@@ -44,10 +48,12 @@ use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Queue;
 use Livewire\Livewire;
 use ReflectionMethod;
+use Tests\Feature\Concerns\InteractsWithBitrix24RuntimeProfile;
 use Tests\TestCase;
 
 class FilamentContactsResourceTest extends TestCase
 {
+    use InteractsWithBitrix24RuntimeProfile;
     use RefreshDatabase;
 
     protected function setUp(): void
@@ -646,6 +652,452 @@ class FilamentContactsResourceTest extends TestCase
         $component
             ->assertSee('MAX Support')
             ->assertDontSee('История событий контакта будет подключена следующим этапом.');
+    }
+
+    public function test_contact_view_bitrix_tab_links_contact_and_deal_to_current_bitrix_portal(): void
+    {
+        $this->makeProfileLinkedActiveBitrix24Connection([
+            'portal_domain' => 'stagecrm.fvds.ru',
+            'client_endpoint' => 'https://stagecrm.fvds.ru/rest/',
+        ], [
+            'portal_domain' => 'stagecrm.fvds.ru',
+        ]);
+
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'bitrix24_contact_id' => '71455',
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_SYNCED,
+            'bitrix24_deal_id' => '136886',
+            'bitrix24_deal_sync_status' => Contact::BITRIX24_DEAL_SYNC_STATUS_SYNCED,
+        ]);
+
+        $component = Livewire::actingAs($admin)
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->set('activeTab', ViewContact::TAB_BITRIX24)
+            ->assertSee('71455')
+            ->assertSee('136886')
+            ->assertSee('Ссылка на карточку контакта')
+            ->assertSee('Ссылка на сделку')
+            ->assertSee('href="https://stagecrm.fvds.ru/crm/contact/details/71455/"', false)
+            ->assertSee('href="https://stagecrm.fvds.ru/crm/deal/details/136886/"', false)
+            ->assertSee('title="Открыть контакт в Bitrix24"', false)
+            ->assertSee('title="Открыть сделку в Bitrix24"', false)
+            ->assertSee('target="_blank"', false)
+            ->assertSee('rel="noopener noreferrer"', false)
+            ->assertSee('aria-label="Открыть контакт в Bitrix24"', false)
+            ->assertSee('aria-label="Открыть сделку в Bitrix24"', false);
+
+        $html = $component->html();
+
+        $this->assertMatchesRegularExpression(
+            '#data-role="contact-bitrix24-contact-link"[^>]*>\s*https://stagecrm\.fvds\.ru/crm/contact/details/71455/\s*</a>#',
+            $html,
+        );
+        $this->assertMatchesRegularExpression(
+            '#data-role="contact-bitrix24-deal-link"[^>]*>\s*https://stagecrm\.fvds\.ru/crm/deal/details/136886/\s*</a>#',
+            $html,
+        );
+    }
+
+    public function test_contact_view_bitrix_rescue_panel_is_compact_when_fully_synced(): void
+    {
+        $this->makeProfileLinkedActiveBitrix24Connection([
+            'portal_domain' => 'stagecrm.fvds.ru',
+            'client_endpoint' => 'https://stagecrm.fvds.ru/rest/',
+        ], [
+            'portal_domain' => 'stagecrm.fvds.ru',
+        ]);
+
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'role' => User::ROLE_SUPERADMIN,
+        ]);
+        $contact = $this->createBitrix24RescueReadyContact([
+            'bitrix24_contact_id' => '71455',
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_SYNCED,
+            'bitrix24_sync_pending' => false,
+            'bitrix24_deal_id' => '136886',
+            'bitrix24_deal_sync_status' => Contact::BITRIX24_DEAL_SYNC_STATUS_SYNCED,
+            'bitrix24_deal_sync_pending' => false,
+            'bitrix24_history_sync_status' => Contact::BITRIX24_HISTORY_SYNC_STATUS_SYNCED,
+            'bitrix24_history_sync_pending' => false,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->set('activeTab', ViewContact::TAB_BITRIX24)
+            ->assertSee('Bitrix24 синхронизирован')
+            ->assertSee('ac-bitrix-rescue-sync--compact', false)
+            ->assertDontSee('data-role="contact-bitrix-rescue-sync-description"', false)
+            ->assertDontSee('data-role="contact-bitrix-rescue-sync-reasons"', false)
+            ->assertSee('data-auto-refresh="false"', false);
+    }
+
+    public function test_contact_view_bitrix_tab_skips_external_links_without_active_bitrix_connection(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $contact = Contact::factory()->create([
+            'bitrix24_contact_id' => '71455',
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_SYNCED,
+            'bitrix24_deal_id' => '136886',
+            'bitrix24_deal_sync_status' => Contact::BITRIX24_DEAL_SYNC_STATUS_SYNCED,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->set('activeTab', ViewContact::TAB_BITRIX24)
+            ->assertSee('71455')
+            ->assertSee('136886')
+            ->assertDontSee('Ссылка на карточку контакта')
+            ->assertDontSee('Ссылка на сделку')
+            ->assertDontSee('Открыть контакт в Bitrix24')
+            ->assertDontSee('Открыть сделку в Bitrix24')
+            ->assertDontSee('https://')
+            ->assertDontSee('crm/contact/details', false)
+            ->assertDontSee('crm/deal/details', false);
+    }
+
+    public function test_admin_can_request_quiet_bitrix24_rescue_sync_from_contact_view(): void
+    {
+        Queue::fake();
+
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'role' => User::ROLE_SUPERADMIN,
+        ]);
+        $contact = $this->createBitrix24RescueReadyContact([
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_NOT_SYNCED,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->set('activeTab', ViewContact::TAB_BITRIX24)
+            ->assertSee('Ручная синхронизация')
+            ->assertSee('Можно синхронизировать контакт')
+            ->assertSee('data-role="contact-bitrix-rescue-sync-button"', false)
+            ->call('requestBitrix24RescueSync')
+            ->assertHasNoErrors()
+            ->assertSee('Синхронизация выполняется')
+            ->assertSee('data-auto-refresh="true"', false)
+            ->assertSee('wire:poll.2s.visible="refreshBitrix24SyncState"', false)
+            ->assertSee('В очереди');
+
+        $contact->refresh();
+
+        $this->assertTrue($contact->bitrix24_sync_pending);
+        $this->assertSame(Contact::BITRIX24_SYNC_STATUS_PENDING, $contact->bitrix24_sync_status);
+
+        Queue::assertPushed(SyncContactToBitrix24Job::class, function (SyncContactToBitrix24Job $job) use ($contact): bool {
+            return $job->contactId === $contact->id
+                && $job->suppressDialogContinuation === true;
+        });
+        $this->assertDatabaseHas('contact_timeline_events', [
+            'contact_id' => $contact->id,
+            'event_type' => ContactTimelineEvent::EVENT_BITRIX24_RESCUE_SYNC_REQUESTED,
+            'actor_user_id' => $admin->id,
+        ]);
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'rescue_sync_requested',
+            'entity_type' => 'contact',
+            'entity_id' => (string) $contact->id,
+            'status' => Bitrix24SyncLog::STATUS_SUCCESS,
+        ]);
+    }
+
+    public function test_bitrix24_rescue_sync_auto_refresh_shows_completed_ids(): void
+    {
+        Queue::fake();
+
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'role' => User::ROLE_SUPERADMIN,
+        ]);
+        $contact = $this->createBitrix24RescueReadyContact([
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_NOT_SYNCED,
+        ]);
+
+        $component = Livewire::actingAs($admin)
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->set('activeTab', ViewContact::TAB_BITRIX24)
+            ->call('requestBitrix24RescueSync')
+            ->assertHasNoErrors()
+            ->assertSee('Синхронизация выполняется')
+            ->assertSee('data-auto-refresh="true"', false)
+            ->assertSee('wire:poll.2s.visible="refreshBitrix24SyncState"', false);
+
+        DB::table('contacts')
+            ->where('id', $contact->id)
+            ->update([
+                'bitrix24_contact_id' => '71455',
+                'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_SYNCED,
+                'bitrix24_sync_pending' => false,
+                'bitrix24_last_synced_at' => now(),
+                'bitrix24_linked_at' => now(),
+                'bitrix24_deal_id' => '136886',
+                'bitrix24_deal_sync_status' => Contact::BITRIX24_DEAL_SYNC_STATUS_SYNCED,
+                'bitrix24_deal_sync_pending' => false,
+                'bitrix24_deal_last_synced_at' => now(),
+                'bitrix24_deal_linked_at' => now(),
+                'bitrix24_history_sync_status' => Contact::BITRIX24_HISTORY_SYNC_STATUS_SYNCED,
+                'bitrix24_history_sync_pending' => false,
+                'bitrix24_history_last_synced_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+        $component
+            ->call('refreshBitrix24SyncState')
+            ->assertHasNoErrors()
+            ->assertSee('Bitrix24 синхронизирован')
+            ->assertSee('71455')
+            ->assertSee('136886')
+            ->assertSee('data-auto-refresh="false"', false)
+            ->assertDontSee('wire:poll.2s.visible="refreshBitrix24SyncState"', false);
+    }
+
+    public function test_employee_without_bitrix24_edit_cannot_request_rescue_sync_from_contact_view(): void
+    {
+        Queue::fake();
+
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+        $contact = $this->createBitrix24RescueReadyContact([
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_NOT_SYNCED,
+        ]);
+
+        Livewire::actingAs($employee)
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->set('activeTab', ViewContact::TAB_BITRIX24)
+            ->assertSee('Ручная синхронизация')
+            ->assertDontSee('data-role="contact-bitrix-rescue-sync-button"', false)
+            ->call('requestBitrix24RescueSync')
+            ->assertHasNoErrors();
+
+        $contact->refresh();
+
+        $this->assertFalse($contact->bitrix24_sync_pending);
+        Queue::assertNothingPushed();
+        $this->assertDatabaseMissing('contact_timeline_events', [
+            'contact_id' => $contact->id,
+            'event_type' => ContactTimelineEvent::EVENT_BITRIX24_RESCUE_SYNC_REQUESTED,
+        ]);
+        $this->assertDatabaseMissing('bitrix24_sync_logs', [
+            'operation' => 'rescue_sync_requested',
+            'entity_type' => 'contact',
+            'entity_id' => (string) $contact->id,
+        ]);
+    }
+
+    public function test_contacts_table_can_filter_bitrix24_rescue_required_contacts(): void
+    {
+        config()->set('bitrix24.features.deals_sync_enabled', true);
+        config()->set('bitrix24.features.timeline_history_import_enabled', true);
+
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'role' => User::ROLE_SUPERADMIN,
+        ]);
+        $needsContactSync = $this->createBitrix24RescueReadyContact([
+            'name' => 'Нужен контакт sync',
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_NOT_SYNCED,
+        ]);
+        $needsDealAndHistory = $this->createBitrix24RescueReadyContact([
+            'name' => 'Нужны сделка и история',
+            'bitrix24_contact_id' => '71455',
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_SYNCED,
+            'bitrix24_deal_sync_status' => Contact::BITRIX24_DEAL_SYNC_STATUS_NOT_SYNCED,
+            'bitrix24_history_sync_status' => Contact::BITRIX24_HISTORY_SYNC_STATUS_FAILED,
+        ]);
+        $needsManualReview = $this->createBitrix24RescueReadyContact([
+            'name' => 'Нужна ручная проверка',
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_PENDING_REVIEW,
+        ]);
+        $synced = $this->createBitrix24RescueReadyContact([
+            'name' => 'Уже синхронизирован',
+            'bitrix24_contact_id' => '71456',
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_SYNCED,
+            'bitrix24_deal_sync_status' => Contact::BITRIX24_DEAL_SYNC_STATUS_SYNCED,
+            'bitrix24_history_sync_status' => Contact::BITRIX24_HISTORY_SYNC_STATUS_SYNCED,
+        ]);
+        $notReady = Contact::factory()->create([
+            'name' => 'Анкета не готова',
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
+            'first_name' => null,
+            'country' => 'США',
+            'city' => 'Сиэтл',
+            'age_range' => '18_23',
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_NOT_SYNCED,
+        ]);
+        $emptyNormalizedPhone = $this->createBitrix24RescueReadyContact([
+            'name' => 'Телефон без нормализации',
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_NOT_SYNCED,
+        ]);
+        $emptyNormalizedPhone->phoneNumbers()->update(['phone_normalized' => '']);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->assertTableFilterExists('bitrix24_rescue_required')
+            ->filterTable('bitrix24_rescue_required')
+            ->assertCanSeeTableRecords([$needsContactSync, $needsDealAndHistory, $needsManualReview])
+            ->assertCanNotSeeTableRecords([$synced, $notReady, $emptyNormalizedPhone]);
+    }
+
+    public function test_admin_can_bulk_queue_bitrix24_rescue_sync_from_contacts_table(): void
+    {
+        config()->set('bitrix24.features.deals_sync_enabled', true);
+        config()->set('bitrix24.features.timeline_history_import_enabled', true);
+        Queue::fake();
+
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'role' => User::ROLE_SUPERADMIN,
+        ]);
+        $needsContactSync = $this->createBitrix24RescueReadyContact([
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_NOT_SYNCED,
+        ]);
+        $needsDealAndHistory = $this->createBitrix24RescueReadyContact([
+            'bitrix24_contact_id' => '71455',
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_SYNCED,
+            'bitrix24_deal_sync_status' => Contact::BITRIX24_DEAL_SYNC_STATUS_NOT_SYNCED,
+            'bitrix24_history_sync_status' => Contact::BITRIX24_HISTORY_SYNC_STATUS_FAILED,
+        ]);
+        $needsManualReview = $this->createBitrix24RescueReadyContact([
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_PENDING_REVIEW,
+        ]);
+        $notReady = Contact::factory()->create([
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_ACTIVE,
+            'first_name' => null,
+            'country' => 'США',
+            'city' => 'Сиэтл',
+            'age_range' => '18_23',
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_NOT_SYNCED,
+        ]);
+        $alreadySynced = $this->createBitrix24RescueReadyContact([
+            'bitrix24_contact_id' => '71456',
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_SYNCED,
+            'bitrix24_deal_sync_status' => Contact::BITRIX24_DEAL_SYNC_STATUS_SYNCED,
+            'bitrix24_history_sync_status' => Contact::BITRIX24_HISTORY_SYNC_STATUS_SYNCED,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->assertTableBulkActionVisible('queueBitrix24RescueSync')
+            ->assertTableBulkActionHasLabel('queueBitrix24RescueSync', 'Поставить выбранных в очередь Bitrix24')
+            ->callTableBulkAction('queueBitrix24RescueSync', [
+                $needsContactSync,
+                $needsDealAndHistory,
+                $needsManualReview,
+                $notReady,
+                $alreadySynced,
+            ])
+            ->assertHasNoTableBulkActionErrors()
+            ->assertNotified();
+
+        $needsContactSync->refresh();
+        $needsDealAndHistory->refresh();
+        $needsManualReview->refresh();
+        $notReady->refresh();
+        $alreadySynced->refresh();
+
+        $this->assertTrue($needsContactSync->bitrix24_sync_pending);
+        $this->assertTrue($needsDealAndHistory->bitrix24_deal_sync_pending);
+        $this->assertTrue($needsDealAndHistory->bitrix24_history_sync_pending);
+        $this->assertFalse($needsManualReview->bitrix24_sync_pending);
+        $this->assertFalse($notReady->bitrix24_sync_pending);
+        $this->assertFalse($alreadySynced->bitrix24_sync_pending);
+
+        Queue::assertPushed(SyncContactToBitrix24Job::class, function (SyncContactToBitrix24Job $job) use ($needsContactSync): bool {
+            return $job->contactId === $needsContactSync->id
+                && $job->suppressDialogContinuation === true;
+        });
+        Queue::assertNotPushed(SyncContactToBitrix24Job::class, function (SyncContactToBitrix24Job $job) use ($needsManualReview, $notReady, $alreadySynced): bool {
+            return in_array($job->contactId, [$needsManualReview->id, $notReady->id, $alreadySynced->id], true);
+        });
+        Queue::assertPushed(EnsureBitrix24DealJob::class, fn (EnsureBitrix24DealJob $job): bool => $job->contactId === $needsDealAndHistory->id);
+        Queue::assertPushed(SyncChatHistoryToBitrix24Job::class, fn (SyncChatHistoryToBitrix24Job $job): bool => $job->contactId === $needsDealAndHistory->id);
+
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'rescue_sync_requested',
+            'entity_type' => 'contact',
+            'entity_id' => (string) $needsContactSync->id,
+            'status' => Bitrix24SyncLog::STATUS_SUCCESS,
+        ]);
+        $this->assertDatabaseHas('bitrix24_sync_logs', [
+            'operation' => 'rescue_sync_requested',
+            'entity_type' => 'contact',
+            'entity_id' => (string) $needsManualReview->id,
+            'status' => Bitrix24SyncLog::STATUS_SKIPPED,
+        ]);
+    }
+
+    public function test_employee_without_bitrix24_edit_does_not_see_bulk_rescue_sync_action(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+
+        Livewire::actingAs($employee)
+            ->test(ManageContacts::class)
+            ->assertTableBulkActionHidden('queueBitrix24RescueSync');
+    }
+
+    public function test_contact_bitrix_tab_shows_last_rescue_sync_errors(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'role' => User::ROLE_SUPERADMIN,
+        ]);
+        $contact = $this->createBitrix24RescueReadyContact([
+            'bitrix24_contact_id' => '71455',
+            'bitrix24_deal_id' => '136886',
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_FAILED,
+            'bitrix24_deal_sync_status' => Contact::BITRIX24_DEAL_SYNC_STATUS_FAILED,
+            'bitrix24_history_sync_status' => Contact::BITRIX24_HISTORY_SYNC_STATUS_FAILED,
+        ]);
+
+        Bitrix24SyncLog::query()->create([
+            'direction' => Bitrix24SyncLog::DIRECTION_SYSTEM,
+            'operation' => 'contact_sync_failed',
+            'entity_type' => 'contact',
+            'entity_id' => (string) $contact->id,
+            'status' => Bitrix24SyncLog::STATUS_FAILED,
+            'error_message' => 'Contact sync failed.',
+        ]);
+        Bitrix24SyncLog::query()->create([
+            'direction' => Bitrix24SyncLog::DIRECTION_SYSTEM,
+            'operation' => 'deal_sync_failed',
+            'entity_type' => 'contact',
+            'entity_id' => (string) $contact->id,
+            'status' => Bitrix24SyncLog::STATUS_FAILED,
+            'error_message' => 'Deal sync failed.',
+        ]);
+        Bitrix24SyncLog::query()->create([
+            'direction' => Bitrix24SyncLog::DIRECTION_SYSTEM,
+            'operation' => 'history_export_failed',
+            'entity_type' => 'contact',
+            'entity_id' => (string) $contact->id,
+            'request_payload' => [
+                'contact_id' => $contact->id,
+            ],
+            'status' => Bitrix24SyncLog::STATUS_FAILED,
+            'error_message' => 'History export failed.',
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewContact::class, ['record' => $contact->getRouteKey()])
+            ->set('activeTab', ViewContact::TAB_BITRIX24)
+            ->assertSee('data-role="contact-bitrix-rescue-sync-errors"', false)
+            ->assertSee('Контакт: Contact sync failed.')
+            ->assertSee('Сделка: Deal sync failed.')
+            ->assertSee('История: History export failed.');
     }
 
     public function test_contact_history_tab_does_not_render_message_text(): void
@@ -3428,6 +3880,8 @@ class FilamentContactsResourceTest extends TestCase
             ->assertCanSeeTableRecords([$contactWithPhone])
             ->assertCanNotSeeTableRecords([$contactWithoutPhone]);
 
+        $this->forgetContactsTableFiltersSession();
+
         Livewire::actingAs($admin)
             ->test(ManageContacts::class)
             ->filterTable('without_phone')
@@ -4444,6 +4898,46 @@ class FilamentContactsResourceTest extends TestCase
             ->assertCanSeeTableRecords([$secondContact, $firstContact], inOrder: true);
     }
 
+    public function test_contacts_table_persists_selected_filters_in_session(): void
+    {
+        config()->set('bitrix24.features.deals_sync_enabled', true);
+        config()->set('bitrix24.features.timeline_history_import_enabled', true);
+
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'role' => User::ROLE_SUPERADMIN,
+        ]);
+        $needsSync = $this->createBitrix24RescueReadyContact([
+            'name' => 'Нужна синхронизация Bitrix24',
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_NOT_SYNCED,
+        ]);
+        $alreadySynced = $this->createBitrix24RescueReadyContact([
+            'name' => 'Уже есть в Bitrix24',
+            'bitrix24_contact_id' => '71456',
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_SYNCED,
+            'bitrix24_deal_sync_status' => Contact::BITRIX24_DEAL_SYNC_STATUS_SYNCED,
+            'bitrix24_history_sync_status' => Contact::BITRIX24_HISTORY_SYNC_STATUS_SYNCED,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->filterTable('bitrix24_rescue_required')
+            ->assertSet('tableFilters.bitrix24_rescue_required.isActive', true)
+            ->assertCanSeeTableRecords([$needsSync])
+            ->assertCanNotSeeTableRecords([$alreadySynced]);
+
+        $this->assertTrue((bool) data_get(
+            session()->get('tables.'.md5(ManageContacts::class).'_filters'),
+            'bitrix24_rescue_required.isActive',
+        ));
+
+        Livewire::actingAs($admin)
+            ->test(ManageContacts::class)
+            ->assertSet('tableFilters.bitrix24_rescue_required.isActive', true)
+            ->assertCanSeeTableRecords([$needsSync])
+            ->assertCanNotSeeTableRecords([$alreadySynced]);
+    }
+
     public function test_contact_modal_can_assign_current_employee_via_responsible_dialog(): void
     {
         $admin = User::factory()->create([
@@ -4576,6 +5070,8 @@ class FilamentContactsResourceTest extends TestCase
             ->filterTable('assigned_to_me')
             ->assertCanSeeTableRecords([$myContact])
             ->assertCanNotSeeTableRecords([$otherContact, $freeContact]);
+
+        $this->forgetContactsTableFiltersSession();
 
         Livewire::actingAs($admin)
             ->test(ManageContacts::class)
@@ -4821,6 +5317,44 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertFalse($employee->canEditExistingContactPhones());
         $this->assertFalse($employee->canDeleteExistingContactPhones());
         $this->assertFalse($employee->canDeleteContacts());
+    }
+
+    private function forgetContactsTableFiltersSession(): void
+    {
+        session()->forget('tables.'.md5(ManageContacts::class).'_filters');
+    }
+
+    /**
+     * @param  array<string, mixed>  $overrides
+     */
+    private function createBitrix24RescueReadyContact(array $overrides = []): Contact
+    {
+        $contact = Contact::factory()->create(array_merge([
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_COMPLETED,
+            'first_name' => 'Кирилл',
+            'country' => 'США',
+            'city' => 'Сиэтл',
+            'age_range' => '18_23',
+        ], $overrides));
+
+        ContactPhoneNumber::factory()->create([
+            'contact_id' => $contact->id,
+            'phone_raw' => '+14255983129',
+            'phone_normalized' => '14255983129',
+            'is_primary' => true,
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        return $contact;
     }
 
     private function createHistoricalQuestionnaireTemplate(): QuestionnaireTemplate
