@@ -935,13 +935,18 @@ class FilamentContactsResourceTest extends TestCase
             'age_range' => '18_23',
             'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_NOT_SYNCED,
         ]);
+        $emptyNormalizedPhone = $this->createBitrix24RescueReadyContact([
+            'name' => 'Телефон без нормализации',
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_NOT_SYNCED,
+        ]);
+        $emptyNormalizedPhone->phoneNumbers()->update(['phone_normalized' => '']);
 
         Livewire::actingAs($admin)
             ->test(ManageContacts::class)
             ->assertTableFilterExists('bitrix24_rescue_required')
             ->filterTable('bitrix24_rescue_required')
             ->assertCanSeeTableRecords([$needsContactSync, $needsDealAndHistory, $needsManualReview])
-            ->assertCanNotSeeTableRecords([$synced, $notReady]);
+            ->assertCanNotSeeTableRecords([$synced, $notReady, $emptyNormalizedPhone]);
     }
 
     public function test_admin_can_bulk_queue_bitrix24_rescue_sync_from_contacts_table(): void

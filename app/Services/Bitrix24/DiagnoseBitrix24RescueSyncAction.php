@@ -123,6 +123,16 @@ class DiagnoseBitrix24RescueSyncAction
             $reasons[] = 'already_fully_synced';
         }
 
+        $lastContactError = $rootContact->bitrix24_sync_status === Contact::BITRIX24_SYNC_STATUS_FAILED
+            ? $this->latestFailedError($rootContact, ['contact_sync'])
+            : null;
+        $lastDealError = $rootContact->bitrix24_deal_sync_status === Contact::BITRIX24_DEAL_SYNC_STATUS_FAILED
+            ? $this->latestFailedError($rootContact, ['deal_sync'])
+            : null;
+        $lastHistoryError = $rootContact->bitrix24_history_sync_status === Contact::BITRIX24_HISTORY_SYNC_STATUS_FAILED
+            ? $this->latestFailedError($rootContact, ['history_export'])
+            : null;
+
         return new Bitrix24RescueSyncDiagnosticData(
             ready: $ready,
             rootContactId: (int) $rootContact->id,
@@ -140,9 +150,9 @@ class DiagnoseBitrix24RescueSyncAction
             canQueueDeal: $canQueueDeal,
             canQueueHistory: $canQueueHistory,
             needsManualReview: $needsManualReview,
-            lastContactError: $this->latestFailedError($rootContact, ['contact_sync']),
-            lastDealError: $this->latestFailedError($rootContact, ['deal_sync']),
-            lastHistoryError: $this->latestFailedError($rootContact, ['history_export']),
+            lastContactError: $lastContactError,
+            lastDealError: $lastDealError,
+            lastHistoryError: $lastHistoryError,
             reasons: array_values(array_unique($reasons)),
         );
     }
@@ -152,24 +162,24 @@ class DiagnoseBitrix24RescueSyncAction
      */
     private function latestFailedError(Contact $contact, array $operationPrefixes): ?string
     {
-        $logs = Bitrix24SyncLog::query()
+        $log = Bitrix24SyncLog::query()
             ->where('status', Bitrix24SyncLog::STATUS_FAILED)
             ->where(function ($query) use ($operationPrefixes): void {
                 foreach ($operationPrefixes as $prefix) {
                     $query->orWhere('operation', 'like', $prefix.'%');
                 }
             })
+            ->where(function ($query) use ($contact): void {
+                $query
+                    ->where(function ($query) use ($contact): void {
+                        $query
+                            ->where('entity_type', 'contact')
+                            ->where('entity_id', (string) $contact->id);
+                    })
+                    ->orWhere('request_payload->contact_id', (string) $contact->id);
+            })
             ->latest('id')
-            ->limit(25)
-            ->get();
-
-        $log = $logs->first(function (Bitrix24SyncLog $log) use ($contact): bool {
-            if ($log->entity_type === 'contact' && (string) $log->entity_id === (string) $contact->id) {
-                return true;
-            }
-
-            return (int) data_get($log->request_payload, 'contact_id') === (int) $contact->id;
-        });
+            ->first();
 
         if (! $log instanceof Bitrix24SyncLog) {
             return null;

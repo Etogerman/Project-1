@@ -825,8 +825,12 @@ class ContactResource extends Resource
             ->where('city', '!=', '')
             ->whereNotNull('age_range')
             ->where('age_range', '!=', '')
-            ->whereHas('phoneNumbers')
-            ->whereHas('identities')
+            ->whereHas('phoneNumbers', function (Builder $query): Builder {
+                return $query
+                    ->whereNotNull('phone_normalized')
+                    ->where('phone_normalized', '!=', '');
+            })
+            ->whereHas('identities', fn (Builder $query): Builder => $query->whereHas('channel'))
             ->where(function (Builder $query) use ($dealsSyncEnabled, $historySyncEnabled): void {
                 $query
                     ->where(function (Builder $query): void {

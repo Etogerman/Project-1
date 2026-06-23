@@ -16,6 +16,7 @@ use App\Services\Bitrix24\DiagnoseBitrix24RescueSyncAction;
 use App\Services\Bitrix24\QueueBitrix24RescueSyncAction;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
@@ -188,7 +189,7 @@ class Bitrix24RescueSyncActionTest extends TestCase
         $contact = $this->createReadyContact([
             'bitrix24_contact_id' => '71455',
             'bitrix24_deal_id' => '136886',
-            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_SYNCED,
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_FAILED,
             'bitrix24_deal_sync_status' => Contact::BITRIX24_DEAL_SYNC_STATUS_FAILED,
             'bitrix24_history_sync_status' => Contact::BITRIX24_HISTORY_SYNC_STATUS_FAILED,
         ]);
@@ -227,6 +228,73 @@ class Bitrix24RescueSyncActionTest extends TestCase
         $this->assertSame('Contact failed.', $diagnostics->lastContactError);
         $this->assertSame('Deal failed.', $diagnostics->lastDealError);
         $this->assertSame('History deal copy failed.', $diagnostics->lastHistoryError);
+    }
+
+    public function test_diagnostics_reads_failed_logs_only_for_failed_statuses(): void
+    {
+        $contact = $this->createReadyContact([
+            'bitrix24_contact_id' => '71455',
+            'bitrix24_deal_id' => '136886',
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_SYNCED,
+            'bitrix24_deal_sync_status' => Contact::BITRIX24_DEAL_SYNC_STATUS_SYNCED,
+            'bitrix24_history_sync_status' => Contact::BITRIX24_HISTORY_SYNC_STATUS_SYNCED,
+        ]);
+
+        Bitrix24SyncLog::query()->create([
+            'direction' => Bitrix24SyncLog::DIRECTION_SYSTEM,
+            'operation' => 'contact_sync_failed',
+            'entity_type' => 'contact',
+            'entity_id' => (string) $contact->id,
+            'status' => Bitrix24SyncLog::STATUS_FAILED,
+            'error_message' => 'Old contact failure.',
+        ]);
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+
+        $diagnostics = app(DiagnoseBitrix24RescueSyncAction::class)->handle($contact);
+
+        $logQueries = collect(DB::getQueryLog())
+            ->filter(fn (array $query): bool => str_contains((string) ($query['query'] ?? ''), 'bitrix24_sync_logs'))
+            ->count();
+
+        DB::disableQueryLog();
+
+        $this->assertNull($diagnostics->lastContactError);
+        $this->assertNull($diagnostics->lastDealError);
+        $this->assertNull($diagnostics->lastHistoryError);
+        $this->assertSame(0, $logQueries);
+    }
+
+    public function test_diagnostics_finds_contact_error_even_after_many_unrelated_failures(): void
+    {
+        $contact = $this->createReadyContact([
+            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_FAILED,
+        ]);
+
+        Bitrix24SyncLog::query()->create([
+            'direction' => Bitrix24SyncLog::DIRECTION_SYSTEM,
+            'operation' => 'contact_sync_failed',
+            'entity_type' => 'contact',
+            'entity_id' => (string) $contact->id,
+            'status' => Bitrix24SyncLog::STATUS_FAILED,
+            'error_message' => 'Original contact failure.',
+        ]);
+
+        foreach (range(1, 30) as $index) {
+            Bitrix24SyncLog::query()->create([
+                'direction' => Bitrix24SyncLog::DIRECTION_SYSTEM,
+                'operation' => 'contact_sync_failed',
+                'entity_type' => 'contact',
+                'entity_id' => 'unrelated-'.$index,
+                'status' => Bitrix24SyncLog::STATUS_FAILED,
+                'error_message' => 'Unrelated failure '.$index.'.',
+            ]);
+        }
+
+        $diagnostics = app(DiagnoseBitrix24RescueSyncAction::class)->handle($contact);
+
+        $this->assertSame('Original contact failure.', $diagnostics->lastContactError);
     }
 
     public function test_rescue_sync_requires_bitrix_edit_permission(): void
