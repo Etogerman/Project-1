@@ -4,10 +4,10 @@ namespace App\Services\TelegramAccount;
 
 use App\Data\Bots\StoredInboundMessageResult;
 use App\Data\TelegramAccount\NormalizedInboundMessageEvent;
-use App\Jobs\ProcessAutoReplyJob;
 use App\Models\Channel;
 use App\Models\Message;
 use App\Services\Bots\ChannelActivityLogger;
+use App\Services\Bots\DispatchStoredInboundBotMessageAction;
 use App\Services\Bots\StoreInboundMessageAction;
 use Illuminate\Support\Facades\DB;
 
@@ -17,6 +17,7 @@ class StoreTelegramAccountInboundEventAction
         private readonly TouchTelegramAccountRuntimeStateFromInboundEventAction $touchTelegramAccountRuntimeStateFromInboundEventAction,
         private readonly UpsertChannelPeerSyncStateFromInboundEventAction $upsertChannelPeerSyncStateFromInboundEventAction,
         private readonly StoreInboundMessageAction $storeInboundMessageAction,
+        private readonly DispatchStoredInboundBotMessageAction $dispatchStoredInboundBotMessageAction,
         private readonly ChannelActivityLogger $channelActivityLogger,
     ) {}
 
@@ -63,13 +64,13 @@ class StoreTelegramAccountInboundEventAction
 
             $result = $this->storeInboundMessageAction->handle($channel, $event->toIncomingBotMessage());
 
-            $this->queueAutoReplyIfNeeded($channel, $event, $result);
+            $this->dispatchLiveInboundIfNeeded($channel, $event, $result);
 
             return $result;
         });
     }
 
-    private function queueAutoReplyIfNeeded(
+    private function dispatchLiveInboundIfNeeded(
         Channel $channel,
         NormalizedInboundMessageEvent $event,
         ?StoredInboundMessageResult $result,
@@ -96,20 +97,6 @@ class StoreTelegramAccountInboundEventAction
             return;
         }
 
-        ProcessAutoReplyJob::dispatch($message->id)->afterCommit();
-
-        $this->channelActivityLogger->info(
-            $channel,
-            'bot.reply_queued',
-            'Автоответ поставлен в очередь.',
-            [
-                'platform' => $channel->platform,
-                'connection_type' => $channel->connection_type,
-                'message_id' => $message->id,
-                'provider_event_key' => $message->provider_event_key,
-                'external_message_id' => $message->external_message_id,
-                'history_source' => $event->historySource,
-            ],
-        );
+        $this->dispatchStoredInboundBotMessageAction->handle($channel, $result);
     }
 }
