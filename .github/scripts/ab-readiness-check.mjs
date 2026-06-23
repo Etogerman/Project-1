@@ -304,11 +304,11 @@ function parseRepository(repository) {
 }
 
 function printFailure(message) {
-  console.error(`::error::${message}`);
+  console.log(`::error::${message}`);
 }
 
 function printWarning(message) {
-  console.warn(`::warning::${message}`);
+  console.log(`::warning::${message}`);
 }
 
 function runSelfTest() {
