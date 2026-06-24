@@ -97,7 +97,6 @@ class ScenarioBuilderV3AutoReplyImportPlanService
             }
 
             if (! (bool) ($row['is_active'] ?? false)) {
-                $blockers[] = 'inactive_rule';
                 $summary['inactive']++;
             }
 
@@ -1178,7 +1177,7 @@ class ScenarioBuilderV3AutoReplyImportPlanService
         return [
             'id' => 'mod_start',
             'type' => 'start_condition',
-            'enabled' => true,
+            'enabled' => (bool) ($row['is_active'] ?? false),
             'payload' => [
                 'command' => $command,
                 'values' => [],
