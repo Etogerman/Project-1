@@ -28,14 +28,14 @@ test.describe('Admin smoke', () => {
         await page.goto('/admin/contacts');
 
         await expect(page).toHaveURL(/\/admin\/contacts(?:\?.*)?$/);
-        await expect(page.getByRole('heading', { name: 'Контакты' })).toBeVisible();
+        await expect(page.getByRole('navigation', { name: 'Хлебные крошки' })).toContainText('Контакты');
         await expect(page.getByRole('table')).toBeVisible();
         await expect(page.getByRole('columnheader', { name: 'Контакт' })).toBeVisible();
 
         await page.goto('/admin/dialogs');
 
         await expect(page).toHaveURL(/\/admin\/dialogs(?:\?.*)?$/);
-        await expect(page.getByRole('heading', { name: 'Диалоги' })).toBeVisible();
+        await expect(page.getByRole('navigation', { name: 'Хлебные крошки' })).toContainText('Диалоги');
         await expect(page.getByRole('table')).toBeVisible();
         await expect(page.getByRole('columnheader', { name: 'Контакт' })).toBeVisible();
     });
@@ -46,7 +46,7 @@ test.describe('Admin smoke', () => {
         await page.goto('/admin/dialogs');
 
         await expect(page).toHaveURL(/\/admin\/dialogs(?:\?.*)?$/);
-        await expect(page.getByRole('heading', { name: 'Диалоги' })).toBeVisible();
+        await expect(page.getByRole('navigation', { name: 'Хлебные крошки' })).toContainText('Диалоги');
 
         const emptyState = page.getByText('Диалогов ещё нет');
 
@@ -55,6 +55,8 @@ test.describe('Admin smoke', () => {
 
             return;
         }
+
+        await expect(page.getByRole('table')).toBeVisible();
 
         const dialogPath = await findFirstResourceRecordPath(page, '/admin/dialogs', ['kanban']);
 
