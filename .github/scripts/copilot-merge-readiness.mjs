@@ -246,14 +246,65 @@ function buildPrompt({ pr, files, diff, instructions, deterministic }) {
 function parseStrictJson(output) {
   const trimmed = output.trim();
 
-  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+  if (!trimmed.startsWith("{")) {
     throw new Error("Copilot output is not strict JSON.");
   }
 
+  const jsonEnd = findJsonObjectEnd(trimmed);
+
+  if (jsonEnd === -1) {
+    throw new Error("Copilot output does not contain a complete JSON object.");
+  }
+
+  const trailingText = trimmed.slice(jsonEnd + 1).trim();
+
   return {
-    payload: JSON.parse(trimmed),
+    payload: JSON.parse(trimmed.slice(0, jsonEnd + 1)),
     normalizedControlChars: false,
+    normalizedTrailingText: trailingText.length > 0,
   };
+}
+
+function findJsonObjectEnd(value) {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+
+      continue;
+    }
+
+    if (char === "\"") {
+      inString = true;
+      continue;
+    }
+
+    if (char === "{") {
+      depth += 1;
+      continue;
+    }
+
+    if (char === "}") {
+      depth -= 1;
+
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+
+  return -1;
 }
 
 function escapeRawControlCharsInJsonStrings(value) {
@@ -320,10 +371,16 @@ function parseStrictJsonWithControlCharNormalization(output) {
     }
 
     const trimmed = output.trim();
+    const jsonEnd = findJsonObjectEnd(trimmed);
+
+    if (jsonEnd === -1) {
+      throw error;
+    }
 
     return {
-      payload: JSON.parse(escapeRawControlCharsInJsonStrings(trimmed)),
+      payload: JSON.parse(escapeRawControlCharsInJsonStrings(trimmed.slice(0, jsonEnd + 1))),
       normalizedControlChars: true,
+      normalizedTrailingText: trimmed.slice(jsonEnd + 1).trim().length > 0,
     };
   }
 }
@@ -334,6 +391,7 @@ function parseCopilotResponse(output) {
   return {
     payload: normalizeCopilotPayload(parsed.payload),
     normalizedControlChars: parsed.normalizedControlChars,
+    normalizedTrailingText: parsed.normalizedTrailingText,
   };
 }
 
@@ -435,6 +493,10 @@ function withParseDiagnostics(parsed, condition) {
 
   if (parsed.normalizedControlChars) {
     diagnostics.push("Copilot JSON raw control characters normalized");
+  }
+
+  if (parsed.normalizedTrailingText) {
+    diagnostics.push("Copilot JSON trailing text ignored");
   }
 
   return diagnostics.reduce(
@@ -725,9 +787,26 @@ function selfTest() {
         next_step: "fix",
       },
       normalizedControlChars: true,
+      normalizedTrailingText: false,
+    },
+  );
+  assert.deepEqual(
+    parseCopilotResponse("{\"verdict\":\"BLOCKED\",\"blockers\":[\"x\"],\"risks\":[],\"checked_conditions\":[],\"missing_data\":[],\"next_step\":\"fix\"}\n\nextra text"),
+    {
+      payload: {
+        verdict: "BLOCKED",
+        blockers: ["x"],
+        risks: [],
+        checked_conditions: [],
+        missing_data: [],
+        next_step: "fix",
+      },
+      normalizedControlChars: false,
+      normalizedTrailingText: true,
     },
   );
   assert.throws(() => parseStrictJson("```json\n{}\n```"), /strict JSON/);
+  assert.throws(() => parseStrictJson("{\"verdict\":\"BLOCKED\""), /complete JSON object/);
   assert.deepEqual(
     buildCopilotArgs("prompt").filter((arg) => ["--no-custom-instructions", "--no-color", "--silent", "--stream", "off"].includes(arg)),
     ["--silent", "--no-color", "--stream", "off", "--no-custom-instructions"],
