@@ -4227,6 +4227,45 @@ class ScenarioBuilderV3StateTest extends TestCase
         $this->assertSame([(int) $excludedTag->id], data_get($blocks[1], 'settings_payload.modules.0.payload.tag_condition.tag_ids'));
     }
 
+    public function test_auto_reply_import_preserves_inactive_rules_as_disabled_start_modules(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_auto_reply_import_inactive',
+            'name' => 'V3 Auto Reply Import Inactive',
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+        $state = $this->actingAs($admin)
+            ->getJson($this->stateUrl($scenario))
+            ->assertOk()
+            ->json();
+        $inactiveRow = $this->autoReplyWorkbookRuleRow(3001, 'Выключенное правило', 'Категория', 'off', 'Не должен отвечать', $channel);
+        $inactiveRow[3] = '0';
+
+        $preview = $this->actingAs($admin)
+            ->post($this->autoReplyImportPreviewUrl($scenario), [
+                'workbook' => $this->autoReplyWorkbookFile([$inactiveRow]),
+                'builder_state' => json_encode(['builder' => $state['builder']], JSON_UNESCAPED_UNICODE),
+                'placement_mode' => json_encode('single_sheet'),
+                'import_batch_id' => json_encode('auto_reply_xlsx_20260623_inactive'),
+            ])
+            ->assertOk()
+            ->json();
+
+        $this->assertTrue($preview['can_apply']);
+        $this->assertSame(1, $preview['summary']['created']);
+        $this->assertSame(0, $preview['summary']['blocked']);
+        $this->assertSame(1, $preview['summary']['inactive']);
+
+        $block = data_get($preview, 'plan.blocks.0.block');
+
+        $this->assertSame(false, data_get($block, 'settings_payload.modules.0.enabled'));
+        $this->assertSame('Выключенное правило', data_get($block, 'title'));
+    }
+
     public function test_auto_reply_import_defaults_to_single_sheet_and_preserves_update_location(): void
     {
         $admin = $this->adminUser();
