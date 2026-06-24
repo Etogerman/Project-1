@@ -8,6 +8,7 @@ const VALID_COPILOT_VERDICTS = new Set(["READY_TO_MERGE", "BLOCKED", "READY_AFTE
 const DEFAULT_CONTEXT_BUDGET_BYTES = 60000;
 const DEFAULT_CHECK_WAIT_SECONDS = 600;
 const CHECK_POLL_SECONDS = 15;
+const COPILOT_OUTPUT_RETRY_BYTES = 12000;
 
 function byteLength(value) {
   return Buffer.byteLength(value, "utf8");
@@ -248,6 +249,10 @@ function parseStrictJson(output) {
   return JSON.parse(trimmed);
 }
 
+function parseCopilotResponse(output) {
+  return normalizeCopilotPayload(parseStrictJson(output));
+}
+
 function normalizeStringArray(value) {
   return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : [];
 }
@@ -271,19 +276,21 @@ function normalizeCopilotPayload(payload) {
   };
 }
 
-function callCopilot(prompt) {
-  if (!process.env.COPILOT_GITHUB_TOKEN) {
-    return {
-      verdict: "BLOCKED",
-      blockers: ["Secret `COPILOT_GITHUB_TOKEN` недоступен для workflow."],
-      risks: [],
-      checked_conditions: [],
-      missing_data: ["COPILOT_GITHUB_TOKEN"],
-      next_step: "Настроить GitHub Actions secret и повторить shadow-check.",
-    };
-  }
+function buildCopilotArgs(prompt) {
+  return [
+    "-p",
+    prompt,
+    "--silent",
+    "--no-ask-user",
+    "--no-color",
+    "--stream",
+    "off",
+    "--no-custom-instructions",
+  ];
+}
 
-  const result = spawnSync("copilot", ["-p", prompt, "-s", "--no-ask-user"], {
+function runCopilotPrompt(prompt) {
+  const result = spawnSync("copilot", buildCopilotArgs(prompt), {
     encoding: "utf8",
     env: {
       ...process.env,
@@ -300,12 +307,79 @@ function callCopilot(prompt) {
   if (result.status !== 0) {
     throw new Error([
       `Copilot CLI exited with status ${result.status}.`,
-      `stdout: ${truncate(result.stdout || "")}`,
-      `stderr: ${truncate(result.stderr || "")}`,
+      `stdout bytes: ${byteLength(result.stdout || "")}`,
+      `stderr bytes: ${byteLength(result.stderr || "")}`,
+      `stderr preview: ${truncate(result.stderr || "")}`,
     ].join("\n"));
   }
 
-  return normalizeCopilotPayload(parseStrictJson(result.stdout));
+  return {
+    stdout: result.stdout || "",
+    stderr: result.stderr || "",
+  };
+}
+
+function buildJsonRetryPrompt({ previousOutput, parseError }) {
+  return [
+    "Your previous answer was rejected because it was not strict JSON.",
+    `Parser error: ${parseError.message}`,
+    "Convert the previous answer into exactly one strict JSON object and nothing else.",
+    "Do not use markdown, code fences, comments, prose, or explanatory text.",
+    "The JSON shape must be:",
+    "{\"verdict\":\"READY_TO_MERGE|BLOCKED|READY_AFTER_HUMAN_CHECK\",\"blockers\":[],\"risks\":[],\"checked_conditions\":[],\"missing_data\":[],\"next_step\":\"...\"}",
+    "Write all human-facing strings in Russian.",
+    "If the previous answer cannot be safely converted, return verdict BLOCKED and explain that in blockers or missing_data.",
+    "",
+    "Previous answer:",
+    truncate(previousOutput || "", COPILOT_OUTPUT_RETRY_BYTES),
+  ].join("\n");
+}
+
+function withCheckedCondition(payload, condition) {
+  return {
+    ...payload,
+    checked_conditions: [...payload.checked_conditions, condition],
+  };
+}
+
+function callCopilot(prompt) {
+  if (!process.env.COPILOT_GITHUB_TOKEN) {
+    return {
+      verdict: "BLOCKED",
+      blockers: ["Secret `COPILOT_GITHUB_TOKEN` недоступен для workflow."],
+      risks: [],
+      checked_conditions: [],
+      missing_data: ["COPILOT_GITHUB_TOKEN"],
+      next_step: "Настроить GitHub Actions secret и повторить shadow-check.",
+    };
+  }
+
+  const first = runCopilotPrompt(prompt);
+
+  try {
+    return withCheckedCondition(parseCopilotResponse(first.stdout), "Copilot JSON attempt 1: valid");
+  } catch (firstError) {
+    const retryPrompt = buildJsonRetryPrompt({
+      previousOutput: first.stdout,
+      parseError: firstError,
+    });
+    const second = runCopilotPrompt(retryPrompt);
+
+    try {
+      return withCheckedCondition(
+        withCheckedCondition(parseCopilotResponse(second.stdout), "Copilot JSON attempt 1: invalid strict JSON"),
+        "Copilot JSON attempt 2: valid",
+      );
+    } catch (secondError) {
+      throw new Error([
+        "Copilot output is not strict JSON after 2 attempts.",
+        `first parse error: ${firstError.message}`,
+        `second parse error: ${secondError.message}`,
+        `first stdout bytes: ${byteLength(first.stdout)}`,
+        `second stdout bytes: ${byteLength(second.stdout)}`,
+      ].join("\n"));
+    }
+  }
 }
 
 function finalVerdict({ deterministicBlockers, contextBlockers, copilot }) {
@@ -535,8 +609,16 @@ function selfTest() {
   assert.equal(finalVerdict({ deterministicBlockers: [], contextBlockers: [], copilot: { verdict: "READY_TO_MERGE" } }), "READY_TO_MERGE");
   assert.equal(finalVerdict({ deterministicBlockers: ["x"], contextBlockers: [], copilot: { verdict: "READY_TO_MERGE" } }), "BLOCKED");
   assert.equal(finalVerdict({ deterministicBlockers: [], contextBlockers: ["x"], copilot: { verdict: "READY_TO_MERGE" } }), "BLOCKED");
-  assert.equal(normalizeCopilotPayload(parseStrictJson("{\"verdict\":\"BLOCKED\",\"blockers\":[\"x\"],\"risks\":[],\"checked_conditions\":[],\"missing_data\":[],\"next_step\":\"fix\"}")).verdict, "BLOCKED");
+  assert.equal(parseCopilotResponse("{\"verdict\":\"BLOCKED\",\"blockers\":[\"x\"],\"risks\":[],\"checked_conditions\":[],\"missing_data\":[],\"next_step\":\"fix\"}").verdict, "BLOCKED");
   assert.throws(() => parseStrictJson("```json\n{}\n```"), /strict JSON/);
+  assert.deepEqual(
+    buildCopilotArgs("prompt").filter((arg) => ["--no-custom-instructions", "--no-color", "--silent", "--stream", "off"].includes(arg)),
+    ["--silent", "--no-color", "--stream", "off", "--no-custom-instructions"],
+  );
+  assert.match(
+    buildJsonRetryPrompt({ previousOutput: "```json\n{}\n```", parseError: new Error("not strict") }),
+    /Previous answer:/,
+  );
   assert.equal(buildDiff([{ filename: "a.txt", previous_filename: "old.txt", patch: "@@ -1 +1 @@\n-a\n+b" }]).blockers.length, 0);
   assert.equal(buildDiff([{ filename: "image.png" }]).blockers.length, 1);
   console.log("copilot-merge-readiness self-test passed");
