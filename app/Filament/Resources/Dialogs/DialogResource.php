@@ -811,7 +811,6 @@ class DialogResource extends Resource
         $direction = strtolower($direction) === 'desc' ? 'desc' : 'asc';
 
         return $query
-            ->select('dialogs.*')
             ->leftJoin('contacts as contact_sort', 'contact_sort.id', '=', 'dialogs.contact_id')
             ->leftJoin('contact_identities as dialog_identity_sort', 'dialog_identity_sort.id', '=', 'dialogs.current_contact_identity_id')
             ->orderByRaw(

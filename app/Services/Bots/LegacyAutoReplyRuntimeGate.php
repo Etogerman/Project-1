@@ -6,6 +6,6 @@ class LegacyAutoReplyRuntimeGate
 {
     public function rulesEnabled(): bool
     {
-        return (bool) config('bots.legacy_auto_reply_rules_enabled', false);
+        return (bool) config('bots.legacy_auto_reply_rules_enabled', true);
     }
 }
