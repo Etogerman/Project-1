@@ -9,6 +9,7 @@ use App\Models\Message;
 use App\Services\Bots\AutoReplyDispatchException;
 use App\Services\Bots\BotAutoReplyService;
 use App\Services\Bots\ChannelActivityLogger;
+use App\Services\Bots\LegacyAutoReplyRuntimeGate;
 use App\Services\Bots\ProcessBotConstructorBlocksAction;
 use App\Services\Bots\ResolveAutoReplyRuleAction;
 use Illuminate\Bus\Queueable;
@@ -67,6 +68,7 @@ class ProcessAutoReplyJob implements ShouldQueue
     public function handle(
         BotAutoReplyService $botAutoReplyService,
         ChannelActivityLogger $channelActivityLogger,
+        LegacyAutoReplyRuntimeGate $legacyAutoReplyRuntimeGate,
         ResolveAutoReplyRuleAction $resolveAutoReplyRuleAction,
         ProcessBotConstructorBlocksAction $processBotConstructorBlocksAction,
     ): void {
@@ -83,6 +85,25 @@ class ProcessAutoReplyJob implements ShouldQueue
         }
 
         if ($message->message_kind !== Message::KIND_INBOUND_USER) {
+            return;
+        }
+
+        if (! $legacyAutoReplyRuntimeGate->rulesEnabled()) {
+            if ($message->channel instanceof Channel) {
+                $channelActivityLogger->info(
+                    $message->channel,
+                    'bot.reply_skipped_legacy_cutover',
+                    'Старый автоответчик пропущен: включён cutover на V3-конструктор.',
+                    [
+                        'platform' => $message->channel->platform,
+                        'message_id' => $message->id,
+                        'provider_event_key' => $message->provider_event_key,
+                        'external_message_id' => $message->external_message_id,
+                        'auto_reply_mode' => $message->channel->auto_reply_mode ?? Channel::AUTO_REPLY_MODE_RULES_ONLY,
+                    ],
+                );
+            }
+
             return;
         }
 

@@ -991,6 +991,102 @@
         display: none;
     }
 
+    :is(.fi-resource-contacts, .fi-resource-tags, .fi-resource-channels) .fi-page-header-main-ctn {
+        gap: 0;
+    }
+
+    .fi-resource-contacts .fi-page-header-main-ctn > .fi-header {
+        display: none;
+    }
+
+    :is(.fi-resource-tags, .fi-resource-channels) .fi-page-header-main-ctn > .fi-header {
+        align-items: center;
+        justify-content: flex-end;
+        min-height: 0;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        box-shadow: none;
+        padding: 0 0 0.75rem;
+    }
+
+    :is(.fi-resource-tags, .fi-resource-channels) .fi-header-heading {
+        display: none;
+    }
+
+    :is(.fi-resource-tags, .fi-resource-channels) .fi-header-actions-ctn {
+        margin: 0 0 0 auto;
+    }
+
+    :is(.fi-resource-tags, .fi-resource-channels) .fi-header-actions-ctn .fi-btn {
+        min-height: 2.25rem;
+        border-radius: 8px;
+        box-shadow: none;
+    }
+
+    :is(.fi-resource-contacts, .fi-resource-tags, .fi-resource-channels) .fi-ta-header-ctn {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        align-items: center;
+        gap: 0.7rem;
+        padding: 0.75rem 0.85rem;
+    }
+
+    :is(.fi-resource-contacts, .fi-resource-tags, .fi-resource-channels) .fi-ta-header-toolbar {
+        min-width: 0;
+        margin-top: 0;
+        padding: 0;
+        border-top: 0;
+        border-bottom: 0;
+        justify-content: flex-start;
+    }
+
+    :is(.fi-resource-contacts, .fi-resource-tags, .fi-resource-channels) .fi-ta-header-toolbar > :first-child:empty {
+        display: none;
+    }
+
+    :is(.fi-resource-contacts, .fi-resource-tags, .fi-resource-channels) .fi-ta-header-toolbar > :last-child {
+        width: 100%;
+        min-width: 0;
+        margin-inline-start: 0;
+        justify-content: flex-start;
+        gap: 0.5rem;
+        flex-wrap: nowrap;
+    }
+
+    :is(.fi-resource-contacts, .fi-resource-tags, .fi-resource-channels) .fi-ta-header-toolbar .fi-btn,
+    :is(.fi-resource-contacts, .fi-resource-tags, .fi-resource-channels) .fi-ta-header-toolbar .fi-icon-btn {
+        min-height: 2.25rem;
+        border-radius: 8px;
+        box-shadow: none;
+    }
+
+    .fi-resource-contacts .fi-ta-header-toolbar .ac-contacts-filter-trigger.fi-btn,
+    .fi-resource-tags .fi-ta-header-toolbar .ac-tags-filter-trigger.fi-btn,
+    .fi-resource-channels .fi-ta-header-toolbar .ac-channels-filter-trigger.fi-btn {
+        min-height: 2.25rem;
+        border-color: var(--ac-border);
+        border-radius: 8px;
+        background: var(--ac-surface) !important;
+        color: var(--ac-text) !important;
+        font-size: 0.84rem;
+        font-weight: 700;
+        box-shadow: none;
+    }
+
+    .fi-resource-contacts .fi-ta-header-toolbar .ac-contacts-filter-trigger.fi-btn:hover,
+    .fi-resource-tags .fi-ta-header-toolbar .ac-tags-filter-trigger.fi-btn:hover,
+    .fi-resource-channels .fi-ta-header-toolbar .ac-channels-filter-trigger.fi-btn:hover {
+        border-color: color-mix(in srgb, var(--ac-primary) 28%, var(--ac-border));
+        background: var(--ac-primary-soft) !important;
+        color: var(--ac-primary) !important;
+    }
+
+    :is(.fi-resource-contacts, .fi-resource-tags, .fi-resource-channels) .fi-ta-header-toolbar .fi-ta-col-manager-dropdown {
+        margin-inline-start: auto;
+        flex-shrink: 0;
+    }
+
     .fi-resource-data-dictionary-entries .fi-header {
         align-items: center;
         flex-wrap: nowrap;
@@ -5533,26 +5629,22 @@
     .ac-kanban-hero__top {
         display: flex;
         align-items: center;
-        justify-content: space-between;
+        justify-content: flex-start;
         gap: 1.25rem;
         flex-wrap: wrap;
-    }
-
-    .ac-kanban-hero__title {
-        margin: 0;
-        color: #171717;
-        font-size: 1.85rem;
-        font-weight: 800;
-        letter-spacing: -0.035em;
-        line-height: 1.1;
     }
 
     .ac-kanban-hero__actions {
         display: flex;
         align-items: center;
-        justify-content: flex-end;
+        justify-content: flex-start;
         gap: 0.5rem;
         flex-wrap: wrap;
+        width: 100%;
+    }
+
+    .ac-kanban-hero__actions > .ac-kanban-view-switch {
+        margin-left: auto;
     }
 
     .ac-kanban-hero__actions > .ac-button,
@@ -5564,6 +5656,8 @@
         color: #343434;
         font-size: 0.84rem;
         font-weight: 700;
+        line-height: 1;
+        padding: 0.44rem 0.75rem;
         box-shadow: none;
     }
 
@@ -5620,6 +5714,23 @@
 
     .ac-kanban-hero__actions .ac-kanban-toolbar__search {
         width: min(18rem, 32vw);
+    }
+
+    .ac-kanban-hero__actions .ac-kanban-search-control .ac-input {
+        min-height: 2.3rem;
+        border-color: #e5e3df;
+        border-radius: 0.6rem;
+        background: #ffffff;
+        padding: 0.44rem 0.75rem;
+        font-size: 0.84rem;
+        line-height: 1.2;
+        box-shadow: none;
+    }
+
+    .ac-kanban-hero__actions .ac-kanban-search-control .ac-input:hover,
+    .ac-kanban-hero__actions .ac-kanban-search-control .ac-input:focus {
+        border-color: #d6d2cb;
+        box-shadow: none;
     }
 
     .ac-kanban-toolbar__summary {
@@ -9262,24 +9373,10 @@
 
     .fi-resource-dialogs .fi-ta-header-ctn {
         display: grid;
-        grid-template-columns: auto minmax(0, 1fr);
+        grid-template-columns: minmax(0, 1fr);
         align-items: center;
         gap: 0.7rem;
         padding: 0.75rem 0.85rem;
-    }
-
-    .fi-resource-dialogs .ac-dialogs-table-hero {
-        min-width: 0;
-    }
-
-    .fi-resource-dialogs .ac-dialogs-table-hero .ac-kanban-hero__top {
-        justify-content: flex-start;
-        gap: 0.7rem;
-        flex-wrap: nowrap;
-    }
-
-    .fi-resource-dialogs .ac-dialogs-table-hero .ac-kanban-hero__title {
-        font-size: 1.55rem;
     }
 
     .fi-resource-dialogs .fi-ta-header {
@@ -9316,7 +9413,8 @@
         margin-top: 0;
         padding: 0;
         border-top: 0;
-        justify-content: flex-end;
+        border-bottom: 0;
+        justify-content: flex-start;
     }
 
     .fi-resource-dialogs .fi-ta-header-toolbar > :first-child:empty {
@@ -9324,17 +9422,20 @@
     }
 
     .fi-resource-dialogs .fi-ta-header-toolbar > :last-child {
+        width: 100%;
         min-width: 0;
         margin-inline-start: 0;
-        justify-content: flex-end;
+        justify-content: flex-start;
+        gap: 0.5rem;
+        flex-wrap: nowrap;
     }
 
-    :is(.fi-resource-dialogs, .fi-resource-contacts) .fi-ta-header-toolbar > :last-child > .fi-ta-search-field {
+    :is(.fi-resource-dialogs, .fi-resource-contacts, .fi-resource-tags, .fi-resource-channels) .fi-ta-header-toolbar > :last-child > .fi-ta-search-field {
         flex: 0 1 17.5rem;
         min-width: 17.5rem;
     }
 
-    :is(.fi-resource-dialogs, .fi-resource-contacts) .fi-ta-search-field .fi-input-wrp {
+    :is(.fi-resource-dialogs, .fi-resource-contacts, .fi-resource-tags, .fi-resource-channels) .fi-ta-search-field .fi-input-wrp {
         display: flex;
         align-items: center;
         min-height: 2.15rem;
@@ -9345,13 +9446,13 @@
         box-shadow: none;
     }
 
-    :is(.fi-resource-dialogs, .fi-resource-contacts) .fi-ta-search-field .fi-input-wrp-content-ctn {
+    :is(.fi-resource-dialogs, .fi-resource-contacts, .fi-resource-tags, .fi-resource-channels) .fi-ta-search-field .fi-input-wrp-content-ctn {
         order: 2;
         min-width: 0;
     }
 
-    :is(.fi-resource-dialogs, .fi-resource-contacts) .fi-ta-search-field .fi-input-wrp-prefix,
-    :is(.fi-resource-dialogs, .fi-resource-contacts) .fi-ta-search-field .fi-input-wrp-suffix {
+    :is(.fi-resource-dialogs, .fi-resource-contacts, .fi-resource-tags, .fi-resource-channels) .fi-ta-search-field .fi-input-wrp-prefix,
+    :is(.fi-resource-dialogs, .fi-resource-contacts, .fi-resource-tags, .fi-resource-channels) .fi-ta-search-field .fi-input-wrp-suffix {
         order: 1;
         min-height: 2.15rem;
         border: 0;
@@ -9359,14 +9460,14 @@
         color: var(--ac-text-soft);
     }
 
-    :is(.fi-resource-dialogs, .fi-resource-contacts) .fi-ta-search-field .fi-input {
+    :is(.fi-resource-dialogs, .fi-resource-contacts, .fi-resource-tags, .fi-resource-channels) .fi-ta-search-field .fi-input {
         min-height: 2.15rem;
         color: var(--ac-text);
         font-size: 0.82rem;
         font-weight: 500;
     }
 
-    :is(.fi-resource-dialogs, .fi-resource-contacts) .fi-ta-search-field .fi-input::placeholder {
+    :is(.fi-resource-dialogs, .fi-resource-contacts, .fi-resource-tags, .fi-resource-channels) .fi-ta-search-field .fi-input::placeholder {
         color: var(--ac-text-soft);
     }
 
@@ -9391,19 +9492,20 @@
     }
 
     .fi-resource-dialogs .fi-ta-header-toolbar .ac-dialogs-filter-trigger.fi-btn {
-        min-height: 2.3rem;
-        border-color: #e5e3df;
-        border-radius: 0.6rem;
-        background: #ffffff !important;
-        color: #343434 !important;
+        min-height: 2.25rem;
+        border-color: var(--ac-border);
+        border-radius: 8px;
+        background: var(--ac-surface) !important;
+        color: var(--ac-text) !important;
         font-size: 0.84rem;
         font-weight: 700;
         box-shadow: none;
     }
 
     .fi-resource-dialogs .fi-ta-header-toolbar .ac-dialogs-filter-trigger.fi-btn:hover {
-        border-color: #d6d2cb;
-        background: #ffffff !important;
+        border-color: color-mix(in srgb, var(--ac-primary) 28%, var(--ac-border));
+        background: var(--ac-primary-soft) !important;
+        color: var(--ac-primary) !important;
     }
 
     .fi-resource-dialogs .fi-ta-filters-dropdown > .fi-dropdown-panel {
@@ -9723,14 +9825,28 @@
         align-items: center;
         gap: 0.45rem;
         flex: 0 0 auto;
+        margin-inline-start: auto;
     }
 
     .fi-resource-dialogs .ac-dialogs-view-switch {
         flex: 0 0 auto;
     }
 
-    .fi-resource-dialogs .ac-dialogs-sort-wrap .ac-kanban-sort-popover[hidden] {
-        display: none !important;
+    @media (max-width: 980px) {
+        .fi-resource-dialogs .fi-ta-header-toolbar > :last-child {
+            flex-wrap: wrap;
+        }
+
+        .fi-resource-dialogs .ac-dialogs-table-tools {
+            margin-inline-start: 0;
+        }
+    }
+
+    @media (max-width: 820px) {
+        .fi-resource-dialogs .fi-ta-header-toolbar > :last-child > .fi-ta-search-field {
+            flex: 1 1 100%;
+            min-width: 0;
+        }
     }
 
     .fi-resource-dialogs .ac-dialogs-table-scroll {
@@ -10648,13 +10764,6 @@
         const scrollSelector = '.fi-resource-dialogs .fi-ta-content-ctn';
         const configByFilament = new Map(columnConfig.map((column) => [column.filament, column]));
         const selectionColumnConfig = columnConfig.find((column) => column.id === 'selection') || null;
-        const tableSortOptions = [
-            { code: 'last_message_at:desc', label: 'Сначала новые' },
-            { code: 'last_message_at:asc', label: 'Сначала старые' },
-            { code: 'id:desc', label: 'ID по убыванию' },
-            { code: 'id:asc', label: 'ID по возрастанию' },
-        ];
-        let sortFallbackListenerReady = false;
         let rowNavigationFallbackReady = false;
         let selectionCellClickGuardReady = false;
         let selectionCellClickSuppressedUntil = 0;
@@ -10841,54 +10950,12 @@
             window.localStorage.removeItem(storageKey);
         };
 
-        const currentTableSort = () => {
-            return new URL(window.location.href).searchParams.get('sort') || 'last_message_at:desc';
-        };
-
-        const tableSortUrl = (sortCode) => {
-            const url = new URL(window.location.href);
-            url.searchParams.set('sort', sortCode);
-            url.searchParams.delete('page');
-
-            return url.toString();
-        };
-
         const dialogsKanbanUrl = () => {
             const url = new URL(window.location.href);
             url.pathname = '/admin/dialogs/kanban';
             url.search = '';
 
             return url.toString();
-        };
-
-        const resolveSortColumn = (button) => {
-            const action = button.dataset.acDialogsWireClick || button.getAttribute('wire:click') || '';
-            const match = action.match(/sortTable\('([^']+)'\)/);
-
-            return button.dataset.acDialogsSortColumn || match?.[1] || null;
-        };
-
-        const resolveNextSortDirection = (column) => {
-            const currentSort = new URL(window.location.href).searchParams.get('sort') || '';
-            const [currentColumn, currentDirection] = currentSort.split(':');
-
-            if (currentColumn !== column) {
-                return 'asc';
-            }
-
-            return currentDirection === 'asc' ? 'desc' : 'asc';
-        };
-
-        const resolveSortUrl = (column) => {
-            const url = new URL(window.location.href);
-            url.searchParams.set('sort', `${column}:${resolveNextSortDirection(column)}`);
-            url.searchParams.delete('page');
-
-            return url.toString();
-        };
-
-        const navigateToSort = (column) => {
-            window.location.href = resolveSortUrl(column);
         };
 
         const getColumnSuffixFromHeader = (header) => {
@@ -11279,58 +11346,6 @@
             });
         };
 
-        const ensureSortFallbacks = (table) => {
-            table.querySelectorAll('.fi-ta-header-cell-sort-btn').forEach((button) => {
-                const column = resolveSortColumn(button);
-
-                if (!column) {
-                    return;
-                }
-
-                button.dataset.acDialogsWireClick = button.dataset.acDialogsWireClick || button.getAttribute('wire:click') || '';
-                button.dataset.acDialogsSortColumn = column;
-            });
-
-            installSortFallbackListener();
-        };
-
-        const installSortFallbackListener = () => {
-            if (sortFallbackListenerReady) {
-                return;
-            }
-
-            sortFallbackListenerReady = true;
-
-            const sort = (event) => {
-                const button = event.target?.closest?.('.fi-ta-header-cell-sort-btn');
-
-                if (!isDialogsIndex() || !button || !button.closest(tableSelector)) {
-                    return;
-                }
-
-                const column = resolveSortColumn(button);
-
-                if (!column) {
-                    return;
-                }
-
-                event.preventDefault();
-                event.stopPropagation();
-                event.stopImmediatePropagation?.();
-                navigateToSort(column);
-            };
-
-            document.addEventListener('pointerup', sort, true);
-            document.addEventListener('click', sort, true);
-            document.addEventListener('keydown', (event) => {
-                if (event.key !== 'Enter' && event.key !== ' ') {
-                    return;
-                }
-
-                sort(event);
-            }, true);
-        };
-
         const installRowNavigationFallbackListener = () => {
             if (rowNavigationFallbackReady) {
                 return;
@@ -11713,26 +11728,6 @@
             count.textContent = `${visible}/${columns.length}`;
         };
 
-        const syncSortTools = (tools) => {
-            const current = currentTableSort();
-            const button = tools?.querySelector('[data-ac-dialogs-sort-toggle]');
-
-            tools?.querySelectorAll('[data-ac-dialogs-sort-option]').forEach((link) => {
-                const sortCode = link.dataset.acDialogsSortOption || '';
-                const isActive = sortCode === current;
-
-                link.href = tableSortUrl(sortCode);
-                link.classList.toggle('is-active', isActive);
-                link.setAttribute('aria-checked', isActive ? 'true' : 'false');
-                link.querySelector('[data-ac-dialogs-sort-mark]')?.toggleAttribute('hidden', !isActive);
-            });
-
-            if (button) {
-                button.classList.toggle('ac-button--warning-soft', current !== 'last_message_at:desc');
-                button.classList.toggle('ac-button--secondary', current === 'last_message_at:desc');
-            }
-        };
-
         const ensureTools = (table, columns, state) => {
             const tableContainer = table.closest('.fi-ta-ctn');
             const toolbar = document.querySelector(toolbarSelector);
@@ -11757,36 +11752,6 @@
                 tools.className = 'ac-dialogs-table-tools';
                 tools.dataset.acDialogsTools = '1';
                 tools.innerHTML = `
-                    <div class="ac-kanban-sort-wrap ac-dialogs-sort-wrap" data-ac-dialogs-sort-wrap>
-                        <button
-                            type="button"
-                            class="ac-button ac-button--secondary ac-kanban-sort-button"
-                            data-ac-dialogs-sort-toggle
-                            aria-haspopup="menu"
-                            aria-expanded="false"
-                        >
-                            Сортировка
-                        </button>
-                        <div hidden class="ac-kanban-sort-popover" role="menu" data-ac-dialogs-sort-popover>
-                            <div class="ac-kanban-sort-popover__head">
-                                <span>Сортировка</span>
-                            </div>
-                            <div class="ac-kanban-sort-popover__list">
-                                ${tableSortOptions.map((option) => `
-                                    <a
-                                        href="${tableSortUrl(option.code)}"
-                                        class="ac-kanban-sort-option"
-                                        data-ac-dialogs-sort-option="${option.code}"
-                                        role="menuitemradio"
-                                        aria-checked="false"
-                                    >
-                                        <span>${option.label}</span>
-                                        <span hidden class="ac-kanban-sort-option__mark" data-ac-dialogs-sort-mark>✓</span>
-                                    </a>
-                                `).join('')}
-                            </div>
-                        </div>
-                    </div>
                     <span class="ac-kanban-view-switch ac-dialogs-view-switch" role="group" aria-label="Вид диалогов">
                         <a
                             href="${dialogsKanbanUrl()}"
@@ -11836,34 +11801,6 @@
             }
 
             tools.__acDialogsTable = table;
-            const sortWrap = tools.querySelector('[data-ac-dialogs-sort-wrap]');
-
-            if (sortWrap && sortWrap.dataset.acDialogsBound !== '1') {
-                sortWrap.dataset.acDialogsBound = '1';
-                const sortButton = sortWrap.querySelector('[data-ac-dialogs-sort-toggle]');
-                const sortPopover = sortWrap.querySelector('[data-ac-dialogs-sort-popover]');
-
-                sortButton?.addEventListener('click', (event) => {
-                    event.preventDefault();
-                    const isOpen = sortPopover?.hidden === false;
-
-                    if (sortPopover) {
-                        sortPopover.hidden = isOpen;
-                    }
-
-                    sortButton.setAttribute('aria-expanded', isOpen ? 'false' : 'true');
-                });
-
-                document.addEventListener('click', (event) => {
-                    if (!sortPopover || sortPopover.hidden || sortWrap.contains(event.target)) {
-                        return;
-                    }
-
-                    sortPopover.hidden = true;
-                    sortButton?.setAttribute('aria-expanded', 'false');
-                });
-            }
-
             const details = tools.querySelector('.ac-dialogs-columns');
 
             if (details && details.dataset.acDialogsBound !== '1') {
@@ -11967,7 +11904,6 @@
             }
 
             syncToolsCount(tools, columns, state);
-            syncSortTools(tools);
 
             return tools;
         };
@@ -11999,7 +11935,6 @@
             const tools = ensureTools(table, columns, state);
 
             ensureResizeHandles(table, columns, state);
-            ensureSortFallbacks(table);
             applyColumnLayout(table, columns, state);
             syncToolsCount(tools, columns, state);
 
@@ -12024,7 +11959,6 @@
             updateScrollState(scroll);
         };
 
-        installSortFallbackListener();
         installSelectionCellClickGuard();
         installRowNavigationFallbackListener();
         installDialogSideFieldCopyListener();

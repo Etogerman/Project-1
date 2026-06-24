@@ -7,14 +7,17 @@ use App\Models\Scenario;
 use App\Models\Tag;
 use App\Models\User;
 use App\Services\Scenarios\BuildScenarioBuilderV3StateAction;
+use App\Services\Scenarios\ExportScenarioBuilderV3AutoReplyWorkbookAction;
 use App\Services\Scenarios\PublishScenarioBuilderV3Action;
 use App\Services\Scenarios\SaveScenarioBuilderV3StateAction;
 use App\Services\Scenarios\ScenarioBuilderV3AutoReplyImportPlanService;
 use App\Services\Scenarios\ScenarioBuilderV3SheetTransferService;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Http\UploadedFile;
 use Illuminate\Http\Request;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Validation\ValidationException;
+use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class ScenarioBuilderV3StateController extends Controller
 {
@@ -169,6 +172,26 @@ class ScenarioBuilderV3StateController extends Controller
             $workbook,
             $this->decodeAutoReplyImportPayload($request),
         ));
+    }
+
+    public function exportAutoReplies(
+        Request $request,
+        Scenario $scenario,
+        ExportScenarioBuilderV3AutoReplyWorkbookAction $exportScenarioBuilderV3AutoReplyWorkbookAction,
+    ): StreamedResponse {
+        $user = $this->authorizeScenarioBuilderAccess($request, $scenario);
+        $spreadsheet = $exportScenarioBuilderV3AutoReplyWorkbookAction->handle($scenario, $user);
+
+        return response()->streamDownload(function () use ($spreadsheet): void {
+            try {
+                (new Xlsx($spreadsheet))->save('php://output');
+            } finally {
+                $spreadsheet->disconnectWorksheets();
+                unset($spreadsheet);
+            }
+        }, 'constructor-auto-replies-'.now()->format('Ymd-His').'.xlsx', [
+            'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ]);
     }
 
     public function createAutoReplyImportTag(Request $request, Scenario $scenario): JsonResponse

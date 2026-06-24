@@ -359,7 +359,7 @@ class ContactResource extends Resource
         return $table
             ->recordUrl(fn (Contact $record): string => static::getUrl('view', ['record' => $record]))
             ->splitSearchTerms(false)
-            ->searchPlaceholder('Поиск контакта')
+            ->searchPlaceholder('Поиск')
             ->columns([
                 TextColumn::make('display_name')
                     ->label('Контакт')
@@ -504,6 +504,12 @@ class ContactResource extends Resource
                         );
                     }),
             ])
+            ->filtersTriggerAction(
+                fn (Action $action): Action => $action
+                    ->button()
+                    ->label('Фильтр')
+                    ->extraAttributes(['class' => 'ac-contacts-filter-trigger'], merge: true),
+            )
             ->columnManager()
             ->deferColumnManager(false)
             ->reorderableColumns()

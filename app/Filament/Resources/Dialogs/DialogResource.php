@@ -133,8 +133,7 @@ class DialogResource extends Resource
         return $table
             ->poll('10s')
             ->splitSearchTerms(false)
-            ->header(view('filament.dialogs.partials.table-header'))
-            ->searchPlaceholder('Поиск диалога')
+            ->searchPlaceholder('Поиск')
             ->columns([
                 TextColumn::make('contact_label')
                     ->label($dialogFieldLabel('contact_id', 'Контакт'))
@@ -224,7 +223,6 @@ class DialogResource extends Resource
                     ->label('Статус')
                     ->options(static::getInboxStatusFilterOptions())
                     ->placeholder('Все')
-                    ->default(DialogInboxStatusData::CODE_REQUIRES_REPLY)
                     ->query(function (Builder $query, array $data): void {
                         $status = $data['value'] ?? null;
 
@@ -270,7 +268,7 @@ class DialogResource extends Resource
             ->filtersTriggerAction(
                 fn (Action $action): Action => $action
                     ->button()
-                    ->label('Фильтры')
+                    ->label('Фильтр')
                     ->extraAttributes(['class' => 'ac-dialogs-filter-trigger'], merge: true),
             )
             ->selectable()
@@ -668,7 +666,7 @@ class DialogResource extends Resource
                         ->where('later_outbound_manual_reply.message_kind', Message::KIND_OUTBOUND_MANUAL_REPLY)
                         ->whereRaw(static::messageIsAfterSql('later_outbound_manual_reply', 'latest_inbound_user'));
                 });
-            });
+        });
     }
 
     public static function applyInboxStatusFilter(Builder $query, string $status): Builder
@@ -815,7 +813,6 @@ class DialogResource extends Resource
         return $query
             ->leftJoin('contacts as contact_sort', 'contact_sort.id', '=', 'dialogs.contact_id')
             ->leftJoin('contact_identities as dialog_identity_sort', 'dialog_identity_sort.id', '=', 'dialogs.current_contact_identity_id')
-            ->select('dialogs.*')
             ->orderByRaw(
                 "lower(coalesce(nullif(trim(coalesce(contact_sort.first_name, '') || ' ' || coalesce(contact_sort.last_name, '')), ''), nullif(contact_sort.name, ''), nullif(dialog_identity_sort.display_name, ''), nullif(dialog_identity_sort.external_username, ''), nullif(dialog_identity_sort.external_user_id, ''), '')) {$direction}"
             )

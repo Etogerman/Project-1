@@ -14,8 +14,6 @@
     >
         <section class="ac-kanban-hero">
             <div class="ac-kanban-hero__top">
-                <h1 class="ac-kanban-hero__title">Диалоги</h1>
-
                 <div class="ac-kanban-hero__actions" role="toolbar" aria-label="Управление канбаном">
                     <div class="ac-kanban-toolbar__search">
                         <label for="kanban-search" class="sr-only">Поиск</label>
@@ -25,7 +23,7 @@
                                 type="search"
                                 wire:model.live.debounce.350ms="search"
                                 class="ac-input"
-                                placeholder="Поиск по диалогам"
+                                placeholder="Поиск"
                             >
 
                             @if (trim($search) !== '')
@@ -49,57 +47,11 @@
                             'ac-button--warning-soft' => $filtersPanelOpen,
                         ])
                     >
-                        Фильтры
+                        Фильтр
                         @if ($filter_state['active_count'] > 0)
                             <span class="ac-kanban-hero__badge">{{ $filter_state['active_count'] }}</span>
                         @endif
                     </button>
-
-                    <div class="ac-kanban-sort-wrap">
-                        <button
-                            type="button"
-                            wire:click="toggleSortPanel"
-                            @class([
-                                'ac-button',
-                                'ac-kanban-sort-button',
-                                'ac-button--secondary' => ! $sortPanelOpen && $sort_state['is_default'],
-                                'ac-button--warning-soft' => $sortPanelOpen || ! $sort_state['is_default'],
-                            ])
-                            aria-haspopup="menu"
-                            aria-expanded="{{ $sortPanelOpen ? 'true' : 'false' }}"
-                        >
-                            Сортировка
-                        </button>
-
-                        @if ($sortPanelOpen)
-                            <div class="ac-kanban-sort-popover" role="menu" wire:key="dialog-kanban-sort-popover">
-                                <div class="ac-kanban-sort-popover__head">
-                                    <span>Сортировка</span>
-                                </div>
-
-                                <div class="ac-kanban-sort-popover__list">
-                                    @foreach ($sort_options as $sortCode => $sortLabel)
-                                        <button
-                                            type="button"
-                                            wire:click="selectKanbanSort('{{ $sortCode }}')"
-                                            @class([
-                                                'ac-kanban-sort-option',
-                                                'is-active' => $sort_state['selected'] === $sortCode,
-                                            ])
-                                            role="menuitemradio"
-                                            aria-checked="{{ $sort_state['selected'] === $sortCode ? 'true' : 'false' }}"
-                                        >
-                                            <span>{{ $sortLabel }}</span>
-
-                                            @if ($sort_state['selected'] === $sortCode)
-                                                <span class="ac-kanban-sort-option__mark">✓</span>
-                                            @endif
-                                        </button>
-                                    @endforeach
-                                </div>
-                            </div>
-                        @endif
-                    </div>
 
                     <span class="ac-kanban-view-switch" role="group" aria-label="Вид диалогов">
                         <span class="ac-kanban-view-switch__item is-active">Канбан</span>

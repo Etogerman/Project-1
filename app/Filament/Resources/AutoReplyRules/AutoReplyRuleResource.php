@@ -13,8 +13,6 @@ use App\Services\Bots\SyncAutoReplyRuleTagConditionsAction;
 use App\Services\Bots\SyncAutoReplyRuleTagEffectsAction;
 use BackedEnum;
 use Filament\Actions\Action;
-use Filament\Actions\DeleteAction;
-use Filament\Actions\EditAction;
 use Filament\Forms\Components\Checkbox;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
@@ -26,7 +24,6 @@ use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Schema;
-use Filament\Support\Enums\Alignment;
 use Filament\Support\Enums\Width;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
@@ -53,11 +50,11 @@ class AutoReplyRuleResource extends Resource
 
     protected static ?string $recordTitleAttribute = 'keyword';
 
-    protected static ?string $modelLabel = 'Правило автоответа';
+    protected static ?string $modelLabel = 'Старое правило автоответа';
 
-    protected static ?string $pluralModelLabel = 'Правила автоответа';
+    protected static ?string $pluralModelLabel = 'Архив старых автоответов';
 
-    protected static ?string $navigationLabel = 'Правила автоответа';
+    protected static ?string $navigationLabel = 'Архив автоответов';
 
     protected static string|UnitEnum|null $navigationGroup = 'Автоматизация';
 
@@ -702,35 +699,9 @@ class AutoReplyRuleResource extends Resource
                     ->extraAttributes(['class' => 'ac-table-toolbar-trigger'], merge: true),
             )
             ->defaultSort('created_at', 'desc')
-            ->emptyStateHeading('Правила автоответа ещё не добавлены')
-            ->emptyStateDescription('Создайте первое правило для точного совпадения текста.')
-            ->recordActionsColumnLabel('Кнопки')
-            ->recordActions([
-                EditAction::make()
-                    ->icon(Heroicon::OutlinedPencilSquare)
-                    ->iconButton()
-                    ->tooltip('Изменить правило')
-                    ->modalWidth(Width::FiveExtraLarge)
-                    ->modalFooterActionsAlignment(Alignment::End)
-                    ->extraModalWindowAttributes([
-                        'class' => 'ac-auto-reply-form-modal',
-                        'style' => 'width: 90vw; max-width: 90vw;',
-                    ])
-                    ->using(function (array $data, AutoReplyRule $record): AutoReplyRule {
-                        try {
-                            return static::saveAutoReplyRule($data, $record);
-                        } catch (ValidationException $exception) {
-                            static::notifyValidationFailure($exception);
-
-                            throw $exception;
-                        }
-                    }),
-                DeleteAction::make()
-                    ->icon(Heroicon::OutlinedTrash)
-                    ->iconButton()
-                    ->color('danger')
-                    ->tooltip('Удалить правило'),
-            ])
+            ->emptyStateHeading('В архиве старых автоответов пока нет правил')
+            ->emptyStateDescription('Действующие автоответы настраиваются во вкладке «Автоответчик» конструктора.')
+            ->recordActions([])
             ->toolbarActions([]);
     }
 

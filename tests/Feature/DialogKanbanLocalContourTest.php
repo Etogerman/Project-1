@@ -53,10 +53,11 @@ class DialogKanbanLocalContourTest extends TestCase
             ->assertOk()
             ->assertSee('Диалоги')
             ->assertSee('Канбан')
-            ->assertSee('Фильтры')
-            ->assertSee('Сортировка')
+            ->assertSee('Фильтр')
             ->assertSee('Таблица')
-            ->assertSeeInOrder(['Фильтры', 'Таблица'])
+            ->assertSeeInOrder(['Фильтр', 'Таблица'])
+            ->assertDontSee('ac-kanban-hero__title', false)
+            ->assertDontSee('Сортировка')
             ->assertDontSee('Сортировка появится следующим срезом')
             ->assertDontSee('Требует проверки')
             ->assertSee($dialog->contact->display_name)
@@ -228,7 +229,7 @@ class DialogKanbanLocalContourTest extends TestCase
             ->assertDontSee($readyDialog->contact->display_name);
     }
 
-    public function test_kanban_sort_menu_sorts_cards_by_oldest_activity(): void
+    public function test_kanban_query_sort_sorts_cards_by_oldest_activity(): void
     {
         $admin = $this->createAdmin();
         $olderDialog = $this->createKanbanDialog([
@@ -247,26 +248,21 @@ class DialogKanbanLocalContourTest extends TestCase
             ->assertSeeInOrder([
                 $newerDialog->contact->display_name,
                 $olderDialog->contact->display_name,
-            ])
-            ->call('toggleSortPanel')
-            ->assertSet('sortPanelOpen', true)
-            ->assertSee('Сначала старые')
-            ->call('selectKanbanSort', 'activity_asc')
-            ->assertSet('selectedSort', 'activity_asc')
-            ->assertSet('sortPanelOpen', false);
+            ]);
 
         Livewire::withQueryParams([
             'sort' => 'activity_asc',
         ])
             ->actingAs($admin)
             ->test(DialogKanban::class)
+            ->assertSet('selectedSort', 'activity_asc')
             ->assertSeeInOrder([
                 $olderDialog->contact->display_name,
                 $newerDialog->contact->display_name,
             ]);
     }
 
-    public function test_kanban_sort_menu_can_put_dialogs_requiring_reply_first(): void
+    public function test_kanban_query_sort_can_put_dialogs_requiring_reply_first(): void
     {
         $admin = $this->createAdmin();
         $answeredDialog = $this->createKanbanDialog([

@@ -914,6 +914,44 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertCanSeeTableRecords([$zetaDialog, $alphaDialog], inOrder: true);
     }
 
+    public function test_dialogs_inbox_contact_sort_keeps_manual_requires_reply_filter_and_status_projection(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $openDialog = $this->createInboxDialog([
+            'contactName' => 'Анна требует ответа',
+        ]);
+        $closedDialog = $this->createInboxDialog([
+            'contactName' => 'Яков уже закрыт',
+        ]);
+
+        $closedInbound = $this->createDialogMessage($closedDialog, [
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'text' => 'Закрытый вопрос',
+            'received_at' => now()->subMinutes(2),
+        ]);
+
+        $this->createDialogMessage($closedDialog, [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'reply_to_message_id' => $closedInbound->id,
+            'text' => 'Ответ уже отправлен',
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ListDialogs::class)
+            ->filterTable('inbox_status', DialogInboxStatusData::CODE_REQUIRES_REPLY)
+            ->call('sortTable', 'contact_label', 'asc')
+            ->assertSet('tableFilters.inbox_status.value', DialogInboxStatusData::CODE_REQUIRES_REPLY)
+            ->assertCanSeeTableRecords([$openDialog])
+            ->assertCanNotSeeTableRecords([$closedDialog])
+            ->assertTableColumnStateSet('inbox_status', 'Требует ответа', $openDialog);
+    }
+
     public function test_dialogs_inbox_uses_current_dialog_identity_label_for_each_row(): void
     {
         $admin = User::factory()->create([
@@ -1769,6 +1807,7 @@ class FilamentDialogsResourceTest extends TestCase
 
         $component = Livewire::actingAs($admin)
             ->test(ListDialogs::class)
+            ->filterTable('inbox_status', DialogInboxStatusData::CODE_REQUIRES_REPLY)
             ->assertCanSeeTableRecords([$dialog])
             ->set('selectedTableRecords', [(string) $dialog->getKey()]);
 
@@ -1805,7 +1844,7 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSet('isTrackingDeselectedTableRecords', false);
     }
 
-    public function test_dialogs_inbox_defaults_to_requires_manual_reply_filter(): void
+    public function test_dialogs_inbox_opens_without_default_status_filter(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -1837,12 +1876,11 @@ class FilamentDialogsResourceTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ListDialogs::class)
             ->assertTableFilterExists('inbox_status')
-            ->assertSet('tableFilters.inbox_status.value', DialogInboxStatusData::CODE_REQUIRES_REPLY)
-            ->assertCanSeeTableRecords([$openDialog])
-            ->assertCanNotSeeTableRecords([$closedDialog]);
+            ->assertSet('tableFilters.inbox_status.value', null)
+            ->assertCanSeeTableRecords([$openDialog, $closedDialog]);
     }
 
-    public function test_dialogs_inbox_can_show_all_dialogs_when_requires_reply_filter_is_removed(): void
+    public function test_dialogs_inbox_can_filter_requires_manual_reply_dialogs(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -1873,8 +1911,9 @@ class FilamentDialogsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ListDialogs::class)
-            ->removeTableFilter('inbox_status')
-            ->assertCanSeeTableRecords([$openDialog, $closedDialog]);
+            ->filterTable('inbox_status', DialogInboxStatusData::CODE_REQUIRES_REPLY)
+            ->assertCanSeeTableRecords([$openDialog])
+            ->assertCanNotSeeTableRecords([$closedDialog]);
     }
 
     public function test_dialogs_inbox_status_filter_supports_all_inbox_states(): void
@@ -1932,7 +1971,7 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertCanNotSeeTableRecords([$requiresReplyDialog, $notRequiredDialog]);
     }
 
-    public function test_dialogs_inbox_default_requires_reply_filter_hides_manually_dismissed_dialogs(): void
+    public function test_dialogs_inbox_requires_reply_filter_hides_manually_dismissed_dialogs(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -1957,6 +1996,7 @@ class FilamentDialogsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ListDialogs::class)
+            ->filterTable('inbox_status', DialogInboxStatusData::CODE_REQUIRES_REPLY)
             ->assertCanSeeTableRecords([$openDialog])
             ->assertCanNotSeeTableRecords([$dismissedDialog]);
     }
@@ -2350,11 +2390,11 @@ class FilamentDialogsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ListDialogs::class)
+            ->filterTable('inbox_status', DialogInboxStatusData::CODE_REQUIRES_REPLY)
             ->assertCanNotSeeTableRecords([$dialog]);
 
         Livewire::actingAs($admin)
             ->test(ListDialogs::class)
-            ->removeTableFilter('inbox_status')
             ->assertCanSeeTableRecords([$dialog])
             ->assertSee('Клиент заблокировал бота')
             ->assertSee('Система')
