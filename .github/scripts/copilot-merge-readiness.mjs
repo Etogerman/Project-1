@@ -250,11 +250,91 @@ function parseStrictJson(output) {
     throw new Error("Copilot output is not strict JSON.");
   }
 
-  return JSON.parse(trimmed);
+  return {
+    payload: JSON.parse(trimmed),
+    normalizedControlChars: false,
+  };
+}
+
+function escapeRawControlCharsInJsonStrings(value) {
+  let result = "";
+  let inString = false;
+  let escaped = false;
+
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+
+    if (!inString) {
+      if (char === "\"") {
+        inString = true;
+      }
+
+      result += char;
+      continue;
+    }
+
+    if (escaped) {
+      result += char;
+      escaped = false;
+      continue;
+    }
+
+    if (char === "\\") {
+      result += char;
+      escaped = true;
+      continue;
+    }
+
+    if (char === "\"") {
+      result += char;
+      inString = false;
+      continue;
+    }
+
+    if (code <= 0x1F) {
+      if (char === "\n") {
+        result += "\\n";
+      } else if (char === "\r") {
+        result += "\\r";
+      } else if (char === "\t") {
+        result += "\\t";
+      } else {
+        result += `\\u${code.toString(16).padStart(4, "0")}`;
+      }
+
+      continue;
+    }
+
+    result += char;
+  }
+
+  return result;
+}
+
+function parseStrictJsonWithControlCharNormalization(output) {
+  try {
+    return parseStrictJson(output);
+  } catch (error) {
+    if (!/control character/i.test(error.message)) {
+      throw error;
+    }
+
+    const trimmed = output.trim();
+
+    return {
+      payload: JSON.parse(escapeRawControlCharsInJsonStrings(trimmed)),
+      normalizedControlChars: true,
+    };
+  }
 }
 
 function parseCopilotResponse(output) {
-  return normalizeCopilotPayload(parseStrictJson(output));
+  const parsed = parseStrictJsonWithControlCharNormalization(output);
+
+  return {
+    payload: normalizeCopilotPayload(parsed.payload),
+    normalizedControlChars: parsed.normalizedControlChars,
+  };
 }
 
 function normalizeStringArray(value) {
@@ -350,6 +430,19 @@ function withCheckedCondition(payload, condition) {
   };
 }
 
+function withParseDiagnostics(parsed, condition) {
+  const diagnostics = [condition];
+
+  if (parsed.normalizedControlChars) {
+    diagnostics.push("Copilot JSON raw control characters normalized");
+  }
+
+  return diagnostics.reduce(
+    (payload, diagnostic) => withCheckedCondition(payload, diagnostic),
+    parsed.payload,
+  );
+}
+
 function callCopilot(prompt) {
   if (!process.env.COPILOT_GITHUB_TOKEN) {
     return {
@@ -365,7 +458,7 @@ function callCopilot(prompt) {
   const first = runCopilotPrompt(prompt);
 
   try {
-    return withCheckedCondition(parseCopilotResponse(first.stdout), "Copilot JSON attempt 1: valid");
+    return withParseDiagnostics(parseCopilotResponse(first.stdout), "Copilot JSON attempt 1: valid");
   } catch (firstError) {
     const retryPrompt = buildJsonRetryPrompt({
       previousOutput: first.stdout,
@@ -374,10 +467,12 @@ function callCopilot(prompt) {
     const second = runCopilotPrompt(retryPrompt);
 
     try {
-      return withCheckedCondition(
-        withCheckedCondition(parseCopilotResponse(second.stdout), "Copilot JSON attempt 1: invalid strict JSON"),
-        "Copilot JSON attempt 2: valid",
-      );
+      const parsedSecond = parseCopilotResponse(second.stdout);
+
+      return withParseDiagnostics({
+        ...parsedSecond,
+        payload: withCheckedCondition(parsedSecond.payload, "Copilot JSON attempt 1: invalid strict JSON"),
+      }, "Copilot JSON attempt 2: valid");
     } catch (secondError) {
       throw new Error([
         "Copilot output is not strict JSON after 2 attempts.",
@@ -617,7 +712,21 @@ function selfTest() {
   assert.equal(finalVerdict({ deterministicBlockers: [], contextBlockers: [], copilot: { verdict: "READY_TO_MERGE" } }), "READY_TO_MERGE");
   assert.equal(finalVerdict({ deterministicBlockers: ["x"], contextBlockers: [], copilot: { verdict: "READY_TO_MERGE" } }), "BLOCKED");
   assert.equal(finalVerdict({ deterministicBlockers: [], contextBlockers: ["x"], copilot: { verdict: "READY_TO_MERGE" } }), "BLOCKED");
-  assert.equal(parseCopilotResponse("{\"verdict\":\"BLOCKED\",\"blockers\":[\"x\"],\"risks\":[],\"checked_conditions\":[],\"missing_data\":[],\"next_step\":\"fix\"}").verdict, "BLOCKED");
+  assert.equal(parseCopilotResponse("{\"verdict\":\"BLOCKED\",\"blockers\":[\"x\"],\"risks\":[],\"checked_conditions\":[],\"missing_data\":[],\"next_step\":\"fix\"}").payload.verdict, "BLOCKED");
+  assert.deepEqual(
+    parseCopilotResponse("{\"verdict\":\"BLOCKED\",\"blockers\":[\"line\nbreak\"],\"risks\":[],\"checked_conditions\":[],\"missing_data\":[],\"next_step\":\"fix\"}"),
+    {
+      payload: {
+        verdict: "BLOCKED",
+        blockers: ["line\nbreak"],
+        risks: [],
+        checked_conditions: [],
+        missing_data: [],
+        next_step: "fix",
+      },
+      normalizedControlChars: true,
+    },
+  );
   assert.throws(() => parseStrictJson("```json\n{}\n```"), /strict JSON/);
   assert.deepEqual(
     buildCopilotArgs("prompt").filter((arg) => ["--no-custom-instructions", "--no-color", "--silent", "--stream", "off"].includes(arg)),
