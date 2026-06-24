@@ -11,6 +11,7 @@
         data-sheet-export-url="{{ $scenarioBuilderV3Config['sheetExportUrl'] }}"
         data-sheet-import-preview-url="{{ $scenarioBuilderV3Config['sheetImportPreviewUrl'] }}"
         data-sheet-import-apply-url="{{ $scenarioBuilderV3Config['sheetImportApplyUrl'] }}"
+        data-auto-reply-export-url="{{ $scenarioBuilderV3Config['autoReplyExportUrl'] }}"
         data-auto-reply-import-preview-url="{{ $scenarioBuilderV3Config['autoReplyImportPreviewUrl'] }}"
         data-auto-reply-import-tag-store-url="{{ $scenarioBuilderV3Config['autoReplyImportTagStoreUrl'] }}"
         data-csrf-token="{{ $scenarioBuilderV3Config['csrfToken'] }}"

@@ -18,6 +18,7 @@ document.querySelectorAll('[data-scenario-builder-v3]').forEach((element) => {
             sheetExportUrl={element.dataset.sheetExportUrl}
             sheetImportPreviewUrl={element.dataset.sheetImportPreviewUrl}
             sheetImportApplyUrl={element.dataset.sheetImportApplyUrl}
+            autoReplyExportUrl={element.dataset.autoReplyExportUrl}
             autoReplyImportPreviewUrl={element.dataset.autoReplyImportPreviewUrl}
             autoReplyImportTagStoreUrl={element.dataset.autoReplyImportTagStoreUrl}
             csrfToken={element.dataset.csrfToken}

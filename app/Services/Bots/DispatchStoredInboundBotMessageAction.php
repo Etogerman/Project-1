@@ -25,6 +25,7 @@ class DispatchStoredInboundBotMessageAction
         protected SendBotDialogTextAction $sendBotDialogTextAction,
         protected StoreOutboundAutoReplyMessageAction $storeOutboundAutoReplyMessageAction,
         protected DataCollectionPromptHelper $dataCollectionPromptHelper,
+        protected LegacyAutoReplyRuntimeGate $legacyAutoReplyRuntimeGate,
     ) {}
 
     public function handle(
@@ -437,6 +438,19 @@ class DispatchStoredInboundBotMessageAction
      */
     protected function queueAutoReply(Channel $channel, Message $storedMessage, array $duplicateContext): void
     {
+        if (! $this->legacyAutoReplyRuntimeGate->rulesEnabled()) {
+            $this->channelActivityLogger->info(
+                $channel,
+                'bot.reply_skipped_legacy_cutover',
+                'Старый автоответчик пропущен: включён cutover на V3-конструктор.',
+                $duplicateContext + [
+                    'auto_reply_mode' => $channel->auto_reply_mode ?? Channel::AUTO_REPLY_MODE_RULES_ONLY,
+                ],
+            );
+
+            return;
+        }
+
         if (! $storedMessage->wasRecentlyCreated) {
             $this->channelActivityLogger->info(
                 $channel,

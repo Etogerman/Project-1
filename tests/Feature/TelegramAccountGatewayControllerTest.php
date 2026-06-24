@@ -155,6 +155,39 @@ class TelegramAccountGatewayControllerTest extends TestCase
         Queue::assertNotPushed(ProcessAutoReplyJob::class);
     }
 
+    public function test_gateway_live_event_skips_legacy_auto_reply_when_cutover_is_enabled(): void
+    {
+        Queue::fake();
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+        config()->set('bots.legacy_auto_reply_rules_enabled', false);
+
+        $channel = $this->createTelegramAccountChannel([
+            'name' => 'Telegram Account Cutover',
+        ]);
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(
+            route('internal.telegram-account.messages.handle', ['channel' => $channel]),
+            $this->payload(
+                channel: $channel,
+                externalChatId: '700015',
+                externalUserId: 'tg-account-user-15',
+                externalMessageId: '900015',
+                text: 'Привет после cutover',
+                historySource: 'live',
+            ),
+        )->assertOk()
+            ->assertJsonPath('stored', true);
+
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'bot.reply_skipped_legacy_cutover',
+            'level' => 'info',
+        ]);
+    }
+
     public function test_gateway_live_event_starts_matching_published_v3_scenario_before_auto_reply(): void
     {
         Queue::fake();

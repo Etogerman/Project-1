@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import {
     applyScenarioBuilderSheetImport,
     createScenarioBuilderAutoReplyImportTag,
+    exportScenarioBuilderAutoReplies,
     exportScenarioBuilderSheet,
     loadScenarioBuilderState,
     previewScenarioBuilderAutoReplyImport,
@@ -35,6 +36,12 @@ const AUTO_REPLY_IMPORT_PLACEMENTS = [
 const AUTO_REPLY_IMPORT_DEFAULT_PLACEMENT = 'single_sheet';
 const AUTO_REPLY_IMPORT_TYPE = 'auto_reply_rule_xlsx';
 const MAX_VISIBLE_SHEET_TABS = 8;
+const BUILDER_VIEW_MODE_STORAGE_KEY = 'scenario-builder-v3:view-mode';
+const BUILDER_VIEW_MODE_QUERY_PARAM = 'builder_view';
+const BUILDER_VIEW_MODES = ['design', 'auto_reply', 'logs'];
+const BUILDER_WORKSPACE_STORAGE_PREFIX = 'scenario-builder-v3:workspace:';
+const AUTO_REPLY_TABLE_STORAGE_PREFIX = 'scenario-builder-v3:auto-reply-table:';
+const AUTO_REPLY_TOOLBAR_PORTAL_ID = 'scenario-builder-v3-auto-reply-toolbar-root';
 
 const NODE_WIDTH = 286;
 const NODE_HEADER_HEIGHT = 54;
@@ -61,6 +68,34 @@ const MATCH_OPTIONS = [
     ['exact_callback', 'Точный callback'],
     ['any_inbound', 'Любое входящее'],
 ];
+const AUTO_REPLY_TABLE_COLUMNS = [
+    { id: 'active', label: 'Вкл', width: '46px', sortable: true },
+    { id: 'block', label: 'Блок', width: 'minmax(190px, 1.15fr)', sortable: true },
+    { id: 'priority', label: 'Priority', width: '84px', sortable: true },
+    { id: 'match', label: 'Совпадение', width: '142px', sortable: true },
+    { id: 'phrase', label: 'Фраза', width: 'minmax(160px, 0.9fr)', sortable: true },
+    { id: 'text', label: 'Текст', width: 'minmax(220px, 1.2fr)', sortable: true },
+    { id: 'channels', label: 'Каналы', width: 'minmax(176px, 0.9fr)', sortable: true },
+    { id: 'continuation', label: 'Дальше', width: '78px', sortable: true },
+    { id: 'open', label: 'Открыть', width: '88px', sortable: false },
+];
+const AUTO_REPLY_TABLE_COLUMN_IDS = AUTO_REPLY_TABLE_COLUMNS.map((column) => column.id);
+const AUTO_REPLY_TABLE_COLUMN_BY_ID = new Map(AUTO_REPLY_TABLE_COLUMNS.map((column) => [column.id, column]));
+const AUTO_REPLY_TABLE_DEFAULT_SETTINGS = {
+    query: '',
+    status: 'all',
+    channelId: 'all',
+    match: 'all',
+    sheetId: 'all',
+    continuation: 'all',
+    sortKey: 'default',
+    sortDirection: 'desc',
+    pageSize: 25,
+    page: 1,
+    columnOrder: AUTO_REPLY_TABLE_COLUMN_IDS,
+    visibleColumns: AUTO_REPLY_TABLE_COLUMN_IDS,
+};
+const AUTO_REPLY_TABLE_PAGE_SIZES = [25, 50, 100, 'all'];
 const EDGE_MATCH_OPTIONS = [
     ['any_inbound', 'Любое входящее'],
     ['exact_text', 'Точный текст'],
@@ -641,6 +676,7 @@ export default function App({
     sheetExportUrl,
     sheetImportPreviewUrl,
     sheetImportApplyUrl,
+    autoReplyExportUrl,
     autoReplyImportPreviewUrl,
     autoReplyImportTagStoreUrl,
     csrfToken,
@@ -655,12 +691,17 @@ export default function App({
     const [error, setError] = useState(null);
     const [notice, setNotice] = useState(null);
     const [validationIssue, setValidationIssue] = useState(null);
-    const [mode, setMode] = useState('design');
+    const initialUrlModeRef = useRef(null);
+    if (initialUrlModeRef.current === null) {
+        initialUrlModeRef.current = readBuilderViewModeFromUrl();
+    }
+    const [mode, setMode] = useState(readStoredBuilderViewMode);
     const [logStatusFilter, setLogStatusFilter] = useState('all');
     const [tool, setTool] = useState('select');
     const [isSaving, setIsSaving] = useState(false);
     const [isPublishing, setIsPublishing] = useState(false);
     const [isExportingSheet, setIsExportingSheet] = useState(false);
+    const [isExportingAutoReplies, setIsExportingAutoReplies] = useState(false);
     const [isImportingSheet, setIsImportingSheet] = useState(false);
     const [isApplyingSheetImport, setIsApplyingSheetImport] = useState(false);
     const [sheetImportJson, setSheetImportJson] = useState('');
@@ -690,6 +731,7 @@ export default function App({
     const [blockSearchIndex, setBlockSearchIndex] = useState(0);
     const [selectedBlockKey, setSelectedBlockKey] = useState(null);
     const [selectedEdgeKey, setSelectedEdgeKey] = useState(null);
+    const [autoReplyPanelOpen, setAutoReplyPanelOpen] = useState(false);
     const [selectedWaypoint, setSelectedWaypoint] = useState(null);
     const [waypointPreview, setWaypointPreview] = useState(null);
     const [isPanelCollapsed, setIsPanelCollapsed] = useState(false);
@@ -714,8 +756,18 @@ export default function App({
                     return;
                 }
 
-                setState(data);
-                setSelectedBlockKey(data.builder?.blocks?.[0]?.client_key ?? null);
+                const storedWorkspace = readStoredBuilderWorkspace(stateUrl);
+                const restoredState = stateWithStoredBuilderWorkspace(data, storedWorkspace);
+                const restoredSelection = selectedBuilderItemFromStoredWorkspace(restoredState?.builder, storedWorkspace);
+                const urlMode = readBuilderViewModeFromUrl();
+
+                setState(restoredState);
+                if (urlMode) {
+                    setMode(urlMode);
+                }
+                setSelectedBlockKey(restoredSelection.blockKey);
+                setSelectedEdgeKey(restoredSelection.edgeKey);
+                setIsPanelCollapsed(restoredSelection.panelCollapsed);
                 setStatus('ready');
             })
             .catch((requestError) => {
@@ -769,6 +821,7 @@ export default function App({
             || isPublishing
             || isImportingSheet
             || isApplyingSheetImport
+            || isExportingAutoReplies
             || isImportingAutoReplies
             || isApplyingAutoReplyImport
         ) {
@@ -808,6 +861,7 @@ export default function App({
         isPublishing,
         isImportingSheet,
         isApplyingSheetImport,
+        isExportingAutoReplies,
         isImportingAutoReplies,
         isApplyingAutoReplyImport,
         refreshBuilderDiagnostics,
@@ -839,16 +893,38 @@ export default function App({
     const serverTimezoneLabel = serverClock?.timezone_abbr || serverClock?.utc_offset || '';
     const blocks = useMemo(() => blocksForSheet(allBlocks, activeSheet.id), [allBlocks, activeSheet.id]);
     const edges = useMemo(() => filterEdgesForBlocks(allEdges, blocks), [allEdges, blocks]);
+    const autoReplyBlocks = useMemo(() => autoReplyBlocksForBuilder(allBlocks), [allBlocks]);
     const selectedBlock = blocks.find((block) => block.client_key === selectedBlockKey) ?? null;
+    const selectedAutoReplyBlock = autoReplyBlocks.find((block) => block.client_key === selectedBlockKey) ?? null;
     const selectedEdge = edges.find((edge) => edge.client_key === selectedEdgeKey) ?? null;
     const dialogFieldKeys = useMemo(() => dialogFieldSuggestionsFromDictionary(fieldDictionary), [fieldDictionary]);
     const blockSearchMatches = useMemo(() => searchBlocks(blocks, blockSearchQuery), [blocks, blockSearchQuery]);
+
+    useEffect(() => {
+        if (status !== 'ready' || ! builder) {
+            return undefined;
+        }
+
+        const timeout = window.setTimeout(() => {
+            storeBuilderWorkspace(stateUrl, builder, {
+                selectedBlockKey,
+                selectedEdgeKey,
+                panelCollapsed: isPanelCollapsed,
+            });
+        }, 160);
+
+        return () => {
+            window.clearTimeout(timeout);
+        };
+    }, [status, stateUrl, builder?.active_sheet_id, builder?.sheets, selectedBlockKey, selectedEdgeKey, isPanelCollapsed]);
+
     const canSave = state?.permissions?.can_update === true
         && status === 'ready'
         && ! isSaving
         && ! isPublishing
         && ! isImportingSheet
         && ! isApplyingSheetImport
+        && ! isExportingAutoReplies
         && ! isImportingAutoReplies
         && ! isApplyingAutoReplyImport;
     const canPublish = state?.permissions?.can_publish === true
@@ -857,6 +933,7 @@ export default function App({
         && ! isPublishing
         && ! isImportingSheet
         && ! isApplyingSheetImport
+        && ! isExportingAutoReplies
         && ! isImportingAutoReplies
         && ! isApplyingAutoReplyImport
         && Boolean(publishUrl);
@@ -865,6 +942,7 @@ export default function App({
         && ! isSaving
         && ! isPublishing
         && ! isExportingSheet
+        && ! isExportingAutoReplies
         && ! isImportingSheet
         && ! isApplyingSheetImport
         && Boolean(sheetExportUrl)
@@ -874,16 +952,70 @@ export default function App({
         && status === 'ready'
         && ! isSaving
         && ! isPublishing
+        && ! isExportingAutoReplies
         && ! isImportingSheet
         && ! isApplyingSheetImport
         && ! isImportingAutoReplies
         && ! isApplyingAutoReplyImport
         && Boolean(autoReplyImportPreviewUrl);
+    const canExportAutoReplies = state?.permissions?.can_update === true
+        && status === 'ready'
+        && ! isSaving
+        && ! isPublishing
+        && ! isExportingSheet
+        && ! isExportingAutoReplies
+        && ! isImportingSheet
+        && ! isApplyingSheetImport
+        && ! isImportingAutoReplies
+        && ! isApplyingAutoReplyImport
+        && Boolean(autoReplyExportUrl);
     const canCreateAutoReplyTags = state?.permissions?.can_create_tags === true
         && Boolean(autoReplyImportTagStoreUrl);
     const canvasBounds = useMemo(() => graphBounds(blocks, edges), [blocks, edges]);
-    const hasPanelSelection = Boolean(selectedBlock || selectedEdge);
-    const isPanelOpen = mode === 'design' && hasPanelSelection && ! isPanelCollapsed;
+    const inspectorBlock = mode === 'auto_reply' ? selectedAutoReplyBlock : selectedBlock;
+    const hasPanelSelection = mode === 'auto_reply'
+        ? Boolean(selectedAutoReplyBlock && autoReplyPanelOpen)
+        : Boolean(selectedBlock || selectedEdge);
+    const isPanelOpen = (mode === 'design' || mode === 'auto_reply') && hasPanelSelection && ! isPanelCollapsed;
+
+    useEffect(() => {
+        storeBuilderViewMode(mode);
+    }, [mode]);
+
+    useEffect(() => {
+        const urlMode = initialUrlModeRef.current;
+
+        if (urlMode && urlMode !== mode) {
+            setMode(urlMode);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (typeof document === 'undefined') {
+            return undefined;
+        }
+
+        const handleNativePanelClose = (event) => {
+            const target = event.target?.closest?.('[data-panel-close]')
+                ?? event.target?.parentElement?.closest?.('[data-panel-close]');
+
+            if (! target) {
+                return;
+            }
+
+            event.preventDefault();
+            event.stopPropagation();
+            closePanelSelection();
+        };
+
+        document.addEventListener('pointerdown', handleNativePanelClose, true);
+        document.addEventListener('click', handleNativePanelClose, true);
+
+        return () => {
+            document.removeEventListener('pointerdown', handleNativePanelClose, true);
+            document.removeEventListener('click', handleNativePanelClose, true);
+        };
+    }, [builder, stateUrl]);
 
     useEffect(() => {
         setBlockSearchIndex(0);
@@ -1071,13 +1203,35 @@ export default function App({
     }
 
     function updateView(nextView) {
-        const sheets = (builder?.sheets?.length ? builder.sheets : [MAIN_SHEET]).map((sheet) => (
-            sheet.id === activeSheet.id
+        updateBuilder({ sheets: sheetsWithView(activeSheet.id, nextView) });
+    }
+
+    function sheetsWithView(sheetId, nextView) {
+        const resolvedSheetId = String(sheetId || MAIN_SHEET.id);
+        const sourceSheets = builder?.sheets?.length ? builder.sheets : [MAIN_SHEET];
+
+        return sourceSheets.map((sheet) => (
+            String(sheet.id) === resolvedSheetId
                 ? { ...sheet, view: typeof nextView === 'function' ? nextView(sheet.view ?? MAIN_SHEET.view) : nextView }
                 : sheet
         ));
+    }
 
-        updateBuilder({ sheets });
+    function constructorCanvasViewportSize() {
+        const rect = canvasRef.current?.getBoundingClientRect();
+
+        if (rect?.width && rect?.height) {
+            return { width: rect.width, height: rect.height };
+        }
+
+        if (typeof window === 'undefined') {
+            return { width: 1100, height: 720 };
+        }
+
+        return {
+            width: Math.max(420, window.innerWidth - panelWidth - 160),
+            height: Math.max(420, window.innerHeight - 190),
+        };
     }
 
     function switchSheet(sheetId) {
@@ -1093,6 +1247,150 @@ export default function App({
         setPendingConnection(null);
         setRewireTargetKey(null);
         setNotice(null);
+    }
+
+    function openDesignMode() {
+        setMode('design');
+        setTool('select');
+        setAutoReplyPanelOpen(false);
+        setSelectedEdgeKey(null);
+        setSelectedWaypoint(null);
+        setPendingConnection(null);
+        setRewireTargetKey(null);
+        setIsMoreMenuOpen(false);
+    }
+
+    function openAutoReplyMode() {
+        setMode('auto_reply');
+        setTool('select');
+        setSelectedBlockKey(null);
+        setSelectedEdgeKey(null);
+        setAutoReplyPanelOpen(false);
+        setSelectedWaypoint(null);
+        setPendingConnection(null);
+        setRewireTargetKey(null);
+        setIsMoreMenuOpen(false);
+    }
+
+    function openLogsMode() {
+        setMode('logs');
+        setSelectedEdgeKey(null);
+        setSelectedWaypoint(null);
+        setPendingConnection(null);
+        setRewireTargetKey(null);
+        setIsMoreMenuOpen(false);
+    }
+
+    function selectAutoReplyBlock(block, { openPanel = true } = {}) {
+        if (! block) {
+            return;
+        }
+
+        const sheetId = blockSheetId(block);
+
+        if (sheetId && sheetId !== activeSheet.id) {
+            updateBuilder({ active_sheet_id: sheetId });
+        }
+
+        setMode('auto_reply');
+        setTool('select');
+        setSelectedBlockKey(block.client_key);
+        setSelectedEdgeKey(null);
+        setAutoReplyPanelOpen(openPanel);
+        setSelectedWaypoint(null);
+        setIsPanelCollapsed(! openPanel);
+        setPendingConnection(null);
+        setRewireTargetKey(null);
+    }
+
+    function openAutoReplyBlockInConstructor(block) {
+        if (! block) {
+            return;
+        }
+
+        const sheetId = blockSheetId(block);
+        const targetSheet = sheets.find((sheet) => String(sheet.id) === sheetId) ?? activeSheet;
+        const viewportSize = constructorCanvasViewportSize();
+        const nextView = viewCenteredOnBlock(block, targetSheet.view ?? MAIN_SHEET.view, viewportSize);
+
+        updateBuilder({
+            active_sheet_id: sheetId,
+            sheets: sheetsWithView(sheetId, nextView),
+        });
+        setMode('design');
+        setTool('select');
+        setAutoReplyPanelOpen(false);
+        setSelectedBlockKey(block.client_key);
+        setSelectedEdgeKey(null);
+        setSelectedWaypoint(null);
+        setIsPanelCollapsed(false);
+        setPendingConnection(null);
+        setRewireTargetKey(null);
+        setNotice(`Открыт на холсте ${shortBlockId(block)} · ${block.title || 'Без названия'}`);
+    }
+
+    function updateAutoReplyStartPayload(block, patch) {
+        if (! block) {
+            return;
+        }
+
+        selectAutoReplyBlock(block, { openPanel: true });
+        updateModulePayload(block.client_key, 'start_condition', patch);
+    }
+
+    function updateAutoReplyStartEnabled(block, enabled) {
+        if (! block) {
+            return;
+        }
+
+        selectAutoReplyBlock(block, { openPanel: true });
+        updateBlockSettings(block.client_key, (settings) => ({
+            ...settings,
+            modules: sortModules(modulesFrom(settings).map((module) => (
+                module.type === 'start_condition'
+                    ? { ...module, enabled }
+                    : module
+            ))),
+        }));
+    }
+
+    function updateAutoReplyStartChannels(block, channelIds) {
+        updateAutoReplyStartPayload(block, {
+            channels: {
+                mode: 'selected',
+                ids: channelIds.map((id) => Number(id)).filter((id) => id > 0),
+            },
+        });
+    }
+
+    function updateAutoReplyMessageText(block, text) {
+        if (! block) {
+            return;
+        }
+
+        selectAutoReplyBlock(block, { openPanel: true });
+        updateBlockSettings(block.client_key, (settings) => {
+            const modules = modulesFrom(settings);
+            const hasMessage = modules.some((module) => module.type === 'message');
+            const nextMessage = {
+                ...moduleTemplate('message', channels),
+                payload: {
+                    ...moduleTemplate('message', channels).payload,
+                    text,
+                },
+            };
+
+            return {
+                ...settings,
+                modules: sortModules(hasMessage
+                    ? modules.map((module) => (
+                        module.type === 'message'
+                            ? { ...module, payload: { ...module.payload, text } }
+                            : module
+                    ))
+                    : [...modules, nextMessage]),
+            };
+        });
     }
 
     function addSheet() {
@@ -1126,6 +1424,7 @@ export default function App({
         });
         setSelectedBlockKey(null);
         setSelectedEdgeKey(null);
+        setAutoReplyPanelOpen(false);
         setSelectedWaypoint(null);
         setIsPanelCollapsed(false);
         setPendingConnection(null);
@@ -1317,8 +1616,17 @@ export default function App({
     }
 
     function closePanelSelection() {
+        if (builder) {
+            storeBuilderWorkspace(stateUrl, builder, {
+                selectedBlockKey: null,
+                selectedEdgeKey: null,
+                panelCollapsed: false,
+            });
+        }
+
         setSelectedBlockKey(null);
         setSelectedEdgeKey(null);
+        setAutoReplyPanelOpen(false);
         setSelectedWaypoint(null);
         setIsPanelCollapsed(false);
         setRewireTargetKey(null);
@@ -1334,19 +1642,28 @@ export default function App({
         }
     }
 
+    function handlePanelPointerDownCapture(event) {
+        const target = event.target?.closest?.('[data-panel-close]')
+            ?? event.target?.parentElement?.closest?.('[data-panel-close]');
+
+        if (! target) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+        closePanelSelection();
+    }
+
     function addBlock(kind) {
         const index = blocks.length + 1;
         const clientKey = `tmp_block_${Date.now().toString(36)}_${index}`;
-        const position = {
-            x: snap(Math.round((-view.tx + 140) / view.zoom) + index * 34),
-            y: snap(Math.round((-view.ty + 116) / view.zoom) + index * 26),
-        };
         const block = {
             id: null,
             client_key: clientKey,
             type: 'state',
             title: kind === 'start' ? `Старт ${index}` : `Блок ${index}`,
-            position,
+            position: { x: 0, y: 0 },
             settings_payload: messageSettingsPayload('Новый текст сообщения'),
         };
 
@@ -1362,6 +1679,8 @@ export default function App({
             block.title = `ИИ-анализ ${index}`;
             block.settings_payload = aiSettingsPayload();
         }
+
+        block.position = newBlockPositionForVisibleCanvas(view, constructorCanvasViewportSize(), block, blocks.length);
 
         updateBlocks([...blocks, blockWithSheet(block, activeSheet.id)]);
         selectBlock(clientKey);
@@ -2738,6 +3057,27 @@ export default function App({
         }
     }
 
+    async function exportAutoReplies() {
+        if (! autoReplyExportUrl || isExportingAutoReplies) {
+            return;
+        }
+
+        setIsExportingAutoReplies(true);
+        setError(null);
+        setNotice(null);
+
+        try {
+            const document = await exportScenarioBuilderAutoReplies(autoReplyExportUrl);
+
+            downloadBlobDocument(document.filename, document.blob);
+            setNotice('Автоответы экспортированы из сохранённого черновика.');
+        } catch (requestError) {
+            setError(errorText(requestError));
+        } finally {
+            setIsExportingAutoReplies(false);
+        }
+    }
+
     function openSheetImportPicker() {
         if (! canTransferSheet) {
             return;
@@ -3237,27 +3577,35 @@ export default function App({
     }
 
     return (
-        <section className="ac-v3-builder" data-active-sheet-color={activeSheet.color || 'none'}>
-            <header className="ac-v3-builder__topbar">
-                <div className="ac-v3-builder__crumb">
-                    <strong>{state?.scenario?.name ?? 'Сценарий'}</strong>
-                </div>
+        <section
+            className={`ac-v3-builder ${mode === 'auto_reply' ? 'is-auto-reply-mode' : ''}`}
+            data-active-sheet-color={activeSheet.color || 'none'}
+        >
+            <header className={`ac-v3-builder__topbar ${mode === 'auto_reply' ? 'is-auto-reply' : ''}`}>
+                {mode === 'auto_reply' ? (
+                    <div
+                        id={AUTO_REPLY_TOOLBAR_PORTAL_ID}
+                        className="ac-v3-builder__topbar-auto-reply-tools"
+                    />
+                ) : (
+                    <>
+                        <div className="ac-v3-builder__crumb">
+                            <strong>{state?.scenario?.name ?? 'Сценарий'}</strong>
+                        </div>
 
-                <BlockSearchControl
-                    query={blockSearchQuery}
-                    matchCount={blockSearchMatches.length}
-                    matchIndex={blockSearchIndex}
-                    onQueryChange={setBlockSearchQuery}
-                    onOpen={() => focusBlockSearchMatch(0)}
-                    onPrevious={() => focusBlockSearchMatch(-1)}
-                    onNext={() => focusBlockSearchMatch(1)}
-                />
+                        <BlockSearchControl
+                            query={blockSearchQuery}
+                            matchCount={blockSearchMatches.length}
+                            matchIndex={blockSearchIndex}
+                            onQueryChange={setBlockSearchQuery}
+                            onOpen={() => focusBlockSearchMatch(0)}
+                            onPrevious={() => focusBlockSearchMatch(-1)}
+                            onNext={() => focusBlockSearchMatch(1)}
+                        />
+                    </>
+                )}
 
                 <div className="ac-v3-builder__top-actions">
-                    <button type="button" className="ac-v3-builder__run" onClick={() => setNotice('Симулятор будет подключен отдельным шагом.')}>
-                        <PlayIcon />
-                        Прогнать
-                    </button>
                     <button type="button" className="ac-v3-builder__primary" disabled={! canSave} onClick={save}>
                         {isSaving ? 'Сохраняю...' : 'Сохранить'}
                     </button>
@@ -3284,20 +3632,21 @@ export default function App({
                                         <button
                                             type="button"
                                             className={mode === 'design' ? 'is-active' : ''}
-                                            onClick={() => {
-                                                setMode('design');
-                                                setIsMoreMenuOpen(false);
-                                            }}
+                                            onClick={openDesignMode}
                                         >
                                             Сценарий
                                         </button>
                                         <button
                                             type="button"
+                                            className={mode === 'auto_reply' ? 'is-active' : ''}
+                                            onClick={openAutoReplyMode}
+                                        >
+                                            Автоответчик
+                                        </button>
+                                        <button
+                                            type="button"
                                             className={mode === 'logs' ? 'is-active' : ''}
-                                            onClick={() => {
-                                                setMode('logs');
-                                                setIsMoreMenuOpen(false);
-                                            }}
+                                            onClick={openLogsMode}
                                         >
                                             Логи
                                         </button>
@@ -3331,6 +3680,17 @@ export default function App({
                                     <button
                                         type="button"
                                         role="menuitem"
+                                        disabled={! canExportAutoReplies}
+                                        onClick={() => {
+                                            setIsMoreMenuOpen(false);
+                                            exportAutoReplies();
+                                        }}
+                                    >
+                                        {isExportingAutoReplies ? 'Экспорт...' : 'Экспорт автоответов Excel'}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        role="menuitem"
                                         disabled={! canImportAutoReplies}
                                         onClick={() => {
                                             setIsMoreMenuOpen(false);
@@ -3343,6 +3703,17 @@ export default function App({
 
                                 <div className="ac-v3-builder__more-section">
                                     <span className="ac-v3-builder__more-label">Сервис</span>
+                                    <button
+                                        type="button"
+                                        role="menuitem"
+                                        onClick={() => {
+                                            setIsMoreMenuOpen(false);
+                                            setNotice('Симулятор будет подключен отдельным шагом.');
+                                        }}
+                                    >
+                                        <PlayIcon />
+                                        Прогнать
+                                    </button>
                                     <button
                                         type="button"
                                         role="menuitem"
@@ -3389,6 +3760,23 @@ export default function App({
             />
 
             <div className="ac-v3-builder__tabs">
+                <div className="ac-v3-builder__view-tabs" role="tablist" aria-label="Вид конструктора">
+                    <button
+                        type="button"
+                        className={mode === 'design' ? 'is-active' : ''}
+                        onClick={openDesignMode}
+                    >
+                        <span>Конструктор</span>
+                    </button>
+                    <button
+                        type="button"
+                        className={mode === 'auto_reply' ? 'is-active' : ''}
+                        onClick={openAutoReplyMode}
+                    >
+                        <span>Автоответчик</span>
+                        <b>{autoReplyBlocks.length}</b>
+                    </button>
+                </div>
                 {visibleSheetTabs.map((sheet) => (
                     <button
                         key={sheet.id}
@@ -3557,10 +3945,16 @@ export default function App({
             ) : null}
 
             <div
-                className={`ac-v3-builder__workbench ${isPanelOpen ? 'is-panel-open' : ''}`}
+                className={[
+                    'ac-v3-builder__workbench',
+                    isPanelOpen ? 'is-panel-open' : '',
+                    mode === 'auto_reply' ? 'is-auto-reply' : '',
+                ].filter(Boolean).join(' ')}
                 style={{ '--ac-v3-panel-width': `${panelWidth}px` }}
             >
-                <ToolRail tool={tool} onTool={setTool} onAddBlock={addBlock} />
+                {mode !== 'auto_reply' ? (
+                    <ToolRail tool={tool} onTool={setTool} onAddBlock={addBlock} />
+                ) : null}
 
                 {mode === 'logs' ? (
                     <ScenarioLogs
@@ -3572,6 +3966,23 @@ export default function App({
                         onOpenEdge={openTransitionEdge}
                         timezone={serverTimezone}
                         timezoneLabel={serverTimezoneLabel}
+                    />
+                ) : mode === 'auto_reply' ? (
+                    <AutoReplyWorkspace
+                        stateUrl={stateUrl}
+                        toolbarPortalId={AUTO_REPLY_TOOLBAR_PORTAL_ID}
+                        blocks={autoReplyBlocks}
+                        edges={allEdges}
+                        sheets={sheets}
+                        channels={channels}
+                        selectedBlockKey={selectedBlockKey}
+                        onSelectBlock={selectAutoReplyBlock}
+                        onOpenConstructor={openAutoReplyBlockInConstructor}
+                        onAddStart={() => addBlock('start')}
+                        onUpdateStartPayload={updateAutoReplyStartPayload}
+                        onUpdateStartEnabled={updateAutoReplyStartEnabled}
+                        onUpdateStartChannels={updateAutoReplyStartChannels}
+                        onUpdateMessageText={updateAutoReplyMessageText}
                     />
                 ) : (
                     <main
@@ -3675,7 +4086,7 @@ export default function App({
                 )}
 
                 {isPanelOpen ? (
-                    <aside className="ac-v3-builder__panel">
+                    <aside className="ac-v3-builder__panel" onPointerDownCapture={handlePanelPointerDownCapture}>
                         <button
                             type="button"
                             className="ac-v3-builder__panel-resizer"
@@ -3684,7 +4095,7 @@ export default function App({
                             onPointerDown={startPanelResize}
                             onDoubleClick={resetPanelWidth}
                         />
-                        {selectedEdge ? (
+                        {mode === 'design' && selectedEdge ? (
                             <EdgePanel
                                 edge={selectedEdge}
                                 blocks={blocks}
@@ -3702,7 +4113,7 @@ export default function App({
                             />
                         ) : (
                             <BlockPanel
-                                block={selectedBlock}
+                                block={inspectorBlock}
                                 channels={channels}
                                 tags={tags}
                                 blocks={blocks}
@@ -3728,7 +4139,7 @@ export default function App({
                     </aside>
                 ) : null}
 
-                {mode === 'design' && hasPanelSelection && isPanelCollapsed ? (
+                {(mode === 'design' || mode === 'auto_reply') && hasPanelSelection && isPanelCollapsed ? (
                     <button
                         type="button"
                         className="ac-v3-builder__panel-reopen"
@@ -3749,6 +4160,727 @@ function Notice({ kind, children, onClose }) {
             <div className="ac-v3-builder__notice-body">{children}</div>
             <button type="button" onClick={onClose}>Закрыть</button>
         </div>
+    );
+}
+
+function AutoReplyWorkspace({
+    stateUrl,
+    toolbarPortalId = null,
+    blocks,
+    edges,
+    sheets,
+    channels,
+    selectedBlockKey,
+    onSelectBlock,
+    onOpenConstructor,
+    onAddStart,
+    onUpdateStartPayload,
+    onUpdateStartEnabled,
+    onUpdateStartChannels,
+    onUpdateMessageText,
+}) {
+    const tableRef = useRef(null);
+    const [channelEditorBlockKey, setChannelEditorBlockKey] = useState(null);
+    const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false);
+    const [isColumnManagerOpen, setIsColumnManagerOpen] = useState(false);
+    const [toolbarPortalElement, setToolbarPortalElement] = useState(null);
+    const [tableSettings, setTableSettings] = useState(() => readStoredAutoReplyTableSettings(stateUrl));
+    const [columnSettingsDraft, setColumnSettingsDraft] = useState(() => autoReplyColumnDraftFromSettings(tableSettings));
+    const [draggedColumnId, setDraggedColumnId] = useState(null);
+    const tableView = useMemo(
+        () => autoReplyTableView(blocks, { edges, sheets, channels }, tableSettings),
+        [blocks, edges, sheets, channels, tableSettings],
+    );
+    const rows = tableView.rows;
+    const visibleColumns = tableView.visibleColumns;
+    const visibleColumnIds = tableView.visibleColumnIds;
+    const columnDraftVisibleSet = useMemo(
+        () => new Set(columnSettingsDraft.visibleColumns),
+        [columnSettingsDraft.visibleColumns],
+    );
+    const rowStyle = useMemo(
+        () => ({ '--ac-v3-auto-reply-columns': autoReplyTableGridTemplate(visibleColumns) }),
+        [visibleColumns],
+    );
+    const activeFilterCount = autoReplyTableActiveFilterCount(tableSettings);
+
+    useEffect(() => {
+        if (! toolbarPortalId || typeof document === 'undefined') {
+            setToolbarPortalElement(null);
+
+            return;
+        }
+
+        setToolbarPortalElement(document.getElementById(toolbarPortalId));
+    }, [toolbarPortalId]);
+
+    useEffect(() => {
+        setTableSettings(readStoredAutoReplyTableSettings(stateUrl));
+    }, [stateUrl]);
+
+    useEffect(() => {
+        const timeout = window.setTimeout(() => {
+            storeAutoReplyTableSettings(stateUrl, tableSettings);
+        }, 160);
+
+        return () => {
+            window.clearTimeout(timeout);
+        };
+    }, [stateUrl, tableSettings]);
+
+    useEffect(() => {
+        const tableElement = tableRef.current;
+        const scrollContainer = tableElement?.parentElement;
+
+        if (! selectedBlockKey || ! tableElement || ! scrollContainer) {
+            return;
+        }
+
+        const selectedRow = Array.from(tableElement.querySelectorAll('[data-auto-reply-row-key]'))
+            .find((row) => row.dataset.autoReplyRowKey === selectedBlockKey);
+
+        if (! selectedRow) {
+            return;
+        }
+
+        const rowTop = selectedRow.offsetTop;
+        const rowBottom = rowTop + selectedRow.offsetHeight;
+        const visibleTop = scrollContainer.scrollTop;
+        const visibleBottom = visibleTop + scrollContainer.clientHeight;
+
+        if (rowTop < visibleTop) {
+            scrollContainer.scrollTop = rowTop;
+        } else if (rowBottom > visibleBottom) {
+            scrollContainer.scrollTop = rowBottom - scrollContainer.clientHeight;
+        }
+    }, [rows, selectedBlockKey]);
+
+    function updateTableSettings(patch, { resetPage = true } = {}) {
+        setTableSettings((current) => normalizeAutoReplyTableSettings({
+            ...current,
+            ...patch,
+            page: resetPage ? 1 : (patch.page ?? current.page),
+        }));
+    }
+
+    function resetTableFilters() {
+        setTableSettings((current) => autoReplyTableSettingsWithoutActiveFilters(current));
+    }
+
+    function resetTableSearchAndFilters() {
+        setTableSettings((current) => autoReplyTableSettingsWithoutActiveFilters(current, { clearQuery: true }));
+    }
+
+    function toggleSort(columnId) {
+        const column = AUTO_REPLY_TABLE_COLUMNS.find((item) => item.id === columnId);
+
+        if (! column?.sortable) {
+            return;
+        }
+
+        setTableSettings((current) => {
+            const nextDirection = current.sortKey === columnId && current.sortDirection === 'asc' ? 'desc' : 'asc';
+
+            return normalizeAutoReplyTableSettings({
+                ...current,
+                sortKey: columnId,
+                sortDirection: nextDirection,
+                page: 1,
+            });
+        });
+    }
+
+    function toggleColumn(columnId, checked) {
+        setColumnSettingsDraft((current) => {
+            const draft = normalizeAutoReplyColumnDraft(current);
+            const visible = new Set(draft.visibleColumns);
+
+            if (checked) {
+                visible.add(columnId);
+            } else {
+                visible.delete(columnId);
+            }
+
+            return normalizeAutoReplyColumnDraft({
+                ...draft,
+                visibleColumns: draft.columnOrder.filter((id) => visible.has(id)),
+            });
+        });
+    }
+
+    function moveColumnDraft(columnId, direction) {
+        setColumnSettingsDraft((current) => {
+            const draft = normalizeAutoReplyColumnDraft(current);
+            const index = draft.columnOrder.indexOf(columnId);
+            const nextIndex = index + direction;
+
+            if (index < 0 || nextIndex < 0 || nextIndex >= draft.columnOrder.length) {
+                return draft;
+            }
+
+            const columnOrder = [...draft.columnOrder];
+            [columnOrder[index], columnOrder[nextIndex]] = [columnOrder[nextIndex], columnOrder[index]];
+
+            return normalizeAutoReplyColumnDraft({
+                ...draft,
+                columnOrder,
+            });
+        });
+    }
+
+    function moveColumnDraftToTarget(sourceColumnId, targetColumnId) {
+        if (! sourceColumnId || ! targetColumnId || sourceColumnId === targetColumnId) {
+            return;
+        }
+
+        setColumnSettingsDraft((current) => {
+            const draft = normalizeAutoReplyColumnDraft(current);
+            const sourceIndex = draft.columnOrder.indexOf(sourceColumnId);
+            const targetIndex = draft.columnOrder.indexOf(targetColumnId);
+
+            if (sourceIndex < 0 || targetIndex < 0) {
+                return draft;
+            }
+
+            const columnOrder = [...draft.columnOrder];
+            const [movedColumnId] = columnOrder.splice(sourceIndex, 1);
+            columnOrder.splice(targetIndex, 0, movedColumnId);
+
+            return normalizeAutoReplyColumnDraft({
+                ...draft,
+                columnOrder,
+            });
+        });
+    }
+
+    function openColumnManager() {
+        setIsFilterMenuOpen(false);
+        setColumnSettingsDraft(autoReplyColumnDraftFromSettings(tableSettings));
+        setDraggedColumnId(null);
+        setIsColumnManagerOpen((isOpen) => ! isOpen);
+    }
+
+    function cancelColumnManager() {
+        setColumnSettingsDraft(autoReplyColumnDraftFromSettings(tableSettings));
+        setDraggedColumnId(null);
+        setIsColumnManagerOpen(false);
+    }
+
+    function resetColumnDraft() {
+        setColumnSettingsDraft(autoReplyColumnDraftFromSettings(AUTO_REPLY_TABLE_DEFAULT_SETTINGS));
+    }
+
+    function showAllColumnDraft() {
+        setColumnSettingsDraft((current) => normalizeAutoReplyColumnDraft({
+            ...current,
+            visibleColumns: AUTO_REPLY_TABLE_COLUMN_IDS,
+        }));
+    }
+
+    function applyColumnDraft() {
+        const draft = normalizeAutoReplyColumnDraft(columnSettingsDraft);
+
+        setTableSettings((current) => normalizeAutoReplyTableSettings({
+            ...current,
+            columnOrder: draft.columnOrder,
+            visibleColumns: draft.visibleColumns,
+            page: tableView.page,
+        }));
+        setDraggedColumnId(null);
+        setIsColumnManagerOpen(false);
+    }
+
+    function toggleChannel(block, currentChannelIds, channelId, checked) {
+        const nextChannelIds = new Set(currentChannelIds.map((id) => Number(id)).filter((id) => id > 0));
+
+        if (checked) {
+            nextChannelIds.add(Number(channelId));
+        } else {
+            nextChannelIds.delete(Number(channelId));
+        }
+
+        onUpdateStartChannels(block, Array.from(nextChannelIds));
+    }
+
+    function renderHeaderCell(column) {
+        if (! column.sortable) {
+            return <span key={column.id} role="columnheader">{column.label}</span>;
+        }
+
+        const isSorted = tableSettings.sortKey === column.id;
+        const directionLabel = tableSettings.sortDirection === 'asc' ? '↑' : '↓';
+
+        return (
+            <button
+                key={column.id}
+                type="button"
+                role="columnheader"
+                className={isSorted ? 'is-sorted' : ''}
+                onClick={() => toggleSort(column.id)}
+            >
+                <span>{column.label}</span>
+                <b>{isSorted ? directionLabel : ''}</b>
+            </button>
+        );
+    }
+
+    function renderCell(row, columnId) {
+        const { block, message, match, usesCommandValue, channelIds, channelSummary, continuationCount } = row;
+        const selectedChannelIds = new Set(channelIds.map(Number));
+        const isChannelEditorOpen = channelEditorBlockKey === block.client_key;
+
+        switch (columnId) {
+            case 'active':
+                return (
+                    <label key={columnId} className="ac-v3-builder__auto-reply-active" title="Включить стартовый блок">
+                        <input
+                            type="checkbox"
+                            checked={row.enabled}
+                            onChange={(event) => onUpdateStartEnabled(block, event.target.checked)}
+                        />
+                    </label>
+                );
+            case 'block':
+                return (
+                    <button
+                        key={columnId}
+                        type="button"
+                        className="ac-v3-builder__auto-reply-block"
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            onSelectBlock(block);
+                        }}
+                    >
+                        <strong>{row.displayId}</strong>
+                        <span>{row.title}</span>
+                        <small>{row.sheetName} · {row.moduleSummary}</small>
+                    </button>
+                );
+            case 'priority':
+                return (
+                    <input
+                        key={columnId}
+                        type="number"
+                        min="1"
+                        max="100"
+                        value={row.priority}
+                        onChange={(event) => onUpdateStartPayload(block, { priority: Number(event.target.value) })}
+                        aria-label="Priority"
+                    />
+                );
+            case 'match':
+                return (
+                    <select
+                        key={columnId}
+                        value={match}
+                        onChange={(event) => onUpdateStartPayload(block, { match: event.target.value })}
+                        aria-label="Тип совпадения"
+                    >
+                        {MATCH_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                    </select>
+                );
+            case 'phrase':
+                return (
+                    <AutoGrowTextarea
+                        key={columnId}
+                        value={usesCommandValue ? row.command : ''}
+                        placeholder={usesCommandValue ? '/start' : 'Любое входящее'}
+                        maxHeight={72}
+                        disabled={! usesCommandValue}
+                        onChange={(event) => onUpdateStartPayload(block, { command: event.target.value })}
+                    />
+                );
+            case 'text':
+                return (
+                    <AutoGrowTextarea
+                        key={columnId}
+                        value={message?.payload?.text ?? ''}
+                        placeholder="Текст ответа"
+                        maxHeight={72}
+                        onChange={(event) => onUpdateMessageText(block, event.target.value)}
+                    />
+                );
+            case 'channels':
+                return (
+                    <div
+                        key={columnId}
+                        className="ac-v3-builder__auto-reply-channels"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <button
+                            type="button"
+                            className="ac-v3-builder__auto-reply-channel-trigger"
+                            title={channelSummary.full}
+                            aria-expanded={isChannelEditorOpen}
+                            onClick={() => {
+                                onSelectBlock(block);
+                                setChannelEditorBlockKey((current) => (
+                                    current === block.client_key ? null : block.client_key
+                                ));
+                            }}
+                        >
+                            <span>{channelSummary.label}</span>
+                            <small>{channelSummary.meta}</small>
+                        </button>
+
+                        {isChannelEditorOpen ? (
+                            <div className="ac-v3-builder__auto-reply-channel-menu">
+                                <div>
+                                    <button
+                                        type="button"
+                                        onClick={() => onUpdateStartChannels(block, channels.map((channel) => Number(channel.id)).filter((id) => id > 0))}
+                                    >
+                                        Все
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => onUpdateStartChannels(block, [])}
+                                    >
+                                        Снять
+                                    </button>
+                                </div>
+                                {channels.map((channel) => (
+                                    <label key={channel.id} title={channel.name}>
+                                        <input
+                                            type="checkbox"
+                                            checked={selectedChannelIds.has(Number(channel.id))}
+                                            onChange={(event) => toggleChannel(block, channelIds, channel.id, event.target.checked)}
+                                        />
+                                        <span>{channel.name}</span>
+                                    </label>
+                                ))}
+                            </div>
+                        ) : null}
+                    </div>
+                );
+            case 'continuation':
+                return (
+                    <span key={columnId} className="ac-v3-builder__auto-reply-continuation">
+                        {continuationCount > 0 ? `${continuationCount} связ.` : 'нет'}
+                    </span>
+                );
+            case 'open':
+                return (
+                    <button
+                        key={columnId}
+                        type="button"
+                        className="ac-v3-builder__auto-reply-open"
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            setChannelEditorBlockKey(null);
+                            onOpenConstructor(block);
+                        }}
+                    >
+                        Открыть
+                    </button>
+                );
+            default:
+                return null;
+        }
+    }
+
+    const autoReplyToolbar = (
+        <div className={`ac-v3-builder__auto-reply-toolbar ${toolbarPortalElement ? 'is-topbar' : ''}`}>
+            <div className="ac-v3-builder__auto-reply-toolbar-primary">
+                <label className="ac-v3-builder__auto-reply-search">
+                    <input
+                        type="search"
+                        aria-label="Поиск по ID, блоку, фразе, тексту или каналу"
+                        value={tableSettings.query}
+                        placeholder="Поиск"
+                        title="ID, блок, фраза, текст, канал"
+                        onChange={(event) => updateTableSettings({ query: event.target.value })}
+                    />
+                </label>
+
+                <div className="ac-v3-builder__auto-reply-filter-manager">
+                    <button
+                        type="button"
+                        className="ac-v3-builder__auto-reply-tool-button"
+                        aria-expanded={isFilterMenuOpen}
+                        onClick={() => {
+                            setIsColumnManagerOpen(false);
+                            setIsFilterMenuOpen((isOpen) => ! isOpen);
+                        }}
+                    >
+                        Фильтр
+                        {activeFilterCount > 0 ? <b>{activeFilterCount}</b> : null}
+                    </button>
+                    {isFilterMenuOpen ? (
+                        <div className="ac-v3-builder__auto-reply-filter-menu">
+                            <label>
+                                <span>Активность</span>
+                                <select
+                                    value={tableSettings.status}
+                                    onChange={(event) => updateTableSettings({ status: event.target.value })}
+                                >
+                                    <option value="all">Все</option>
+                                    <option value="active">Активные</option>
+                                    <option value="inactive">Отключённые</option>
+                                </select>
+                            </label>
+
+                            <label>
+                                <span>Канал</span>
+                                <select
+                                    value={tableSettings.channelId}
+                                    onChange={(event) => updateTableSettings({ channelId: event.target.value })}
+                                >
+                                    <option value="all">Все каналы</option>
+                                    {channels.map((channel) => (
+                                        <option key={channel.id} value={channel.id}>{channel.name}</option>
+                                    ))}
+                                </select>
+                            </label>
+
+                            <label>
+                                <span>Совпадение</span>
+                                <select
+                                    value={tableSettings.match}
+                                    onChange={(event) => updateTableSettings({ match: event.target.value })}
+                                >
+                                    <option value="all">Все типы</option>
+                                    {MATCH_OPTIONS.map(([value, label]) => (
+                                        <option key={value} value={value}>{label}</option>
+                                    ))}
+                                </select>
+                            </label>
+
+                            <label>
+                                <span>Лист</span>
+                                <select
+                                    value={tableSettings.sheetId}
+                                    onChange={(event) => updateTableSettings({ sheetId: event.target.value })}
+                                >
+                                    <option value="all">Все листы</option>
+                                    {sheets.map((sheet) => (
+                                        <option key={sheet.id} value={sheet.id}>{sheet.name || sheet.id}</option>
+                                    ))}
+                                </select>
+                            </label>
+
+                            <label className="is-wide">
+                                <span>Дальше</span>
+                                <select
+                                    value={tableSettings.continuation}
+                                    onChange={(event) => updateTableSettings({ continuation: event.target.value })}
+                                >
+                                    <option value="all">Все</option>
+                                    <option value="yes">Есть</option>
+                                    <option value="no">Нет</option>
+                                </select>
+                            </label>
+
+                            <div className="ac-v3-builder__auto-reply-filter-menu-actions">
+                                <button type="button" disabled={activeFilterCount === 0} onClick={resetTableFilters}>
+                                    Сбросить фильтры
+                                </button>
+                            </div>
+                        </div>
+                    ) : null}
+                </div>
+            </div>
+
+            <div className="ac-v3-builder__auto-reply-toolbar-actions">
+                <div className="ac-v3-builder__auto-reply-column-manager">
+                    <button
+                        type="button"
+                        className="ac-v3-builder__auto-reply-tool-button"
+                        aria-expanded={isColumnManagerOpen}
+                        onClick={openColumnManager}
+                    >
+                        Столбцы
+                        <b>{visibleColumnIds.length}/{AUTO_REPLY_TABLE_COLUMN_IDS.length}</b>
+                    </button>
+                    {isColumnManagerOpen ? (
+                        <div className="ac-v3-builder__auto-reply-column-menu" role="dialog" aria-label="Видимость и порядок колонок">
+                            <div className="ac-v3-builder__auto-reply-column-menu-head">
+                                <strong>Видимость и порядок</strong>
+                                <button type="button" onClick={resetColumnDraft}>
+                                    Сбросить вид
+                                </button>
+                            </div>
+
+                            <div className="ac-v3-builder__auto-reply-column-list">
+                                {columnSettingsDraft.columnOrder.map((columnId, index) => {
+                                    const column = AUTO_REPLY_TABLE_COLUMN_BY_ID.get(columnId);
+
+                                    if (! column) {
+                                        return null;
+                                    }
+
+                                    const isVisible = columnDraftVisibleSet.has(column.id);
+                                    const isLastVisible = isVisible && columnSettingsDraft.visibleColumns.length <= 1;
+
+                                    return (
+                                        <div
+                                            key={column.id}
+                                            className={`ac-v3-builder__auto-reply-column-row ${draggedColumnId === column.id ? 'is-dragging' : ''}`}
+                                            draggable
+                                            onDragStart={(event) => {
+                                                setDraggedColumnId(column.id);
+                                                event.dataTransfer.effectAllowed = 'move';
+                                                event.dataTransfer.setData('text/plain', column.id);
+                                            }}
+                                            onDragOver={(event) => {
+                                                event.preventDefault();
+                                                event.dataTransfer.dropEffect = 'move';
+                                            }}
+                                            onDrop={(event) => {
+                                                event.preventDefault();
+                                                moveColumnDraftToTarget(
+                                                    draggedColumnId || event.dataTransfer.getData('text/plain'),
+                                                    column.id,
+                                                );
+                                            }}
+                                            onDragEnd={() => setDraggedColumnId(null)}
+                                        >
+                                            <span className="ac-v3-builder__auto-reply-column-drag" aria-hidden="true">⋮⋮</span>
+                                            <label>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={isVisible}
+                                                    disabled={isLastVisible}
+                                                    onChange={(event) => toggleColumn(column.id, event.target.checked)}
+                                                />
+                                                <span>{column.label}</span>
+                                            </label>
+                                            <div className="ac-v3-builder__auto-reply-column-row-actions">
+                                                <button
+                                                    type="button"
+                                                    title="Поднять колонку"
+                                                    disabled={index === 0}
+                                                    onClick={() => moveColumnDraft(column.id, -1)}
+                                                >
+                                                    ↑
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    title="Опустить колонку"
+                                                    disabled={index === columnSettingsDraft.columnOrder.length - 1}
+                                                    onClick={() => moveColumnDraft(column.id, 1)}
+                                                >
+                                                    ↓
+                                                </button>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+
+                            <div className="ac-v3-builder__auto-reply-column-menu-actions">
+                                <button type="button" onClick={cancelColumnManager}>Отмена</button>
+                                <button type="button" onClick={showAllColumnDraft}>Показать все</button>
+                                <button type="button" className="is-primary" onClick={applyColumnDraft}>Применить</button>
+                            </div>
+                        </div>
+                    ) : null}
+                </div>
+
+                <button
+                    type="button"
+                    className="ac-v3-builder__auto-reply-start-button"
+                    title="Создать стартовый блок"
+                    aria-label="Создать стартовый блок"
+                    onClick={onAddStart}
+                >
+                    <TriggerIcon />
+                    Создать
+                </button>
+            </div>
+        </div>
+    );
+    const workspaceClassName = [
+        'ac-v3-builder__auto-reply-workspace',
+        toolbarPortalElement ? 'has-external-toolbar' : '',
+    ].filter(Boolean).join(' ');
+
+    return (
+        <main className={workspaceClassName}>
+            {toolbarPortalElement ? createPortal(autoReplyToolbar, toolbarPortalElement) : null}
+            {tableView.totalRows === 0 ? (
+                <div className="ac-v3-builder__auto-reply-empty">
+                    <strong>Стартовых блоков нет</strong>
+                    <button type="button" onClick={onAddStart}>Создать стартовый блок</button>
+                </div>
+            ) : (
+                <>
+                    {! toolbarPortalElement ? autoReplyToolbar : null}
+
+                    <div className="ac-v3-builder__auto-reply-table-wrap">
+                        <div ref={tableRef} className="ac-v3-builder__auto-reply-table" role="table" aria-label="Автоответчик">
+                            <div className="ac-v3-builder__auto-reply-row ac-v3-builder__auto-reply-row--head" role="row" style={rowStyle}>
+                                {visibleColumns.map(renderHeaderCell)}
+                            </div>
+
+                            {rows.length === 0 ? (
+                                <div className="ac-v3-builder__auto-reply-filter-empty">
+                                    <strong>Ничего не найдено</strong>
+                                    <button type="button" onClick={resetTableSearchAndFilters}>
+                                        Сбросить поиск и фильтры
+                                    </button>
+                                </div>
+                            ) : rows.map((row) => {
+                                const { block } = row;
+                                const isSelected = block.client_key === selectedBlockKey;
+
+                                return (
+                                    <div
+                                        key={block.client_key}
+                                        className={[
+                                            'ac-v3-builder__auto-reply-row',
+                                            isSelected ? 'is-selected' : '',
+                                            row.enabled ? '' : 'is-disabled',
+                                        ].filter(Boolean).join(' ')}
+                                        data-auto-reply-row-key={block.client_key}
+                                        role="row"
+                                        style={rowStyle}
+                                        onClick={() => {
+                                            setChannelEditorBlockKey(null);
+                                            onSelectBlock(block);
+                                        }}
+                                    >
+                                        {visibleColumnIds.map((columnId) => renderCell(row, columnId))}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+
+                    <div className="ac-v3-builder__auto-reply-pagination">
+                        <span>{tableView.rangeLabel}</span>
+                        <label>
+                            <span>На странице</span>
+                            <select
+                                value={String(tableSettings.pageSize)}
+                                onChange={(event) => updateTableSettings({ pageSize: event.target.value })}
+                            >
+                                {AUTO_REPLY_TABLE_PAGE_SIZES.map((value) => (
+                                    <option key={value} value={value}>{value === 'all' ? 'Все' : value}</option>
+                                ))}
+                            </select>
+                        </label>
+                        <div>
+                            <button
+                                type="button"
+                                disabled={tableView.page <= 1}
+                                onClick={() => updateTableSettings({ page: tableView.page - 1 }, { resetPage: false })}
+                            >
+                                ‹
+                            </button>
+                            <b>{tableView.page} / {tableView.pageCount}</b>
+                            <button
+                                type="button"
+                                disabled={tableView.page >= tableView.pageCount}
+                                onClick={() => updateTableSettings({ page: tableView.page + 1 }, { resetPage: false })}
+                            >
+                                ›
+                            </button>
+                        </div>
+                    </div>
+                </>
+            )}
+        </main>
     );
 }
 
@@ -5903,6 +7035,12 @@ function BlockPanel({
 }) {
     const [isTypeMenuOpen, setIsTypeMenuOpen] = useState(false);
 
+    function handleClosePanel(event) {
+        event.preventDefault();
+        event.stopPropagation();
+        onClose();
+    }
+
     if (! block) {
         return (
             <div className="ac-v3-builder__panel-empty">
@@ -6024,7 +7162,14 @@ function BlockPanel({
                     <button type="button" className="ac-v3-builder__panel-icon-btn" title="Свернуть панель" onClick={onCollapse}>
                         ›
                     </button>
-                    <button type="button" className="ac-v3-builder__panel-icon-btn" title="Закрыть панель" onClick={onClose}>
+                    <button
+                        type="button"
+                        className="ac-v3-builder__panel-icon-btn"
+                        title="Закрыть панель"
+                        data-panel-close="true"
+                        onPointerDown={handleClosePanel}
+                        onClick={handleClosePanel}
+                    >
                         ×
                     </button>
                 </div>
@@ -8270,6 +9415,8 @@ function StartConditionFields({
                 <span>Приоритет</span>
                 <input
                     type="number"
+                    min="1"
+                    max="100"
                     value={start?.payload?.priority ?? 10}
                     onChange={(event) => onUpdateModulePayload(blockKey, 'start_condition', { priority: Number(event.target.value) })}
                 />
@@ -9159,6 +10306,12 @@ function EdgePanel({ edge, blocks, tags = [], onCollapse, onClose, onRemove, onU
     const edgeTitlePlaceholder = edgeAutoLabel(edge) || DEFAULT_OUTPUT.label;
     const edgeTitle = edgeFullLabel(edge, isButton) || DEFAULT_OUTPUT.label;
 
+    function handleClosePanel(event) {
+        event.preventDefault();
+        event.stopPropagation();
+        onClose();
+    }
+
     useEffect(() => {
         const migration = migrateStartPhoneConditions(payload);
 
@@ -9338,7 +10491,14 @@ function EdgePanel({ edge, blocks, tags = [], onCollapse, onClose, onRemove, onU
                     <button type="button" className="ac-v3-builder__panel-icon-btn" title="Свернуть панель" onClick={onCollapse}>
                         ›
                     </button>
-                    <button type="button" className="ac-v3-builder__panel-icon-btn" title="Закрыть панель" onClick={onClose}>
+                    <button
+                        type="button"
+                        className="ac-v3-builder__panel-icon-btn"
+                        title="Закрыть панель"
+                        data-panel-close="true"
+                        onPointerDown={handleClosePanel}
+                        onClick={handleClosePanel}
+                    >
                         ×
                     </button>
                 </div>
@@ -10048,6 +11208,753 @@ function sheetBlockCount(blocks, sheetId) {
     return blocksForSheet(blocks, sheetId).length;
 }
 
+function viewCenteredOnBlock(block, currentView, viewportSize) {
+    const rect = blockRect(block);
+    const zoom = clamp(Number(currentView?.zoom) || 1, 0.35, 2.2);
+    const viewportWidth = Number(viewportSize?.width) || 1100;
+    const viewportHeight = Number(viewportSize?.height) || 720;
+
+    return {
+        ...(currentView ?? MAIN_SHEET.view),
+        zoom,
+        tx: Math.round((viewportWidth * 0.5) - (rect.x + (rect.width / 2)) * zoom),
+        ty: Math.round((viewportHeight * 0.42) - (rect.y + (rect.height / 2)) * zoom),
+    };
+}
+
+function stateWithStoredBuilderWorkspace(state, workspace) {
+    if (! state?.builder) {
+        return state;
+    }
+
+    return {
+        ...state,
+        builder: builderWithStoredWorkspace(state.builder, workspace),
+    };
+}
+
+export function builderWithStoredWorkspace(builder, workspace) {
+    if (! builder || ! workspace || typeof workspace !== 'object') {
+        return builder;
+    }
+
+    const sheets = sheetsFrom(builder);
+    const sheetIds = new Set(sheets.map((sheet) => String(sheet.id)));
+    const storedActiveSheetId = String(workspace.active_sheet_id || '');
+    const views = workspace.views && typeof workspace.views === 'object' ? workspace.views : {};
+    const nextSheets = sheets.map((sheet) => {
+        const view = normalizeBuilderWorkspaceView(views[String(sheet.id)]);
+
+        return view ? { ...sheet, view } : sheet;
+    });
+
+    return {
+        ...builder,
+        active_sheet_id: sheetIds.has(storedActiveSheetId)
+            ? storedActiveSheetId
+            : builder.active_sheet_id,
+        sheets: nextSheets,
+    };
+}
+
+export function selectedBuilderItemFromStoredWorkspace(builder, workspace) {
+    const fallback = { blockKey: null, edgeKey: null, panelCollapsed: false };
+
+    if (! builder || ! workspace || typeof workspace !== 'object') {
+        return fallback;
+    }
+
+    const selection = workspace.selection && typeof workspace.selection === 'object'
+        ? workspace.selection
+        : {};
+    const type = selection.type === 'edge' ? 'edge' : (selection.type === 'block' ? 'block' : null);
+    const key = String(selection.key || '');
+
+    if (! type || ! key) {
+        return fallback;
+    }
+
+    const activeSheetId = activeSheetIdFrom(builder);
+    const blocks = blocksForSheet(builder.blocks ?? [], activeSheetId);
+
+    if (type === 'block') {
+        return blocks.some((block) => block.client_key === key)
+            ? { blockKey: key, edgeKey: null, panelCollapsed: selection.panel_collapsed === true }
+            : fallback;
+    }
+
+    const edges = filterEdgesForBlocks(builder.edges ?? [], blocks);
+
+    return edges.some((edge) => edge.client_key === key)
+        ? { blockKey: null, edgeKey: key, panelCollapsed: selection.panel_collapsed === true }
+        : fallback;
+}
+
+function normalizeBuilderWorkspaceView(view) {
+    if (! view || typeof view !== 'object') {
+        return null;
+    }
+
+    const tx = Number(view.tx);
+    const ty = Number(view.ty);
+    const zoom = Number(view.zoom);
+
+    if (! Number.isFinite(tx) || ! Number.isFinite(ty) || ! Number.isFinite(zoom)) {
+        return null;
+    }
+
+    return {
+        tx: Math.round(tx),
+        ty: Math.round(ty),
+        zoom: clamp(zoom, 0.35, 2.2),
+    };
+}
+
+function readStoredBuilderWorkspace(stateUrl) {
+    if (typeof window === 'undefined') {
+        return null;
+    }
+
+    try {
+        const raw = window.localStorage?.getItem(builderWorkspaceStorageKey(stateUrl));
+
+        return raw ? JSON.parse(raw) : null;
+    } catch {
+        return null;
+    }
+}
+
+function storeBuilderWorkspace(stateUrl, builder, selection = {}) {
+    if (typeof window === 'undefined' || ! builder) {
+        return;
+    }
+
+    const views = {};
+
+    sheetsFrom(builder).forEach((sheet) => {
+        const view = normalizeBuilderWorkspaceView(sheet.view);
+
+        if (view) {
+            views[String(sheet.id)] = view;
+        }
+    });
+
+    try {
+        window.localStorage?.setItem(builderWorkspaceStorageKey(stateUrl), JSON.stringify({
+            active_sheet_id: activeSheetIdFrom(builder),
+            views,
+            selection: builderWorkspaceSelection(selection),
+            updated_at: Date.now(),
+        }));
+    } catch {
+        // Workspace position is a local convenience; blocked storage must not break the builder.
+    }
+}
+
+function builderWorkspaceSelection(selection) {
+    if (selection?.selectedBlockKey) {
+        return {
+            type: 'block',
+            key: String(selection.selectedBlockKey),
+            panel_collapsed: selection.panelCollapsed === true,
+        };
+    }
+
+    if (selection?.selectedEdgeKey) {
+        return {
+            type: 'edge',
+            key: String(selection.selectedEdgeKey),
+            panel_collapsed: selection.panelCollapsed === true,
+        };
+    }
+
+    return {
+        type: null,
+        key: null,
+        panel_collapsed: false,
+    };
+}
+
+function builderWorkspaceStorageKey(stateUrl) {
+    const source = String(stateUrl || '');
+
+    if (typeof window === 'undefined') {
+        return `${BUILDER_WORKSPACE_STORAGE_PREFIX}${source}`;
+    }
+
+    try {
+        const url = new URL(source, window.location.origin);
+
+        return `${BUILDER_WORKSPACE_STORAGE_PREFIX}${url.pathname}${url.search}`;
+    } catch {
+        return `${BUILDER_WORKSPACE_STORAGE_PREFIX}${window.location.pathname}:${source}`;
+    }
+}
+
+function readStoredAutoReplyTableSettings(stateUrl) {
+    if (typeof window === 'undefined') {
+        return AUTO_REPLY_TABLE_DEFAULT_SETTINGS;
+    }
+
+    try {
+        const raw = window.localStorage?.getItem(autoReplyTableStorageKey(stateUrl));
+
+        return normalizeAutoReplyTableSettings(raw ? JSON.parse(raw) : AUTO_REPLY_TABLE_DEFAULT_SETTINGS);
+    } catch {
+        return AUTO_REPLY_TABLE_DEFAULT_SETTINGS;
+    }
+}
+
+function storeAutoReplyTableSettings(stateUrl, settings) {
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    try {
+        window.localStorage?.setItem(
+            autoReplyTableStorageKey(stateUrl),
+            JSON.stringify({
+                ...normalizeAutoReplyTableSettings(settings),
+                updated_at: Date.now(),
+            }),
+        );
+    } catch {
+        // Table preferences are local convenience state; blocked storage must not break editing.
+    }
+}
+
+function autoReplyTableStorageKey(stateUrl) {
+    const source = String(stateUrl || '');
+
+    if (typeof window === 'undefined') {
+        return `${AUTO_REPLY_TABLE_STORAGE_PREFIX}${source}`;
+    }
+
+    try {
+        const url = new URL(source, window.location.origin);
+
+        return `${AUTO_REPLY_TABLE_STORAGE_PREFIX}${url.pathname}${url.search}`;
+    } catch {
+        return `${AUTO_REPLY_TABLE_STORAGE_PREFIX}${window.location.pathname}:${source}`;
+    }
+}
+
+function readStoredBuilderViewMode() {
+    if (typeof window === 'undefined') {
+        return 'design';
+    }
+
+    const urlMode = readBuilderViewModeFromUrl();
+
+    if (urlMode) {
+        return urlMode;
+    }
+
+    try {
+        const storedMode = normalizeBuilderViewMode(window.localStorage?.getItem(BUILDER_VIEW_MODE_STORAGE_KEY));
+
+        return storedMode ?? 'design';
+    } catch {
+        return 'design';
+    }
+}
+
+function storeBuilderViewMode(mode) {
+    if (typeof window === 'undefined' || ! BUILDER_VIEW_MODES.includes(mode)) {
+        return;
+    }
+
+    try {
+        window.localStorage?.setItem(BUILDER_VIEW_MODE_STORAGE_KEY, mode);
+    } catch {
+        // The chosen view is a convenience preference; blocked storage must not break the builder.
+    }
+
+    storeBuilderViewModeInUrl(mode);
+}
+
+function normalizeBuilderViewMode(mode) {
+    return BUILDER_VIEW_MODES.includes(mode) ? mode : null;
+}
+
+function readBuilderViewModeFromUrl() {
+    if (typeof window === 'undefined') {
+        return null;
+    }
+
+    try {
+        return normalizeBuilderViewMode(new URL(window.location.href).searchParams.get(BUILDER_VIEW_MODE_QUERY_PARAM));
+    } catch {
+        return null;
+    }
+}
+
+function storeBuilderViewModeInUrl(mode) {
+    if (typeof window === 'undefined' || typeof window.history?.replaceState !== 'function') {
+        return;
+    }
+
+    try {
+        const url = new URL(window.location.href);
+
+        if (mode === 'design') {
+            url.searchParams.delete(BUILDER_VIEW_MODE_QUERY_PARAM);
+        } else {
+            url.searchParams.set(BUILDER_VIEW_MODE_QUERY_PARAM, mode);
+        }
+
+        const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+
+        if (nextUrl !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
+            window.history.replaceState(window.history.state, '', nextUrl);
+        }
+    } catch {
+        // URL persistence is a convenience layer; local storage still keeps the preference.
+    }
+}
+
+export function autoReplyBlocksForBuilder(blocks) {
+    return (Array.isArray(blocks) ? blocks : [])
+        .filter((block) => Boolean(findModule(block?.settings_payload, 'start_condition')));
+}
+
+export function compareAutoReplyBlocks(left, right) {
+    const leftPriority = autoReplyPriority(findModule(left?.settings_payload, 'start_condition'));
+    const rightPriority = autoReplyPriority(findModule(right?.settings_payload, 'start_condition'));
+
+    if (leftPriority !== rightPriority) {
+        return rightPriority - leftPriority;
+    }
+
+    const leftDisplayOrder = autoReplyDisplayOrder(left);
+    const rightDisplayOrder = autoReplyDisplayOrder(right);
+
+    if (leftDisplayOrder !== rightDisplayOrder) {
+        return rightDisplayOrder - leftDisplayOrder;
+    }
+
+    return autoReplyDisplayId(right).localeCompare(autoReplyDisplayId(left), 'ru', { numeric: true });
+}
+
+export function autoReplyTableView(blocks, context = {}, settings = {}) {
+    const normalizedSettings = normalizeAutoReplyTableSettings(settings);
+    const allRows = autoReplyBlocksForBuilder(blocks)
+        .map((block) => autoReplyTableRowFromBlock(block, context));
+    const filteredRows = allRows.filter((row) => autoReplyTableRowMatches(row, normalizedSettings));
+    const sortedRows = [...filteredRows].sort((left, right) => compareAutoReplyTableRows(left, right, normalizedSettings));
+    const pageSize = normalizedSettings.pageSize;
+    const pageCount = pageSize === 'all'
+        ? 1
+        : Math.max(1, Math.ceil(sortedRows.length / pageSize));
+    const page = clamp(normalizedSettings.page, 1, pageCount);
+    const pageRows = pageSize === 'all'
+        ? sortedRows
+        : sortedRows.slice((page - 1) * pageSize, page * pageSize);
+    const visibleColumnIds = normalizeAutoReplyVisibleColumns(normalizedSettings.visibleColumns, normalizedSettings.columnOrder);
+    const visibleColumns = visibleColumnIds
+        .map((columnId) => AUTO_REPLY_TABLE_COLUMN_BY_ID.get(columnId))
+        .filter(Boolean);
+    const from = sortedRows.length === 0 ? 0 : (pageSize === 'all' ? 1 : ((page - 1) * pageSize) + 1);
+    const to = sortedRows.length === 0 ? 0 : (pageSize === 'all' ? sortedRows.length : Math.min(sortedRows.length, page * pageSize));
+
+    return {
+        rows: pageRows,
+        allRows,
+        filteredRows: sortedRows,
+        totalRows: allRows.length,
+        filteredTotal: sortedRows.length,
+        page,
+        pageCount,
+        pageSize,
+        from,
+        to,
+        rangeLabel: autoReplyTableRangeLabel(from, to, sortedRows.length, allRows.length),
+        visibleColumnIds,
+        visibleColumns,
+        settings: normalizedSettings,
+    };
+}
+
+export function normalizeAutoReplyTableSettings(settings = {}) {
+    const raw = settings && typeof settings === 'object' ? settings : {};
+    const status = ['all', 'active', 'inactive'].includes(raw.status) ? raw.status : AUTO_REPLY_TABLE_DEFAULT_SETTINGS.status;
+    const channelId = normalizeAutoReplyFilterValue(raw.channelId);
+    const match = MATCH_OPTIONS.some(([value]) => value === raw.match) ? raw.match : AUTO_REPLY_TABLE_DEFAULT_SETTINGS.match;
+    const sheetId = normalizeAutoReplyFilterValue(raw.sheetId);
+    const continuation = ['all', 'yes', 'no'].includes(raw.continuation)
+        ? raw.continuation
+        : AUTO_REPLY_TABLE_DEFAULT_SETTINGS.continuation;
+    const sortKey = raw.sortKey === 'default' || AUTO_REPLY_TABLE_COLUMNS.some((column) => column.id === raw.sortKey)
+        ? raw.sortKey
+        : AUTO_REPLY_TABLE_DEFAULT_SETTINGS.sortKey;
+    const sortDirection = raw.sortDirection === 'asc' ? 'asc' : 'desc';
+    const pageSize = normalizeAutoReplyPageSize(raw.pageSize);
+    const page = Math.max(1, Math.floor(Number(raw.page) || 1));
+    const columnOrder = normalizeAutoReplyColumnOrder(raw.columnOrder ?? raw.visibleColumns);
+
+    return {
+        query: String(raw.query ?? '').slice(0, 300),
+        status,
+        channelId,
+        match,
+        sheetId,
+        continuation,
+        sortKey,
+        sortDirection,
+        pageSize,
+        page,
+        columnOrder,
+        visibleColumns: normalizeAutoReplyVisibleColumns(raw.visibleColumns, columnOrder),
+    };
+}
+
+function autoReplyTableRowFromBlock(block, context = {}) {
+    const start = findModule(block?.settings_payload, 'start_condition');
+    const message = findModule(block?.settings_payload, 'message');
+    const edges = context.edges ?? [];
+    const sheets = context.sheets ?? [];
+    const channels = context.channels ?? [];
+    const match = startMatchForUi(start?.payload?.match);
+    const matchLabel = optionLabel(MATCH_OPTIONS, match);
+    const channelIds = autoReplyStartChannelIds(start);
+    const channelSummary = autoReplyChannelSummary(channelIds, channels);
+    const sheetId = blockSheetId(block);
+    const sheetName = sheetNameForBlock(block, sheets);
+    const moduleSummary = autoReplyModuleSummary(block);
+    const command = String(start?.payload?.command ?? '');
+    const text = String(message?.payload?.text ?? '');
+    const continuationCount = outgoingEdgesForBlock(block, edges).length;
+    const title = block?.title || 'Без названия';
+    const displayId = shortBlockId(block);
+    const searchText = normalizeSearchValue([
+        displayId,
+        autoReplyDisplayId(block),
+        title,
+        sheetName,
+        moduleSummary,
+        matchLabel,
+        command,
+        text,
+        channelSummary.full,
+        continuationCount > 0 ? 'есть продолжение' : 'нет продолжения',
+    ].join(' '));
+
+    return {
+        block,
+        start,
+        message,
+        match,
+        matchLabel,
+        usesCommandValue: match !== 'any_inbound',
+        command,
+        text,
+        channelIds,
+        channelSummary,
+        sheetId,
+        sheetName,
+        moduleSummary,
+        continuationCount,
+        enabled: autoReplyStartEnabled(start),
+        priority: autoReplyPriority(start),
+        displayId,
+        displayOrder: autoReplyDisplayOrder(block),
+        title,
+        searchText,
+    };
+}
+
+function autoReplyTableRowMatches(row, settings) {
+    const query = normalizeSearchValue(settings.query);
+
+    if (query !== '') {
+        const terms = query.split(/\s+/).filter(Boolean);
+
+        if (! terms.every((term) => row.searchText.includes(term))) {
+            return false;
+        }
+    }
+
+    if (settings.status === 'active' && ! row.enabled) {
+        return false;
+    }
+
+    if (settings.status === 'inactive' && row.enabled) {
+        return false;
+    }
+
+    if (settings.channelId !== 'all') {
+        const channelId = Number(settings.channelId);
+
+        if (! row.channelIds.some((id) => Number(id) === channelId)) {
+            return false;
+        }
+    }
+
+    if (settings.match !== 'all' && row.match !== settings.match) {
+        return false;
+    }
+
+    if (settings.sheetId !== 'all' && row.sheetId !== settings.sheetId) {
+        return false;
+    }
+
+    if (settings.continuation === 'yes' && row.continuationCount <= 0) {
+        return false;
+    }
+
+    if (settings.continuation === 'no' && row.continuationCount > 0) {
+        return false;
+    }
+
+    return true;
+}
+
+function compareAutoReplyTableRows(left, right, settings) {
+    if (settings.sortKey === 'default') {
+        return compareAutoReplyBlocks(left.block, right.block);
+    }
+
+    const direction = settings.sortDirection === 'asc' ? 1 : -1;
+    let comparison = 0;
+
+    if (settings.sortKey === 'active') {
+        comparison = Number(left.enabled) - Number(right.enabled);
+    } else if (settings.sortKey === 'block') {
+        comparison = compareAutoReplyValues(left.title, right.title);
+    } else if (settings.sortKey === 'priority') {
+        comparison = left.priority - right.priority;
+    } else if (settings.sortKey === 'match') {
+        comparison = compareAutoReplyValues(left.matchLabel, right.matchLabel);
+    } else if (settings.sortKey === 'phrase') {
+        comparison = compareAutoReplyValues(left.command, right.command);
+    } else if (settings.sortKey === 'text') {
+        comparison = compareAutoReplyValues(left.text, right.text);
+    } else if (settings.sortKey === 'channels') {
+        comparison = compareAutoReplyValues(left.channelSummary.full, right.channelSummary.full);
+    } else if (settings.sortKey === 'continuation') {
+        comparison = left.continuationCount - right.continuationCount;
+    }
+
+    if (comparison !== 0) {
+        return comparison * direction;
+    }
+
+    return compareAutoReplyBlocks(left.block, right.block);
+}
+
+function compareAutoReplyValues(left, right) {
+    return String(left ?? '').localeCompare(String(right ?? ''), 'ru', { numeric: true, sensitivity: 'base' });
+}
+
+function normalizeAutoReplyFilterValue(value) {
+    const normalized = String(value ?? 'all').trim();
+
+    return normalized === '' ? 'all' : normalized;
+}
+
+function normalizeAutoReplyPageSize(value) {
+    if (value === 'all') {
+        return 'all';
+    }
+
+    const numeric = Number(value);
+
+    return AUTO_REPLY_TABLE_PAGE_SIZES.includes(numeric) ? numeric : AUTO_REPLY_TABLE_DEFAULT_SETTINGS.pageSize;
+}
+
+function normalizeAutoReplyColumnOrder(columns) {
+    const requested = Array.isArray(columns)
+        ? columns.map((column) => String(column)).filter((column) => AUTO_REPLY_TABLE_COLUMN_IDS.includes(column))
+        : AUTO_REPLY_TABLE_DEFAULT_SETTINGS.columnOrder;
+    const unique = Array.from(new Set(requested));
+
+    return [
+        ...unique,
+        ...AUTO_REPLY_TABLE_COLUMN_IDS.filter((columnId) => ! unique.includes(columnId)),
+    ];
+}
+
+function normalizeAutoReplyVisibleColumns(columns, columnOrder = AUTO_REPLY_TABLE_DEFAULT_SETTINGS.columnOrder) {
+    const order = normalizeAutoReplyColumnOrder(columnOrder);
+    const visible = Array.isArray(columns)
+        ? columns.map((column) => String(column)).filter((column) => AUTO_REPLY_TABLE_COLUMN_IDS.includes(column))
+        : AUTO_REPLY_TABLE_DEFAULT_SETTINGS.visibleColumns;
+    const visibleSet = new Set(visible);
+    const orderedVisible = order.filter((columnId) => visibleSet.has(columnId));
+
+    return orderedVisible.length > 0 ? orderedVisible : ['block'];
+}
+
+function autoReplyColumnDraftFromSettings(settings) {
+    const normalized = normalizeAutoReplyTableSettings(settings);
+
+    return {
+        columnOrder: normalized.columnOrder,
+        visibleColumns: normalized.visibleColumns,
+    };
+}
+
+function normalizeAutoReplyColumnDraft(draft = {}) {
+    const raw = draft && typeof draft === 'object' ? draft : {};
+    const columnOrder = normalizeAutoReplyColumnOrder(raw.columnOrder ?? raw.visibleColumns);
+
+    return {
+        columnOrder,
+        visibleColumns: normalizeAutoReplyVisibleColumns(raw.visibleColumns, columnOrder),
+    };
+}
+
+function autoReplyTableRangeLabel(from, to, filteredTotal, totalRows) {
+    const base = filteredTotal === 0 ? '0' : `${from}-${to}`;
+
+    if (filteredTotal === totalRows) {
+        return `${base} из ${totalRows}`;
+    }
+
+    return `${base} из ${filteredTotal}, всего ${totalRows}`;
+}
+
+function autoReplyTableGridTemplate(columns) {
+    return (columns.length > 0 ? columns : AUTO_REPLY_TABLE_COLUMNS)
+        .map((column) => column.width)
+        .join(' ');
+}
+
+export function autoReplyTableActiveFilterCount(settings) {
+    const normalized = normalizeAutoReplyTableSettings(settings);
+    const defaults = normalizeAutoReplyTableSettings(AUTO_REPLY_TABLE_DEFAULT_SETTINGS);
+
+    return [
+        normalized.status !== defaults.status,
+        normalized.channelId !== defaults.channelId,
+        normalized.match !== defaults.match,
+        normalized.sheetId !== defaults.sheetId,
+        normalized.continuation !== defaults.continuation,
+    ].filter(Boolean).length;
+}
+
+export function autoReplyTableSettingsWithoutActiveFilters(settings = {}, { clearQuery = false } = {}) {
+    const normalized = normalizeAutoReplyTableSettings(settings);
+    const defaults = normalizeAutoReplyTableSettings(AUTO_REPLY_TABLE_DEFAULT_SETTINGS);
+
+    return normalizeAutoReplyTableSettings({
+        ...normalized,
+        query: clearQuery ? defaults.query : normalized.query,
+        status: defaults.status,
+        channelId: defaults.channelId,
+        match: defaults.match,
+        sheetId: defaults.sheetId,
+        continuation: defaults.continuation,
+        page: 1,
+    });
+}
+
+function autoReplyDisplayOrder(block) {
+    const displayId = autoReplyDisplayId(block);
+
+    return /^\d+$/.test(displayId) ? Number(displayId) : Number.MIN_SAFE_INTEGER;
+}
+
+function autoReplyDisplayId(block) {
+    const displayId = String(block?.display_id ?? block?.settings_payload?.ui?.display_number ?? '').trim();
+
+    if (displayId !== '') {
+        return displayId;
+    }
+
+    const cardId = String(block?.settings_payload?.ui?.card_id ?? '').trim();
+
+    return cardId !== '' ? cardId : String(block?.id ?? block?.client_key ?? '');
+}
+
+function autoReplyPriority(startModule) {
+    return clamp(Math.floor(Number(startModule?.payload?.priority ?? 10) || 10), 1, 100);
+}
+
+function autoReplyStartEnabled(startModule) {
+    return startModule?.enabled !== false;
+}
+
+function autoReplyStartChannelIds(startModule) {
+    return Array.isArray(startModule?.payload?.channels?.ids)
+        ? startModule.payload.channels.ids.map((id) => Number(id)).filter((id) => id > 0)
+        : [];
+}
+
+function autoReplyChannelSummary(channelIds, channels) {
+    const selectedIds = Array.from(new Set((Array.isArray(channelIds) ? channelIds : [])
+        .map((id) => Number(id))
+        .filter((id) => id > 0)));
+    const knownChannels = Array.isArray(channels) ? channels : [];
+
+    if (knownChannels.length === 0) {
+        return {
+            label: 'Каналов нет',
+            meta: '0 доступно',
+            full: 'Нет доступных каналов',
+        };
+    }
+
+    if (selectedIds.length === 0) {
+        return {
+            label: 'Каналы не выбраны',
+            meta: '0 выбрано',
+            full: 'Каналы не выбраны',
+        };
+    }
+
+    const selectedSet = new Set(selectedIds);
+    const knownLabels = knownChannels
+        .filter((channel) => selectedSet.has(Number(channel.id)))
+        .map((channel) => String(channel.name || `#${channel.id}`));
+    const unknownLabels = selectedIds
+        .filter((id) => ! knownChannels.some((channel) => Number(channel.id) === id))
+        .map((id) => `#${id}`);
+    const labels = [...knownLabels, ...unknownLabels];
+
+    if (knownLabels.length === knownChannels.length && unknownLabels.length === 0) {
+        return {
+            label: 'Все каналы',
+            meta: `${selectedIds.length} выбрано`,
+            full: labels.join(', '),
+        };
+    }
+
+    const visibleLabels = labels.slice(0, 2);
+    const hiddenCount = Math.max(0, labels.length - visibleLabels.length);
+
+    return {
+        label: hiddenCount > 0 ? `${visibleLabels.join(', ')} +${hiddenCount}` : visibleLabels.join(', '),
+        meta: `${selectedIds.length} выбрано`,
+        full: labels.join(', '),
+    };
+}
+
+function sheetNameForBlock(block, sheets) {
+    const sheetId = blockSheetId(block);
+    const sheet = (Array.isArray(sheets) ? sheets : []).find((item) => String(item.id) === sheetId);
+
+    return sheet?.name || sheetId;
+}
+
+function outgoingEdgesForBlock(block, edges) {
+    const blockKey = String(block?.client_key ?? '');
+
+    if (blockKey === '') {
+        return [];
+    }
+
+    return (Array.isArray(edges) ? edges : []).filter((edge) => String(edge?.source?.client_key ?? '') === blockKey);
+}
+
+function autoReplyModuleSummary(block) {
+    const modules = modulesFrom(block?.settings_payload)
+        .filter((module) => module.type !== 'start_condition')
+        .map((module) => moduleLabel(module.type));
+
+    return modules.length > 0 ? modules.join(', ') : 'только старт';
+}
+
 function blockImportCreatedBatchId(block) {
     const source = block?.settings_payload?.ui?.import_source ?? {};
 
@@ -10227,7 +12134,7 @@ function autoReplyImportReasonLabel(reason) {
         row_excluded: 'строка исключена',
         rule_id_required: 'нет ID правила',
         inactive_rule: 'правило выключено',
-        tag_conditions_not_supported: 'условия по тегам не поддержаны в MVP',
+        mixed_tag_conditions_not_supported: 'одновременно обязательные и исключающие теги пока не поддержаны',
         channel_required: 'канал обязателен',
         channel_not_mapped: 'канал нужно сопоставить',
         tag_not_mapped: 'тег нужно сопоставить',
@@ -10240,6 +12147,8 @@ function autoReplyImportReasonLabel(reason) {
 
 function autoReplyImportColumnLabel(column) {
     return {
+        required_tag_names: 'обязательный тег',
+        excluded_tag_names: 'исключающий тег',
         assign_tag_names: 'назначить тег',
         remove_tag_names: 'снять тег',
     }[column] ?? String(column || 'тег');
@@ -10247,6 +12156,11 @@ function autoReplyImportColumnLabel(column) {
 
 function downloadJsonDocument(filename, document) {
     const blob = new Blob([JSON.stringify(document, null, 2)], { type: 'application/json;charset=utf-8' });
+
+    downloadBlobDocument(filename, blob);
+}
+
+function downloadBlobDocument(filename, blob) {
     const url = URL.createObjectURL(blob);
     const link = documentForDownload();
 
@@ -11876,6 +13790,31 @@ function stableBlockCardId(block) {
     return block?.settings_payload?.ui?.card_id
         ?? block?.display_id
         ?? null;
+}
+
+export function newBlockPositionForVisibleCanvas(view, viewportSize, block, existingBlockCount = 0) {
+    const resolvedView = {
+        tx: Number.isFinite(Number(view?.tx)) ? Number(view.tx) : MAIN_SHEET.view.tx,
+        ty: Number.isFinite(Number(view?.ty)) ? Number(view.ty) : MAIN_SHEET.view.ty,
+        zoom: Number.isFinite(Number(view?.zoom)) && Number(view.zoom) > 0 ? Number(view.zoom) : MAIN_SHEET.view.zoom,
+    };
+    const viewport = {
+        width: Math.max(320, Number(viewportSize?.width) || 0),
+        height: Math.max(320, Number(viewportSize?.height) || 0),
+    };
+    const blockSize = {
+        width: NODE_WIDTH,
+        height: blockHeight(block),
+    };
+    const stagger = {
+        x: (existingBlockCount % 4) * 28,
+        y: (existingBlockCount % 3) * 24,
+    };
+
+    return {
+        x: snap(((viewport.width / 2) - resolvedView.tx) / resolvedView.zoom - (blockSize.width / 2) + stagger.x),
+        y: snap(((viewport.height / 2) - resolvedView.ty) / resolvedView.zoom - (blockSize.height / 2) + stagger.y),
+    };
 }
 
 function snap(value) {

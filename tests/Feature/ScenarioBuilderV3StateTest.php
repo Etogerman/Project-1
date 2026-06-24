@@ -22,6 +22,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
+use PhpOffice\PhpSpreadsheet\IOFactory;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 use Tests\TestCase;
@@ -3627,6 +3628,82 @@ class ScenarioBuilderV3StateTest extends TestCase
         ]);
     }
 
+    public function test_publish_rejects_telegram_account_gateway_v3_buttons(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->account()->create(['is_active' => true]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_publish_account_buttons',
+            'name' => 'V3 Publish Account Buttons',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $savedState = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, [
+                [
+                    'id' => null,
+                    'client_key' => 'tmp_start',
+                    'type' => 'state',
+                    'title' => 'Старт',
+                    'position' => ['x' => 64, 'y' => 64],
+                    'settings_payload' => $this->startMessageButtonsSettings(
+                        '/start',
+                        [(int) $channel->id],
+                        'Выберите действие',
+                        'Далее',
+                    ),
+                ],
+            ]))
+            ->assertOk()
+            ->json();
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $savedState['scenario']['draft_version_id'],
+                'base_revision' => $savedState['builder']['revision'],
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['builder.telegram_account_gateway']);
+    }
+
+    public function test_publish_rejects_telegram_account_gateway_v3_html_text(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->account()->create(['is_active' => true]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_publish_account_html',
+            'name' => 'V3 Publish Account HTML',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $settings = $this->startSettings('/start', [(int) $channel->id]);
+        $settings['modules'][] = [
+            'id' => 'mod_message',
+            'type' => 'message',
+            'enabled' => true,
+            'payload' => ['text' => '<b>Привет</b>', 'text_format' => Message::TEXT_FORMAT_HTML],
+        ];
+        $savedState = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, [
+                [
+                    'id' => null,
+                    'client_key' => 'tmp_start',
+                    'type' => 'state',
+                    'title' => 'Старт',
+                    'position' => ['x' => 64, 'y' => 64],
+                    'settings_payload' => $settings,
+                ],
+            ]))
+            ->assertOk()
+            ->json();
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $savedState['scenario']['draft_version_id'],
+                'base_revision' => $savedState['builder']['revision'],
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['builder.telegram_account_gateway']);
+    }
+
     public function test_publish_v3_graph_warns_about_pending_scheduled_transitions(): void
     {
         $admin = $this->adminUser();
@@ -3983,6 +4060,171 @@ class ScenarioBuilderV3StateTest extends TestCase
 
         $this->assertTrue($state['permissions']['can_create_tags']);
         $this->assertContains($tagId, collect($state['catalogs']['tags'])->pluck('id')->all());
+    }
+
+    public function test_auto_reply_export_downloads_v3_blocks_as_xlsx_workbook(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_auto_reply_export_xlsx',
+            'name' => 'V3 Auto Reply Export XLSX',
+        ]);
+        $telegram = Channel::factory()->create([
+            'name' => 'Telegram Export',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+        $max = Channel::factory()->create([
+            'name' => 'MAX Export',
+            'platform' => Channel::PLATFORM_MAX,
+            'is_active' => true,
+        ]);
+        $requiredTag = Tag::factory()->create(['name' => 'vip']);
+        $assignTag = Tag::factory()->create(['name' => 'lead']);
+        $state = $this->actingAs($admin)
+            ->getJson($this->stateUrl($scenario))
+            ->assertOk()
+            ->json();
+        $settings = $this->startMessageButtonsSettings(
+            'VIP',
+            [(int) $max->id, (int) $telegram->id],
+            'Ответ из V3',
+            'Открыть',
+            AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE,
+            'link',
+            'https://example.test/vip',
+        );
+        data_set($settings, 'modules.0.payload.match', AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD);
+        data_set($settings, 'modules.0.payload.priority', 90);
+        data_set($settings, 'modules.0.payload.tag_condition', [
+            'enabled' => true,
+            'mode' => 'has_all',
+            'tag_ids' => [(int) $requiredTag->id],
+        ]);
+        $settings['modules'][] = [
+            'id' => 'mod_action',
+            'type' => 'action',
+            'enabled' => true,
+            'payload' => [
+                'actions' => [[
+                    'type' => 'tag_effects',
+                    'assign_tag_ids' => [(int) $assignTag->id],
+                    'remove_tag_ids' => [],
+                ]],
+            ],
+        ];
+
+        $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, [
+                [
+                    'id' => null,
+                    'client_key' => 'tmp_export_start',
+                    'type' => 'state',
+                    'title' => 'VIP старт',
+                    'position' => ['x' => 120, 'y' => 160],
+                    'settings_payload' => $settings,
+                ],
+            ]))
+            ->assertOk();
+
+        $response = $this->actingAs($admin)
+            ->get($this->autoReplyExportUrl($scenario))
+            ->assertOk()
+            ->assertHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+
+        $path = tempnam(sys_get_temp_dir(), 'v3-auto-reply-export');
+
+        if ($path === false) {
+            $this->fail('Failed to allocate temporary workbook path.');
+        }
+
+        $finalPath = $path.'.xlsx';
+
+        try {
+            file_put_contents($finalPath, $response->streamedContent());
+
+            $spreadsheet = IOFactory::load($finalPath);
+
+            try {
+                $rows = $spreadsheet
+                    ->getSheetByName(AutoReplyRuleWorkbookFormat::SHEET_RULES)
+                    ?->toArray(null, true, true, false);
+
+                $this->assertSame(AutoReplyRuleWorkbookFormat::rulesColumns(), $rows[0] ?? []);
+                $this->assertSame('VIP старт', $rows[1][1] ?? null);
+                $this->assertSame('1', (string) ($rows[1][3] ?? ''));
+                $this->assertSame('90', (string) ($rows[1][4] ?? ''));
+                $this->assertSame(AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD, $rows[1][5] ?? null);
+                $this->assertSame('VIP', $rows[1][6] ?? null);
+                $this->assertSame(AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE, $rows[1][7] ?? null);
+                $this->assertSame('Ответ из V3', $rows[1][8] ?? null);
+                $this->assertSame(AutoReplyRuleWorkbookFormat::BUTTON_KIND_LINK, $rows[1][9] ?? null);
+                $this->assertSame('Открыть', $rows[1][10] ?? null);
+                $this->assertSame('https://example.test/vip', $rows[1][11] ?? null);
+                $this->assertSame(
+                    AutoReplyRuleWorkbookFormat::formatList([(string) $telegram->id, (string) $max->id]),
+                    $rows[1][12] ?? null,
+                );
+                $this->assertSame('vip', $rows[1][13] ?? null);
+                $this->assertSame('lead', $rows[1][15] ?? null);
+            } finally {
+                $spreadsheet->disconnectWorksheets();
+                unset($spreadsheet);
+            }
+        } finally {
+            if (file_exists($finalPath)) {
+                unlink($finalPath);
+            }
+
+            if (file_exists($path)) {
+                unlink($path);
+            }
+        }
+    }
+
+    public function test_auto_reply_import_maps_workbook_tag_conditions_to_start_module(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_auto_reply_import_tag_conditions',
+            'name' => 'V3 Auto Reply Import Tag Conditions',
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+        $requiredTag = Tag::factory()->create(['name' => 'vip']);
+        $excludedTag = Tag::factory()->create(['name' => 'blocked']);
+        $state = $this->actingAs($admin)
+            ->getJson($this->stateUrl($scenario))
+            ->assertOk()
+            ->json();
+        $requiredRow = $this->autoReplyWorkbookRuleRow(2001, 'Требует VIP', 'Категория', 'vip', 'Ответ VIP', $channel);
+        $excludedRow = $this->autoReplyWorkbookRuleRow(2002, 'Исключает blocked', 'Категория', 'blocked', 'Ответ blocked', $channel);
+        $requiredRow[13] = 'vip';
+        $excludedRow[14] = 'blocked';
+
+        $preview = $this->actingAs($admin)
+            ->post($this->autoReplyImportPreviewUrl($scenario), [
+                'workbook' => $this->autoReplyWorkbookFile([$requiredRow, $excludedRow]),
+                'builder_state' => json_encode(['builder' => $state['builder']], JSON_UNESCAPED_UNICODE),
+                'placement_mode' => json_encode('single_sheet'),
+                'import_batch_id' => json_encode('auto_reply_xlsx_20260623_tags'),
+            ])
+            ->assertOk()
+            ->json();
+
+        $this->assertSame(2, $preview['summary']['created']);
+        $this->assertSame(0, $preview['summary']['blocked']);
+
+        $blocks = collect($preview['plan']['blocks'])->pluck('block')->values();
+
+        $this->assertSame(true, data_get($blocks[0], 'settings_payload.modules.0.payload.tag_condition.enabled'));
+        $this->assertSame('has_all', data_get($blocks[0], 'settings_payload.modules.0.payload.tag_condition.mode'));
+        $this->assertSame([(int) $requiredTag->id], data_get($blocks[0], 'settings_payload.modules.0.payload.tag_condition.tag_ids'));
+        $this->assertSame(true, data_get($blocks[1], 'settings_payload.modules.0.payload.tag_condition.enabled'));
+        $this->assertSame('has_none', data_get($blocks[1], 'settings_payload.modules.0.payload.tag_condition.mode'));
+        $this->assertSame([(int) $excludedTag->id], data_get($blocks[1], 'settings_payload.modules.0.payload.tag_condition.tag_ids'));
     }
 
     public function test_auto_reply_import_defaults_to_single_sheet_and_preserves_update_location(): void
@@ -5149,6 +5391,11 @@ class ScenarioBuilderV3StateTest extends TestCase
     private function autoReplyImportPreviewUrl(Scenario $scenario): string
     {
         return route('admin.scenario-constructor.v3.auto-reply.import.preview', ['scenario' => $scenario]);
+    }
+
+    private function autoReplyExportUrl(Scenario $scenario): string
+    {
+        return route('admin.scenario-constructor.v3.auto-reply.export', ['scenario' => $scenario]);
     }
 
     private function autoReplyImportTagStoreUrl(Scenario $scenario): string

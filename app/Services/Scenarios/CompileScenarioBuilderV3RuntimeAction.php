@@ -3,6 +3,8 @@
 namespace App\Services\Scenarios;
 
 use App\Models\AutoReplyRule;
+use App\Models\Channel;
+use App\Models\Message;
 use App\Models\ScenarioBuilderBlock;
 use App\Models\ScenarioBuilderCondition;
 use App\Models\ScenarioBuilderEdge;
@@ -27,6 +29,10 @@ class CompileScenarioBuilderV3RuntimeAction
     private const EDGE_MODE_ACTION_RESULT = 'action_result';
 
     private const EDGE_MATCH_EXACT_CALLBACK = 'exact_callback';
+
+    private const START_PRIORITY_MIN = 1;
+
+    private const START_PRIORITY_MAX = 100;
 
     /**
      * @return array<string, mixed>
@@ -81,6 +87,8 @@ class CompileScenarioBuilderV3RuntimeAction
         if ($entrypoints === []) {
             $this->fail('builder.start_condition', 'Для публикации нужен хотя бы один стартовый блок с каналом и фразой.');
         }
+
+        $this->guardTelegramAccountGatewayCompatibility($entrypoints, $runtimeBlocks);
 
         return [
             'schema_version' => BuildScenarioBuilderV3StateAction::SCHEMA_VERSION,
@@ -599,11 +607,14 @@ class CompileScenarioBuilderV3RuntimeAction
     {
         return $blocks
             ->map(function (ScenarioBuilderBlock $block) use ($runtimeBlockIdsByDbId): ?array {
-                $start = $this->module($this->settingsPayload($block), 'start_condition');
+                $settings = $this->settingsPayload($block);
+                $start = $this->module($settings, 'start_condition');
 
                 if ($start === null) {
                     return null;
                 }
+
+                $runtimeBlockId = $runtimeBlockIdsByDbId[(int) $block->id] ?? $this->runtimeBlockId($block);
 
                 $channelIds = $block->channels
                     ->pluck('id')
@@ -627,7 +638,8 @@ class CompileScenarioBuilderV3RuntimeAction
                 }
 
                 return [
-                    'block_id' => $runtimeBlockIdsByDbId[(int) $block->id] ?? $this->runtimeBlockId($block),
+                    'block_id' => $runtimeBlockId,
+                    'display_id' => $this->entrypointDisplayId($block, $settings),
                     'db_block_id' => (int) $block->id,
                     'channel_ids' => $channelIds,
                     'match' => $match,
@@ -642,7 +654,7 @@ class CompileScenarioBuilderV3RuntimeAction
                         data_get($start, 'payload.expression', ''),
                     ),
                     'tag_condition' => $this->compileTagCondition(data_get($start, 'payload.tag_condition', [])),
-                    'priority' => (int) data_get($start, 'payload.priority', 10),
+                    'priority' => $this->normalizeStartPriority(data_get($start, 'payload.priority', 10)),
                 ];
             })
             ->filter()
@@ -658,24 +670,279 @@ class CompileScenarioBuilderV3RuntimeAction
     private function compareEntrypoints(array $left, array $right): int
     {
         return [
-            (int) ($right['priority'] ?? 10),
-            $this->entrypointBlockOrder($right),
-            (string) ($right['block_id'] ?? ''),
+            $this->normalizeStartPriority($right['priority'] ?? 10),
+            $this->entrypointDisplayOrder($right),
+            $this->entrypointDisplayIdFromEntrypoint($right),
         ] <=> [
-            (int) ($left['priority'] ?? 10),
-            $this->entrypointBlockOrder($left),
-            (string) ($left['block_id'] ?? ''),
+            $this->normalizeStartPriority($left['priority'] ?? 10),
+            $this->entrypointDisplayOrder($left),
+            $this->entrypointDisplayIdFromEntrypoint($left),
         ];
     }
 
     /**
      * @param  array<string, mixed>  $entrypoint
      */
-    private function entrypointBlockOrder(array $entrypoint): int
+    private function entrypointDisplayOrder(array $entrypoint): int
     {
-        $blockId = $entrypoint['block_id'] ?? null;
+        $displayId = $this->entrypointDisplayIdFromEntrypoint($entrypoint);
 
-        return is_numeric($blockId) ? (int) $blockId : PHP_INT_MIN;
+        return is_numeric($displayId) ? (int) $displayId : PHP_INT_MIN;
+    }
+
+    /**
+     * @param  array<string, mixed>  $entrypoint
+     */
+    private function entrypointDisplayIdFromEntrypoint(array $entrypoint): string
+    {
+        $displayId = trim((string) ($entrypoint['display_id'] ?? $entrypoint['display_number'] ?? ''));
+
+        return $displayId !== '' ? $displayId : trim((string) ($entrypoint['block_id'] ?? ''));
+    }
+
+    private function normalizeStartPriority(mixed $value): int
+    {
+        return max(self::START_PRIORITY_MIN, min(self::START_PRIORITY_MAX, (int) $value));
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $entrypoints
+     * @param  array<string, array<string, mixed>>  $runtimeBlocks
+     */
+    private function guardTelegramAccountGatewayCompatibility(array $entrypoints, array $runtimeBlocks): void
+    {
+        $telegramAccountChannelIds = $this->telegramAccountChannelIds($entrypoints);
+
+        if ($telegramAccountChannelIds === []) {
+            return;
+        }
+
+        $startBlockIds = collect($entrypoints)
+            ->filter(fn (array $entrypoint): bool => array_intersect(
+                $this->entrypointChannelIds($entrypoint),
+                $telegramAccountChannelIds,
+            ) !== [])
+            ->map(fn (array $entrypoint): string => trim((string) ($entrypoint['block_id'] ?? '')))
+            ->filter(fn (string $blockId): bool => $blockId !== '')
+            ->values()
+            ->all();
+
+        foreach ($this->reachableRuntimeBlockIds($startBlockIds, $runtimeBlocks) as $blockId) {
+            $block = $runtimeBlocks[$blockId] ?? null;
+
+            if (! is_array($block)) {
+                continue;
+            }
+
+            $this->guardTelegramAccountGatewayBlockCompatibility($block);
+        }
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $entrypoints
+     * @return list<int>
+     */
+    private function telegramAccountChannelIds(array $entrypoints): array
+    {
+        $channelIds = collect($entrypoints)
+            ->flatMap(fn (array $entrypoint): array => $this->entrypointChannelIds($entrypoint))
+            ->unique()
+            ->values()
+            ->all();
+
+        if ($channelIds === []) {
+            return [];
+        }
+
+        return Channel::query()
+            ->whereIn('id', $channelIds)
+            ->get()
+            ->filter(fn (Channel $channel): bool => $channel->platform === Channel::PLATFORM_TELEGRAM
+                && $channel->isAccountConnection())
+            ->pluck('id')
+            ->map(fn (mixed $id): int => (int) $id)
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  array<string, mixed>  $entrypoint
+     * @return list<int>
+     */
+    private function entrypointChannelIds(array $entrypoint): array
+    {
+        return collect($entrypoint['channel_ids'] ?? [])
+            ->map(fn (mixed $id): int => (int) $id)
+            ->filter(fn (int $id): bool => $id > 0)
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  list<string>  $startBlockIds
+     * @param  array<string, array<string, mixed>>  $runtimeBlocks
+     * @return list<string>
+     */
+    private function reachableRuntimeBlockIds(array $startBlockIds, array $runtimeBlocks): array
+    {
+        $seen = [];
+        $stack = array_values($startBlockIds);
+
+        while ($stack !== []) {
+            $blockId = trim((string) array_pop($stack));
+
+            if ($blockId === '' || isset($seen[$blockId])) {
+                continue;
+            }
+
+            $seen[$blockId] = true;
+            $block = $runtimeBlocks[$blockId] ?? null;
+
+            if (! is_array($block)) {
+                continue;
+            }
+
+            foreach ($this->runtimeBlockTargetIds($block) as $targetBlockId) {
+                if (! isset($seen[$targetBlockId])) {
+                    $stack[] = $targetBlockId;
+                }
+            }
+        }
+
+        return array_keys($seen);
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     * @return list<string>
+     */
+    private function runtimeBlockTargetIds(array $block): array
+    {
+        $targets = [];
+
+        $this->pushRuntimeTargetId($targets, $block['default_target_block_id'] ?? null);
+
+        foreach (['wait_reply_edges', 'automatic_edges', 'action_result_edges'] as $edgeListKey) {
+            foreach ($this->runtimeList($block[$edgeListKey] ?? []) as $edge) {
+                $this->pushRuntimeTargetId($targets, $edge['target_block_id'] ?? null);
+            }
+        }
+
+        foreach ($this->runtimeButtonRows(data_get($block, 'buttons.rows', [])) as $row) {
+            foreach ($row as $button) {
+                $this->pushRuntimeTargetId($targets, $button['target_block_id'] ?? null);
+            }
+        }
+
+        foreach ($this->runtimeList(data_get($block, 'ai_analysis.outputs', [])) as $output) {
+            $this->pushRuntimeTargetId($targets, $output['target_block_id'] ?? null);
+        }
+
+        return array_values(array_unique($targets));
+    }
+
+    /**
+     * @param  list<string>  $targets
+     */
+    private function pushRuntimeTargetId(array &$targets, mixed $targetBlockId): void
+    {
+        $targetBlockId = trim((string) $targetBlockId);
+
+        if ($targetBlockId !== '') {
+            $targets[] = $targetBlockId;
+        }
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function runtimeList(mixed $items): array
+    {
+        if (! is_array($items)) {
+            return [];
+        }
+
+        return collect($items)
+            ->filter(fn (mixed $item): bool => is_array($item))
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @return list<list<array<string, mixed>>>
+     */
+    private function runtimeButtonRows(mixed $rows): array
+    {
+        if (! is_array($rows)) {
+            return [];
+        }
+
+        return collect($rows)
+            ->filter(fn (mixed $row): bool => is_array($row))
+            ->map(fn (array $row): array => collect($row)
+                ->filter(fn (mixed $button): bool => is_array($button) && filled($button['text'] ?? null))
+                ->values()
+                ->all())
+            ->filter(fn (array $row): bool => $row !== [])
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     */
+    private function guardTelegramAccountGatewayBlockCompatibility(array $block): void
+    {
+        $message = is_array($block['message'] ?? null) ? $block['message'] : null;
+
+        if (
+            $message !== null
+            && (string) ($message['text_format'] ?? Message::TEXT_FORMAT_PLAIN_TEXT) !== Message::TEXT_FORMAT_PLAIN_TEXT
+        ) {
+            $this->fail(
+                'builder.telegram_account_gateway',
+                'Telegram Account Gateway пока поддерживает только простой текст в V3-сообщениях. Проверьте блок '.$this->runtimeBlockLabel($block).'.',
+            );
+        }
+
+        if ($this->runtimeButtonRows(data_get($block, 'buttons.rows', [])) !== []) {
+            $this->fail(
+                'builder.telegram_account_gateway',
+                'Telegram Account Gateway пока поддерживает только текстовые V3-сообщения без кнопок. Проверьте блок '.$this->runtimeBlockLabel($block).'.',
+            );
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     */
+    private function runtimeBlockLabel(array $block): string
+    {
+        $displayNumber = trim((string) ($block['display_number'] ?? ''));
+
+        if ($displayNumber !== '') {
+            return '#'.$displayNumber;
+        }
+
+        $title = trim((string) ($block['title'] ?? ''));
+
+        return $title !== '' ? $title : '#'.trim((string) ($block['id'] ?? ''));
+    }
+
+    /**
+     * @param  array<string, mixed>  $settings
+     */
+    private function entrypointDisplayId(ScenarioBuilderBlock $block, array $settings): string
+    {
+        $displayNumber = $this->displayNumber($settings);
+
+        if ($displayNumber !== null) {
+            return $displayNumber;
+        }
+
+        $cardId = trim((string) data_get($settings, 'ui.card_id', ''));
+
+        return $cardId !== '' ? $cardId : (string) $block->id;
     }
 
     private function normalizeContactPhoneCondition(mixed $condition): string
