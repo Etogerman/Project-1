@@ -209,7 +209,11 @@ function buildPrompt({ pr, files, diff, instructions, deterministic }) {
 
   return [
     "Return exactly one strict JSON object and nothing else.",
+    "Return minified JSON on a single line.",
     "Do not use markdown, code fences, comments, or explanatory text.",
+    "Every JSON string value must be single-line. Replace line breaks with spaces or escaped \\n sequences.",
+    "Never put raw control characters inside JSON strings.",
+    "Array values must be short single-line Russian strings.",
     "The JSON shape must be:",
     "{\"verdict\":\"READY_TO_MERGE|BLOCKED|READY_AFTER_HUMAN_CHECK\",\"blockers\":[],\"risks\":[],\"checked_conditions\":[],\"missing_data\":[],\"next_step\":\"...\"}",
     "Review the pull request for merge-readiness. Write all human-facing strings in Russian.",
@@ -324,7 +328,11 @@ function buildJsonRetryPrompt({ previousOutput, parseError }) {
     "Your previous answer was rejected because it was not strict JSON.",
     `Parser error: ${parseError.message}`,
     "Convert the previous answer into exactly one strict JSON object and nothing else.",
+    "Return minified JSON on a single line.",
     "Do not use markdown, code fences, comments, prose, or explanatory text.",
+    "Every JSON string value must be single-line. Replace line breaks with spaces or escaped \\n sequences.",
+    "Never put raw control characters inside JSON strings.",
+    "Array values must be short single-line Russian strings.",
     "The JSON shape must be:",
     "{\"verdict\":\"READY_TO_MERGE|BLOCKED|READY_AFTER_HUMAN_CHECK\",\"blockers\":[],\"risks\":[],\"checked_conditions\":[],\"missing_data\":[],\"next_step\":\"...\"}",
     "Write all human-facing strings in Russian.",
@@ -618,6 +626,16 @@ function selfTest() {
   assert.match(
     buildJsonRetryPrompt({ previousOutput: "```json\n{}\n```", parseError: new Error("not strict") }),
     /Previous answer:/,
+  );
+  assert.match(
+    buildPrompt({
+      pr: { number: 1, title: "t", body: "b", base: { ref: "main" }, head: { ref: "branch" }, draft: false },
+      files: [],
+      diff: "",
+      instructions: "",
+      deterministic: { pass: true },
+    }),
+    /Return minified JSON on a single line/,
   );
   assert.equal(buildDiff([{ filename: "a.txt", previous_filename: "old.txt", patch: "@@ -1 +1 @@\n-a\n+b" }]).blockers.length, 0);
   assert.equal(buildDiff([{ filename: "image.png" }]).blockers.length, 1);
