@@ -406,6 +406,7 @@ class ChannelResource extends Resource
     {
         return $table
             ->poll('30s')
+            ->searchPlaceholder('Поиск')
             ->header(view('filament.channels.partials.connection-health-header', [
                 'health' => static::resolveConnectionCheckerHealth(),
             ]))
@@ -595,8 +596,9 @@ class ChannelResource extends Resource
             ->deferFilters(false)
             ->filtersTriggerAction(
                 fn (Action $action): Action => $action
-                    ->tooltip('Фильтры')
-                    ->extraAttributes(['class' => 'ac-table-toolbar-trigger'], merge: true),
+                    ->button()
+                    ->label('Фильтр')
+                    ->extraAttributes(['class' => 'ac-channels-filter-trigger'], merge: true),
             )
             ->recordActionsColumnLabel('Кнопки')
             ->columnManager()

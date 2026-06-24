@@ -159,7 +159,8 @@ function aggregatePreviousFilename(files) {
 }
 
 function countPatchLines(files) {
-  const counts = new Map();
+  const additions = new Map();
+  const removals = new Map();
 
   for (const file of files) {
     const patch = normalizePatch(file.patch || "");
@@ -169,7 +170,23 @@ function countPatchLines(files) {
     }
 
     for (const line of patch.split("\n")) {
-      counts.set(line, (counts.get(line) || 0) + 1);
+      const content = line.slice(1);
+      const bucket = line.startsWith("+") ? additions : removals;
+
+      bucket.set(content, (bucket.get(content) || 0) + 1);
+    }
+  }
+
+  const counts = new Map();
+  const contents = new Set([...additions.keys(), ...removals.keys()]);
+
+  for (const content of contents) {
+    const delta = (additions.get(content) || 0) - (removals.get(content) || 0);
+
+    if (delta > 0) {
+      counts.set(`+${content}`, delta);
+    } else if (delta < 0) {
+      counts.set(`-${content}`, Math.abs(delta));
     }
   }
 
@@ -739,6 +756,41 @@ function runSelfTest() {
         {
           ...runtimeFiles[0],
           patch: "index ddd..eee 100644\n@@ -100,6 +100,7 @@\n context from staging\n+next",
+        },
+      ],
+      currentPrCommitShas: ["1111111111111111111111111111111111111111"],
+      stagingSmokeRun: {
+        ...successfulSmokeRun,
+        head_sha: nextStagingPr.merge_commit_sha,
+      },
+    }).failures,
+    [],
+  );
+
+  assert.deepEqual(
+    evaluatePullRequest({
+      baseRef: "main",
+      title: "[codex] Исправить cutover автоответчика",
+      body: "Описание PR на русском языке.\n\nStaging PRs: #614, #615\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
+      files: [
+        {
+          filename: ".env.example",
+          patch: "index aaa..bbb 100644\n@@ -1,2 +1,3 @@\n context\n+BOT_LEGACY_AUTO_REPLY_RULES_ENABLED=false",
+          status: "modified",
+        },
+      ],
+      repository: { owner: "Etogerman", repo: "Project-1" },
+      stagingPrs: [stagingPr, nextStagingPr],
+      stagingPrFiles: [
+        {
+          filename: ".env.example",
+          patch: "index aaa..bbb 100644\n@@ -1,2 +1,3 @@\n context\n+BOT_LEGACY_AUTO_REPLY_RULES_ENABLED=true",
+          status: "modified",
+        },
+        {
+          filename: ".env.example",
+          patch: "index bbb..ccc 100644\n@@ -1,3 +1,3 @@\n context\n-BOT_LEGACY_AUTO_REPLY_RULES_ENABLED=true\n+BOT_LEGACY_AUTO_REPLY_RULES_ENABLED=false",
+          status: "modified",
         },
       ],
       currentPrCommitShas: ["1111111111111111111111111111111111111111"],

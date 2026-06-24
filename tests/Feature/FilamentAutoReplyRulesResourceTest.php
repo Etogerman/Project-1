@@ -11,19 +11,11 @@ use App\Models\AutoReplyRuleTagEffect;
 use App\Models\Channel;
 use App\Models\Tag;
 use App\Models\User;
-use App\Services\AutoReplyRules\AutoReplyRuleWorkbookFormat;
-use App\Services\AutoReplyRules\ParseAutoReplyRulesWorkbookAction;
 use Filament\Facades\Filament;
-use Filament\Support\Icons\Heroicon;
-use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
-use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
-use PhpOffice\PhpSpreadsheet\Spreadsheet;
-use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 use Tests\TestCase;
 
 class FilamentAutoReplyRulesResourceTest extends TestCase
@@ -38,7 +30,7 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
         Filament::bootCurrentPanel();
     }
 
-    public function test_active_admin_can_open_auto_reply_rules_page(): void
+    public function test_active_admin_can_open_auto_reply_rules_archive_page(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -48,10 +40,13 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
         $this->actingAs($admin)
             ->get(AutoReplyRuleResource::getUrl())
             ->assertOk()
-            ->assertSee('Правила автоответа');
+            ->assertSee('Архив старых автоответов')
+            ->assertSee('Не используется после перехода на V3-конструктор')
+            ->assertSee('Открыть V3 автоответчик')
+            ->assertSee('Экспорт в XLSX');
     }
 
-    public function test_employee_auto_reply_rule_access_is_controlled_by_role_permission_matrix(): void
+    public function test_employee_auto_reply_rule_archive_access_is_controlled_by_view_permission(): void
     {
         $employee = User::factory()->create([
             'is_active' => true,
@@ -66,7 +61,7 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
         $this->actingAs($employee)
             ->get(AutoReplyRuleResource::getUrl())
             ->assertOk()
-            ->assertSee('Правила автоответа');
+            ->assertSee('Архив старых автоответов');
 
         $this->assertTrue(Gate::forUser($employee)->allows('viewAny', AutoReplyRule::class));
         $this->assertTrue(Gate::forUser($employee)->allows('view', $rule));
@@ -75,15 +70,13 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
         $this->assertFalse(Gate::forUser($employee)->allows('delete', $rule));
     }
 
-    public function test_employee_can_manage_auto_reply_rules_when_edit_and_delete_are_enabled_in_matrix(): void
+    public function test_archive_is_read_only_even_when_user_has_legacy_manage_permissions(): void
     {
         $employee = User::factory()->create([
             'is_active' => true,
             'is_admin' => false,
         ]);
-        $channel = Channel::factory()->create([
-            'is_active' => true,
-        ]);
+        $rule = AutoReplyRule::factory()->create();
 
         $this->setRolePermission(User::ROLE_EMPLOYEE, 'auto_reply_rules.view', true);
         $this->setRolePermission(User::ROLE_EMPLOYEE, 'auto_reply_rules.edit', true);
@@ -91,227 +84,41 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
 
         Livewire::actingAs($employee)
             ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData($channel, [
-                'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
-                'contact_phone_condition' => null,
-                'reply_text' => 'Employee managed rule',
-                'is_active' => true,
-            ]))
-            ->assertHasNoFormErrors();
-
-        $rule = AutoReplyRule::query()->firstOrFail();
-
-        Livewire::actingAs($employee)
-            ->test(ManageAutoReplyRules::class)
-            ->callTableAction('edit', $rule, $this->buildRuleFormData($channel, [
-                'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
-                'contact_phone_condition' => null,
-                'reply_text' => 'Employee updated rule',
-                'is_active' => false,
-            ]))
-            ->assertHasNoTableActionErrors();
-
-        $rule->refresh();
-
-        $this->assertSame('Employee updated rule', $rule->reply_text);
-        $this->assertFalse($rule->is_active);
-
-        Livewire::actingAs($employee)
-            ->test(ManageAutoReplyRules::class)
-            ->callTableAction('delete', $rule)
-            ->assertHasNoTableActionErrors();
-
-        $this->assertModelMissing($rule);
+            ->assertActionVisible('openV3AutoReplyConstructor')
+            ->assertActionVisible('exportWorkbook')
+            ->assertActionDoesNotExist('create')
+            ->assertActionDoesNotExist('importWorkbook')
+            ->assertActionDoesNotExist('applyWorkbookImport')
+            ->assertTableActionDoesNotExist('edit', null, $rule)
+            ->assertTableActionDoesNotExist('delete', null, $rule);
     }
 
-    public function test_admin_can_create_edit_and_delete_auto_reply_rule(): void
+    public function test_auto_reply_rules_archive_keeps_table_tools(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
             'is_admin' => true,
         ]);
-        $channel = Channel::factory()->create([
-            'name' => 'Telegram Support',
-            'platform' => Channel::PLATFORM_TELEGRAM,
-            'is_active' => true,
-        ]);
 
         Livewire::actingAs($admin)
             ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData(
-                $channel,
-                [
-                    'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
-                    'contact_phone_condition' => null,
-                    'keyword' => 'Тест1',
-                    'reply_text' => 'Шаблон 1',
-                    'is_active' => true,
-                ],
-                [
-                    'button_kind' => 'request_phone',
-                ],
-            ))
-            ->assertHasNoFormErrors();
+            ->tap(function ($component): void {
+                $table = $component->instance()->getTable();
 
-        $rule = AutoReplyRule::query()->firstOrFail();
-
-        $this->assertSame('Тест1', $rule->keyword);
-        $this->assertSame('тест1', $rule->normalized_keyword);
-        $this->assertSame(AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD, $rule->match_scope);
-        $this->assertNull($rule->contact_phone_condition);
-        $this->assertSame(AutoReplyRule::BUTTON_TYPE_SHARE_CONTACT, $rule->getButtonTypeForChannel($channel));
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callTableAction('edit', $rule, $this->buildRuleFormData(
-                $channel,
-                [
-                    'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
-                    'contact_phone_condition' => null,
-                    'keyword' => 'Тест2',
-                    'reply_text' => 'Шаблон 2',
-                    'is_active' => false,
-                ],
-                [
-                    'button_kind' => null,
-                ],
-            ))
-            ->assertHasNoTableActionErrors();
-
-        $rule->refresh();
-
-        $this->assertSame('Тест2', $rule->keyword);
-        $this->assertSame('тест2', $rule->normalized_keyword);
-        $this->assertSame('Шаблон 2', $rule->reply_text);
-        $this->assertFalse($rule->is_active);
-        $this->assertNull($rule->getButtonTypeForChannel($channel));
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callTableAction('delete', $rule)
-            ->assertHasNoTableActionErrors();
-
-        $this->assertModelMissing($rule);
+                $this->assertTrue($table->hasColumnManager());
+                $this->assertFalse($table->hasDeferredColumnManager());
+                $this->assertFalse($table->getColumnManagerApplyAction()->isVisible());
+                $this->assertTrue($table->getColumn('id')?->isToggleable());
+                $this->assertTrue($table->getColumn('match_scope')?->isToggleable());
+                $this->assertTrue($table->getColumn('contact_phone_condition')?->isToggleable());
+                $this->assertNotNull($table->getFilter('auto_reply_category_id'));
+                $this->assertNotNull($table->getFilter('channel_id'));
+                $this->assertNotNull($table->getFilter('tag'));
+                $this->assertNotNull($table->getFilter('is_active'));
+            });
     }
 
-    public function test_rule_without_name_uses_display_name_fallback(): void
-    {
-        $rule = AutoReplyRule::factory()->create([
-            'name' => null,
-        ]);
-
-        $this->assertNull($rule->name);
-        $this->assertSame("Автоответ #{$rule->id}", $rule->display_name);
-    }
-
-    public function test_rule_name_is_trimmed_to_null_when_it_is_blank(): void
-    {
-        $rule = AutoReplyRule::query()->create([
-            'name' => '   ',
-            'channel_id' => Channel::factory()->create()->id,
-            'keyword' => 'Тест1',
-            'normalized_keyword' => 'тест1',
-            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
-            'reply_text' => 'Шаблон 1',
-            'is_active' => true,
-            'priority' => 10,
-        ]);
-
-        $this->assertNull($rule->fresh()->name);
-        $this->assertSame("Автоответ #{$rule->id}", $rule->fresh()->display_name);
-    }
-
-    public function test_admin_can_create_rule_with_custom_name(): void
-    {
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $channel = Channel::factory()->create([
-            'is_active' => true,
-        ]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData($channel, [
-                'name' => 'Старт Telegram',
-                'keyword' => 'Тест1',
-                'reply_text' => 'Шаблон 1',
-            ]))
-            ->assertHasNoFormErrors()
-            ->assertSee('Старт Telegram');
-
-        $rule = AutoReplyRule::query()->firstOrFail();
-
-        $this->assertSame('Старт Telegram', $rule->name);
-        $this->assertSame('Старт Telegram', $rule->display_name);
-    }
-
-    public function test_admin_can_create_rule_with_category(): void
-    {
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $channel = Channel::factory()->create([
-            'is_active' => true,
-        ]);
-        $category = AutoReplyCategory::query()->create([
-            'name' => 'Старт',
-            'sort_order' => 10,
-        ]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData($channel, [
-                'name' => 'Старт Telegram',
-                'auto_reply_category_id' => $category->id,
-                'keyword' => 'Тест1',
-                'reply_text' => 'Шаблон 1',
-            ]))
-            ->assertHasNoFormErrors()
-            ->assertSee('Старт');
-
-        $rule = AutoReplyRule::query()->firstOrFail();
-
-        $this->assertSame($category->id, $rule->auto_reply_category_id);
-    }
-
-    public function test_admin_can_edit_rule_category(): void
-    {
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $channel = Channel::factory()->create([
-            'is_active' => true,
-        ]);
-        $firstCategory = AutoReplyCategory::query()->create([
-            'name' => 'Старт',
-            'sort_order' => 10,
-        ]);
-        $secondCategory = AutoReplyCategory::query()->create([
-            'name' => 'Fallback',
-            'sort_order' => 20,
-        ]);
-        $rule = AutoReplyRule::factory()->create([
-            'auto_reply_category_id' => $firstCategory->id,
-        ]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callTableAction('edit', $rule, $this->buildRuleFormData($channel, [
-                'name' => 'Старт Telegram',
-                'auto_reply_category_id' => $secondCategory->id,
-                'keyword' => 'Тест2',
-                'reply_text' => 'Шаблон 2',
-            ]))
-            ->assertHasNoTableActionErrors();
-
-        $this->assertSame($secondCategory->id, $rule->fresh()->auto_reply_category_id);
-    }
-
-    public function test_table_search_can_find_rule_by_name(): void
+    public function test_table_search_can_find_archived_rule_by_name(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -331,7 +138,7 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
             ->assertCanNotSeeTableRecords([$otherRule]);
     }
 
-    public function test_table_filter_can_filter_rules_by_category(): void
+    public function test_table_filters_can_filter_archived_rules_by_category(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -387,7 +194,7 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
             });
     }
 
-    public function test_table_filter_can_filter_rules_without_category(): void
+    public function test_table_filters_can_filter_archived_rules_without_category(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -411,1163 +218,67 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
             ->assertCanNotSeeTableRecords([$categorizedRule]);
     }
 
-    public function test_admin_can_create_multichannel_rule_with_shared_request_phone_button(): void
+    public function test_table_filters_can_filter_archived_rules_by_channel(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
             'is_admin' => true,
         ]);
-        $telegramChannel = Channel::factory()->create([
-            'name' => 'Telegram Sales',
-            'platform' => Channel::PLATFORM_TELEGRAM,
+        $matchingChannel = Channel::factory()->create([
+            'name' => 'Telegram Local',
             'is_active' => true,
         ]);
-        $maxChannel = Channel::factory()->create([
-            'name' => 'MAX Support',
-            'platform' => Channel::PLATFORM_MAX,
+        $otherChannel = Channel::factory()->create([
+            'name' => 'MAX Local',
             'is_active' => true,
         ]);
+        $matchingRule = AutoReplyRule::factory()->forChannel($matchingChannel)->create();
+        $otherRule = AutoReplyRule::factory()->forChannel($otherChannel)->create();
 
         Livewire::actingAs($admin)
             ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData(
-                [$telegramChannel, $maxChannel],
-                [
-                    'keyword' => 'Мульти',
-                    'reply_text' => 'Общий ответ',
-                ],
-                [
-                    'button_kind' => 'request_phone',
-                ],
-            ))
-            ->assertHasNoFormErrors();
-
-        $rule = AutoReplyRule::query()->firstOrFail()->load('channels');
-
-        $this->assertEqualsCanonicalizing(
-            [$telegramChannel->id, $maxChannel->id],
-            $rule->channels->modelKeys(),
-        );
-        $this->assertSame(AutoReplyRule::BUTTON_TYPE_SHARE_CONTACT, $rule->getButtonTypeForChannel($telegramChannel));
-        $this->assertSame(AutoReplyRule::BUTTON_TYPE_SHARE_CONTACT, $rule->getButtonTypeForChannel($maxChannel));
+            ->filterTable('channel_id', $matchingChannel->id)
+            ->assertCanSeeTableRecords([$matchingRule])
+            ->assertCanNotSeeTableRecords([$otherRule]);
     }
 
-    public function test_admin_can_edit_multichannel_rule_with_shared_request_phone_button(): void
+    public function test_table_filters_can_filter_archived_rules_by_tag(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
             'is_admin' => true,
         ]);
-        $telegramChannel = Channel::factory()->create([
-            'name' => 'Telegram Sales',
-            'platform' => Channel::PLATFORM_TELEGRAM,
-            'is_active' => true,
-        ]);
-        $maxChannel = Channel::factory()->create([
-            'name' => 'MAX Support',
-            'platform' => Channel::PLATFORM_MAX,
-            'is_active' => true,
-        ]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData(
-                [$telegramChannel, $maxChannel],
-                [
-                    'keyword' => 'Мульти',
-                    'reply_text' => 'Общий ответ',
-                ],
-                [
-                    'button_kind' => 'request_phone',
-                ],
-            ))
-            ->assertHasNoFormErrors();
-
-        $rule = AutoReplyRule::query()->firstOrFail();
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callTableAction('edit', $rule, $this->buildRuleFormData(
-                [$telegramChannel, $maxChannel],
-                [
-                    'keyword' => 'Мульти',
-                    'reply_text' => 'Обновлённый ответ',
-                    'is_active' => true,
-                ],
-                [
-                    'button_kind' => 'request_phone',
-                ],
-            ))
-            ->assertHasNoTableActionErrors();
-
-        $rule = $rule->fresh()->load('channels');
-
-        $this->assertSame('Обновлённый ответ', $rule->reply_text);
-        $this->assertSame(AutoReplyRule::BUTTON_TYPE_SHARE_CONTACT, $rule->getButtonTypeForChannel($telegramChannel));
-        $this->assertSame(AutoReplyRule::BUTTON_TYPE_SHARE_CONTACT, $rule->getButtonTypeForChannel($maxChannel));
-    }
-
-    public function test_admin_can_disable_multichannel_rule_with_shared_request_phone_button(): void
-    {
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $telegramChannel = Channel::factory()->create([
-            'name' => 'Telegram Sales',
-            'platform' => Channel::PLATFORM_TELEGRAM,
-            'is_active' => true,
-        ]);
-        $maxChannel = Channel::factory()->create([
-            'name' => 'MAX Support',
-            'platform' => Channel::PLATFORM_MAX,
-            'is_active' => true,
-        ]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData(
-                [$telegramChannel, $maxChannel],
-                [
-                    'keyword' => 'Мульти',
-                    'reply_text' => 'Общий ответ',
-                ],
-                [
-                    'button_kind' => 'request_phone',
-                ],
-            ))
-            ->assertHasNoFormErrors();
-
-        $rule = AutoReplyRule::query()->firstOrFail();
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callTableAction('edit', $rule, $this->buildRuleFormData(
-                [$telegramChannel, $maxChannel],
-                [
-                    'keyword' => 'Мульти',
-                    'reply_text' => 'Общий ответ',
-                    'is_active' => false,
-                ],
-                [
-                    'button_kind' => 'request_phone',
-                ],
-            ))
-            ->assertHasNoTableActionErrors();
-
-        $rule = $rule->fresh()->load('channels');
-
-        $this->assertFalse($rule->is_active);
-        $this->assertSame(AutoReplyRule::BUTTON_TYPE_SHARE_CONTACT, $rule->getButtonTypeForChannel($telegramChannel));
-        $this->assertSame(AutoReplyRule::BUTTON_TYPE_SHARE_CONTACT, $rule->getButtonTypeForChannel($maxChannel));
-    }
-
-    public function test_admin_can_create_telegram_rule_with_shared_link_button(): void
-    {
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $telegramChannel = Channel::factory()->create([
-            'name' => 'Telegram Sales',
-            'platform' => Channel::PLATFORM_TELEGRAM,
-            'is_active' => true,
-        ]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData(
-                $telegramChannel,
-                [
-                    'keyword' => 'Ссылка',
-                    'reply_text' => 'Перейдите по ссылке',
-                ],
-                [
-                    'button_kind' => 'link',
-                    'button_text' => 'Открыть форму',
-                    'button_url' => 'https://example.com/form',
-                ],
-            ))
-            ->assertHasNoFormErrors();
-
-        $rule = AutoReplyRule::query()->firstOrFail()->load('channels');
-
-        $this->assertSame(AutoReplyRule::BUTTON_TYPE_INLINE_KEYBOARD, $rule->getButtonTypeForChannel($telegramChannel));
-        $this->assertSame('Открыть форму', $rule->getButtonTextForChannel($telegramChannel));
-        $this->assertSame('https://example.com/form', $rule->getButtonUrlForChannel($telegramChannel));
-    }
-
-    public function test_admin_can_create_max_rule_with_shared_link_button(): void
-    {
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $maxChannel = Channel::factory()->create([
-            'name' => 'MAX Support',
-            'platform' => Channel::PLATFORM_MAX,
-            'is_active' => true,
-        ]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData(
-                $maxChannel,
-                [
-                    'keyword' => 'MAX ссылка',
-                    'reply_text' => 'Перейдите по ссылке',
-                ],
-                [
-                    'button_kind' => 'link',
-                    'button_text' => 'Открыть MAX форму',
-                    'button_url' => 'https://example.com/max-form',
-                ],
-            ))
-            ->assertHasNoFormErrors();
-
-        $rule = AutoReplyRule::query()->firstOrFail()->load('channels');
-
-        $this->assertSame(AutoReplyRule::BUTTON_TYPE_INLINE_KEYBOARD, $rule->getButtonTypeForChannel($maxChannel));
-        $this->assertSame('Открыть MAX форму', $rule->getButtonTextForChannel($maxChannel));
-        $this->assertSame('https://example.com/max-form', $rule->getButtonUrlForChannel($maxChannel));
-    }
-
-    public function test_admin_can_create_mixed_platform_rule_with_shared_link_button(): void
-    {
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $telegramChannel = Channel::factory()->create([
-            'name' => 'Telegram Sales',
-            'platform' => Channel::PLATFORM_TELEGRAM,
-            'is_active' => true,
-        ]);
-        $maxChannel = Channel::factory()->create([
-            'name' => 'MAX Support',
-            'platform' => Channel::PLATFORM_MAX,
-            'is_active' => true,
-        ]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData(
-                [$telegramChannel, $maxChannel],
-                [
-                    'keyword' => 'Общая ссылка',
-                    'reply_text' => 'Перейдите по ссылке',
-                ],
-                [
-                    'button_kind' => 'link',
-                    'button_text' => 'Открыть заявку',
-                    'button_url' => 'https://example.com/shared-form',
-                ],
-            ))
-            ->assertHasNoFormErrors();
-
-        $rule = AutoReplyRule::query()->firstOrFail()->load('channels');
-
-        $this->assertSame(AutoReplyRule::BUTTON_TYPE_INLINE_KEYBOARD, $rule->getButtonTypeForChannel($telegramChannel));
-        $this->assertSame(AutoReplyRule::BUTTON_TYPE_INLINE_KEYBOARD, $rule->getButtonTypeForChannel($maxChannel));
-        $this->assertSame('Открыть заявку', $rule->getButtonTextForChannel($telegramChannel));
-        $this->assertSame('Открыть заявку', $rule->getButtonTextForChannel($maxChannel));
-        $this->assertSame('https://example.com/shared-form', $rule->getButtonUrlForChannel($telegramChannel));
-        $this->assertSame('https://example.com/shared-form', $rule->getButtonUrlForChannel($maxChannel));
-    }
-
-    public function test_admin_can_create_telegram_account_rule_as_text_only(): void
-    {
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $accountChannel = Channel::factory()->account()->create([
-            'name' => 'Telegram Account Gateway',
-            'platform' => Channel::PLATFORM_TELEGRAM,
-            'is_active' => true,
-        ]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData(
-                $accountChannel,
-                [
-                    'keyword' => 'Gateway',
-                    'reply_text' => 'Текст для Gateway',
-                ],
-            ))
-            ->assertHasNoFormErrors();
-
-        $rule = AutoReplyRule::query()->firstOrFail()->load('channels');
-
-        $this->assertSame('Текст для Gateway', $rule->reply_text);
-        $this->assertNull($rule->getButtonTypeForChannel($accountChannel));
-        $this->assertNull($rule->getButtonTextForChannel($accountChannel));
-        $this->assertNull($rule->getButtonUrlForChannel($accountChannel));
-    }
-
-    public function test_telegram_account_rule_persistence_drops_submitted_button_config(): void
-    {
-        $accountChannel = Channel::factory()->account()->create([
-            'name' => 'Telegram Account Gateway',
-            'platform' => Channel::PLATFORM_TELEGRAM,
-            'is_active' => true,
-        ]);
-
-        $rule = AutoReplyRuleResource::saveAutoReplyRule($this->buildRuleFormData(
-            $accountChannel,
-            [
-                'keyword' => 'Gateway direct',
-                'reply_text' => 'Текст для Gateway',
-            ],
-            [
-                'button_kind' => 'link',
-                'button_text' => 'Открыть форму',
-                'button_url' => 'https://example.com/form',
-            ],
-        ))->load('channels');
-
-        $this->assertSame('Текст для Gateway', $rule->reply_text);
-        $this->assertNull($rule->getButtonTypeForChannel($accountChannel));
-        $this->assertNull($rule->getButtonTextForChannel($accountChannel));
-        $this->assertNull($rule->getButtonUrlForChannel($accountChannel));
-    }
-
-    public function test_admin_can_create_mixed_bot_and_account_rule_with_button_only_for_bot(): void
-    {
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $botChannel = Channel::factory()->create([
-            'name' => 'Telegram Bot',
-            'platform' => Channel::PLATFORM_TELEGRAM,
-            'connection_type' => Channel::CONNECTION_TYPE_BOT,
-            'is_active' => true,
-        ]);
-        $accountChannel = Channel::factory()->account()->create([
-            'name' => 'Telegram Account Gateway',
-            'platform' => Channel::PLATFORM_TELEGRAM,
-            'is_active' => true,
-        ]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData(
-                [$botChannel, $accountChannel],
-                [
-                    'keyword' => 'Смешанное правило',
-                    'reply_text' => 'Один текст для двух каналов',
-                ],
-                [
-                    'button_kind' => 'link',
-                    'button_text' => 'Открыть заявку',
-                    'button_url' => 'https://example.com/request',
-                ],
-            ))
-            ->assertHasNoFormErrors();
-
-        $rule = AutoReplyRule::query()->firstOrFail()->load('channels');
-
-        $this->assertSame(AutoReplyRule::BUTTON_TYPE_INLINE_KEYBOARD, $rule->getButtonTypeForChannel($botChannel));
-        $this->assertSame('Открыть заявку', $rule->getButtonTextForChannel($botChannel));
-        $this->assertSame('https://example.com/request', $rule->getButtonUrlForChannel($botChannel));
-        $this->assertNull($rule->getButtonTypeForChannel($accountChannel));
-        $this->assertNull($rule->getButtonTextForChannel($accountChannel));
-        $this->assertNull($rule->getButtonUrlForChannel($accountChannel));
-    }
-
-    public function test_auto_reply_rules_table_uses_live_column_manager_and_icon_only_edit_action(): void
-    {
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $rule = AutoReplyRule::factory()->create();
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->assertTableActionHasIcon('edit', Heroicon::OutlinedPencilSquare, $rule)
-            ->assertTableActionHasIcon('delete', Heroicon::OutlinedTrash, $rule)
-            ->assertTableActionDoesNotHaveLabel('edit', $rule)
-            ->assertTableActionDoesNotHaveLabel('delete', $rule)
-            ->tap(function ($component): void {
-                $table = $component->instance()->getTable();
-
-                $this->assertTrue($table->hasColumnManager());
-                $this->assertFalse($table->hasDeferredColumnManager());
-                $this->assertFalse($table->getColumnManagerApplyAction()->isVisible());
-                $this->assertTrue($table->getColumn('id')?->isToggleable());
-                $this->assertTrue($table->getColumn('match_scope')?->isToggleable());
-                $this->assertTrue($table->getColumn('contact_phone_condition')?->isToggleable());
-                $this->assertSame('Кнопки', $table->getRecordActionsColumnLabel());
-            });
-    }
-
-    public function test_normalized_keyword_duplicate_is_rejected_within_channel(): void
-    {
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $channel = Channel::factory()->create([
-            'is_active' => true,
-        ]);
-
-        AutoReplyRule::factory()->create([
-            'channel_id' => $channel->id,
-            'keyword' => 'Тест1',
-            'normalized_keyword' => 'тест1',
-        ]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData($channel, [
-                'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
-                'keyword' => '  тест1  ',
-                'reply_text' => 'Дубликат',
-                'is_active' => true,
-            ]))
-            ->assertHasErrors(['keyword']);
-
-        $this->assertSame(1, AutoReplyRule::query()->count());
-    }
-
-    public function test_exact_keyword_duplicate_is_rejected_for_overlapping_selected_channels(): void
-    {
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $firstChannel = Channel::factory()->create(['is_active' => true]);
-        $secondChannel = Channel::factory()->create(['is_active' => true]);
-        $thirdChannel = Channel::factory()->create(['is_active' => true]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData(
-                [$firstChannel, $secondChannel],
-                [
-                    'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
-                    'keyword' => 'OVERLAP',
-                    'reply_text' => 'Первое правило',
-                ],
-            ))
-            ->assertHasNoFormErrors();
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData(
-                [$secondChannel, $thirdChannel],
-                [
-                    'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
-                    'keyword' => ' overlap ',
-                    'reply_text' => 'Дубликат',
-                ],
-            ))
-            ->assertHasErrors(['keyword']);
-
-        $this->assertSame(1, AutoReplyRule::query()->count());
-    }
-
-    public function test_auto_reply_rule_save_locks_selected_channels_before_duplicate_validation(): void
-    {
-        if (DB::connection()->getDriverName() !== 'pgsql') {
-            $this->markTestSkipped('PostgreSQL renders FOR UPDATE in query SQL for this lock assertion.');
-        }
-
-        $firstChannel = Channel::factory()->create(['is_active' => true]);
-        $secondChannel = Channel::factory()->create(['is_active' => true]);
-        $queries = [];
-
-        DB::listen(function (QueryExecuted $query) use (&$queries): void {
-            $sql = strtolower($query->sql);
-
-            if (str_contains($sql, 'from "channels"') && str_contains($sql, 'for update')) {
-                $queries[] = $query->sql;
-            }
-        });
-
-        AutoReplyRuleResource::saveAutoReplyRule($this->buildRuleFormData(
-            [$secondChannel, $firstChannel],
-            [
-                'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
-                'keyword' => 'LOCK_ME',
-                'reply_text' => 'Правило с блокировкой каналов',
-            ],
-        ));
-
-        $this->assertNotEmpty($queries, 'Expected selected channels to be locked before saving an auto-reply rule.');
-        $this->assertSame(1, AutoReplyRule::query()->count());
-    }
-
-    public function test_admin_can_create_any_inbound_rule_without_keyword(): void
-    {
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $channel = Channel::factory()->create([
-            'is_active' => true,
-        ]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData($channel, [
-                'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
-                'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE,
-                'reply_text' => 'Поделитесь номером',
-                'is_active' => true,
-            ]))
-            ->assertHasNoFormErrors();
-
-        $rule = AutoReplyRule::query()->firstOrFail();
-
-        $this->assertSame(AutoReplyRule::MATCH_SCOPE_ANY_INBOUND, $rule->match_scope);
-        $this->assertSame(AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE, $rule->contact_phone_condition);
-        $this->assertNull($rule->keyword);
-        $this->assertNull($rule->normalized_keyword);
-    }
-
-    public function test_admin_can_save_tag_effects_for_auto_reply_rule(): void
-    {
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $channel = Channel::factory()->create([
-            'is_active' => true,
-        ]);
-        $assignTag = Tag::factory()->create([
+        $matchingTag = Tag::factory()->create([
             'name' => 'VIP',
-            'color' => Tag::COLOR_SUCCESS,
-            'is_active' => true,
         ]);
-        $removeTag = Tag::factory()->create([
-            'name' => 'Новый',
-            'color' => Tag::COLOR_WARNING,
-            'is_active' => true,
+        $otherTag = Tag::factory()->create([
+            'name' => 'Other',
         ]);
+        $matchingByEffectRule = AutoReplyRule::factory()->create();
+        $matchingByConditionRule = AutoReplyRule::factory()->create();
+        $otherRule = AutoReplyRule::factory()->create();
 
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData($channel, [
-                'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
-                'reply_text' => 'Подтверждаем тегирование',
-                'assign_tag_ids' => [$assignTag->id],
-                'remove_tag_ids' => [$removeTag->id],
-                'is_active' => true,
-            ]))
-            ->assertHasNoFormErrors();
-
-        $rule = AutoReplyRule::query()->firstOrFail();
-
-        $this->assertDatabaseHas('auto_reply_rule_tag_effects', [
-            'auto_reply_rule_id' => $rule->id,
-            'tag_id' => $assignTag->id,
-            'effect' => AutoReplyRuleTagEffect::EFFECT_ASSIGN,
-        ]);
-        $this->assertDatabaseHas('auto_reply_rule_tag_effects', [
-            'auto_reply_rule_id' => $rule->id,
-            'tag_id' => $removeTag->id,
-            'effect' => AutoReplyRuleTagEffect::EFFECT_REMOVE,
-        ]);
-    }
-
-    public function test_admin_can_update_tag_effects_for_auto_reply_rule(): void
-    {
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $channel = Channel::factory()->create([
-            'is_active' => true,
-        ]);
-        $oldAssignTag = Tag::factory()->create([
-            'name' => 'Старый assign',
-            'color' => Tag::COLOR_PRIMARY,
-        ]);
-        $newAssignTag = Tag::factory()->create([
-            'name' => 'Новый assign',
-            'color' => Tag::COLOR_SUCCESS,
-        ]);
-        $removeTag = Tag::factory()->create([
-            'name' => 'Снять метку',
-            'color' => Tag::COLOR_DANGER,
-        ]);
-
-        $rule = AutoReplyRule::factory()->create([
-            'channel_id' => $channel->id,
-            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
-            'keyword' => null,
-            'normalized_keyword' => null,
-        ]);
         AutoReplyRuleTagEffect::query()->create([
-            'auto_reply_rule_id' => $rule->id,
-            'tag_id' => $oldAssignTag->id,
+            'auto_reply_rule_id' => $matchingByEffectRule->id,
+            'tag_id' => $matchingTag->id,
             'effect' => AutoReplyRuleTagEffect::EFFECT_ASSIGN,
         ]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callTableAction('edit', $rule, [
-                'channel_id' => $channel->id,
-                'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
-                'contact_phone_condition' => null,
-                'reply_text' => 'Обновили эффекты',
-                'assign_tag_ids' => [$newAssignTag->id],
-                'remove_tag_ids' => [$removeTag->id],
-                'is_active' => true,
-            ])
-            ->assertHasNoTableActionErrors();
-
-        $this->assertDatabaseMissing('auto_reply_rule_tag_effects', [
-            'auto_reply_rule_id' => $rule->id,
-            'tag_id' => $oldAssignTag->id,
-            'effect' => AutoReplyRuleTagEffect::EFFECT_ASSIGN,
-        ]);
-        $this->assertDatabaseHas('auto_reply_rule_tag_effects', [
-            'auto_reply_rule_id' => $rule->id,
-            'tag_id' => $newAssignTag->id,
-            'effect' => AutoReplyRuleTagEffect::EFFECT_ASSIGN,
-        ]);
-        $this->assertDatabaseHas('auto_reply_rule_tag_effects', [
-            'auto_reply_rule_id' => $rule->id,
-            'tag_id' => $removeTag->id,
-            'effect' => AutoReplyRuleTagEffect::EFFECT_REMOVE,
-        ]);
-    }
-
-    public function test_same_tag_cannot_be_assigned_and_removed_in_same_rule(): void
-    {
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $channel = Channel::factory()->create([
-            'is_active' => true,
-        ]);
-        $tag = Tag::factory()->create([
-            'name' => 'Конфликтный тег',
-            'color' => Tag::COLOR_WARNING,
-        ]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData($channel, [
-                'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
-                'reply_text' => 'Конфликт',
-                'assign_tag_ids' => [$tag->id],
-                'remove_tag_ids' => [$tag->id],
-                'is_active' => true,
-            ]));
-
-        $this->assertDatabaseCount('auto_reply_rules', 0);
-        $this->assertDatabaseCount('auto_reply_rule_tag_effects', 0);
-    }
-
-    public function test_admin_can_create_contains_text_and_exact_parameter_rules(): void
-    {
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $channel = Channel::factory()->create([
-            'is_active' => true,
-        ]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData($channel, [
-                'match_scope' => AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT,
-                'keyword' => '  скидка  ',
-                'reply_text' => 'Contains',
-                'is_active' => true,
-            ]))
-            ->assertHasNoFormErrors();
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData($channel, [
-                'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
-                'keyword' => '  TEXT_1  ',
-                'reply_text' => 'Parameter',
-                'is_active' => true,
-            ]))
-            ->assertHasNoFormErrors();
-
-        $this->assertDatabaseHas('auto_reply_rules', [
-            'channel_id' => $channel->id,
-            'match_scope' => AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT,
-            'keyword' => 'скидка',
-            'normalized_keyword' => 'скидка',
-        ]);
-        $this->assertDatabaseHas('auto_reply_rules', [
-            'channel_id' => $channel->id,
-            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
-            'keyword' => 'TEXT_1',
-            'normalized_keyword' => 'text_1',
-        ]);
-    }
-
-    public function test_admin_can_create_exact_text_or_parameter_rule(): void
-    {
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $channel = Channel::factory()->create([
-            'is_active' => true,
-        ]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData($channel, [
-                'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER,
-                'keyword' => '  TEXT_OR_PARAM  ',
-                'reply_text' => 'Combined',
-                'is_active' => true,
-            ]))
-            ->assertHasNoFormErrors();
-
-        $rule = AutoReplyRule::query()->firstOrFail();
-
-        $this->assertSame(AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER, $rule->match_scope);
-        $this->assertSame('TEXT_OR_PARAM', $rule->keyword);
-        $this->assertSame('text_or_param', $rule->normalized_keyword);
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->assertSee('Текст или параметр: TEXT_OR_PARAM');
-    }
-
-    public function test_admin_can_save_tag_conditions_for_auto_reply_rule(): void
-    {
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $channel = Channel::factory()->create([
-            'is_active' => true,
-        ]);
-        $requiredTag = Tag::factory()->create([
-            'name' => 'VIP',
-            'color' => Tag::COLOR_SUCCESS,
-            'is_active' => true,
-        ]);
-        $excludedTag = Tag::factory()->create([
-            'name' => 'Стоп',
-            'color' => Tag::COLOR_DANGER,
-            'is_active' => true,
-        ]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData($channel, [
-                'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
-                'reply_text' => 'Условие по тегам',
-                'required_tag_ids' => [$requiredTag->id],
-                'excluded_tag_ids' => [$excludedTag->id],
-                'is_active' => true,
-            ]))
-            ->assertHasNoFormErrors();
-
-        $rule = AutoReplyRule::query()->firstOrFail();
-
-        $this->assertDatabaseHas('auto_reply_rule_tag_conditions', [
-            'auto_reply_rule_id' => $rule->id,
-            'tag_id' => $requiredTag->id,
+        AutoReplyRuleTagCondition::query()->create([
+            'auto_reply_rule_id' => $matchingByConditionRule->id,
+            'tag_id' => $matchingTag->id,
             'condition' => AutoReplyRuleTagCondition::CONDITION_REQUIRED,
         ]);
-        $this->assertDatabaseHas('auto_reply_rule_tag_conditions', [
-            'auto_reply_rule_id' => $rule->id,
-            'tag_id' => $excludedTag->id,
-            'condition' => AutoReplyRuleTagCondition::CONDITION_EXCLUDED,
-        ]);
-    }
-
-    public function test_same_tag_cannot_be_required_and_excluded_in_same_rule(): void
-    {
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $channel = Channel::factory()->create([
-            'is_active' => true,
-        ]);
-        $tag = Tag::factory()->create([
-            'name' => 'Конфликтный тег условия',
-            'color' => Tag::COLOR_WARNING,
+        AutoReplyRuleTagEffect::query()->create([
+            'auto_reply_rule_id' => $otherRule->id,
+            'tag_id' => $otherTag->id,
+            'effect' => AutoReplyRuleTagEffect::EFFECT_ASSIGN,
         ]);
 
         Livewire::actingAs($admin)
             ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData($channel, [
-                'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
-                'reply_text' => 'Конфликт условий',
-                'required_tag_ids' => [$tag->id],
-                'excluded_tag_ids' => [$tag->id],
-                'is_active' => true,
-            ]));
-
-        $this->assertDatabaseCount('auto_reply_rules', 0);
-        $this->assertDatabaseCount('auto_reply_rule_tag_conditions', 0);
-    }
-
-    public function test_same_keyword_is_allowed_when_match_scope_differs(): void
-    {
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $channel = Channel::factory()->create([
-            'is_active' => true,
-        ]);
-
-        AutoReplyRule::factory()->create([
-            'channel_id' => $channel->id,
-            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
-            'keyword' => 'TEXT_1',
-            'normalized_keyword' => 'text_1',
-        ]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData($channel, [
-                'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
-                'keyword' => 'TEXT_1',
-                'reply_text' => 'Parameter',
-                'is_active' => true,
-            ]))
-            ->assertHasNoFormErrors();
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData($channel, [
-                'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER,
-                'keyword' => 'TEXT_1',
-                'reply_text' => 'Combined',
-                'is_active' => true,
-            ]))
-            ->assertHasNoFormErrors();
-
-        $this->assertSame(3, AutoReplyRule::query()->count());
-    }
-
-    public function test_exact_text_or_parameter_duplicate_is_rejected_within_same_scope(): void
-    {
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $channel = Channel::factory()->create([
-            'is_active' => true,
-        ]);
-
-        AutoReplyRule::factory()->create([
-            'channel_id' => $channel->id,
-            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER,
-            'keyword' => 'TEXT_1',
-            'normalized_keyword' => 'text_1',
-        ]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData($channel, [
-                'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER,
-                'keyword' => ' text_1 ',
-                'reply_text' => 'Duplicate combined',
-                'is_active' => true,
-            ]))
-            ->assertHasErrors(['keyword']);
-
-        $this->assertSame(1, AutoReplyRule::query()->count());
-    }
-
-    public function test_same_keyword_is_allowed_for_mutually_exclusive_phone_conditions(): void
-    {
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $channel = Channel::factory()->create([
-            'is_active' => true,
-        ]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData($channel, [
-                'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
-                'keyword' => 'PHONE_BRANCH',
-                'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE,
-                'reply_text' => 'Для контакта с телефоном',
-            ]))
-            ->assertHasNoFormErrors();
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData($channel, [
-                'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
-                'keyword' => ' phone_branch ',
-                'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE,
-                'reply_text' => 'Для контакта без телефона',
-            ]))
-            ->assertHasNoFormErrors();
-
-        $this->assertSame(2, AutoReplyRule::query()->count());
-    }
-
-    public function test_same_keyword_is_allowed_for_mutually_exclusive_tag_conditions(): void
-    {
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $channel = Channel::factory()->create([
-            'is_active' => true,
-        ]);
-        $tag = Tag::factory()->create([
-            'name' => 'VIP',
-            'is_active' => true,
-        ]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData($channel, [
-                'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
-                'keyword' => 'TAG_BRANCH',
-                'required_tag_ids' => [$tag->id],
-                'reply_text' => 'Для контакта с тегом',
-            ]))
-            ->assertHasNoFormErrors();
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData($channel, [
-                'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
-                'keyword' => ' tag_branch ',
-                'excluded_tag_ids' => [$tag->id],
-                'reply_text' => 'Для контакта без тега',
-            ]))
-            ->assertHasNoFormErrors();
-
-        $this->assertSame(2, AutoReplyRule::query()->count());
-    }
-
-    public function test_any_inbound_duplicates_are_allowed_per_channel_and_phone_condition(): void
-    {
-        $channel = Channel::factory()->create([
-            'is_active' => true,
-        ]);
-
-        AutoReplyRule::query()->create([
-            'channel_id' => $channel->id,
-            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
-            'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE,
-            'reply_text' => 'Первое правило',
-            'is_active' => true,
-        ]);
-
-        AutoReplyRule::query()->create([
-            'channel_id' => $channel->id,
-            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
-            'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE,
-            'reply_text' => 'Дубликат',
-            'is_active' => true,
-        ]);
-
-        $this->assertSame(2, AutoReplyRule::query()->count());
-    }
-
-    public function test_any_inbound_duplicate_is_allowed_for_overlapping_selected_channels(): void
-    {
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $firstChannel = Channel::factory()->create(['is_active' => true]);
-        $secondChannel = Channel::factory()->create(['is_active' => true]);
-        $thirdChannel = Channel::factory()->create(['is_active' => true]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData(
-                [$firstChannel, $secondChannel],
-                [
-                    'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
-                    'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE,
-                    'reply_text' => 'Первое any_inbound правило',
-                ],
-            ))
-            ->assertHasNoFormErrors();
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData(
-                [$secondChannel, $thirdChannel],
-                [
-                    'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
-                    'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE,
-                    'reply_text' => 'Дубликат any_inbound',
-                ],
-            ));
-
-        $this->assertSame(2, AutoReplyRule::query()->count());
-    }
-
-    public function test_request_phone_button_cannot_be_saved_for_non_telegram_channel(): void
-    {
-        $channel = Channel::factory()->create([
-            'platform' => Channel::PLATFORM_MAX,
-            'is_active' => true,
-        ]);
-
-        $this->expectException(ValidationException::class);
-
-        AutoReplyRule::query()->create([
-            'channel_id' => $channel->id,
-            'keyword' => 'Тест1',
-            'normalized_keyword' => 'тест1',
-            'reply_text' => 'Шаблон 1',
-            'telegram_button_type' => AutoReplyRule::TELEGRAM_BUTTON_TYPE_REQUEST_PHONE,
-            'is_active' => true,
-        ]);
-    }
-
-    public function test_request_phone_button_cannot_be_saved_for_telegram_account_channel(): void
-    {
-        $channel = Channel::factory()->account()->create([
-            'platform' => Channel::PLATFORM_TELEGRAM,
-            'is_active' => true,
-        ]);
-
-        $this->expectException(ValidationException::class);
-
-        AutoReplyRule::query()->create([
-            'channel_id' => $channel->id,
-            'keyword' => 'Телефон',
-            'normalized_keyword' => 'телефон',
-            'reply_text' => 'Поделитесь номером',
-            'telegram_button_type' => AutoReplyRule::TELEGRAM_BUTTON_TYPE_REQUEST_PHONE,
-            'is_active' => true,
-        ]);
-    }
-
-    public function test_admin_can_save_request_phone_button_for_max_channel(): void
-    {
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $channel = Channel::factory()->create([
-            'name' => 'MAX Support',
-            'platform' => Channel::PLATFORM_MAX,
-            'is_active' => true,
-        ]);
-
-        Livewire::actingAs($admin)
-            ->test(ManageAutoReplyRules::class)
-            ->callAction('create', $this->buildRuleFormData(
-                $channel,
-                [
-                    'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
-                    'keyword' => 'Телефон',
-                    'reply_text' => 'Поделитесь номером',
-                    'is_active' => true,
-                ],
-                [
-                    'button_kind' => 'request_phone',
-                ],
-            ))
-            ->assertHasNoFormErrors();
-
-        $rule = AutoReplyRule::query()->firstOrFail();
-
-        $this->assertSame(AutoReplyRule::BUTTON_TYPE_SHARE_CONTACT, $rule->getButtonTypeForChannel($channel));
-    }
-
-    public function test_request_phone_button_cannot_be_saved_for_non_max_channel(): void
-    {
-        $channel = Channel::factory()->create([
-            'platform' => Channel::PLATFORM_TELEGRAM,
-            'is_active' => true,
-        ]);
-
-        $this->expectException(ValidationException::class);
-
-        AutoReplyRule::query()->create([
-            'channel_id' => $channel->id,
-            'keyword' => 'Телефон',
-            'normalized_keyword' => 'телефон',
-            'reply_text' => 'Поделитесь номером',
-            'max_button_type' => AutoReplyRule::MAX_BUTTON_TYPE_REQUEST_PHONE,
-            'is_active' => true,
-        ]);
-    }
-
-    public function test_apply_workbook_import_returns_action_error_when_rule_conflicts_after_preview(): void
-    {
-        $admin = User::factory()->create([
-            'is_active' => true,
-            'is_admin' => true,
-        ]);
-        $channel = Channel::factory()->create([
-            'platform' => Channel::PLATFORM_TELEGRAM,
-            'is_active' => true,
-        ]);
-
-        $path = $this->storeWorkbook([
-            AutoReplyRuleWorkbookFormat::rulesColumns(),
-            [
-                '',
-                'Импортируемое правило',
-                '',
-                '1',
-                '10',
-                AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
-                'ONASA01',
-                '',
-                'Импортируемый ответ',
-                'none',
-                '',
-                '',
-                (string) $channel->id,
-                '',
-                '',
-                '',
-                '',
-            ],
-        ]);
-
-        $preview = app(ParseAutoReplyRulesWorkbookAction::class)->handle($path);
-
-        $this->assertFalse($preview->hasErrors());
-
-        AutoReplyRule::factory()->create([
-            'channel_id' => $channel->id,
-            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
-            'keyword' => 'ONASA01',
-            'normalized_keyword' => AutoReplyRule::normalizeKeyword('ONASA01'),
-            'reply_text' => 'Уже существующий ответ',
-            'is_active' => true,
-            'priority' => 10,
-        ]);
-
-        $token = 'auto-reply-rules-import-preview-test';
-
-        Cache::put($token, $preview->toArray(), now()->addMinutes(30));
-
-        try {
-            Livewire::actingAs($admin)
-                ->test(ManageAutoReplyRules::class)
-                ->set('workbookImportPreviewToken', $token)
-                ->callAction('applyWorkbookImport')
-                ->assertHasErrors(['workbook_0']);
-
-            $this->assertSame(1, AutoReplyRule::query()->count());
-        } finally {
-            Cache::forget($token);
-        }
+            ->filterTable('tag', $matchingTag->id)
+            ->assertCanSeeTableRecords([$matchingByEffectRule, $matchingByConditionRule])
+            ->assertCanNotSeeTableRecords([$otherRule]);
     }
 
     private function setRolePermission(string $role, string $permissionKey, bool $granted): void
@@ -1576,69 +287,5 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
             ->where('role', $role)
             ->where('permission_key', $permissionKey)
             ->update(['granted' => $granted]);
-    }
-
-    /**
-     * @param  Channel|array<int, Channel>  $channels
-     * @param  array<string, mixed>  $overrides
-     * @param  array<string, mixed>  $buttonOverrides
-     * @return array<string, mixed>
-     */
-    private function buildRuleFormData(Channel|array $channels, array $overrides = [], array $buttonOverrides = []): array
-    {
-        $channelList = array_values(is_array($channels) ? $channels : [$channels]);
-
-        return array_merge([
-            'name' => null,
-            'auto_reply_category_id' => null,
-            'channel_ids' => array_map(
-                fn (Channel $channel): int => (int) $channel->id,
-                $channelList,
-            ),
-            'button_kind' => null,
-            'button_text' => null,
-            'button_url' => null,
-            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
-            'contact_phone_condition' => null,
-            'reply_text' => 'Тестовый автоответ',
-            'is_active' => true,
-            'priority' => 10,
-        ], $buttonOverrides, $overrides);
-    }
-
-    /**
-     * @param  list<array<int, mixed>>  $rows
-     */
-    private function storeWorkbook(array $rows): string
-    {
-        $spreadsheet = new Spreadsheet;
-
-        try {
-            $sheet = $spreadsheet->getActiveSheet();
-            $sheet->setTitle(AutoReplyRuleWorkbookFormat::SHEET_RULES);
-
-            foreach ($rows as $index => $row) {
-                $sheet->fromArray([$row], null, 'A'.($index + 1));
-            }
-
-            $path = tempnam(sys_get_temp_dir(), 'auto-reply-rules-xlsx');
-
-            if ($path === false) {
-                $this->fail('Failed to allocate temporary workbook path.');
-            }
-
-            $finalPath = $path.'.xlsx';
-
-            if (file_exists($path)) {
-                unlink($path);
-            }
-
-            (new Xlsx($spreadsheet))->save($finalPath);
-
-            return $finalPath;
-        } finally {
-            $spreadsheet->disconnectWorksheets();
-            unset($spreadsheet);
-        }
     }
 }

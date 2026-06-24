@@ -111,6 +111,52 @@ class ProcessAutoReplyJobTest extends TestCase
         $this->assertSame($rule->display_name, $sentLog->context['rule_name']);
     }
 
+    public function test_job_skips_legacy_auto_reply_when_cutover_is_enabled(): void
+    {
+        Http::fake();
+        config()->set('bots.legacy_auto_reply_rules_enabled', false);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+
+        AutoReplyRule::factory()->create([
+            'channel_id' => $channel->id,
+            'keyword' => null,
+            'normalized_keyword' => null,
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            'reply_text' => 'Старый ответ не должен уйти.',
+            'is_active' => true,
+        ]);
+
+        $message = $this->createInboundMessage($channel, [
+            'external_chat_id' => '300',
+            'external_message_id' => '10',
+            'provider_event_key' => 'telegram-cutover',
+        ]);
+
+        ProcessAutoReplyJob::dispatchSync($message->id);
+
+        Http::assertNothingSent();
+
+        $message->refresh();
+
+        $this->assertNull($message->auto_reply_sent_at);
+        $this->assertDatabaseMissing('messages', [
+            'reply_to_message_id' => $message->id,
+            'message_kind' => Message::KIND_OUTBOUND_AUTO_REPLY,
+        ]);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'bot.reply_skipped_legacy_cutover',
+            'level' => 'info',
+        ]);
+    }
+
     public function test_job_queues_telegram_account_auto_reply_for_gateway(): void
     {
         Http::fake();

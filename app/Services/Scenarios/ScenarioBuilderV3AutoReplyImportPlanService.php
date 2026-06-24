@@ -88,6 +88,7 @@ class ScenarioBuilderV3AutoReplyImportPlanService
             if (isset($excludedRows[$rowNumber])) {
                 $summary['excluded']++;
                 $rowResults[] = $this->rowResult($row, 'excluded', ['row_excluded'], null);
+
                 continue;
             }
 
@@ -96,12 +97,7 @@ class ScenarioBuilderV3AutoReplyImportPlanService
             }
 
             if (! (bool) ($row['is_active'] ?? false)) {
-                $blockers[] = 'inactive_rule';
                 $summary['inactive']++;
-            }
-
-            if (($row['required_tag_names'] ?? []) !== [] || ($row['excluded_tag_names'] ?? []) !== []) {
-                $blockers[] = 'tag_conditions_not_supported';
             }
 
             $channelResolution = $this->resolveChannels(
@@ -116,6 +112,13 @@ class ScenarioBuilderV3AutoReplyImportPlanService
                 $userMappings['tags'],
                 $tagRefs,
             );
+
+            if (
+                ($tagResolution['required_tag_ids'] ?? []) !== []
+                && ($tagResolution['excluded_tag_ids'] ?? []) !== []
+            ) {
+                $blockers[] = 'mixed_tag_conditions_not_supported';
+            }
 
             $blockers = [
                 ...$blockers,
@@ -149,6 +152,8 @@ class ScenarioBuilderV3AutoReplyImportPlanService
                     $position,
                     $sheetId,
                     $channelResolution['channel_ids'],
+                    $tagResolution['required_tag_ids'],
+                    $tagResolution['excluded_tag_ids'],
                     $tagResolution['assign_tag_ids'],
                     $tagResolution['remove_tag_ids'],
                     $baseBlock,
@@ -167,6 +172,7 @@ class ScenarioBuilderV3AutoReplyImportPlanService
                 if ($hasManualConflict && ! isset($overwriteRows[$rowNumber])) {
                     $summary['conflicts']++;
                     $rowResults[] = $this->rowResult($row, 'conflict', ['manual_edit_conflict'], $existingBlock);
+
                     continue;
                 }
             }
@@ -174,6 +180,7 @@ class ScenarioBuilderV3AutoReplyImportPlanService
             if ($blockers !== []) {
                 $summary['blocked']++;
                 $rowResults[] = $this->rowResult($row, 'blocked', array_values(array_unique($blockers)), $existingBlock);
+
                 continue;
             }
 
@@ -200,6 +207,8 @@ class ScenarioBuilderV3AutoReplyImportPlanService
                     $position,
                     $sheetId,
                     $channelResolution['channel_ids'],
+                    $tagResolution['required_tag_ids'],
+                    $tagResolution['excluded_tag_ids'],
                     $tagResolution['assign_tag_ids'],
                     $tagResolution['remove_tag_ids'],
                     $baseBlock,
@@ -617,6 +626,7 @@ class ScenarioBuilderV3AutoReplyImportPlanService
 
             if ($channelId > 0 && isset($channelsById[$channelId])) {
                 $ids[] = $channelId;
+
                 continue;
             }
 
@@ -637,18 +647,32 @@ class ScenarioBuilderV3AutoReplyImportPlanService
     }
 
     /**
-     * @return array{assign_tag_ids: list<int>, remove_tag_ids: list<int>, blockers: list<string>, unresolved: list<array<string, mixed>>}
+     * @return array{required_tag_ids: list<int>, excluded_tag_ids: list<int>, assign_tag_ids: list<int>, remove_tag_ids: list<int>, blockers: list<string>, unresolved: list<array<string, mixed>>}
      */
     private function resolveTags(array $row, array $tagsByName, array $mappings, array $tagRefs): array
     {
+        $required = $this->resolveTagList($row['required_tag_names'] ?? [], $tagsByName, $mappings, $tagRefs, 'required_tag_names');
+        $excluded = $this->resolveTagList($row['excluded_tag_names'] ?? [], $tagsByName, $mappings, $tagRefs, 'excluded_tag_names');
         $assign = $this->resolveTagList($row['assign_tag_names'] ?? [], $tagsByName, $mappings, $tagRefs, 'assign_tag_names');
         $remove = $this->resolveTagList($row['remove_tag_names'] ?? [], $tagsByName, $mappings, $tagRefs, 'remove_tag_names');
 
         return [
+            'required_tag_ids' => $required['ids'],
+            'excluded_tag_ids' => $excluded['ids'],
             'assign_tag_ids' => $assign['ids'],
             'remove_tag_ids' => $remove['ids'],
-            'blockers' => array_values(array_unique([...$assign['blockers'], ...$remove['blockers']])),
-            'unresolved' => [...$assign['unresolved'], ...$remove['unresolved']],
+            'blockers' => array_values(array_unique([
+                ...$required['blockers'],
+                ...$excluded['blockers'],
+                ...$assign['blockers'],
+                ...$remove['blockers'],
+            ])),
+            'unresolved' => [
+                ...$required['unresolved'],
+                ...$excluded['unresolved'],
+                ...$assign['unresolved'],
+                ...$remove['unresolved'],
+            ],
         ];
     }
 
@@ -667,6 +691,7 @@ class ScenarioBuilderV3AutoReplyImportPlanService
 
             if ($mappedId !== null) {
                 $ids[] = (int) $mappedId;
+
                 continue;
             }
 
@@ -674,6 +699,7 @@ class ScenarioBuilderV3AutoReplyImportPlanService
 
             if ($tag instanceof Tag) {
                 $ids[] = (int) $tag->id;
+
                 continue;
             }
 
@@ -1050,6 +1076,8 @@ class ScenarioBuilderV3AutoReplyImportPlanService
         array $position,
         string $sheetId,
         array $channelIds,
+        array $requiredTagIds,
+        array $excludedTagIds,
         array $assignTagIds,
         array $removeTagIds,
         array $baseBlock,
@@ -1067,7 +1095,7 @@ class ScenarioBuilderV3AutoReplyImportPlanService
         }
 
         $modules = [
-            $this->startModule($row, $channelIds),
+            $this->startModule($row, $channelIds, $requiredTagIds, $excludedTagIds),
         ];
 
         if ($assignTagIds !== [] || $removeTagIds !== []) {
@@ -1138,23 +1166,29 @@ class ScenarioBuilderV3AutoReplyImportPlanService
     /**
      * @return array<string, mixed>
      */
-    private function startModule(array $row, array $channelIds): array
+    private function startModule(array $row, array $channelIds, array $requiredTagIds, array $excludedTagIds): array
     {
         $match = (string) ($row['match_scope'] ?? AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER);
         $command = $match === AutoReplyRule::MATCH_SCOPE_ANY_INBOUND
             ? ''
             : (string) ($row['keyword'] ?? '');
+        $tagConditionIds = $requiredTagIds !== [] ? $requiredTagIds : $excludedTagIds;
 
         return [
             'id' => 'mod_start',
             'type' => 'start_condition',
-            'enabled' => true,
+            'enabled' => (bool) ($row['is_active'] ?? false),
             'payload' => [
                 'command' => $command,
                 'values' => [],
                 'match' => $match,
                 'variable' => '',
                 'exclude' => '',
+                'tag_condition' => [
+                    'enabled' => $tagConditionIds !== [],
+                    'mode' => $excludedTagIds !== [] ? 'has_none' : 'has_all',
+                    'tag_ids' => $tagConditionIds,
+                ],
                 'contact_phone_condition' => (string) ($row['contact_phone_condition'] ?? ''),
                 'dialog_phone_condition' => '',
                 'priority' => (int) ($row['priority'] ?? 10),
