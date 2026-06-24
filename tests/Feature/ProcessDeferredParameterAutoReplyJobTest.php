@@ -26,6 +26,7 @@ class ProcessDeferredParameterAutoReplyJobTest extends TestCase
         parent::setUp();
 
         config()->set('bitrix24.features.openlines_enabled', true);
+        config()->set('bots.legacy_auto_reply_rules_enabled', true);
     }
 
     public function test_job_sends_single_delayed_reply_and_clears_pending(): void
