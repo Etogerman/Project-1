@@ -1,0 +1,57 @@
+name: Copilot Merge Readiness Shadow
+
+on:
+  pull_request:
+    branches:
+      - staging
+      - main
+    types:
+      - opened
+      - ready_for_review
+      - synchronize
+      - reopened
+      - edited
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Номер PR для shadow readiness verdict"
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  copilot-merge-readiness:
+    name: copilot-merge-readiness
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+      CHECK_WAIT_SECONDS: "600"
+      COPILOT_CONTEXT_BUDGET_BYTES: "60000"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Run self-test
+        run: node .github/scripts/copilot-merge-readiness.mjs --self-test
+
+      - name: Install Copilot CLI
+        run: npm_config_ignore_scripts=false npm install -g @github/copilot
+
+      - name: Publish shadow verdict
+        run: node .github/scripts/copilot-merge-readiness.mjs
