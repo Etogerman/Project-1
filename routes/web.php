@@ -1,7 +1,7 @@
 <?php
 
-use App\Http\Controllers\Admin\ScenarioBuilderV3StateController;
 use App\Http\Controllers\Admin\DialogNotificationsController;
+use App\Http\Controllers\Admin\ScenarioBuilderV3StateController;
 use App\Http\Controllers\Bitrix24AdminOAuthController;
 use App\Http\Controllers\Bitrix24CallbackController;
 use App\Http\Controllers\Bitrix24ProbeController;
@@ -82,6 +82,9 @@ Route::middleware('auth')
 
         Route::post('/auto-reply/import/preview', [ScenarioBuilderV3StateController::class, 'previewAutoReplyImport'])
             ->name('auto-reply.import.preview');
+
+        Route::get('/auto-reply/export', [ScenarioBuilderV3StateController::class, 'exportAutoReplies'])
+            ->name('auto-reply.export');
 
         Route::post('/auto-reply/import/tags', [ScenarioBuilderV3StateController::class, 'createAutoReplyImportTag'])
             ->name('auto-reply.import.tags.store');

@@ -50,6 +50,29 @@ export async function exportScenarioBuilderSheet(exportUrl) {
     return parseJsonResponse(response);
 }
 
+export async function exportScenarioBuilderAutoReplies(exportUrl) {
+    const response = await fetch(exportUrl, {
+        headers: {
+            Accept: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        },
+        credentials: 'same-origin',
+    });
+
+    if (! response.ok) {
+        const error = new Error('Не удалось экспортировать автоответы.');
+        error.status = response.status;
+        error.data = {};
+
+        throw error;
+    }
+
+    return {
+        blob: await response.blob(),
+        filename: filenameFromContentDisposition(response.headers.get('Content-Disposition'))
+            || 'constructor-auto-replies.xlsx',
+    };
+}
+
 export async function previewScenarioBuilderSheetImport(previewUrl, csrfToken, payload) {
     const response = await fetch(previewUrl, {
         method: 'POST',
@@ -128,4 +151,24 @@ async function parseJsonResponse(response) {
     }
 
     return data;
+}
+
+function filenameFromContentDisposition(header) {
+    if (! header) {
+        return null;
+    }
+
+    const utfMatch = String(header).match(/filename\*=UTF-8''([^;]+)/i);
+
+    if (utfMatch) {
+        try {
+            return decodeURIComponent(utfMatch[1].trim().replace(/^"|"$/g, ''));
+        } catch {
+            return utfMatch[1].trim().replace(/^"|"$/g, '');
+        }
+    }
+
+    const match = String(header).match(/filename="?([^";]+)"?/i);
+
+    return match ? match[1].trim() : null;
 }

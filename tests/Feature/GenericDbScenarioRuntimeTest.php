@@ -7591,7 +7591,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame(['Стартовый блок'], $sentTexts);
     }
 
-    public function test_v3_start_chooses_one_matching_entrypoint_by_highest_priority_then_latest_block_id(): void
+    public function test_v3_start_chooses_one_matching_entrypoint_by_priority_then_visible_display_id(): void
     {
         Http::fake([
             'https://api.telegram.org/*' => Http::sequence()
@@ -7604,34 +7604,38 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $schema['builder_v3_runtime']['entrypoints'] = [
             [
                 'block_id' => '13',
+                'display_id' => '30',
                 'channel_ids' => [$channel->id],
-                'match' => 'strict',
+                'match' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
                 'values' => ['старт'],
                 'priority' => 9,
             ],
             [
                 'block_id' => '12',
+                'display_id' => '18',
                 'channel_ids' => [$channel->id],
-                'match' => 'strict',
+                'match' => AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD,
                 'values' => ['старт'],
                 'priority' => 10,
             ],
             [
-                'block_id' => '11',
+                'block_id' => '99',
+                'display_id' => '7',
                 'channel_ids' => [$channel->id],
-                'match' => 'strict',
-                'values' => ['старт'],
+                'match' => AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+                'values' => [''],
                 'priority' => 10,
             ],
         ];
         $schema['builder_v3_runtime']['blocks'] = [
-            '11' => [
-                'id' => '11',
-                'db_id' => 11,
-                'kind' => 'non_state',
-                'title' => 'Серый',
+            '99' => [
+                'id' => '99',
+                'db_id' => 99,
+                'display_number' => '7',
+                'kind' => 'state',
+                'title' => 'Fallback',
                 'message' => [
-                    'text' => 'Ответ серого блока',
+                    'text' => 'Ответ fallback блока',
                     'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
                 ],
                 'buttons' => null,
@@ -7640,10 +7644,11 @@ class GenericDbScenarioRuntimeTest extends TestCase
             '12' => [
                 'id' => '12',
                 'db_id' => 12,
+                'display_number' => '18',
                 'kind' => 'state',
-                'title' => 'Белый',
+                'title' => 'Видимый #18',
                 'message' => [
-                    'text' => 'Ответ белого блока',
+                    'text' => 'Ответ блока #18',
                     'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
                 ],
                 'buttons' => null,
@@ -7652,6 +7657,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
             '13' => [
                 'id' => '13',
                 'db_id' => 13,
+                'display_number' => '30',
                 'kind' => 'state',
                 'title' => 'Низкий приоритет',
                 'message' => [
@@ -7692,7 +7698,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
             ->values()
             ->all();
 
-        $this->assertSame(['Ответ белого блока'], $sentTexts);
+        $this->assertSame(['Ответ блока #18'], $sentTexts);
     }
 
     public function test_v3_exact_callback_start_condition_ignores_plain_text_and_parameters(): void

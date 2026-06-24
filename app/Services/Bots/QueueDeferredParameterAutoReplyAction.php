@@ -7,6 +7,8 @@ use App\Models\Dialog;
 
 class QueueDeferredParameterAutoReplyAction
 {
+    public function __construct(private readonly LegacyAutoReplyRuntimeGate $legacyAutoReplyRuntimeGate) {}
+
     public function handle(Dialog|int $dialog): bool
     {
         $dialog = $dialog instanceof Dialog
@@ -14,6 +16,14 @@ class QueueDeferredParameterAutoReplyAction
             : Dialog::query()->findOrFail($dialog);
 
         if (! filled($dialog->pending_auto_reply_source_message_id)) {
+            return false;
+        }
+
+        if (! $this->legacyAutoReplyRuntimeGate->rulesEnabled()) {
+            $dialog->forceFill([
+                'pending_auto_reply_source_message_id' => null,
+            ])->save();
+
             return false;
         }
 

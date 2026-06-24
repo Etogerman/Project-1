@@ -11,6 +11,7 @@ use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
 use App\Models\Message;
+use App\Services\Bots\QueueDeferredParameterAutoReplyAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
@@ -82,6 +83,47 @@ class ProcessDeferredParameterAutoReplyJobTest extends TestCase
             return $job->messageId === $outbound->id
                 && $job->retryAfterSync === false;
         });
+    }
+
+    public function test_job_skips_and_clears_pending_when_legacy_cutover_is_enabled(): void
+    {
+        Queue::fake();
+        Http::fake();
+        config()->set('bots.legacy_auto_reply_rules_enabled', false);
+
+        [$dialog, $sourceMessage] = $this->createPendingDialogWithSource();
+        AutoReplyRule::factory()->forChannel($dialog->channel)->create([
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+            'keyword' => 'promo',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('promo'),
+            'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE,
+            'reply_text' => 'Старый delayed ответ',
+        ]);
+
+        app()->call([new ProcessDeferredParameterAutoReplyJob($dialog->id), 'handle']);
+
+        Http::assertNothingSent();
+        Queue::assertNotPushed(ExportMessageToBitrix24OpenLinesJob::class);
+        $this->assertNull($dialog->fresh()->pending_auto_reply_source_message_id);
+        $this->assertNull($sourceMessage->fresh()->auto_reply_sent_at);
+        $this->assertSame(0, Message::query()
+            ->where('reply_to_message_id', $sourceMessage->id)
+            ->where('message_kind', Message::KIND_OUTBOUND_AUTO_REPLY)
+            ->count());
+    }
+
+    public function test_queue_action_skips_and_clears_pending_when_legacy_cutover_is_enabled(): void
+    {
+        Queue::fake();
+        config()->set('bots.legacy_auto_reply_rules_enabled', false);
+
+        [$dialog] = $this->createPendingDialogWithSource();
+
+        $queued = app(QueueDeferredParameterAutoReplyAction::class)->handle($dialog);
+
+        $this->assertFalse($queued);
+        Queue::assertNotPushed(ProcessDeferredParameterAutoReplyJob::class);
+        $this->assertNull($dialog->fresh()->pending_auto_reply_source_message_id);
     }
 
     public function test_job_still_sends_delayed_reply_when_source_message_already_has_auto_reply_sent_at(): void

@@ -6,6 +6,7 @@ use App\Models\Dialog;
 use App\Models\Message;
 use App\Services\Bitrix24\IsDialogReadyForBitrix24LiveBridgeAction;
 use App\Services\Bots\BotAutoReplyService;
+use App\Services\Bots\LegacyAutoReplyRuntimeGate;
 use App\Services\Bots\ResolveAutoReplyRuleAction;
 use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\DataCollection\ResolveNextDataCollectionFieldAction;
@@ -53,6 +54,7 @@ class ProcessDeferredParameterAutoReplyJob implements ShouldQueue
         CanSendThroughDialogAction $canSendThroughDialogAction,
         ResolveAutoReplyRuleAction $resolveAutoReplyRuleAction,
         BotAutoReplyService $botAutoReplyService,
+        LegacyAutoReplyRuntimeGate $legacyAutoReplyRuntimeGate,
     ): void {
         $dialog = Dialog::query()
             ->with(['channel', 'contact', 'currentContactIdentity'])
@@ -74,6 +76,12 @@ class ProcessDeferredParameterAutoReplyJob implements ShouldQueue
 
         if (! $sourceMessage instanceof Message) {
             $this->clearPendingIfCurrent($dialog->id, (int) $sourceMessageId);
+
+            return;
+        }
+
+        if (! $legacyAutoReplyRuntimeGate->rulesEnabled()) {
+            $this->clearPendingIfCurrent($dialog->id, $sourceMessage->id);
 
             return;
         }

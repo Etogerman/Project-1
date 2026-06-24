@@ -42,6 +42,10 @@ class ValidateScenarioBuilderV3StateAction
 
     private const MODULE_TYPES = ['start_condition', 'message', 'buttons', 'ai', 'action'];
 
+    private const START_PRIORITY_MIN = 1;
+
+    private const START_PRIORITY_MAX = 100;
+
     private const AI_SOURCES = [
         'current_inbound_message',
         'inbound_messages_after_previous_bot_message',
@@ -457,13 +461,18 @@ class ValidateScenarioBuilderV3StateAction
                 $moduleIndex,
                 "builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.dialog_phone_condition",
             ),
-            'priority' => (int) ($payload['priority'] ?? 10),
+            'priority' => $this->normalizeStartPriority($payload['priority'] ?? 10),
             'once' => (bool) ($payload['once'] ?? false),
             'channels' => [
                 'mode' => (string) data_get($payload, 'channels.mode', 'selected'),
                 'ids' => $channelIds,
             ],
         ];
+    }
+
+    private function normalizeStartPriority(mixed $value): int
+    {
+        return max(self::START_PRIORITY_MIN, min(self::START_PRIORITY_MAX, (int) $value));
     }
 
     private function normalizeStartConditionMatch(mixed $value, int $blockIndex, int $moduleIndex): string

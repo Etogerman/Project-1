@@ -89,6 +89,7 @@ class TagResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
+            ->searchPlaceholder('Поиск')
             ->columns([
                 TextColumn::make('id')
                     ->label('ID')
@@ -159,8 +160,9 @@ class TagResource extends Resource
             ])
             ->filtersTriggerAction(
                 fn (Action $action): Action => $action
-                    ->tooltip('Фильтры')
-                    ->extraAttributes(['class' => 'ac-table-toolbar-trigger'], merge: true),
+                    ->button()
+                    ->label('Фильтр')
+                    ->extraAttributes(['class' => 'ac-tags-filter-trigger'], merge: true),
             )
             ->recordActionsColumnLabel('Кнопки')
             ->columnManager()

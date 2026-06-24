@@ -78,6 +78,10 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
 
     private const V3_MATCH_EXACT_CALLBACK = 'exact_callback';
 
+    private const V3_START_PRIORITY_MIN = 1;
+
+    private const V3_START_PRIORITY_MAX = 100;
+
     private const V3_BUTTON_TYPE_TEXT = 'text';
 
     private const V3_BUTTON_TYPE_REQUEST_PHONE = 'request_phone';
@@ -7476,7 +7480,7 @@ TEXT;
 
         return collect($entrypoints)
             ->filter(fn (mixed $entrypoint): bool => is_array($entrypoint))
-            ->sort(fn (array $left, array $right): int => $this->compareV3Entrypoints($left, $right))
+            ->sort(fn (array $left, array $right): int => $this->compareV3Entrypoints($left, $right, $runtime))
             ->values()
             ->all();
     }
@@ -7484,28 +7488,63 @@ TEXT;
     /**
      * @param  array<string, mixed>  $left
      * @param  array<string, mixed>  $right
+     * @param  array<string, mixed>  $runtime
      */
-    private function compareV3Entrypoints(array $left, array $right): int
+    private function compareV3Entrypoints(array $left, array $right, array $runtime): int
     {
         return [
-            (int) ($right['priority'] ?? 10),
-            $this->v3EntrypointBlockOrder($right),
-            (string) ($right['block_id'] ?? ''),
+            $this->v3EntrypointPriority($right),
+            $this->v3EntrypointDisplayOrder($right, $runtime),
+            $this->v3EntrypointDisplayId($right, $runtime),
         ] <=> [
-            (int) ($left['priority'] ?? 10),
-            $this->v3EntrypointBlockOrder($left),
-            (string) ($left['block_id'] ?? ''),
+            $this->v3EntrypointPriority($left),
+            $this->v3EntrypointDisplayOrder($left, $runtime),
+            $this->v3EntrypointDisplayId($left, $runtime),
         ];
     }
 
     /**
      * @param  array<string, mixed>  $entrypoint
      */
-    private function v3EntrypointBlockOrder(array $entrypoint): int
+    private function v3EntrypointPriority(array $entrypoint): int
     {
-        $blockId = $entrypoint['block_id'] ?? null;
+        return max(
+            self::V3_START_PRIORITY_MIN,
+            min(self::V3_START_PRIORITY_MAX, (int) ($entrypoint['priority'] ?? 10)),
+        );
+    }
 
-        return is_numeric($blockId) ? (int) $blockId : PHP_INT_MIN;
+    /**
+     * @param  array<string, mixed>  $entrypoint
+     * @param  array<string, mixed>  $runtime
+     */
+    private function v3EntrypointDisplayOrder(array $entrypoint, array $runtime): int
+    {
+        $displayId = $this->v3EntrypointDisplayId($entrypoint, $runtime);
+
+        return is_numeric($displayId) ? (int) $displayId : PHP_INT_MIN;
+    }
+
+    /**
+     * @param  array<string, mixed>  $entrypoint
+     * @param  array<string, mixed>  $runtime
+     */
+    private function v3EntrypointDisplayId(array $entrypoint, array $runtime): string
+    {
+        $displayId = trim((string) ($entrypoint['display_id'] ?? $entrypoint['display_number'] ?? ''));
+
+        if ($displayId !== '') {
+            return $displayId;
+        }
+
+        $blockId = trim((string) ($entrypoint['block_id'] ?? ''));
+        $block = $this->v3RuntimeBlock($runtime, $blockId);
+
+        if (is_array($block)) {
+            $displayId = trim((string) ($block['display_number'] ?? $block['card_id'] ?? $block['db_id'] ?? $block['id'] ?? ''));
+        }
+
+        return $displayId !== '' ? $displayId : $blockId;
     }
 
     /**
