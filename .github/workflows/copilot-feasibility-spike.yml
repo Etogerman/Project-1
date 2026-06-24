@@ -1,0 +1,52 @@
+name: Copilot CLI Feasibility Spike
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  copilot-feasibility-spike:
+    name: copilot-feasibility-spike
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Run self-test
+        run: node .github/scripts/copilot-feasibility-spike.mjs --self-test
+
+      - name: Check Copilot token secret
+        run: |
+          if [ -z "${COPILOT_GITHUB_TOKEN}" ]; then
+            {
+              echo "## Copilot CLI feasibility spike"
+              echo ""
+              echo "- Result: failed"
+              echo "- Auth path: not confirmed"
+              echo ""
+              echo "### Error"
+              echo ""
+              echo "Secret COPILOT_GITHUB_TOKEN is not configured. Create a user-owned fine-grained PAT with the Copilot Requests permission."
+            } >> "${GITHUB_STEP_SUMMARY}"
+            exit 1
+          fi
+
+      - name: Install Copilot CLI
+        run: npm_config_ignore_scripts=false npm install -g @github/copilot
+
+      - name: Show Copilot CLI version
+        run: copilot --version
+
+      - name: Run headless JSON prompt
+        run: node .github/scripts/copilot-feasibility-spike.mjs
