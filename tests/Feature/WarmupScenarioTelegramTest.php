@@ -27,6 +27,7 @@ class WarmupScenarioTelegramTest extends TestCase
         parent::setUp();
 
         config()->set('scenarios.warmup.enabled_for_new_starts', true);
+        config()->set('bots.legacy_auto_reply_rules_enabled', true);
         app(ScenarioRegistry::class)->forgetCachedDefinitions();
     }
 
