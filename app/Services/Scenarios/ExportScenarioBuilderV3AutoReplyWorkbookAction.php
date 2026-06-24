@@ -8,6 +8,8 @@ use App\Models\Scenario;
 use App\Models\Tag;
 use App\Models\User;
 use App\Services\AutoReplyRules\AutoReplyRuleWorkbookFormat;
+use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
+use PhpOffice\PhpSpreadsheet\Cell\DataType;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
 
@@ -49,12 +51,12 @@ class ExportScenarioBuilderV3AutoReplyWorkbookAction
     private function buildRulesSheet(Worksheet $sheet, array $builder, array $sheets, array $tagsById): void
     {
         $sheet->setTitle(AutoReplyRuleWorkbookFormat::SHEET_RULES);
-        $sheet->fromArray([AutoReplyRuleWorkbookFormat::rulesColumns()], null, 'A1');
+        $this->writeRow($sheet, 1, AutoReplyRuleWorkbookFormat::rulesColumns());
 
         $rowIndex = 2;
 
         foreach ($this->autoReplyBlocks($builder) as $block) {
-            $sheet->fromArray([$this->ruleRow($block, $sheets, $tagsById)], null, 'A'.$rowIndex);
+            $this->writeRow($sheet, $rowIndex, $this->ruleRow($block, $sheets, $tagsById));
             $rowIndex++;
         }
     }
@@ -66,17 +68,17 @@ class ExportScenarioBuilderV3AutoReplyWorkbookAction
     {
         $sheet = $spreadsheet->createSheet();
         $sheet->setTitle(AutoReplyRuleWorkbookFormat::SHEET_CATEGORIES);
-        $sheet->fromArray([['id', 'name', 'sort_order']], null, 'A1');
+        $this->writeRow($sheet, 1, ['id', 'name', 'sort_order']);
 
         $rowIndex = 2;
         $sortOrder = 1;
 
         foreach ($sheets as $sheetId => $builderSheet) {
-            $sheet->fromArray([[
+            $this->writeRow($sheet, $rowIndex, [
                 $sheetId,
                 (string) ($builderSheet['name'] ?? $sheetId),
                 $sortOrder,
-            ]], null, 'A'.$rowIndex);
+            ]);
             $rowIndex++;
             $sortOrder++;
         }
@@ -86,16 +88,16 @@ class ExportScenarioBuilderV3AutoReplyWorkbookAction
     {
         $sheet = $spreadsheet->createSheet();
         $sheet->setTitle(AutoReplyRuleWorkbookFormat::SHEET_CHANNELS);
-        $sheet->fromArray([['id', 'name', 'platform']], null, 'A1');
+        $this->writeRow($sheet, 1, ['id', 'name', 'platform']);
 
         $rowIndex = 2;
 
         foreach (Channel::query()->orderBy('name')->orderBy('id')->get() as $channel) {
-            $sheet->fromArray([[
+            $this->writeRow($sheet, $rowIndex, [
                 (int) $channel->id,
                 (string) $channel->name,
                 (string) $channel->platform,
-            ]], null, 'A'.$rowIndex);
+            ]);
             $rowIndex++;
         }
     }
@@ -107,15 +109,15 @@ class ExportScenarioBuilderV3AutoReplyWorkbookAction
     {
         $sheet = $spreadsheet->createSheet();
         $sheet->setTitle(AutoReplyRuleWorkbookFormat::SHEET_TAGS);
-        $sheet->fromArray([['id', 'name']], null, 'A1');
+        $this->writeRow($sheet, 1, ['id', 'name']);
 
         $rowIndex = 2;
 
         foreach ($tagsById as $tag) {
-            $sheet->fromArray([[
+            $this->writeRow($sheet, $rowIndex, [
                 (int) $tag->id,
                 (string) $tag->name,
-            ]], null, 'A'.$rowIndex);
+            ]);
             $rowIndex++;
         }
     }
@@ -124,7 +126,7 @@ class ExportScenarioBuilderV3AutoReplyWorkbookAction
     {
         $sheet = $spreadsheet->createSheet();
         $sheet->setTitle(AutoReplyRuleWorkbookFormat::SHEET_INSTRUCTIONS);
-        $sheet->fromArray([['rule']], null, 'A1');
+        $this->writeRow($sheet, 1, ['rule']);
 
         $lines = [
             'Файл сформирован из V3-конструктора. id — пользовательский номер блока.',
@@ -135,8 +137,26 @@ class ExportScenarioBuilderV3AutoReplyWorkbookAction
         $rowIndex = 2;
 
         foreach ($lines as $line) {
-            $sheet->fromArray([[$line]], null, 'A'.$rowIndex);
+            $this->writeRow($sheet, $rowIndex, [$line]);
             $rowIndex++;
+        }
+    }
+
+    /**
+     * @param  list<mixed>  $values
+     */
+    private function writeRow(Worksheet $sheet, int $rowIndex, array $values): void
+    {
+        foreach (array_values($values) as $offset => $value) {
+            $cell = Coordinate::stringFromColumnIndex($offset + 1).$rowIndex;
+
+            if (is_string($value)) {
+                $sheet->setCellValueExplicit($cell, $value, DataType::TYPE_STRING);
+
+                continue;
+            }
+
+            $sheet->setCellValue($cell, $value);
         }
     }
 
