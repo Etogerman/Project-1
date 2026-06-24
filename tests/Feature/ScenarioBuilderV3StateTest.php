@@ -22,6 +22,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
+use PhpOffice\PhpSpreadsheet\Cell\DataType;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
@@ -4081,15 +4082,19 @@ class ScenarioBuilderV3StateTest extends TestCase
         ]);
         $requiredTag = Tag::factory()->create(['name' => 'vip']);
         $assignTag = Tag::factory()->create(['name' => 'lead']);
+        $dangerousTitle = '=HYPERLINK("https://evil.test","VIP")';
+        $dangerousKeyword = '+VIP';
+        $dangerousMessage = '@Ответ из V3';
+        $dangerousButtonText = '-Открыть';
         $state = $this->actingAs($admin)
             ->getJson($this->stateUrl($scenario))
             ->assertOk()
             ->json();
         $settings = $this->startMessageButtonsSettings(
-            'VIP',
+            $dangerousKeyword,
             [(int) $max->id, (int) $telegram->id],
-            'Ответ из V3',
-            'Открыть',
+            $dangerousMessage,
+            $dangerousButtonText,
             AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE,
             'link',
             'https://example.test/vip',
@@ -4120,7 +4125,7 @@ class ScenarioBuilderV3StateTest extends TestCase
                     'id' => null,
                     'client_key' => 'tmp_export_start',
                     'type' => 'state',
-                    'title' => 'VIP старт',
+                    'title' => $dangerousTitle,
                     'position' => ['x' => 120, 'y' => 160],
                     'settings_payload' => $settings,
                 ],
@@ -4146,20 +4151,21 @@ class ScenarioBuilderV3StateTest extends TestCase
             $spreadsheet = IOFactory::load($finalPath);
 
             try {
-                $rows = $spreadsheet
-                    ->getSheetByName(AutoReplyRuleWorkbookFormat::SHEET_RULES)
-                    ?->toArray(null, true, true, false);
+                $rulesSheet = $spreadsheet->getSheetByName(AutoReplyRuleWorkbookFormat::SHEET_RULES);
+                $this->assertNotNull($rulesSheet);
+
+                $rows = $rulesSheet->toArray(null, true, true, false);
 
                 $this->assertSame(AutoReplyRuleWorkbookFormat::rulesColumns(), $rows[0] ?? []);
-                $this->assertSame('VIP старт', $rows[1][1] ?? null);
+                $this->assertSame($dangerousTitle, $rows[1][1] ?? null);
                 $this->assertSame('1', (string) ($rows[1][3] ?? ''));
                 $this->assertSame('90', (string) ($rows[1][4] ?? ''));
                 $this->assertSame(AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD, $rows[1][5] ?? null);
-                $this->assertSame('VIP', $rows[1][6] ?? null);
+                $this->assertSame($dangerousKeyword, $rows[1][6] ?? null);
                 $this->assertSame(AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE, $rows[1][7] ?? null);
-                $this->assertSame('Ответ из V3', $rows[1][8] ?? null);
+                $this->assertSame($dangerousMessage, $rows[1][8] ?? null);
                 $this->assertSame(AutoReplyRuleWorkbookFormat::BUTTON_KIND_LINK, $rows[1][9] ?? null);
-                $this->assertSame('Открыть', $rows[1][10] ?? null);
+                $this->assertSame($dangerousButtonText, $rows[1][10] ?? null);
                 $this->assertSame('https://example.test/vip', $rows[1][11] ?? null);
                 $this->assertSame(
                     AutoReplyRuleWorkbookFormat::formatList([(string) $telegram->id, (string) $max->id]),
@@ -4167,6 +4173,10 @@ class ScenarioBuilderV3StateTest extends TestCase
                 );
                 $this->assertSame('vip', $rows[1][13] ?? null);
                 $this->assertSame('lead', $rows[1][15] ?? null);
+                $this->assertSame(DataType::TYPE_STRING, $rulesSheet->getCell('B2')->getDataType());
+                $this->assertSame(DataType::TYPE_STRING, $rulesSheet->getCell('G2')->getDataType());
+                $this->assertSame(DataType::TYPE_STRING, $rulesSheet->getCell('I2')->getDataType());
+                $this->assertSame(DataType::TYPE_STRING, $rulesSheet->getCell('K2')->getDataType());
             } finally {
                 $spreadsheet->disconnectWorksheets();
                 unset($spreadsheet);
