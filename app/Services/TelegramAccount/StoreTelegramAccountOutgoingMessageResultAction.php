@@ -10,6 +10,10 @@ use InvalidArgumentException;
 
 class StoreTelegramAccountOutgoingMessageResultAction
 {
+    public function __construct(
+        private readonly ReconcileTelegramAccountExternalOutgoingDuplicateAction $reconcileTelegramAccountExternalOutgoingDuplicateAction,
+    ) {}
+
     /**
      * @param  array<string, mixed>  $payload
      */
@@ -78,6 +82,8 @@ class StoreTelegramAccountOutgoingMessageResultAction
             'sent_at' => $outgoing->sent_at?->toIso8601String(),
             'result_payload' => $resultPayload,
         ], $externalMessageId);
+
+        $this->reconcileTelegramAccountExternalOutgoingDuplicateAction->handle($outgoing);
 
         $channel->markReplySent();
 

@@ -310,6 +310,11 @@ return [
     'telegram_account' => [
         'gateway_shared_secret' => env('TELEGRAM_ACCOUNT_GATEWAY_SHARED_SECRET'),
         'gateway_rate_limit_per_minute' => (int) env('TELEGRAM_ACCOUNT_GATEWAY_RATE_LIMIT_PER_MINUTE', 120),
+        'external_outgoing_backfill_days' => (int) env('TELEGRAM_ACCOUNT_EXTERNAL_OUTGOING_BACKFILL_DAYS', 7),
+        'external_outgoing_backfill_known_dialogs_only' => true,
+        'external_outgoing_echo_deferral_seconds' => (int) env('TELEGRAM_ACCOUNT_EXTERNAL_OUTGOING_ECHO_DEFERRAL_SECONDS', 15),
+        'external_outgoing_echo_retry_interval_seconds' => (int) env('TELEGRAM_ACCOUNT_EXTERNAL_OUTGOING_ECHO_RETRY_INTERVAL_SECONDS', 1),
+        'external_outgoing_echo_near_time_window_seconds' => (int) env('TELEGRAM_ACCOUNT_EXTERNAL_OUTGOING_ECHO_NEAR_TIME_WINDOW_SECONDS', 120),
     ],
 
     'max' => [
