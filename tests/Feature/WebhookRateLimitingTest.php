@@ -14,14 +14,7 @@ class WebhookRateLimitingTest extends TestCase
 {
     use RefreshDatabase;
 
-    protected function setUp(): void
-    {
-        parent::setUp();
-
-        config()->set('bots.legacy_auto_reply_rules_enabled', true);
-    }
-
-    public function test_telegram_webhook_below_limit_still_creates_message_and_queues_job(): void
+    public function test_telegram_webhook_below_limit_still_creates_message_under_prod_default(): void
     {
         Queue::fake();
         Http::fake();
@@ -43,10 +36,11 @@ class WebhookRateLimitingTest extends TestCase
             'direction' => Message::DIRECTION_INBOUND,
             'external_message_id' => '10',
         ]);
-        Queue::assertPushed(ProcessAutoReplyJob::class, 1);
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        $this->assertLegacyAutoReplySkipped($channel);
     }
 
-    public function test_max_webhook_below_limit_still_creates_message_and_queues_job(): void
+    public function test_max_webhook_below_limit_still_creates_message_under_prod_default(): void
     {
         Queue::fake();
         Http::fake();
@@ -68,7 +62,8 @@ class WebhookRateLimitingTest extends TestCase
             'direction' => Message::DIRECTION_INBOUND,
             'external_message_id' => 'max-10',
         ]);
-        Queue::assertPushed(ProcessAutoReplyJob::class, 1);
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        $this->assertLegacyAutoReplySkipped($channel);
     }
 
     public function test_valid_webhook_over_limit_returns_429_and_stops_processing(): void
@@ -102,7 +97,8 @@ class WebhookRateLimitingTest extends TestCase
             'channel_id' => $channel->id,
             'external_message_id' => '11',
         ]);
-        Queue::assertPushed(ProcessAutoReplyJob::class, 1);
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        $this->assertLegacyAutoReplySkipped($channel);
         $this->assertDatabaseHas('channel_activity_logs', [
             'channel_id' => $channel->id,
             'event' => 'webhook.rate_limited',
@@ -146,7 +142,8 @@ class WebhookRateLimitingTest extends TestCase
             'channel_id' => $channel->id,
             'external_message_id' => '13',
         ]);
-        Queue::assertPushed(ProcessAutoReplyJob::class, 1);
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        $this->assertLegacyAutoReplySkipped($channel);
         $this->assertDatabaseMissing('channel_activity_logs', [
             'channel_id' => $channel->id,
             'event' => 'webhook.rate_limited',
@@ -186,7 +183,17 @@ class WebhookRateLimitingTest extends TestCase
             'channel_id' => $secondChannel->id,
             'external_message_id' => '20',
         ]);
-        Queue::assertPushed(ProcessAutoReplyJob::class, 2);
+        Queue::assertNotPushed(ProcessAutoReplyJob::class);
+        $this->assertLegacyAutoReplySkipped($firstChannel);
+        $this->assertLegacyAutoReplySkipped($secondChannel);
+    }
+
+    private function assertLegacyAutoReplySkipped(Channel $channel): void
+    {
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'bot.reply_skipped_legacy_cutover',
+        ]);
     }
 
     private function createTelegramChannel(string $secret = 'telegram-secret'): Channel
