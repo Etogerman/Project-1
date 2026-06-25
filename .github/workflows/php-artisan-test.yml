@@ -61,8 +61,20 @@ jobs:
           tools: composer:v2
           extensions: mbstring, dom, fileinfo, pgsql, pdo_pgsql
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist --optimize-autoloader
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build frontend assets
+        run: npm run build
 
       - name: Run CI test suite
         run: composer test:ci
