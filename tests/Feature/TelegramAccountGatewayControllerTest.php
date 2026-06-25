@@ -17,6 +17,7 @@ use App\Models\ChannelActivityLog;
 use App\Models\ChannelPeerSyncState;
 use App\Models\ChannelRuntimeState;
 use App\Models\Contact;
+use App\Models\ContactIdentity;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\Scenario;
@@ -28,10 +29,15 @@ use App\Models\User;
 use App\Services\Bitrix24\IsMessageReadyForBitrix24LiveExportAction;
 use App\Services\Bots\SendManualDialogReplyAction;
 use App\Services\Scenarios\ScenarioRegistry;
+use App\Services\TelegramAccount\NormalizeTelegramAccountExternalOutgoingMessageEventAction;
 use App\Services\TelegramAccount\ResolveTelegramAccountGatewayDiagnosticsAction;
+use App\Services\TelegramAccount\StoreTelegramAccountExternalOutgoingMessageEventAction;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
+use ReflectionMethod;
 use Tests\TestCase;
 
 class TelegramAccountGatewayControllerTest extends TestCase
@@ -300,6 +306,145 @@ class TelegramAccountGatewayControllerTest extends TestCase
         $this->assertSame('2026-06-25T19:31:14+03:00', $dialog->last_outbound_at?->toIso8601String());
 
         Queue::assertNothingPushed();
+    }
+
+    public function test_external_outgoing_message_unique_violation_rolls_back_to_savepoint(): void
+    {
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel([
+            'sync_external_outgoing_enabled' => true,
+        ]);
+        $dialog = $this->createLiveTelegramAccountDialog($channel, '700040', '900040');
+        $identity = $dialog->currentContactIdentity()->firstOrFail();
+        $event = app(NormalizeTelegramAccountExternalOutgoingMessageEventAction::class)->handle(
+            $channel,
+            $this->externalOutgoingPayload(
+                channel: $channel,
+                externalChatId: '700040',
+                externalUserId: 'tg-account-user-700040',
+                externalMessageId: 'tdlib-savepoint-message',
+                text: 'Savepoint duplicate message',
+            ),
+        );
+
+        Message::query()->create([
+            'contact_id' => $identity->contact_id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_EXTERNAL_ACCOUNT_MESSAGE,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_TELEGRAM_EXTERNAL_ACCOUNT,
+            'provider_event_key' => $event->messageKey,
+            'external_chat_id' => $event->externalChatId,
+            'external_message_id' => $event->externalMessageId,
+            'text' => 'Already stored duplicate',
+            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+            'raw_payload' => [],
+            'received_at' => now(),
+        ]);
+
+        DB::transaction(function () use ($channel, $dialog, $event, $identity): void {
+            try {
+                $this->invokeExternalOutgoingStoreMethod(
+                    'createExternalOutgoingMessageWithSavepoint',
+                    [$channel, $event, $identity],
+                );
+                $this->fail('Expected message provider_event_key unique violation.');
+            } catch (QueryException $exception) {
+                $this->assertSame('23505', $exception->errorInfo[0] ?? null);
+            }
+
+            Message::query()->create([
+                'contact_id' => $identity->contact_id,
+                'contact_identity_id' => $identity->id,
+                'channel_id' => $channel->id,
+                'dialog_id' => $dialog->id,
+                'direction' => Message::DIRECTION_OUTBOUND,
+                'message_kind' => Message::KIND_OUTBOUND_EXTERNAL_ACCOUNT_MESSAGE,
+                'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+                'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_TELEGRAM_EXTERNAL_ACCOUNT,
+                'provider_event_key' => NormalizedExternalOutgoingMessageEvent::buildTelegramAccountMessageKey(
+                    $channel->id,
+                    '700040',
+                    'tdlib-after-message-savepoint',
+                ),
+                'external_chat_id' => '700040',
+                'external_message_id' => 'tdlib-after-message-savepoint',
+                'text' => 'Transaction survived message duplicate',
+                'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                'raw_payload' => [],
+                'received_at' => now(),
+            ]);
+        });
+
+        $this->assertDatabaseHas('messages', [
+            'external_message_id' => 'tdlib-after-message-savepoint',
+            'text' => 'Transaction survived message duplicate',
+        ]);
+    }
+
+    public function test_external_outgoing_identity_unique_violation_rolls_back_to_savepoint(): void
+    {
+        $channel = $this->createTelegramAccountChannel([
+            'sync_external_outgoing_enabled' => true,
+        ]);
+        $existingContact = Contact::factory()->create([
+            'name' => 'Existing race contact',
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $existingContact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'tg-race-identity',
+            'external_username' => 'old_username',
+            'display_name' => 'Old Display',
+        ]);
+        $candidateContact = Contact::factory()->create([
+            'name' => 'Candidate race contact',
+        ]);
+        $event = app(NormalizeTelegramAccountExternalOutgoingMessageEventAction::class)->handle(
+            $channel,
+            $this->externalOutgoingPayload(
+                channel: $channel,
+                externalChatId: '700041',
+                externalUserId: 'tg-race-identity',
+                externalMessageId: 'tdlib-savepoint-identity',
+                text: 'Savepoint duplicate identity',
+                externalUsername: 'new_username',
+                contactName: 'New Display',
+            ),
+        );
+
+        DB::transaction(function () use ($candidateContact, $channel, $event): void {
+            try {
+                $this->invokeExternalOutgoingStoreMethod(
+                    'createContactIdentityWithSavepoint',
+                    [$candidateContact, $channel, $event],
+                );
+                $this->fail('Expected contact identity unique violation.');
+            } catch (QueryException $exception) {
+                $this->assertSame('23505', $exception->errorInfo[0] ?? null);
+            }
+
+            ContactIdentity::query()
+                ->where('channel_id', $channel->id)
+                ->where('external_user_id', 'tg-race-identity')
+                ->lockForUpdate()
+                ->firstOrFail()
+                ->forceFill([
+                    'external_username' => $event->externalUsername,
+                    'display_name' => $event->contactName,
+                ])
+                ->save();
+        });
+
+        $identity->refresh();
+
+        $this->assertSame('new_username', $identity->external_username);
+        $this->assertSame('New Display', $identity->display_name);
     }
 
     public function test_gateway_external_outgoing_backfill_requires_known_dialog(): void
@@ -1861,6 +2006,20 @@ class TelegramAccountGatewayControllerTest extends TestCase
             'platform' => Channel::PLATFORM_TELEGRAM,
             'is_active' => true,
         ], $attributes));
+    }
+
+    /**
+     * @param  list<mixed>  $arguments
+     */
+    private function invokeExternalOutgoingStoreMethod(string $method, array $arguments): mixed
+    {
+        $reflection = new ReflectionMethod(StoreTelegramAccountExternalOutgoingMessageEventAction::class, $method);
+        $reflection->setAccessible(true);
+
+        return $reflection->invoke(
+            app(StoreTelegramAccountExternalOutgoingMessageEventAction::class),
+            ...$arguments,
+        );
     }
 
     private function createPublishedV3StartScenario(Channel $channel, string $keyword): Scenario

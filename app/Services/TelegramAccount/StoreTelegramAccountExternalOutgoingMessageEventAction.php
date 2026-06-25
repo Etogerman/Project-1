@@ -94,22 +94,7 @@ class StoreTelegramAccountExternalOutgoingMessageEventAction
             }
 
             try {
-                $message = Message::query()->create([
-                    'contact_id' => $identity->contact_id,
-                    'contact_identity_id' => $identity->id,
-                    'channel_id' => $channel->id,
-                    'direction' => Message::DIRECTION_OUTBOUND,
-                    'message_kind' => Message::KIND_OUTBOUND_EXTERNAL_ACCOUNT_MESSAGE,
-                    'reply_to_message_id' => null,
-                    'provider_event_key' => $event->messageKey,
-                    'external_chat_id' => $event->externalChatId,
-                    'external_message_id' => $event->externalMessageId,
-                    'text' => $event->text,
-                    'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
-                    'source_text' => null,
-                    'raw_payload' => $this->buildRawPayload($event),
-                    'received_at' => $this->normalizeOccurredAtForStorage($event->occurredAt),
-                ]);
+                $message = $this->createExternalOutgoingMessageWithSavepoint($channel, $event, $identity);
             } catch (QueryException $exception) {
                 if (! $this->wasUniqueConstraintViolation($exception)) {
                     throw $exception;
@@ -226,12 +211,7 @@ class StoreTelegramAccountExternalOutgoingMessageEventAction
         Channel $channel,
         NormalizedExternalOutgoingMessageEvent $event,
     ): ?ContactIdentity {
-        $identity = ContactIdentity::query()
-            ->with('contact')
-            ->where('channel_id', $channel->id)
-            ->where('external_user_id', $event->externalUserId)
-            ->lockForUpdate()
-            ->first();
+        $identity = $this->findContactIdentityForUpdate($channel, $event->externalUserId);
 
         if ($identity instanceof ContactIdentity) {
             $this->syncIdentityProfile($identity, $event);
@@ -245,22 +225,84 @@ class StoreTelegramAccountExternalOutgoingMessageEventAction
             return $dialog?->currentContactIdentity;
         }
 
-        $contact = $dialog?->contact ?? Contact::query()->create([
-            'name' => $this->resolveContactName($event),
-            'is_auto_reply_enabled' => true,
-            'duplicate_review_status' => Contact::DUPLICATE_REVIEW_STATUS_NONE,
-        ]);
+        $contact = $dialog?->contact;
+        $createdContact = false;
 
-        $identity = ContactIdentity::query()->create([
+        if (! $contact instanceof Contact) {
+            $contact = Contact::query()->create([
+                'name' => $this->resolveContactName($event),
+                'is_auto_reply_enabled' => true,
+                'duplicate_review_status' => Contact::DUPLICATE_REVIEW_STATUS_NONE,
+            ]);
+            $createdContact = true;
+        }
+
+        try {
+            $identity = $this->createContactIdentityWithSavepoint($contact, $channel, $event);
+        } catch (QueryException $exception) {
+            if (! $this->wasUniqueConstraintViolation($exception)) {
+                throw $exception;
+            }
+
+            if ($createdContact) {
+                $contact->delete();
+            }
+
+            $identity = $this->findContactIdentityForUpdate($channel, $event->externalUserId) ?? throw $exception;
+            $this->syncIdentityProfile($identity, $event);
+
+            return $identity;
+        }
+
+        return $identity->fresh(['contact']);
+    }
+
+    private function createExternalOutgoingMessageWithSavepoint(
+        Channel $channel,
+        NormalizedExternalOutgoingMessageEvent $event,
+        ContactIdentity $identity,
+    ): Message {
+        return DB::transaction(fn (): Message => Message::query()->create([
+            'contact_id' => $identity->contact_id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_EXTERNAL_ACCOUNT_MESSAGE,
+            'reply_to_message_id' => null,
+            'provider_event_key' => $event->messageKey,
+            'external_chat_id' => $event->externalChatId,
+            'external_message_id' => $event->externalMessageId,
+            'text' => $event->text,
+            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+            'source_text' => null,
+            'raw_payload' => $this->buildRawPayload($event),
+            'received_at' => $this->normalizeOccurredAtForStorage($event->occurredAt),
+        ]));
+    }
+
+    private function findContactIdentityForUpdate(Channel $channel, string $externalUserId): ?ContactIdentity
+    {
+        return ContactIdentity::query()
+            ->with('contact')
+            ->where('channel_id', $channel->id)
+            ->where('external_user_id', $externalUserId)
+            ->lockForUpdate()
+            ->first();
+    }
+
+    private function createContactIdentityWithSavepoint(
+        Contact $contact,
+        Channel $channel,
+        NormalizedExternalOutgoingMessageEvent $event,
+    ): ContactIdentity {
+        return DB::transaction(fn (): ContactIdentity => ContactIdentity::query()->create([
             'contact_id' => $contact->id,
             'channel_id' => $channel->id,
             'platform' => $channel->platform,
             'external_user_id' => $event->externalUserId,
             'external_username' => $event->externalUsername,
             'display_name' => $event->contactName,
-        ]);
-
-        return $identity->fresh(['contact']);
+        ]));
     }
 
     private function resolveDialog(
