@@ -367,6 +367,165 @@ class TelegramAccountGatewayControllerTest extends TestCase
         Queue::assertNothingPushed();
     }
 
+    public function test_gateway_backfill_reconciles_ab_origin_reply_with_final_tdlib_id(): void
+    {
+        Queue::fake();
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        Carbon::setTestNow(Carbon::parse('2026-04-23 12:05:01', 'Europe/Moscow'));
+
+        try {
+            $channel = $this->createTelegramAccountChannel([
+                'sync_external_outgoing_enabled' => true,
+            ]);
+            $dialog = $this->createLiveTelegramAccountDialog($channel, '700037', '900037');
+            $employee = User::factory()->create([
+                'is_active' => true,
+                'is_admin' => true,
+            ]);
+
+            $outboundMessage = app(SendManualDialogReplyAction::class)->handle(
+                $dialog,
+                $employee,
+                'Ответ с временным TDLib id',
+            );
+
+            $this->withHeaders([
+                'Authorization' => 'Bearer gateway-secret',
+            ])->postJson(route('internal.telegram-account.outgoing-messages.claim', ['channel' => $channel]))
+                ->assertOk()
+                ->assertJsonPath('has_message', true);
+
+            $outgoing = TelegramAccountOutgoingMessage::query()
+                ->where('message_id', $outboundMessage->id)
+                ->firstOrFail();
+
+            $this->withHeaders([
+                'Authorization' => 'Bearer gateway-secret',
+            ])->postJson(route('internal.telegram-account.outgoing-messages.result', [
+                'channel' => $channel,
+                'outgoingMessage' => $outgoing,
+            ]), [
+                'status' => TelegramAccountOutgoingMessage::STATUS_SENT,
+                'external_message_id' => 'tdlib-temp-100',
+                'raw_payload' => [
+                    'tdlib_message_id' => 'tdlib-temp-100',
+                ],
+            ])->assertOk()
+                ->assertJsonPath('status', TelegramAccountOutgoingMessage::STATUS_SENT);
+
+            $this->withHeaders([
+                'Authorization' => 'Bearer gateway-secret',
+            ])->postJson(
+                route('internal.telegram-account.external-outgoing-messages.handle', ['channel' => $channel]),
+                $this->externalOutgoingPayload(
+                    channel: $channel,
+                    externalChatId: '700037',
+                    externalUserId: 'tg-account-user-700037',
+                    externalMessageId: 'tdlib-final-100',
+                    text: 'Ответ с временным TDLib id',
+                    historySource: 'backfill',
+                ),
+            )->assertOk()
+                ->assertJsonPath('stored', false)
+                ->assertJsonPath('skipped', true)
+                ->assertJsonPath('skip_reason', 'ab_origin_outgoing_message');
+
+            $outgoing->refresh();
+            $outboundMessage->refresh();
+
+            $this->assertSame('tdlib-final-100', $outgoing->sent_external_message_id);
+            $this->assertSame('tdlib-final-100', $outboundMessage->external_message_id);
+            $this->assertSame('tdlib-final-100', data_get($outboundMessage->raw_payload, 'external_message_id'));
+            $this->assertDatabaseMissing('messages', [
+                'message_kind' => Message::KIND_OUTBOUND_EXTERNAL_ACCOUNT_MESSAGE,
+                'external_chat_id' => '700037',
+                'external_message_id' => 'tdlib-final-100',
+            ]);
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_gateway_backfill_keeps_same_text_external_outgoing_outside_ab_origin_time_window(): void
+    {
+        Queue::fake();
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        Carbon::setTestNow(Carbon::parse('2026-04-23 12:05:01', 'Europe/Moscow'));
+
+        try {
+            $channel = $this->createTelegramAccountChannel([
+                'sync_external_outgoing_enabled' => true,
+            ]);
+            $dialog = $this->createLiveTelegramAccountDialog($channel, '700038', '900038');
+            $employee = User::factory()->create([
+                'is_active' => true,
+                'is_admin' => true,
+            ]);
+
+            $outboundMessage = app(SendManualDialogReplyAction::class)->handle(
+                $dialog,
+                $employee,
+                'Повторяемый короткий ответ',
+            );
+
+            $this->withHeaders([
+                'Authorization' => 'Bearer gateway-secret',
+            ])->postJson(route('internal.telegram-account.outgoing-messages.claim', ['channel' => $channel]))
+                ->assertOk()
+                ->assertJsonPath('has_message', true);
+
+            $outgoing = TelegramAccountOutgoingMessage::query()
+                ->where('message_id', $outboundMessage->id)
+                ->firstOrFail();
+
+            $this->withHeaders([
+                'Authorization' => 'Bearer gateway-secret',
+            ])->postJson(route('internal.telegram-account.outgoing-messages.result', [
+                'channel' => $channel,
+                'outgoingMessage' => $outgoing,
+            ]), [
+                'status' => TelegramAccountOutgoingMessage::STATUS_SENT,
+                'external_message_id' => 'tdlib-temp-200',
+                'raw_payload' => [
+                    'tdlib_message_id' => 'tdlib-temp-200',
+                ],
+            ])->assertOk()
+                ->assertJsonPath('status', TelegramAccountOutgoingMessage::STATUS_SENT);
+
+            $payload = $this->externalOutgoingPayload(
+                channel: $channel,
+                externalChatId: '700038',
+                externalUserId: 'tg-account-user-700038',
+                externalMessageId: 'tdlib-final-200',
+                text: 'Повторяемый короткий ответ',
+                historySource: 'backfill',
+            );
+            $payload['occurred_at'] = '2026-04-23T12:06:00+03:00';
+
+            $this->withHeaders([
+                'Authorization' => 'Bearer gateway-secret',
+            ])->postJson(
+                route('internal.telegram-account.external-outgoing-messages.handle', ['channel' => $channel]),
+                $payload,
+            )->assertOk()
+                ->assertJsonPath('stored', true)
+                ->assertJsonPath('skipped', false);
+
+            $outgoing->refresh();
+
+            $this->assertSame('tdlib-temp-200', $outgoing->sent_external_message_id);
+            $this->assertDatabaseHas('messages', [
+                'message_kind' => Message::KIND_OUTBOUND_EXTERNAL_ACCOUNT_MESSAGE,
+                'external_chat_id' => '700038',
+                'external_message_id' => 'tdlib-final-200',
+            ]);
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
     public function test_gateway_external_outgoing_backfill_requires_matching_known_dialog_chat(): void
     {
         Queue::fake();
