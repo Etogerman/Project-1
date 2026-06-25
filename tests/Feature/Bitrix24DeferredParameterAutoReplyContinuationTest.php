@@ -43,6 +43,7 @@ class Bitrix24DeferredParameterAutoReplyContinuationTest extends TestCase
         config()->set('bitrix24.sources.max_id', 'ABRIKOSOFF_MAX');
         config()->set('bitrix24.duplicate_phone_diagnostic.enabled', false);
         config()->set('bitrix24.http.retry_sleep_milliseconds', 0);
+        config()->set('bots.legacy_auto_reply_rules_enabled', true);
     }
 
     public function test_first_successful_sync_queues_deferred_parameter_job_for_pending_dialog_without_relevant_retry(): void

@@ -44,6 +44,7 @@ class DeferredParameterAutoReplyFlowTest extends TestCase
         config()->set('bitrix24.sources.max_id', 'ABRIKOSOFF_MAX');
         config()->set('bitrix24.duplicate_phone_diagnostic.enabled', false);
         config()->set('bitrix24.http.retry_sleep_milliseconds', 0);
+        config()->set('bots.legacy_auto_reply_rules_enabled', true);
     }
 
     public function test_parameter_inbound_captured_before_qualification_is_sent_after_sync_without_retry_requirement(): void

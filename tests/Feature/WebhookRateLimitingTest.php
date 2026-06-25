@@ -14,6 +14,13 @@ class WebhookRateLimitingTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        config()->set('bots.legacy_auto_reply_rules_enabled', true);
+    }
+
     public function test_telegram_webhook_below_limit_still_creates_message_and_queues_job(): void
     {
         Queue::fake();
