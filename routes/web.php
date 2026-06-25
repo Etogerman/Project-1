@@ -22,8 +22,14 @@ Route::post('/webhooks/max/{channel}', [BotWebhookController::class, 'max'])
 Route::middleware('throttle:telegram-account-gateway')
     ->prefix('/internal/gateway/telegram-account/{channel}')
     ->group(function (): void {
+        Route::get('/config', [TelegramAccountGatewayController::class, 'config'])
+            ->name('internal.telegram-account.config.show');
+
         Route::post('/messages', [TelegramAccountGatewayController::class, 'inboundMessage'])
             ->name('internal.telegram-account.messages.handle');
+
+        Route::post('/external-outgoing-messages', [TelegramAccountGatewayController::class, 'externalOutgoingMessage'])
+            ->name('internal.telegram-account.external-outgoing-messages.handle');
 
         Route::post('/runtime-state', [TelegramAccountGatewayController::class, 'runtimeState'])
             ->name('internal.telegram-account.runtime-state.handle');

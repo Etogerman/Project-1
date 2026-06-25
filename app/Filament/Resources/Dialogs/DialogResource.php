@@ -661,10 +661,10 @@ class DialogResource extends Resource
                 ->whereNotExists(function (QueryBuilder $outbound): void {
                     $outbound
                         ->selectRaw('1')
-                        ->from('messages as later_outbound_manual_reply')
-                        ->whereColumn('later_outbound_manual_reply.dialog_id', 'dialogs.id')
-                        ->where('later_outbound_manual_reply.message_kind', Message::KIND_OUTBOUND_MANUAL_REPLY)
-                        ->whereRaw(static::messageIsAfterSql('later_outbound_manual_reply', 'latest_inbound_user'));
+                        ->from('messages as later_dialog_answer')
+                        ->whereColumn('later_dialog_answer.dialog_id', 'dialogs.id')
+                        ->whereIn('later_dialog_answer.message_kind', Message::dialogAnswerMessageKinds())
+                        ->whereRaw(static::messageIsAfterSql('later_dialog_answer', 'latest_inbound_user'));
                 });
         });
     }
@@ -884,10 +884,10 @@ class DialogResource extends Resource
                 fn (Builder $query): Builder => $query->where('message_kind', Message::KIND_INBOUND_USER),
             ),
             'latest_outbound_manual_reply_message_id' => static::buildLatestMessageIdSubquery(
-                fn (Builder $query): Builder => $query->where('message_kind', Message::KIND_OUTBOUND_MANUAL_REPLY),
+                fn (Builder $query): Builder => $query->whereIn('message_kind', Message::dialogAnswerMessageKinds()),
             ),
             'latest_outbound_manual_reply_message_sort_at' => static::buildLatestMessageSortAtSubquery(
-                fn (Builder $query): Builder => $query->where('message_kind', Message::KIND_OUTBOUND_MANUAL_REPLY),
+                fn (Builder $query): Builder => $query->whereIn('message_kind', Message::dialogAnswerMessageKinds()),
             ),
         ]);
     }
@@ -916,10 +916,10 @@ class DialogResource extends Resource
             Message::KIND_INBOUND_USER,
         );
         $latestOutboundManualReplyMessageId = $chronology->latestDialogMessageIdFragment(
-            Message::KIND_OUTBOUND_MANUAL_REPLY,
+            Message::dialogAnswerMessageKinds(),
         );
         $latestOutboundManualReplyMessageSortAt = $chronology->latestDialogMessageSortAtFragment(
-            Message::KIND_OUTBOUND_MANUAL_REPLY,
+            Message::dialogAnswerMessageKinds(),
         );
 
         return [
