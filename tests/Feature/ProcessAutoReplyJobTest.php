@@ -27,6 +27,13 @@ class ProcessAutoReplyJobTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        config()->set('bots.legacy_auto_reply_rules_enabled', true);
+    }
+
     public function test_job_sends_telegram_auto_reply_and_creates_outbound_message(): void
     {
         Http::fake([

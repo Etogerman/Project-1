@@ -36,6 +36,13 @@ class BotWebhookAutoReplyTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        config()->set('bots.legacy_auto_reply_rules_enabled', true);
+    }
+
     public function test_user_facing_bot_jobs_use_bot_replies_queue(): void
     {
         config()->set('bots.auto_reply_queue', 'bot-replies');

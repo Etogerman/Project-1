@@ -64,12 +64,7 @@
         "test:feature:domain": "@php artisan test tests/Feature/AddContactPhoneActionTest.php tests/Feature/AppVersionTest.php tests/Feature/CanonicalizeContactPhoneNumbersCommandTest.php tests/Feature/ContactDuplicateReviewTest.php tests/Feature/ContactMergeLogTest.php tests/Feature/ContactRootResolutionActionsTest.php tests/Feature/CreateContactDuplicateReviewActionTest.php tests/Feature/DatabaseConfigTest.php tests/Feature/FindDuplicateContactRootsByPhoneActionTest.php tests/Feature/MergeContactsActionTest.php tests/Feature/MergedContactGuardActionsTest.php tests/Feature/NormalizePhoneNumberActionTest.php tests/Feature/PurgeRuntimeDataCommandTest.php tests/Feature/ResolveRootContactActionTest.php tests/Feature/SelectPrimaryContactForMergeActionTest.php tests/Feature/UpdateContactProfileActionTest.php",
         "test:ci": [
             "Composer\\Config::disableProcessTimeout",
-            "@composer test:unit",
-            "@composer test:feature:ui",
-            "@composer test:feature:bots",
-            "@composer test:feature:bitrix",
-            "@composer test:feature:collector",
-            "@composer test:feature:domain"
+            "@php vendor/bin/phpunit"
         ],
         "dev": [
             "Composer\\Config::disableProcessTimeout",

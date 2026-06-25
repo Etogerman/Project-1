@@ -33,6 +33,13 @@ class TelegramAccountGatewayControllerTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        config()->set('bots.legacy_auto_reply_rules_enabled', true);
+    }
+
     public function test_gateway_requires_internal_bearer_secret(): void
     {
         config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');

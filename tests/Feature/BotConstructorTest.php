@@ -48,6 +48,7 @@ class BotConstructorTest extends TestCase
 
         Filament::setCurrentPanel(Filament::getPanel('admin'));
         Filament::bootCurrentPanel();
+        config()->set('bots.legacy_auto_reply_rules_enabled', true);
     }
 
     public function test_constructor_is_available_only_for_admins(): void
