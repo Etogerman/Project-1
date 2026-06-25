@@ -104,6 +104,10 @@ class BuildConversationFeedViewDataAction
             return 'Bitrix24';
         }
 
+        if ($this->isTelegramExternalAccountSender($message)) {
+            return 'Telegram';
+        }
+
         return match ($message->sent_by_type) {
             Message::SENT_BY_TYPE_OPERATOR => filled($message->sentByUser?->name)
                 ? 'Оператор: '.$message->sentByUser->name
@@ -119,6 +123,7 @@ class BuildConversationFeedViewDataAction
     {
         return match ($message->message_kind) {
             Message::KIND_OUTBOUND_MANUAL_REPLY => 'Оператор',
+            Message::KIND_OUTBOUND_EXTERNAL_ACCOUNT_MESSAGE => 'Telegram',
             Message::KIND_OUTBOUND_AUTO_REPLY => 'Автоответчик',
             Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION,
             Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
@@ -171,6 +176,10 @@ class BuildConversationFeedViewDataAction
             return 'primary';
         }
 
+        if ($this->isTelegramExternalAccountSender($message)) {
+            return 'success';
+        }
+
         return match ($message->sent_by_type) {
             Message::SENT_BY_TYPE_OPERATOR => 'success',
             Message::SENT_BY_TYPE_AUTO_REPLY => 'warning',
@@ -184,6 +193,13 @@ class BuildConversationFeedViewDataAction
     {
         return $message->direction === Message::DIRECTION_OUTBOUND
             && $message->sent_by_system_code === Message::SENT_BY_SYSTEM_CODE_BITRIX24_OPENLINES;
+    }
+
+    protected function isTelegramExternalAccountSender(Message $message): bool
+    {
+        return $message->direction === Message::DIRECTION_OUTBOUND
+            && $message->message_kind === Message::KIND_OUTBOUND_EXTERNAL_ACCOUNT_MESSAGE
+            && $message->sent_by_system_code === Message::SENT_BY_SYSTEM_CODE_TELEGRAM_EXTERNAL_ACCOUNT;
     }
 
     /**
@@ -230,6 +246,7 @@ class BuildConversationFeedViewDataAction
             Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION => 'Спасибо, номер получили.',
             Message::KIND_OUTBOUND_AUTO_REPLY => 'Автоответ',
             Message::KIND_OUTBOUND_MANUAL_REPLY => 'Ответ оператора',
+            Message::KIND_OUTBOUND_EXTERNAL_ACCOUNT_MESSAGE => 'Исходящее из Telegram',
             Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION => 'Вопрос сбора данных',
             Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION => 'Спасибо, данные сохранили.',
             default => 'Системное сообщение',

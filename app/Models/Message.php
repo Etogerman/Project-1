@@ -31,6 +31,8 @@ class Message extends Model
 
     public const KIND_OUTBOUND_MANUAL_REPLY = 'outbound_manual_reply';
 
+    public const KIND_OUTBOUND_EXTERNAL_ACCOUNT_MESSAGE = 'outbound_external_account_message';
+
     public const KIND_OUTBOUND_DATA_COLLECTION_QUESTION = 'outbound_data_collection_question';
 
     public const KIND_OUTBOUND_DATA_COLLECTION_COMPLETION = 'outbound_data_collection_completion';
@@ -78,6 +80,8 @@ class Message extends Model
     public const SENT_BY_SYSTEM_CODE_LEGACY_UNKNOWN_KIND = 'legacy_unknown_kind';
 
     public const SENT_BY_SYSTEM_CODE_BITRIX24_OPENLINES = 'bitrix24_openlines';
+
+    public const SENT_BY_SYSTEM_CODE_TELEGRAM_EXTERNAL_ACCOUNT = 'telegram_external_account';
 
     public const SENT_BY_SYSTEM_CODE_DIALOG_INBOX_STATUS_CHANGE = 'dialog_inbox_status_change';
 
@@ -166,6 +170,17 @@ class Message extends Model
         return [
             self::TEXT_FORMAT_PLAIN_TEXT => 'Просто текст',
             self::TEXT_FORMAT_HTML => 'HTML',
+        ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    public static function dialogAnswerMessageKinds(): array
+    {
+        return [
+            self::KIND_OUTBOUND_MANUAL_REPLY,
+            self::KIND_OUTBOUND_EXTERNAL_ACCOUNT_MESSAGE,
         ];
     }
 

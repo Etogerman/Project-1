@@ -3,14 +3,19 @@
 namespace Tests\Feature;
 
 use App\Data\Dialogs\DialogInboxStatusData;
+use App\Models\ContactIdentity;
 use App\Models\Dialog;
+use App\Models\Message;
 use App\Services\Dialogs\ResolveDialogInboxStatusAction;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 class ResolveDialogInboxStatusActionTest extends TestCase
 {
+    use RefreshDatabase;
+
     /**
      * @param  array<string, mixed>  $attributes
      */
@@ -32,6 +37,46 @@ class ResolveDialogInboxStatusActionTest extends TestCase
 
         $this->assertSame($expectedCode, $status->code);
         $this->assertSame([], $queries);
+    }
+
+    public function test_external_account_outgoing_after_inbound_counts_as_dialog_answer(): void
+    {
+        $identity = ContactIdentity::factory()->create();
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $identity->contact_id,
+            'channel_id' => $identity->channel_id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => '700001',
+        ]);
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $identity->contact_id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $identity->channel_id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => '700001',
+            'external_message_id' => '900001',
+            'received_at' => '2026-05-26 10:00:00',
+        ]);
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $identity->contact_id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $identity->channel_id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_EXTERNAL_ACCOUNT_MESSAGE,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_TELEGRAM_EXTERNAL_ACCOUNT,
+            'external_chat_id' => '700001',
+            'external_message_id' => '910001',
+            'received_at' => '2026-05-26 10:05:00',
+        ]);
+
+        $status = app(ResolveDialogInboxStatusAction::class)->handle($dialog);
+
+        $this->assertSame(DialogInboxStatusData::CODE_NO_NEW, $status->code);
     }
 
     /**

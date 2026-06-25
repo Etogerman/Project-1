@@ -107,7 +107,7 @@ class MessageChronology
      * @return array{sql: string, bindings: list<mixed>}
      */
     public function latestDialogMessageIdFragment(
-        ?string $messageKind = null,
+        string|array|null $messageKind = null,
         ?string $direction = null,
     ): array {
         return $this->buildLatestMessageIdFragment('dialog_id', 'dialogs.id', $messageKind, $direction);
@@ -117,7 +117,7 @@ class MessageChronology
      * @return array{sql: string, bindings: list<mixed>}
      */
     public function latestDialogMessageSortAtFragment(
-        ?string $messageKind = null,
+        string|array|null $messageKind = null,
         ?string $direction = null,
     ): array {
         return $this->buildLatestMessageSortAtFragment('dialog_id', 'dialogs.id', $messageKind, $direction);
@@ -127,7 +127,7 @@ class MessageChronology
      * @return array{sql: string, bindings: list<mixed>}
      */
     public function latestContactMessageIdFragment(
-        ?string $messageKind = null,
+        string|array|null $messageKind = null,
         ?string $direction = null,
     ): array {
         return $this->buildLatestMessageIdFragment('contact_id', 'contacts.id', $messageKind, $direction);
@@ -137,7 +137,7 @@ class MessageChronology
      * @return array{sql: string, bindings: list<mixed>}
      */
     public function latestContactMessageSortAtFragment(
-        ?string $messageKind = null,
+        string|array|null $messageKind = null,
         ?string $direction = null,
     ): array {
         return $this->buildLatestMessageSortAtFragment('contact_id', 'contacts.id', $messageKind, $direction);
@@ -210,13 +210,20 @@ class MessageChronology
     private function buildSqlConditions(
         string $foreignColumn,
         string $parentReference,
-        ?string $messageKind,
+        string|array|null $messageKind,
         ?string $direction,
     ): array {
         $conditions = [sprintf('messages.%s = %s', $foreignColumn, $parentReference)];
         $bindings = [];
 
-        if ($messageKind !== null) {
+        if (is_array($messageKind)) {
+            if ($messageKind === []) {
+                $conditions[] = '1 = 0';
+            } else {
+                $conditions[] = 'messages.message_kind in ('.implode(', ', array_fill(0, count($messageKind), '?')).')';
+                $bindings = array_merge($bindings, array_values($messageKind));
+            }
+        } elseif ($messageKind !== null) {
             $conditions[] = 'messages.message_kind = ?';
             $bindings[] = $messageKind;
         }
@@ -238,7 +245,7 @@ class MessageChronology
     private function buildLatestMessageIdFragment(
         string $foreignColumn,
         string $parentReference,
-        ?string $messageKind,
+        string|array|null $messageKind,
         ?string $direction,
     ): array {
         $conditions = $this->buildSqlConditions($foreignColumn, $parentReference, $messageKind, $direction);
@@ -259,7 +266,7 @@ class MessageChronology
     private function buildLatestMessageSortAtFragment(
         string $foreignColumn,
         string $parentReference,
-        ?string $messageKind,
+        string|array|null $messageKind,
         ?string $direction,
     ): array {
         $conditions = $this->buildSqlConditions($foreignColumn, $parentReference, $messageKind, $direction);
