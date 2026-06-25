@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Data\TelegramAccount\NormalizedExternalOutgoingMessageEvent;
 use App\Data\TelegramAccount\TelegramAccountGatewayDiagnosticsData;
 use App\Jobs\ProcessAutoReplyJob;
 use App\Jobs\ProcessDataCollectionQuestionJob;
@@ -442,6 +443,126 @@ class TelegramAccountGatewayControllerTest extends TestCase
                 'external_chat_id' => '700037',
                 'external_message_id' => 'tdlib-final-100',
             ]);
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_gateway_backfill_reconciles_likely_ab_origin_duplicate_after_final_tdlib_id_sync(): void
+    {
+        Queue::fake();
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        Carbon::setTestNow(Carbon::parse('2026-04-23 12:05:01', 'Europe/Moscow'));
+
+        try {
+            $channel = $this->createTelegramAccountChannel([
+                'sync_external_outgoing_enabled' => true,
+            ]);
+            $dialog = $this->createLiveTelegramAccountDialog($channel, '700040', '900040');
+            $employee = User::factory()->create([
+                'is_active' => true,
+                'is_admin' => true,
+            ]);
+
+            $outboundMessage = app(SendManualDialogReplyAction::class)->handle(
+                $dialog,
+                $employee,
+                'Ответ с финальным duplicate',
+            );
+
+            $this->withHeaders([
+                'Authorization' => 'Bearer gateway-secret',
+            ])->postJson(route('internal.telegram-account.outgoing-messages.claim', ['channel' => $channel]))
+                ->assertOk()
+                ->assertJsonPath('has_message', true);
+
+            $outgoing = TelegramAccountOutgoingMessage::query()
+                ->where('message_id', $outboundMessage->id)
+                ->firstOrFail();
+
+            $this->withHeaders([
+                'Authorization' => 'Bearer gateway-secret',
+            ])->postJson(route('internal.telegram-account.outgoing-messages.result', [
+                'channel' => $channel,
+                'outgoingMessage' => $outgoing,
+            ]), [
+                'status' => TelegramAccountOutgoingMessage::STATUS_SENT,
+                'external_message_id' => 'tdlib-temp-101',
+                'raw_payload' => [
+                    'tdlib_message_id' => 'tdlib-temp-101',
+                ],
+            ])->assertOk()
+                ->assertJsonPath('status', TelegramAccountOutgoingMessage::STATUS_SENT);
+
+            $finalExternalMessageId = 'tdlib-final-101';
+            $duplicate = Message::query()->create([
+                'contact_id' => $outboundMessage->contact_id,
+                'contact_identity_id' => $outboundMessage->contact_identity_id,
+                'channel_id' => $channel->id,
+                'dialog_id' => $dialog->id,
+                'direction' => Message::DIRECTION_OUTBOUND,
+                'message_kind' => Message::KIND_OUTBOUND_EXTERNAL_ACCOUNT_MESSAGE,
+                'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+                'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_TELEGRAM_EXTERNAL_ACCOUNT,
+                'provider_event_key' => NormalizedExternalOutgoingMessageEvent::buildTelegramAccountMessageKey(
+                    $channel->id,
+                    '700040',
+                    $finalExternalMessageId,
+                ),
+                'external_chat_id' => '700040',
+                'external_message_id' => $finalExternalMessageId,
+                'text' => 'Ответ с финальным duplicate',
+                'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+                'raw_payload' => [
+                    '_gateway_event' => [
+                        'history_source' => 'backfill',
+                    ],
+                ],
+                'received_at' => now()->addSecond(),
+            ]);
+
+            $dialog->forceFill([
+                'last_message_id' => $duplicate->id,
+                'last_outbound_message_id' => $duplicate->id,
+                'last_message_at' => $duplicate->received_at,
+                'last_outbound_at' => $duplicate->received_at,
+                'last_message_preview' => $duplicate->text,
+                'last_outbound_message_preview' => $duplicate->text,
+            ])->save();
+
+            Queue::fake();
+
+            $this->withHeaders([
+                'Authorization' => 'Bearer gateway-secret',
+            ])->postJson(
+                route('internal.telegram-account.external-outgoing-messages.handle', ['channel' => $channel]),
+                $this->externalOutgoingPayload(
+                    channel: $channel,
+                    externalChatId: '700040',
+                    externalUserId: 'tg-account-user-700040',
+                    externalMessageId: $finalExternalMessageId,
+                    text: 'Ответ с финальным duplicate',
+                    historySource: 'backfill',
+                ),
+            )->assertOk()
+                ->assertJsonPath('stored', false)
+                ->assertJsonPath('skipped', true)
+                ->assertJsonPath('skip_reason', 'ab_origin_outgoing_message');
+
+            $outgoing->refresh();
+            $outboundMessage->refresh();
+            $dialog->refresh();
+
+            $this->assertSame($finalExternalMessageId, $outgoing->sent_external_message_id);
+            $this->assertSame($finalExternalMessageId, $outboundMessage->external_message_id);
+            $this->assertSame($finalExternalMessageId, data_get($outboundMessage->raw_payload, 'external_message_id'));
+            $this->assertSame($outboundMessage->id, $dialog->last_message_id);
+            $this->assertSame($outboundMessage->id, $dialog->last_outbound_message_id);
+            $this->assertDatabaseMissing('messages', [
+                'id' => $duplicate->id,
+            ]);
+            Queue::assertNothingPushed();
         } finally {
             Carbon::setTestNow();
         }
@@ -1027,6 +1148,124 @@ class TelegramAccountGatewayControllerTest extends TestCase
             'message_kind' => Message::KIND_OUTBOUND_EXTERNAL_ACCOUNT_MESSAGE,
             'external_message_id' => 'tdlib-outgoing-duplicate',
         ]);
+    }
+
+    public function test_gateway_ab_origin_skip_reconciles_existing_external_outgoing_duplicate(): void
+    {
+        Queue::fake();
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel([
+            'sync_external_outgoing_enabled' => true,
+        ]);
+        $dialog = $this->createLiveTelegramAccountDialog($channel, '700039', '900039');
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $outboundMessage = app(SendManualDialogReplyAction::class)->handle(
+            $dialog,
+            $employee,
+            'Ответ через AB для cleanup',
+        );
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(route('internal.telegram-account.outgoing-messages.claim', ['channel' => $channel]))
+            ->assertOk()
+            ->assertJsonPath('has_message', true);
+
+        $outgoing = TelegramAccountOutgoingMessage::query()
+            ->where('message_id', $outboundMessage->id)
+            ->firstOrFail();
+
+        $externalMessageId = 'tdlib-existing-duplicate';
+
+        $outgoing->forceFill([
+            'status' => TelegramAccountOutgoingMessage::STATUS_SENT,
+            'sent_at' => now(),
+            'sent_external_message_id' => $externalMessageId,
+            'result_payload' => [
+                'tdlib_message_id' => $externalMessageId,
+            ],
+        ])->save();
+
+        $rawPayload = is_array($outboundMessage->raw_payload) ? $outboundMessage->raw_payload : [];
+        $outboundMessage->forceFill([
+            'external_message_id' => $externalMessageId,
+            'raw_payload' => array_merge($rawPayload, [
+                'delivery_status' => TelegramAccountOutgoingMessage::STATUS_SENT,
+                'external_message_id' => $externalMessageId,
+            ]),
+        ])->save();
+
+        $duplicate = Message::query()->create([
+            'contact_id' => $outboundMessage->contact_id,
+            'contact_identity_id' => $outboundMessage->contact_identity_id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_EXTERNAL_ACCOUNT_MESSAGE,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_TELEGRAM_EXTERNAL_ACCOUNT,
+            'provider_event_key' => NormalizedExternalOutgoingMessageEvent::buildTelegramAccountMessageKey(
+                $channel->id,
+                '700039',
+                $externalMessageId,
+            ),
+            'external_chat_id' => '700039',
+            'external_message_id' => $externalMessageId,
+            'text' => 'Ответ через AB для cleanup',
+            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+            'raw_payload' => [
+                '_gateway_event' => [
+                    'history_source' => 'backfill',
+                ],
+            ],
+            'received_at' => now()->addSecond(),
+        ]);
+
+        $dialog->forceFill([
+            'last_message_id' => $duplicate->id,
+            'last_outbound_message_id' => $duplicate->id,
+            'last_message_at' => $duplicate->received_at,
+            'last_outbound_at' => $duplicate->received_at,
+            'last_message_preview' => $duplicate->text,
+            'last_outbound_message_preview' => $duplicate->text,
+        ])->save();
+
+        Queue::fake();
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(
+            route('internal.telegram-account.external-outgoing-messages.handle', ['channel' => $channel]),
+            $this->externalOutgoingPayload(
+                channel: $channel,
+                externalChatId: '700039',
+                externalUserId: 'tg-account-user-700039',
+                externalMessageId: $externalMessageId,
+                text: 'Ответ через AB для cleanup',
+                historySource: 'backfill',
+            ),
+        )->assertOk()
+            ->assertJsonPath('stored', false)
+            ->assertJsonPath('skipped', true)
+            ->assertJsonPath('skip_reason', 'ab_origin_outgoing_message');
+
+        $dialog->refresh();
+
+        $this->assertSame($outboundMessage->id, $dialog->last_message_id);
+        $this->assertSame($outboundMessage->id, $dialog->last_outbound_message_id);
+        $this->assertDatabaseMissing('messages', [
+            'id' => $duplicate->id,
+        ]);
+        $this->assertDatabaseHas('messages', [
+            'id' => $outboundMessage->id,
+            'external_message_id' => $externalMessageId,
+        ]);
+        Queue::assertNothingPushed();
     }
 
     public function test_gateway_outgoing_result_logs_and_keeps_duplicate_when_reconciliation_has_business_dependency(): void

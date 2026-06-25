@@ -25,6 +25,7 @@ class StoreTelegramAccountExternalOutgoingMessageEventAction
         private readonly ResolveOrCreateDialogAction $resolveOrCreateDialogAction,
         private readonly SyncMessageDialogMetadataAction $syncMessageDialogMetadataAction,
         private readonly ChannelActivityLogger $channelActivityLogger,
+        private readonly ReconcileTelegramAccountExternalOutgoingDuplicateAction $reconcileTelegramAccountExternalOutgoingDuplicateAction,
     ) {}
 
     public function handle(
@@ -43,6 +44,7 @@ class StoreTelegramAccountExternalOutgoingMessageEventAction
             $abOriginOutgoing = $this->findAbOriginOutgoing($channel, $event);
 
             if ($abOriginOutgoing instanceof TelegramAccountOutgoingMessage) {
+                $this->reconcileTelegramAccountExternalOutgoingDuplicateAction->handle($abOriginOutgoing);
                 $this->logSkipped(
                     $channel,
                     $event,
@@ -59,6 +61,7 @@ class StoreTelegramAccountExternalOutgoingMessageEventAction
 
             if ($likelyAbOriginOutgoing instanceof TelegramAccountOutgoingMessage) {
                 $this->syncLikelyAbOriginOutgoingExternalId($likelyAbOriginOutgoing, $event);
+                $this->reconcileTelegramAccountExternalOutgoingDuplicateAction->handle($likelyAbOriginOutgoing);
                 $this->logSkipped(
                     $channel,
                     $event,
