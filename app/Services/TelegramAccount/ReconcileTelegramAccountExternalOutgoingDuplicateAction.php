@@ -2,9 +2,11 @@
 
 namespace App\Services\TelegramAccount;
 
+use App\Models\Channel;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\TelegramAccountOutgoingMessage;
+use App\Services\Bots\ChannelActivityLogger;
 use App\Services\Dialogs\BuildDialogMessageSnapshotPayloadAction;
 use App\Services\Dialogs\MessageChronology;
 use Illuminate\Support\Collection;
@@ -31,6 +33,7 @@ class ReconcileTelegramAccountExternalOutgoingDuplicateAction
     public function __construct(
         private readonly BuildDialogMessageSnapshotPayloadAction $buildDialogMessageSnapshotPayloadAction,
         private readonly MessageChronology $messageChronology,
+        private readonly ChannelActivityLogger $channelActivityLogger,
     ) {}
 
     public function handle(TelegramAccountOutgoingMessage $outgoing): void
@@ -56,7 +59,16 @@ class ReconcileTelegramAccountExternalOutgoingDuplicateAction
             return;
         }
 
-        if ($this->hasDependentBusinessRecords($duplicate)) {
+        $dependentBusinessRecord = $this->findDependentBusinessRecord($duplicate);
+
+        if ($dependentBusinessRecord !== null) {
+            $this->logSkippedDueToDependentBusinessRecord(
+                $outgoing,
+                $canonicalMessage,
+                $duplicate,
+                $dependentBusinessRecord,
+            );
+
             return;
         }
 
@@ -73,7 +85,10 @@ class ReconcileTelegramAccountExternalOutgoingDuplicateAction
         }
     }
 
-    private function hasDependentBusinessRecords(Message $message): bool
+    /**
+     * @return ?array{table: string, column: string}
+     */
+    private function findDependentBusinessRecord(Message $message): ?array
     {
         foreach (self::DEPENDENCY_CHECKS as $check) {
             if (
@@ -81,11 +96,42 @@ class ReconcileTelegramAccountExternalOutgoingDuplicateAction
                     ->where($check['column'], $message->id)
                     ->exists()
             ) {
-                return true;
+                return $check;
             }
         }
 
-        return false;
+        return null;
+    }
+
+    /**
+     * @param  array{table: string, column: string}  $dependentBusinessRecord
+     */
+    private function logSkippedDueToDependentBusinessRecord(
+        TelegramAccountOutgoingMessage $outgoing,
+        Message $canonicalMessage,
+        Message $duplicate,
+        array $dependentBusinessRecord,
+    ): void {
+        $channel = $outgoing->channel;
+
+        if (! $channel instanceof Channel) {
+            return;
+        }
+
+        $this->channelActivityLogger->warning(
+            $channel,
+            'telegram_account_gateway.external_outgoing_reconciliation_skipped',
+            'External outgoing Telegram account duplicate reconciliation пропущена: найдены зависимые бизнес-записи.',
+            [
+                'outgoing_message_id' => $outgoing->id,
+                'canonical_message_id' => $canonicalMessage->id,
+                'duplicate_message_id' => $duplicate->id,
+                'external_chat_id' => $outgoing->external_chat_id,
+                'sent_external_message_id' => $outgoing->sent_external_message_id,
+                'dependency_table' => $dependentBusinessRecord['table'],
+                'dependency_column' => $dependentBusinessRecord['column'],
+            ],
+        );
     }
 
     private function recalculateDialogMetadata(int $dialogId): void
