@@ -19,6 +19,8 @@ use Illuminate\Support\Facades\DB;
 
 class StoreTelegramAccountExternalOutgoingMessageEventAction
 {
+    private const LIKELY_AB_ORIGIN_TIME_WINDOW_SECONDS = 10;
+
     public function __construct(
         private readonly ResolveOrCreateDialogAction $resolveOrCreateDialogAction,
         private readonly SyncMessageDialogMetadataAction $syncMessageDialogMetadataAction,
@@ -50,6 +52,22 @@ class StoreTelegramAccountExternalOutgoingMessageEventAction
                 return StoreExternalOutgoingMessageResult::skipped(
                     NormalizedExternalOutgoingMessageEvent::SKIP_AB_ORIGIN_OUTGOING_MESSAGE,
                     $abOriginOutgoing->message,
+                );
+            }
+
+            $likelyAbOriginOutgoing = $this->findLikelyAbOriginOutgoing($channel, $event);
+
+            if ($likelyAbOriginOutgoing instanceof TelegramAccountOutgoingMessage) {
+                $this->syncLikelyAbOriginOutgoingExternalId($likelyAbOriginOutgoing, $event);
+                $this->logSkipped(
+                    $channel,
+                    $event,
+                    NormalizedExternalOutgoingMessageEvent::SKIP_AB_ORIGIN_OUTGOING_MESSAGE,
+                );
+
+                return StoreExternalOutgoingMessageResult::skipped(
+                    NormalizedExternalOutgoingMessageEvent::SKIP_AB_ORIGIN_OUTGOING_MESSAGE,
+                    $likelyAbOriginOutgoing->message,
                 );
             }
 
@@ -138,6 +156,67 @@ class StoreTelegramAccountExternalOutgoingMessageEventAction
             ->where('external_chat_id', $event->externalChatId)
             ->where('sent_external_message_id', $event->externalMessageId)
             ->first();
+    }
+
+    private function findLikelyAbOriginOutgoing(
+        Channel $channel,
+        NormalizedExternalOutgoingMessageEvent $event,
+    ): ?TelegramAccountOutgoingMessage {
+        if (! $event->isBackfill()) {
+            return null;
+        }
+
+        $text = trim((string) $event->text);
+
+        if ($text === '') {
+            return null;
+        }
+
+        $occurredAt = $this->normalizeOccurredAtForStorage($event->occurredAt);
+
+        return TelegramAccountOutgoingMessage::query()
+            ->with('message')
+            ->where('channel_id', $channel->id)
+            ->where('external_chat_id', $event->externalChatId)
+            ->where('status', TelegramAccountOutgoingMessage::STATUS_SENT)
+            ->where('text', $text)
+            ->whereNotNull('sent_at')
+            ->whereBetween('sent_at', [
+                $occurredAt->copy()->subSeconds(self::LIKELY_AB_ORIGIN_TIME_WINDOW_SECONDS),
+                $occurredAt->copy()->addSeconds(self::LIKELY_AB_ORIGIN_TIME_WINDOW_SECONDS),
+            ])
+            ->latest('id')
+            ->lockForUpdate()
+            ->first();
+    }
+
+    private function syncLikelyAbOriginOutgoingExternalId(
+        TelegramAccountOutgoingMessage $outgoing,
+        NormalizedExternalOutgoingMessageEvent $event,
+    ): void {
+        if ($outgoing->sent_external_message_id === $event->externalMessageId) {
+            return;
+        }
+
+        $outgoing->forceFill([
+            'sent_external_message_id' => $event->externalMessageId,
+        ])->save();
+
+        $message = $outgoing->message;
+
+        if (! $message instanceof Message) {
+            return;
+        }
+
+        $rawPayload = is_array($message->raw_payload) ? $message->raw_payload : [];
+
+        $message->forceFill([
+            'external_message_id' => $event->externalMessageId,
+            'raw_payload' => array_merge($rawPayload, [
+                'external_message_id' => $event->externalMessageId,
+                'reconciled_external_outgoing_message_id' => $event->externalMessageId,
+            ]),
+        ])->save();
     }
 
     private function resolveIdentity(
