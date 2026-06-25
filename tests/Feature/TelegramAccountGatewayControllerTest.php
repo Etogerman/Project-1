@@ -10,9 +10,12 @@ use App\Jobs\ProcessPhoneCaptureFollowUpJob;
 use App\Jobs\ProcessScenarioStartJob;
 use App\Jobs\SyncContactIdentityAvatarJob;
 use App\Models\AutoReplyRule;
+use App\Models\Bitrix24MessageExport;
 use App\Models\Channel;
+use App\Models\ChannelActivityLog;
 use App\Models\ChannelPeerSyncState;
 use App\Models\ChannelRuntimeState;
+use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\Scenario;
@@ -361,6 +364,77 @@ class TelegramAccountGatewayControllerTest extends TestCase
 
         $this->assertSame($dialog->id, $message->dialog_id);
         $this->assertSame('Старый исходящий из лички', $message->text);
+        Queue::assertNothingPushed();
+    }
+
+    public function test_gateway_external_outgoing_backfill_requires_matching_known_dialog_chat(): void
+    {
+        Queue::fake();
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel([
+            'sync_external_outgoing_enabled' => true,
+        ]);
+        $knownDialog = $this->createLiveTelegramAccountDialog($channel, '700035', '900035');
+
+        Queue::fake();
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(
+            route('internal.telegram-account.external-outgoing-messages.handle', ['channel' => $channel]),
+            $this->externalOutgoingPayload(
+                channel: $channel,
+                externalChatId: '700036',
+                externalUserId: 'tg-account-user-700035',
+                externalMessageId: '910036',
+                text: 'Backfill с известной identity, но неизвестным чатом',
+                historySource: 'backfill',
+            ),
+        )->assertOk()
+            ->assertJsonPath('stored', false)
+            ->assertJsonPath('skipped', true)
+            ->assertJsonPath('skip_reason', 'unknown_backfill_dialog');
+
+        $knownDialog->refresh();
+
+        $this->assertSame('700035', $knownDialog->external_chat_id);
+        $this->assertDatabaseMissing('messages', [
+            'message_kind' => Message::KIND_OUTBOUND_EXTERNAL_ACCOUNT_MESSAGE,
+            'external_chat_id' => '700036',
+            'external_message_id' => '910036',
+        ]);
+        Queue::assertNothingPushed();
+    }
+
+    public function test_gateway_uses_telegram_user_fallback_name_for_live_external_outgoing_contact(): void
+    {
+        Queue::fake();
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel([
+            'sync_external_outgoing_enabled' => true,
+        ]);
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(
+            route('internal.telegram-account.external-outgoing-messages.handle', ['channel' => $channel]),
+            $this->externalOutgoingPayload(
+                channel: $channel,
+                externalChatId: '700037',
+                externalUserId: 'tg-account-user-37',
+                externalMessageId: '910037',
+                text: 'Live исходящий без имени',
+                externalUsername: null,
+                contactName: null,
+            ),
+        )->assertOk()
+            ->assertJsonPath('stored', true);
+
+        $contact = Contact::query()->firstOrFail();
+
+        $this->assertSame('Telegram user tg-account-user-37', $contact->name);
         Queue::assertNothingPushed();
     }
 
@@ -794,6 +868,97 @@ class TelegramAccountGatewayControllerTest extends TestCase
             'message_kind' => Message::KIND_OUTBOUND_EXTERNAL_ACCOUNT_MESSAGE,
             'external_message_id' => 'tdlib-outgoing-duplicate',
         ]);
+    }
+
+    public function test_gateway_outgoing_result_logs_and_keeps_duplicate_when_reconciliation_has_business_dependency(): void
+    {
+        Queue::fake();
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel([
+            'sync_external_outgoing_enabled' => true,
+        ]);
+        $dialog = $this->createLiveTelegramAccountDialog($channel, '700038', '900038');
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $outboundMessage = app(SendManualDialogReplyAction::class)->handle(
+            $dialog,
+            $employee,
+            'Ответ через AB с зависимостью',
+        );
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(route('internal.telegram-account.outgoing-messages.claim', ['channel' => $channel]))
+            ->assertOk()
+            ->assertJsonPath('has_message', true);
+
+        $outgoing = TelegramAccountOutgoingMessage::query()->firstOrFail();
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(
+            route('internal.telegram-account.external-outgoing-messages.handle', ['channel' => $channel]),
+            $this->externalOutgoingPayload(
+                channel: $channel,
+                externalChatId: '700038',
+                externalUserId: 'tg-account-user-700038',
+                externalMessageId: 'tdlib-outgoing-dependent',
+                text: 'Ответ через AB с зависимостью',
+                historySource: 'live',
+            ),
+        )->assertOk()
+            ->assertJsonPath('stored', true);
+
+        $duplicate = Message::query()
+            ->where('message_kind', Message::KIND_OUTBOUND_EXTERNAL_ACCOUNT_MESSAGE)
+            ->where('external_message_id', 'tdlib-outgoing-dependent')
+            ->firstOrFail();
+
+        Bitrix24MessageExport::query()->create([
+            'message_id' => $duplicate->id,
+            'contact_id' => $duplicate->contact_id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+            'export_status' => Bitrix24MessageExport::STATUS_PENDING,
+        ]);
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(route('internal.telegram-account.outgoing-messages.result', [
+            'channel' => $channel,
+            'outgoingMessage' => $outgoing,
+        ]), [
+            'status' => TelegramAccountOutgoingMessage::STATUS_SENT,
+            'external_message_id' => 'tdlib-outgoing-dependent',
+            'raw_payload' => [
+                'tdlib_message_id' => 'tdlib-outgoing-dependent',
+            ],
+        ])->assertOk()
+            ->assertJsonPath('status', TelegramAccountOutgoingMessage::STATUS_SENT);
+
+        $outboundMessage->refresh();
+
+        $this->assertSame('tdlib-outgoing-dependent', $outboundMessage->external_message_id);
+        $this->assertDatabaseHas('messages', [
+            'id' => $duplicate->id,
+            'message_kind' => Message::KIND_OUTBOUND_EXTERNAL_ACCOUNT_MESSAGE,
+            'external_message_id' => 'tdlib-outgoing-dependent',
+        ]);
+
+        $log = ChannelActivityLog::query()
+            ->where('channel_id', $channel->id)
+            ->where('event', 'telegram_account_gateway.external_outgoing_reconciliation_skipped')
+            ->firstOrFail();
+
+        $this->assertSame('warning', $log->level);
+        $this->assertSame($outgoing->id, data_get($log->context, 'outgoing_message_id'));
+        $this->assertSame($outboundMessage->id, data_get($log->context, 'canonical_message_id'));
+        $this->assertSame($duplicate->id, data_get($log->context, 'duplicate_message_id'));
+        $this->assertSame('bitrix24_message_exports', data_get($log->context, 'dependency_table'));
+        $this->assertSame('message_id', data_get($log->context, 'dependency_column'));
     }
 
     public function test_gateway_skips_non_private_peer_without_materializing_message_or_peer_sync_state(): void
@@ -1418,6 +1583,8 @@ class TelegramAccountGatewayControllerTest extends TestCase
         string $historySource = 'live',
         bool $isArchived = false,
         bool $isBotUser = false,
+        ?string $externalUsername = 'telegram_external_user',
+        ?string $contactName = 'Telegram External Клиент',
     ): array {
         return [
             'schema_version' => 'v1',
@@ -1433,8 +1600,8 @@ class TelegramAccountGatewayControllerTest extends TestCase
             'external_chat_id' => $externalChatId,
             'external_user_id' => $externalUserId,
             'external_message_id' => $externalMessageId,
-            'external_username' => 'telegram_external_user',
-            'contact_name' => 'Telegram External Клиент',
+            'external_username' => $externalUsername,
+            'contact_name' => $contactName,
             'content_type' => $contentType,
             'text' => $text,
             'is_archived' => $isArchived,

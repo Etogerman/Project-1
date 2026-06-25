@@ -197,10 +197,7 @@ class StoreTelegramAccountExternalOutgoingMessageEventAction
         }
 
         if ($event->isBackfill()) {
-            return Dialog::query()
-                ->where('channel_id', $channel->id)
-                ->where('contact_id', $identity->contact_id)
-                ->first();
+            return null;
         }
 
         return $this->resolveOrCreateDialogAction->handle($identity->contact_id, $channel);
@@ -287,7 +284,7 @@ class StoreTelegramAccountExternalOutgoingMessageEventAction
             return '@'.$event->externalUsername;
         }
 
-        return $event->externalUserId;
+        return 'Telegram user '.$event->externalUserId;
     }
 
     private function normalizeOccurredAtForStorage(Carbon $occurredAt): Carbon
