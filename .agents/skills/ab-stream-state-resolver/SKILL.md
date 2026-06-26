@@ -16,7 +16,8 @@ Skill работает read-only. Он определяет состояние �
 
 Skill не создаёт, не редактирует и не удаляет файлы.
 
-Skill не делает staging, commit, push, PR, ready, merge, deploy или smoke.
+Skill не делает staging, commit, push, PR, пользовательский перевод PR в ready,
+пользовательский merge, deploy или smoke.
 
 Если после определения состояния нужен профильный маршрут, агент переходит к
 соответствующему активному skill. Если skill ещё не активен, агент использует
@@ -148,10 +149,11 @@ comments/threads и CI status. Если данные недоступны, не�
 merge`. Агент может проверять до или после пользовательского merge только по
 отдельной команде.
 
-GitHub-контрольные действия выполняет пользователь: ready, перевод обратно в draft,
-merge, close/reopen PR, approve/request changes, GitHub deploy/promote,
-environment approval, branch protection, required checks и secrets. Агент не
-предлагает себя исполнителем таких действий и в меню указывает пользователя.
+GitHub-контрольные действия выполняет пользователь: пользовательский перевод PR в
+ready, пользовательский перевод PR обратно в draft, пользовательский merge,
+close/reopen PR, approve/request changes, GitHub deploy/promote, environment
+approval, branch protection, required checks и secrets. Агент не предлагает себя
+исполнителем таких действий и в меню указывает пользователя.
 
 Если правильный следующий шаг требует отдельной команды пользователя, скажи это
 прямо.
