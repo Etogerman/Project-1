@@ -1,6 +1,6 @@
 ---
 name: ab-pr-ci-review
-description: Inspect AB Connector PR, CI, review, draft/ready state, PR body guard fields, and allowed next PR checkpoint without editing PRs, merging, or bypassing delivery gates.
+description: Inspect AB Connector PR, CI, review, draft/ready state, Russian PR title/body language, PR body guard fields, Spec fields, and allowed next PR checkpoint without editing PRs, merging, or bypassing delivery gates.
 ---
 
 # Проверка PR, CI и review
@@ -53,7 +53,9 @@ Merge в `staging` или `main` выполняет только пользов�
 1. `AGENTS.md`
 2. `docs/task-delivery-workflow.md`
 3. `.github/PULL_REQUEST_TEMPLATE.md`
-4. GitHub PR state и CI checks, если нужна live-проверка
+4. `.github/scripts/ab-readiness-check.mjs`
+5. `.github/scripts/release-process-guard.mjs`
+6. GitHub PR state и CI checks, если нужна live-проверка
 
 Если `docs/agent-routing.md` или `docs/agent-docs-lifecycle.md` существуют только
 как локальные черновики, скажи об этом и не используй их как активные правила.
@@ -68,8 +70,11 @@ Merge в `staging` или `main` выполняет только пользов�
 - текущее состояние CI;
 - текущее состояние review;
 - mergeability как справочный сигнал;
+- русский title PR;
+- русские разделы и человекочитаемый русский текст в PR body;
 - PR body по шаблону проекта;
 - поля готовности;
+- Spec-поля и `Spec revision`, если они присутствуют;
 - наличие guard-полей для `main` PR после staging;
 - соответствует ли PR текущему delivery level.
 
@@ -101,10 +106,19 @@ CI не отслеживается и review не выполняется без 
 PR в `staging` не включает merge в `staging`, staging smoke, PR в `main` или merge
 в `main`.
 
-## PR body
+## PR title и body
 
-При проверке PR перед handoff проверь, что body содержит русские разделы и
+При проверке PR перед handoff проверь, что title написан на русском языке. Токен
+`[codex]` и технические термины допустимы, но человекочитаемая часть title должна
+быть русской.
+
+Проверь, что body содержит русские разделы, человекочитаемый русский текст и
 допустимые поля готовности из `docs/task-delivery-workflow.md`.
+
+Перед созданием, handoff или исправлением PR metadata сверяй body с действующими
+guard-скриптами `.github/scripts/ab-readiness-check.mjs` и
+`.github/scripts/release-process-guard.mjs`, если они есть в текущей ветке. Не
+полагайся только на шаблон PR: executable guard является более точным источником.
 
 Минимальные поля:
 
@@ -116,6 +130,15 @@ PR в `staging` не включает merge в `staging`, staging smoke, PR в `
 - `Авторская самопроверка: выполнена`
 - `Блокеры: отсутствуют`
 - `Принятый риск: отсутствует | принят: <краткая причина>`
+
+Spec-поля:
+
+- Для docs-only, process-only и несущественного PR не добавляй `Spec repo:`,
+  `Spec doc:` и `Spec revision:`, если реального внешнего `Spec revision` нет.
+- Не пиши `Spec revision: не требуется`. Если поле `Spec revision:` присутствует,
+  оно должно содержать конкретный commit hash длиной 7-40 hex-символов.
+- Для substantial stream, publish/release boundary или PR со статусом
+  `Spec pending` проверяй Spec-поля по `ab-spec-workflow` и активным guard-скриптам.
 
 Для runtime/code PR в `main` после staging должны быть точные строки:
 
