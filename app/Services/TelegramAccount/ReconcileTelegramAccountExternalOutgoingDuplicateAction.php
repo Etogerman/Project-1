@@ -9,7 +9,8 @@ use App\Models\TelegramAccountOutgoingMessage;
 use App\Services\Bots\ChannelActivityLogger;
 use App\Services\Dialogs\BuildDialogMessageSnapshotPayloadAction;
 use App\Services\Dialogs\MessageChronology;
-use Illuminate\Support\Collection;
+use Closure;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
 
 class ReconcileTelegramAccountExternalOutgoingDuplicateAction
@@ -144,38 +145,84 @@ class ReconcileTelegramAccountExternalOutgoingDuplicateAction
             return;
         }
 
-        /** @var Collection<int, Message> $messages */
-        $messages = $dialog->messages()->get();
-        $lastVisible = $this->latestMessage($messages->filter(
-            fn (Message $message): bool => $this->buildDialogMessageSnapshotPayloadAction->isVisibleDialogMessage($message),
-        ));
-        $lastInbound = $this->latestMessage($messages->filter(
-            fn (Message $message): bool => $this->buildDialogMessageSnapshotPayloadAction->isInboundMessage($message),
-        ));
-        $lastOutbound = $this->latestMessage($messages->filter(
-            fn (Message $message): bool => $this->buildDialogMessageSnapshotPayloadAction->isOutboundClientMessage($message),
-        ));
+        $lastVisible = $this->latestDialogMessage(
+            $dialog,
+            fn (Builder $query): Builder => $this->applyVisibleDialogMessageScope($query),
+        );
+        $lastInbound = $this->latestDialogMessage(
+            $dialog,
+            fn (Builder $query): Builder => $query->where('direction', Message::DIRECTION_INBOUND),
+        );
+        $lastOutbound = $this->latestDialogMessage(
+            $dialog,
+            fn (Builder $query): Builder => $this->applyOutboundClientMessageScope($query),
+        );
 
         $dialog->forceFill([
-            'last_message_at' => $lastVisible instanceof Message ? $this->messageChronology->resolveSortAt($lastVisible) : null,
-            'last_inbound_at' => $lastInbound instanceof Message ? $this->messageChronology->resolveSortAt($lastInbound) : null,
-            'last_outbound_at' => $lastOutbound instanceof Message ? $this->messageChronology->resolveSortAt($lastOutbound) : null,
-            ...$this->buildDialogMessageSnapshotPayloadAction->fromMessages($messages),
+            'last_message_at' => $this->resolveMessageSortAt($lastVisible),
+            'last_inbound_at' => $this->resolveMessageSortAt($lastInbound),
+            'last_outbound_at' => $this->resolveMessageSortAt($lastOutbound),
+            ...$this->messageSnapshotPayload($lastVisible, 'last_message'),
+            ...$this->messageSnapshotPayload($lastInbound, 'last_inbound_message'),
+            ...$this->messageSnapshotPayload($lastOutbound, 'last_outbound_message'),
         ])->save();
     }
 
-    /**
-     * @param  Collection<int, Message>  $messages
-     */
-    private function latestMessage(Collection $messages): ?Message
+    private function latestDialogMessage(Dialog $dialog, Closure $scope): ?Message
     {
-        $message = $messages
-            ->sortByDesc(fn (Message $message): string => $this->messageChronology->timestampAndIdSortKey(
-                $this->messageChronology->resolveSortAt($message),
-                $message->id,
-            ))
+        $query = Message::query()
+            ->where('dialog_id', $dialog->id);
+
+        $scope($query);
+
+        $message = $this->messageChronology
+            ->applyLatestOrder($query)
             ->first();
 
         return $message instanceof Message ? $message : null;
+    }
+
+    private function applyVisibleDialogMessageScope(Builder $query): Builder
+    {
+        return $query->where(function (Builder $query): void {
+            $query
+                ->whereNull('message_kind')
+                ->orWhere('message_kind', '!=', Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE);
+        });
+    }
+
+    private function applyOutboundClientMessageScope(Builder $query): Builder
+    {
+        return $this->applyVisibleDialogMessageScope(
+            $query
+                ->where('direction', Message::DIRECTION_OUTBOUND)
+                ->whereNotNull('external_message_id')
+                ->where('external_message_id', '!=', ''),
+        );
+    }
+
+    private function resolveMessageSortAt(?Message $message): mixed
+    {
+        return $message instanceof Message
+            ? $this->messageChronology->resolveSortAt($message)
+            : null;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function messageSnapshotPayload(?Message $message, string $prefix): array
+    {
+        if (! $message instanceof Message) {
+            return [
+                $prefix.'_id' => null,
+                $prefix.'_preview' => null,
+            ];
+        }
+
+        return [
+            $prefix.'_id' => $message->id,
+            $prefix.'_preview' => $this->buildDialogMessageSnapshotPayloadAction->previewText($message),
+        ];
     }
 }
