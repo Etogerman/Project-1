@@ -869,6 +869,7 @@ class ChannelResource extends Resource
                             'token' => null,
                         ],
                         'is_active' => $record->is_active ? '1' : '0',
+                        'sync_external_outgoing_enabled' => (bool) $record->sync_external_outgoing_enabled,
                     ])
                     ->using(function (array $data, Channel $record): void {
                         static::updateChannelRecord($record, static::mutateChannelData($data, $record));
@@ -1120,9 +1121,14 @@ class ChannelResource extends Resource
             $autoReplyMode = $record->auto_reply_mode ?? Channel::AUTO_REPLY_MODE_RULES_ONLY;
         }
 
+        $syncExternalOutgoingEnabled = array_key_exists('sync_external_outgoing_enabled', $data)
+            ? filter_var(data_get($data, 'sync_external_outgoing_enabled'), FILTER_VALIDATE_BOOLEAN)
+            : (bool) $record->sync_external_outgoing_enabled;
+
         return [
             'name' => (string) data_get($data, 'name', $record->name),
             'auto_reply_mode' => $autoReplyMode,
+            'sync_external_outgoing_enabled' => $syncExternalOutgoingEnabled,
         ];
     }
 
