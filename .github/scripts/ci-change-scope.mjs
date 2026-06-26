@@ -31,12 +31,12 @@ function matchesAny(filename, patterns) {
 }
 
 function classifyFile(filename) {
-  if (matchesAny(filename, DOC_ONLY_FILE_PATTERNS)) {
-    return "docs";
-  }
-
   if (matchesAny(filename, PROCESS_ONLY_FILE_PATTERNS)) {
     return "process";
+  }
+
+  if (matchesAny(filename, DOC_ONLY_FILE_PATTERNS)) {
+    return "docs";
   }
 
   return "runtime";
@@ -108,6 +108,18 @@ function selfTest() {
   });
 
   assert.deepEqual(classifyFiles([".github/workflows/php-artisan-test.yml"]), {
+    scope: "process-only",
+    runPhpTests: false,
+    reason: "only process or CI files changed",
+  });
+
+  assert.deepEqual(classifyFiles([".github/copilot-instructions.md"]), {
+    scope: "process-only",
+    runPhpTests: false,
+    reason: "only process or CI files changed",
+  });
+
+  assert.deepEqual(classifyFiles([".github/instructions/release.instructions.md"]), {
     scope: "process-only",
     runPhpTests: false,
     reason: "only process or CI files changed",
