@@ -104,7 +104,7 @@ integration/runtime или release контуром, пока не доказа�
 - запушенная ветка без PR;
 - открытый draft PR;
 - PR, который ждёт CI или review;
-- ready PR, который ждёт пользовательский merge;
+- ready PR, который ждёт Copilot/reviewer review или пользовательский merge;
 - staging/main/release follow-up;
 - production deploy или smoke follow-up;
 - spec/admin tail во внешнем репозитории документации;
@@ -137,8 +137,17 @@ integration/runtime или release контуром, пока не доказа�
 реализация продолжается до согласованного локального MVP и операторской приёмки,
 если пользователь явно не делегировал другой уровень.
 
-Merge в `staging` или `main` выполняет пользователь. Агент может проверять до или
-после пользовательского merge только по отдельной команде.
+После пользовательского ready следующий checkpoint — Copilot/reviewer review.
+После Copilot/reviewer review агент читает review и даёт технический вердикт:
+`готово к merge`, `нужны правки` или `нужен выбор пользователя`.
+Merge в `staging` или `main` выполняет пользователь после вердикта агента
+`готово к merge`. Агент может проверять до или после пользовательского merge
+только по отдельной команде.
+
+GitHub-контрольные действия выполняет пользователь: ready, перевод обратно в draft,
+merge, close/reopen PR, approve/request changes, GitHub deploy/promote,
+environment approval, branch protection, required checks и secrets. Агент не
+предлагает себя исполнителем таких действий и в меню указывает пользователя.
 
 Если правильный следующий шаг требует отдельной команды пользователя, скажи это
 прямо.
