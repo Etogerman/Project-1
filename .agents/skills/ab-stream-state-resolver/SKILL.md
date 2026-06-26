@@ -109,6 +109,8 @@ integration/runtime или release контуром, пока не доказа�
   review или пользовательский merge;
 - staging/main/release follow-up;
 - production deploy или smoke follow-up;
+- branch hygiene tail: слитая удалённая или локальная ветка, stale worktree или
+  локальная ветка без upstream;
 - spec/admin tail во внешнем репозитории документации;
 - загрязнение ветки или worktree другим stream-ом.
 
@@ -154,6 +156,13 @@ ready, пользовательский перевод PR обратно в draf
 close/reopen PR, approve/request changes, GitHub deploy/promote, environment
 approval, branch protection, required checks и secrets. Агент не предлагает себя
 исполнителем таких действий и в меню указывает пользователя.
+
+Исключение branch cleanup: после явной команды пользователя агент может удалить
+remote head branch уже слитого PR, если проверил `MERGED`, соответствие branch
+этому PR, отсутствие другого открытого PR по branch и отсутствие статуса
+защищённой ветки, активного stream-а или backup-ветки. Если любой признак нельзя
+подтвердить read-only проверкой, агент не удаляет remote branch и показывает
+blocker. Для PR, закрытого без merge, remote branch удаляет только пользователь.
 
 Если правильный следующий шаг требует отдельной команды пользователя, скажи это
 прямо.
