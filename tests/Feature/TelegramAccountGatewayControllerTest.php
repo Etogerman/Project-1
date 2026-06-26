@@ -36,7 +36,6 @@ use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
 use ReflectionMethod;
 use Tests\TestCase;
@@ -221,41 +220,6 @@ class TelegramAccountGatewayControllerTest extends TestCase
             'level' => 'info',
         ]);
         Queue::assertNothingPushed();
-    }
-
-    public function test_gateway_logs_invalid_external_outgoing_payload_validation_error(): void
-    {
-        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
-
-        $channel = $this->createTelegramAccountChannel([
-            'sync_external_outgoing_enabled' => true,
-        ]);
-        $payload = $this->externalOutgoingPayload(channel: $channel);
-        $payload['message_key'] = 'telegram_account:invalid';
-
-        Log::shouldReceive('warning')
-            ->once()
-            ->with(
-                'telegram_account_gateway.external_outgoing_invalid_payload',
-                \Mockery::on(fn (array $context): bool => ($context['channel_id'] ?? null) === $channel->id
-                    && ($context['gateway_event_id'] ?? null) === $payload['gateway_event_id']
-                    && ($context['peer_key'] ?? null) === $payload['peer_key']
-                    && ($context['message_key'] ?? null) === 'telegram_account:invalid'
-                    && isset($context['errors']['message_key']))
-            );
-
-        $this->withHeaders([
-            'Authorization' => 'Bearer gateway-secret',
-        ])->postJson(
-            route('internal.telegram-account.external-outgoing-messages.handle', ['channel' => $channel]),
-            $payload,
-        )->assertOk()
-            ->assertJsonPath('ok', true)
-            ->assertJsonPath('stored', false)
-            ->assertJsonPath('skipped', true)
-            ->assertJsonPath('skip_reason', 'invalid_payload');
-
-        $this->assertDatabaseCount('messages', 0);
     }
 
     public function test_gateway_stores_live_external_outgoing_without_auto_reply_or_bitrix_export(): void

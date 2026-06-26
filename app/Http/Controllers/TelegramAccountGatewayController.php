@@ -17,7 +17,6 @@ use App\Services\TelegramAccount\StoreTelegramAccountPeerSyncStateEventAction;
 use App\Services\TelegramAccount\StoreTelegramAccountRuntimeStateEventAction;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
@@ -84,17 +83,7 @@ class TelegramAccountGatewayController extends Controller
                 $channel,
                 $request->json()->all(),
             );
-        } catch (ValidationException $exception) {
-            $payload = $request->json()->all();
-
-            Log::warning('telegram_account_gateway.external_outgoing_invalid_payload', [
-                'channel_id' => $channel->id,
-                'gateway_event_id' => data_get($payload, 'gateway_event_id'),
-                'peer_key' => data_get($payload, 'peer_key'),
-                'message_key' => data_get($payload, 'message_key'),
-                'errors' => $exception->errors(),
-            ]);
-
+        } catch (ValidationException) {
             return response()->json([
                 'ok' => true,
                 'stored' => false,
