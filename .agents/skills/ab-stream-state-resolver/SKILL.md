@@ -1,6 +1,6 @@
 ---
 name: ab-stream-state-resolver
-description: Resolve AB Connector active stream state, tails, write-set type, delivery level, execution ceiling, blockers, and next checkpoint before starting work, answering next-step questions, or advancing docs/code/release streams.
+description: Resolve AB Connector active stream state, tails, changed-scope type, delivery level, execution ceiling, blockers, and next checkpoint before starting work, answering next-step questions, or advancing docs/code/release streams.
 ---
 
 # Определение состояния stream-а
@@ -79,7 +79,7 @@ GitHub или `gh`. Детальную проверку PR, CI, review, PR body 
 
 ## Классификация
 
-Классифицируй текущую работу по фактическому write-set, а не по имени ветки:
+Классифицируй текущую работу по фактически затронутой области изменений, а не по имени ветки:
 
 - `docs-only`
 - `agent-docs`
@@ -150,7 +150,7 @@ Merge в `staging` или `main` выполняет пользователь. А
 - тип работы;
 - active stream;
 - текущая ветка/worktree;
-- краткий write-set;
+- краткая затронутая область изменений без списка файлов по умолчанию;
 - найденные хвосты;
 - текущий delivery level;
 - execution ceiling;
