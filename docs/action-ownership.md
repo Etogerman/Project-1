@@ -135,5 +135,6 @@ GitHub-статус. После fix commit/push поток повторяет CI
 `MERGED`, branch принадлежит этому PR, branch не является `main`, `staging`,
 защищённой веткой, активным stream-ом или backup-веткой, и по branch нет другого
 открытого PR. Если любой из этих признаков нельзя подтвердить read-only
-проверкой, агент не удаляет remote branch и показывает blocker. Для PR,
-закрытого без merge, remote branch удаляет только пользователь.
+проверкой, агент не удаляет remote branch и показывает blocker. PR, закрытый без
+merge, считается blocker-ом branch cleanup для агента: агент показывает blocker и
+ждёт действия пользователя, а remote branch удаляет только пользователь.
