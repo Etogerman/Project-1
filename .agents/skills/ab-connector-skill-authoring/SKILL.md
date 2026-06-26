@@ -51,7 +51,7 @@ Use this skill to design focused repo-scoped skills for AB Connector. Keep the w
 
 7. Validate.
    - Run the skill validation script if available.
-   - Check `git diff --name-only` to confirm the write-set.
+   - Check the changed scope internally with git status or a diff summary.
    - Run `git diff --check`.
    - Search for leftover placeholder markers before handoff.
    - End with an author self-check: scope, triggers, anti-scope, docs-only status, and next step.
@@ -67,8 +67,12 @@ When proposing a skill without writing files, return:
 - recommended next action.
 
 When writing files, report:
-- changed files;
+- concise user-facing status without file lists by default;
 - whether changes are local, committed, pushed, or in a PR;
-- whether this creates a stream tail;
+- whether a follow-up is needed;
 - validation results;
 - next docs-only process step.
+
+Show detailed file lists, full diffs, or technical scope breakdowns only when
+the user asks, when there is risk or ambiguity, or when the user cannot choose
+the next step without those details.
