@@ -10,8 +10,39 @@ permissions:
   contents: read
 
 jobs:
-  php-artisan-test:
-    name: php-artisan-test
+  determine-ci-scope:
+    name: determine-ci-scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      scope: ${{ steps.ci-scope.outputs.scope }}
+      run_php_tests: ${{ steps.ci-scope.outputs.run_php_tests }}
+      reason: ${{ steps.ci-scope.outputs.reason }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Determine CI scope
+        id: ci-scope
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            if ! git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}" -- > /tmp/changed-files.txt; then
+              echo "Unable to determine changed files; falling back to the full Laravel suite."
+              : > /tmp/changed-files.txt
+            fi
+          else
+            printf "__runtime_push__\n" > /tmp/changed-files.txt
+          fi
+
+          node .github/scripts/ci-change-scope.mjs /tmp/changed-files.txt
+
+  laravel-suite:
+    name: Laravel suite
+    needs: determine-ci-scope
+    if: needs.determine-ci-scope.outputs.run_php_tests == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -78,3 +109,45 @@ jobs:
 
       - name: Run CI test suite
         run: composer test:ci
+
+  php-artisan-test:
+    name: php-artisan-test
+    needs:
+      - determine-ci-scope
+      - laravel-suite
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Complete required check
+        env:
+          SCOPE_RESULT: ${{ needs.determine-ci-scope.result }}
+          LARAVEL_RESULT: ${{ needs.laravel-suite.result }}
+          RUN_PHP_TESTS: ${{ needs.determine-ci-scope.outputs.run_php_tests }}
+          SCOPE: ${{ needs.determine-ci-scope.outputs.scope }}
+          REASON: ${{ needs.determine-ci-scope.outputs.reason }}
+        run: |
+          if [ "$SCOPE_RESULT" != "success" ]; then
+            echo "CI scope detection failed."
+            exit 1
+          fi
+
+          if [ "$RUN_PHP_TESTS" = "true" ]; then
+            if [ "$LARAVEL_RESULT" != "success" ]; then
+              echo "Laravel suite result: $LARAVEL_RESULT"
+              exit 1
+            fi
+
+            echo "Laravel suite passed."
+            exit 0
+          fi
+
+          if [ "$RUN_PHP_TESTS" != "false" ]; then
+            echo "Unexpected run_php_tests value: $RUN_PHP_TESTS"
+            exit 1
+          fi
+
+          echo "Scope: $SCOPE"
+          echo "Reason: $REASON"
+          echo "Laravel suite skipped for docs/process-only changes."
