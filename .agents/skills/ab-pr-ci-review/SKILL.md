@@ -1,6 +1,6 @@
 ---
 name: ab-pr-ci-review
-description: Inspect AB Connector PR, CI, review, draft/ready state, Russian PR title/body language, PR body guard fields, Spec fields, and allowed next PR checkpoint without editing PRs, merging, or bypassing delivery gates.
+description: Inspect AB Connector PR, CI, review, draft/ready state, Russian PR title/body language, PR body guard fields, Spec fields, review verdict, and allowed next PR checkpoint without editing PRs, merging, or bypassing delivery gates.
 ---
 
 # Проверка PR, CI и review
@@ -43,8 +43,10 @@ Merge в `staging` или `main` выполняет только пользов�
 - PR body;
 - следующим PR checkpoint.
 
-Этот skill проверяет наличие и статус review comments, но не разбирает их как
-задание на исправление и не реализует изменения по ним.
+Этот skill проверяет наличие и статус review comments. После Copilot/reviewer
+review skill разбирает comments только для технического вердикта, но не
+реализует изменения по ним. Если review status, comments/threads или CI status
+недоступны либо неоднозначны, skill не даёт вердикт `готово к merge`.
 
 ## Источники
 
@@ -80,7 +82,8 @@ Merge в `staging` или `main` выполняет только пользов�
 
 ## CI и review
 
-Skill может прочитать текущее состояние CI и review по явной задаче пользователя.
+Skill может прочитать текущее состояние CI и review по явной задаче пользователя
+или когда пользователь спрашивает следующий checkpoint.
 
 Skill не запускает ожидание CI, не мониторит проверки до зелёного состояния и не
 считает CI подтверждённым по памяти.
@@ -99,9 +102,20 @@ target branch и статус.
 CI не отслеживается и review не выполняется без отдельной команды пользователя.
 
 После зелёного CI на draft PR, валидных полей готовности и отсутствия blocker-ов
-следующий checkpoint — перед ready.
+следующий checkpoint — пользователь переводит PR в ready.
 
-После ready следующий checkpoint — перед пользовательским merge.
+После пользовательского ready следующий checkpoint — Copilot/reviewer review.
+После Copilot/reviewer review агент читает review и даёт технический вердикт:
+`готово к merge`, `нужны правки` или `нужен выбор пользователя`.
+После вердикта `готово к merge` следующий checkpoint — пользовательский merge.
+
+Вердикт `готово к merge` допустим только если агенту доступны review status,
+comments/threads и CI status. Если данные недоступны, неполны или противоречат
+друг другу, следующий checkpoint — получить данные или решение пользователя.
+
+Copilot/reviewer review считается выполненным только когда review завершён, не
+находится в pending/in-progress состоянии и агент может прочитать актуальный
+результат review.
 
 PR в `staging` не включает merge в `staging`, staging smoke, PR в `main` или merge
 в `main`.
@@ -164,8 +178,13 @@ Staging smoke: https://github.com/.../actions/runs/...
 
 - draft PR создан -> пользователь или reviewer проверяет PR;
 - draft PR + CI не проверен -> рекомендовать отдельную проверку CI;
-- draft PR + CI зелёный + поля готовности валидны + blocker-ов нет -> checkpoint перед ready;
-- PR ready -> пользователь выполняет merge;
+- draft PR + CI зелёный + поля готовности валидны + blocker-ов нет -> пользователь переводит PR в ready;
+- PR ready -> Copilot/reviewer выполняет review;
+- PR ready + Copilot/reviewer review выполнен + review status/comments/threads и CI status доступны + вердикт агента ещё не дан -> агент читает review и даёт технический вердикт;
+- вердикт агента `готово к merge` -> пользователь выполняет merge;
+- вердикт агента `нужны правки` -> рекомендовать исправление в текущем scope;
+- вердикт агента `нужен выбор пользователя` -> показать риск и запросить решение пользователя;
+- review status/comments/threads или CI status недоступны либо неоднозначны -> запросить недостающие данные или решение пользователя;
 - merge выполнен пользователем -> агент может проверить результат и cleanup по отдельной команде;
 - PR body невалиден -> рекомендовать отдельный шаг на исправление PR metadata,
   не исправляя metadata из этого skill.
@@ -179,6 +198,7 @@ Staging smoke: https://github.com/.../actions/runs/...
 - draft/ready;
 - CI status;
 - review status;
+- review verdict;
 - PR body/readiness status;
 - текущий delivery level;
 - blockers;
