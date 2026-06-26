@@ -103,10 +103,10 @@ class ContactResource extends Resource
                     fn (Builder $query): Builder => $query->where('message_kind', Message::KIND_INBOUND_USER),
                 ),
                 'latest_outbound_manual_reply_message_id' => static::buildLatestMessageIdSubquery(
-                    fn (Builder $query): Builder => $query->where('message_kind', Message::KIND_OUTBOUND_MANUAL_REPLY),
+                    fn (Builder $query): Builder => $query->whereIn('message_kind', Message::dialogAnswerMessageKinds()),
                 ),
                 'latest_outbound_manual_reply_message_sort_at' => static::buildLatestMessageSortAtSubquery(
-                    fn (Builder $query): Builder => $query->where('message_kind', Message::KIND_OUTBOUND_MANUAL_REPLY),
+                    fn (Builder $query): Builder => $query->whereIn('message_kind', Message::dialogAnswerMessageKinds()),
                 ),
             ])
             ->with([
@@ -771,10 +771,10 @@ class ContactResource extends Resource
             Message::KIND_INBOUND_USER,
         );
         $latestOutboundManualReplyMessageId = $chronology->latestContactMessageIdFragment(
-            Message::KIND_OUTBOUND_MANUAL_REPLY,
+            Message::dialogAnswerMessageKinds(),
         );
         $latestOutboundManualReplyMessageSortAt = $chronology->latestContactMessageSortAtFragment(
-            Message::KIND_OUTBOUND_MANUAL_REPLY,
+            Message::dialogAnswerMessageKinds(),
         );
         $latestInboundAfterOutboundManualReply = $chronology->buildIsAfterCondition(
             $latestInboundUserMessageSortAt,
@@ -1572,6 +1572,7 @@ class ContactResource extends Resource
             Message::KIND_OUTBOUND_AUTO_REPLY => 'Автоответ',
             Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION => 'Подтверждение телефона',
             Message::KIND_OUTBOUND_MANUAL_REPLY => 'Ручной ответ',
+            Message::KIND_OUTBOUND_EXTERNAL_ACCOUNT_MESSAGE => 'Исходящее из Telegram',
             Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION => 'Вопрос сбора данных',
             Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION => 'Сбор данных завершён',
             default => 'Не определен',
@@ -1586,6 +1587,7 @@ class ContactResource extends Resource
             Message::KIND_OUTBOUND_AUTO_REPLY => 'warning',
             Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION => 'primary',
             Message::KIND_OUTBOUND_MANUAL_REPLY => 'success',
+            Message::KIND_OUTBOUND_EXTERNAL_ACCOUNT_MESSAGE => 'success',
             Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION => 'info',
             Message::KIND_OUTBOUND_DATA_COLLECTION_COMPLETION => 'success',
             default => 'gray',

@@ -1150,6 +1150,57 @@ class FilamentChannelsResourceTest extends TestCase
         $this->assertSame(Channel::AUTO_REPLY_MODE_RULES_ONLY, $channel->auto_reply_mode);
     }
 
+    public function test_admin_can_edit_account_channel_external_outgoing_sync_toggle(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $channel = Channel::factory()->account()->create([
+            'name' => 'Local Telegram Account Gateway',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_ACCOUNT,
+            'sync_external_outgoing_enabled' => false,
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->mountTableAction('edit', $channel)
+            ->assertTableActionDataSet([
+                'sync_external_outgoing_enabled' => false,
+            ])
+            ->setTableActionData([
+                'name' => $channel->name,
+                'channel_connection_type_id' => $channel->channel_connection_type_id,
+                'platform' => Channel::PLATFORM_TELEGRAM,
+                'connection_type' => Channel::CONNECTION_TYPE_ACCOUNT,
+                'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+                'credentials' => [
+                    'token' => null,
+                ],
+                'is_active' => false,
+                'sync_external_outgoing_enabled' => true,
+            ])
+            ->callMountedTableAction()
+            ->assertHasNoTableActionErrors();
+
+        $channel->refresh();
+
+        $this->assertTrue($channel->sync_external_outgoing_enabled);
+        $this->assertSame(Channel::PLATFORM_TELEGRAM, $channel->platform);
+        $this->assertSame(Channel::CONNECTION_TYPE_ACCOUNT, $channel->connection_type);
+        $this->assertTrue($channel->is_active);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->mountTableAction('edit', $channel)
+            ->assertTableActionDataSet([
+                'sync_external_outgoing_enabled' => true,
+            ]);
+    }
+
     public function test_account_channel_table_error_columns_use_runtime_state(): void
     {
         $admin = User::factory()->create([

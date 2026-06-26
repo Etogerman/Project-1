@@ -423,10 +423,10 @@ class BuildAnalyticsOverviewAction
             Message::KIND_INBOUND_USER,
         );
         $latestOutboundManualReplyMessageId = $this->messageChronology->latestDialogMessageIdFragment(
-            Message::KIND_OUTBOUND_MANUAL_REPLY,
+            Message::dialogAnswerMessageKinds(),
         );
         $latestOutboundManualReplyMessageSortAt = $this->messageChronology->latestDialogMessageSortAtFragment(
-            Message::KIND_OUTBOUND_MANUAL_REPLY,
+            Message::dialogAnswerMessageKinds(),
         );
 
         return [
@@ -444,7 +444,7 @@ class BuildAnalyticsOverviewAction
     }
 
     /**
-     * @return array<string, \Illuminate\Database\Eloquent\Builder>
+     * @return array<string, Builder>
      */
     private function inboxProjection(): array
     {
@@ -462,12 +462,12 @@ class BuildAnalyticsOverviewAction
             'latest_outbound_manual_reply_message_id' => $this->messageChronology->latestMessageIdSubquery(
                 'dialog_id',
                 'dialogs.id',
-                fn (Builder $query): Builder => $query->where('message_kind', Message::KIND_OUTBOUND_MANUAL_REPLY),
+                fn (Builder $query): Builder => $query->whereIn('message_kind', Message::dialogAnswerMessageKinds()),
             ),
             'latest_outbound_manual_reply_message_sort_at' => $this->messageChronology->latestMessageSortAtSubquery(
                 'dialog_id',
                 'dialogs.id',
-                fn (Builder $query): Builder => $query->where('message_kind', Message::KIND_OUTBOUND_MANUAL_REPLY),
+                fn (Builder $query): Builder => $query->whereIn('message_kind', Message::dialogAnswerMessageKinds()),
             ),
         ];
     }

@@ -21,19 +21,19 @@ class ResolveDialogInboxStatusAction
         }
 
         $latestInboundUserMessage = $this->resolveLatestDialogMessage($dialog, Message::KIND_INBOUND_USER);
-        $latestOutboundManualReplyMessage = $this->resolveLatestDialogMessage($dialog, Message::KIND_OUTBOUND_MANUAL_REPLY);
+        $latestAnswerMessage = $this->resolveLatestDialogAnswerMessage($dialog);
 
         if (! $latestInboundUserMessage instanceof Message) {
             return $this->make(DialogInboxStatusData::CODE_NO_NEW, 'Нет новых', 'success');
         }
 
         if (
-            $latestOutboundManualReplyMessage instanceof Message
+            $latestAnswerMessage instanceof Message
             && ! $this->messageChronology->isAfter(
                 $this->messageChronology->resolveSortAt($latestInboundUserMessage),
                 $latestInboundUserMessage->id,
-                $this->messageChronology->resolveSortAt($latestOutboundManualReplyMessage),
-                $latestOutboundManualReplyMessage->id,
+                $this->messageChronology->resolveSortAt($latestAnswerMessage),
+                $latestAnswerMessage->id,
             )
         ) {
             return $this->make(DialogInboxStatusData::CODE_NO_NEW, 'Нет новых', 'success');
@@ -58,6 +58,17 @@ class ResolveDialogInboxStatusAction
                 $dialog->messages()
                     ->getQuery()
                     ->where('message_kind', $messageKind)
+            )
+            ->first();
+    }
+
+    private function resolveLatestDialogAnswerMessage(Dialog $dialog): ?Message
+    {
+        return $this->messageChronology
+            ->applyLatestOrder(
+                $dialog->messages()
+                    ->getQuery()
+                    ->whereIn('message_kind', Message::dialogAnswerMessageKinds())
             )
             ->first();
     }

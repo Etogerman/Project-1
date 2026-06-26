@@ -2,22 +2,44 @@
 
 namespace App\Http\Controllers;
 
+use App\Data\TelegramAccount\NormalizedExternalOutgoingMessageEvent;
 use App\Models\Channel;
 use App\Models\TelegramAccountOutgoingMessage;
 use App\Services\TelegramAccount\ClaimTelegramAccountOutgoingMessageAction;
+use App\Services\TelegramAccount\NormalizeTelegramAccountExternalOutgoingMessageEventAction;
 use App\Services\TelegramAccount\NormalizeTelegramAccountInboundMessageEventAction;
 use App\Services\TelegramAccount\NormalizeTelegramAccountPeerSyncStateEventAction;
 use App\Services\TelegramAccount\NormalizeTelegramAccountRuntimeStateEventAction;
+use App\Services\TelegramAccount\StoreTelegramAccountExternalOutgoingMessageEventAction;
 use App\Services\TelegramAccount\StoreTelegramAccountInboundEventAction;
 use App\Services\TelegramAccount\StoreTelegramAccountOutgoingMessageResultAction;
 use App\Services\TelegramAccount\StoreTelegramAccountPeerSyncStateEventAction;
 use App\Services\TelegramAccount\StoreTelegramAccountRuntimeStateEventAction;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 class TelegramAccountGatewayController extends Controller
 {
+    public function config(Request $request, Channel $channel): JsonResponse
+    {
+        $this->authorizeGatewayRequest($request, $channel);
+
+        return response()->json([
+            'ok' => true,
+            'channel_id' => $channel->id,
+            'sync_external_outgoing_enabled' => (bool) $channel->sync_external_outgoing_enabled,
+            'external_outgoing_backfill_days' => max(1, (int) config('bots.telegram_account.external_outgoing_backfill_days', 7)),
+            'external_outgoing_backfill_known_dialogs_only' => (bool) config('bots.telegram_account.external_outgoing_backfill_known_dialogs_only', true),
+            'external_outgoing_echo_deferral_seconds' => max(0, (int) config('bots.telegram_account.external_outgoing_echo_deferral_seconds', 15)),
+            'external_outgoing_echo_retry_interval_seconds' => max(1, (int) config('bots.telegram_account.external_outgoing_echo_retry_interval_seconds', 1)),
+            'external_outgoing_echo_near_time_window_seconds' => max(1, (int) config('bots.telegram_account.external_outgoing_echo_near_time_window_seconds', 120)),
+            'config_version' => $channel->updated_at?->getTimestamp() ?? 0,
+        ]);
+    }
+
     public function inboundMessage(
         Request $request,
         Channel $channel,
@@ -46,6 +68,50 @@ class TelegramAccountGatewayController extends Controller
             'skipped' => false,
             'message_id' => $storedResult->message->id,
             'dialog_id' => $storedResult->message->dialog_id,
+        ]);
+    }
+
+    public function externalOutgoingMessage(
+        Request $request,
+        Channel $channel,
+        NormalizeTelegramAccountExternalOutgoingMessageEventAction $normalizeTelegramAccountExternalOutgoingMessageEventAction,
+        StoreTelegramAccountExternalOutgoingMessageEventAction $storeTelegramAccountExternalOutgoingMessageEventAction,
+    ): JsonResponse {
+        $this->authorizeGatewayRequest($request, $channel);
+
+        try {
+            $event = $normalizeTelegramAccountExternalOutgoingMessageEventAction->handle(
+                $channel,
+                $request->json()->all(),
+            );
+        } catch (ValidationException $exception) {
+            $payload = $request->json()->all();
+
+            Log::warning('telegram_account_gateway.external_outgoing_invalid_payload', [
+                'channel_id' => $channel->id,
+                'gateway_event_id' => data_get($payload, 'gateway_event_id'),
+                'peer_key' => data_get($payload, 'peer_key'),
+                'message_key' => data_get($payload, 'message_key'),
+                'errors' => $exception->errors(),
+            ]);
+
+            return response()->json([
+                'ok' => true,
+                'stored' => false,
+                'skipped' => true,
+                'skip_reason' => NormalizedExternalOutgoingMessageEvent::SKIP_INVALID_PAYLOAD,
+            ]);
+        }
+
+        $storedResult = $storeTelegramAccountExternalOutgoingMessageEventAction->handle($channel, $event);
+
+        return response()->json([
+            'ok' => true,
+            'stored' => $storedResult->stored,
+            'skipped' => $storedResult->skipped,
+            'skip_reason' => $storedResult->skipReason,
+            'message_id' => $storedResult->message?->id,
+            'dialog_id' => $storedResult->message?->dialog_id,
         ]);
     }
 
