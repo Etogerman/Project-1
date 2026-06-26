@@ -8,6 +8,8 @@ const PROCESS_ONLY_FILE_PATTERNS = [
   /^\.github\/PULL_REQUEST_TEMPLATE\.md$/,
   /^\.github\/copilot-instructions\.md$/,
   /^\.github\/instructions\/.*\.instructions\.md$/,
+  /^\.github\/scripts\/ci-change-scope\.mjs$/,
+  /^\.github\/workflows\/php-artisan-test\.ya?ml$/,
   /^\.github\/scripts\/release-process-guard\.mjs$/,
   /^\.github\/workflows\/release-process-guard\.ya?ml$/,
   /^\.github\/scripts\/ab-readiness-check\.mjs$/,

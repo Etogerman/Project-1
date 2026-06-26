@@ -52,8 +52,28 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Determine CI scope
+        id: ci-scope
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}" > /tmp/changed-files.txt
+          else
+            printf "__runtime_push__\n" > /tmp/changed-files.txt
+          fi
+
+          node .github/scripts/ci-change-scope.mjs /tmp/changed-files.txt
+
+      - name: Skip Laravel suite for docs/process-only changes
+        if: steps.ci-scope.outputs.run_php_tests == 'false'
+        run: |
+          echo "Scope: ${{ steps.ci-scope.outputs.scope }}"
+          echo "Reason: ${{ steps.ci-scope.outputs.reason }}"
 
       - name: Setup PHP
+        if: steps.ci-scope.outputs.run_php_tests == 'true'
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.5'
@@ -62,19 +82,24 @@ jobs:
           extensions: mbstring, dom, fileinfo, pgsql, pdo_pgsql
 
       - name: Setup Node.js
+        if: steps.ci-scope.outputs.run_php_tests == 'true'
         uses: actions/setup-node@v6
         with:
           node-version: '22'
           cache: npm
 
       - name: Install Composer dependencies
+        if: steps.ci-scope.outputs.run_php_tests == 'true'
         run: composer install --no-interaction --prefer-dist --optimize-autoloader
 
       - name: Install npm dependencies
+        if: steps.ci-scope.outputs.run_php_tests == 'true'
         run: npm ci
 
       - name: Build frontend assets
+        if: steps.ci-scope.outputs.run_php_tests == 'true'
         run: npm run build
 
       - name: Run CI test suite
+        if: steps.ci-scope.outputs.run_php_tests == 'true'
         run: composer test:ci
