@@ -1,0 +1,4 @@
+interface:
+  display_name: "AB Spec Workflow"
+  short_description: "Проверяет и готовит ТЗ, Spec doc и Spec revision"
+  default_prompt: "Используй $ab-spec-workflow, чтобы проверить или подготовить ТЗ, Spec repo, Spec doc, Spec revision, внешний Spec и spec/admin tail. По умолчанию работай read-only; запись во внешний Spec repo, commit и push требуют отдельных команд пользователя."
