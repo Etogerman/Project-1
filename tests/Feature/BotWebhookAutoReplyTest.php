@@ -20,6 +20,8 @@ use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
 use App\Models\Message;
+use App\Models\MessageAttachment;
+use App\Models\MessageRevision;
 use App\Models\Scenario;
 use App\Models\ScenarioChannelBinding;
 use App\Models\ScenarioRun;
@@ -29,6 +31,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Storage;
 use Mockery;
 use Tests\TestCase;
 
@@ -139,6 +142,851 @@ class BotWebhookAutoReplyTest extends TestCase
         ]);
         $this->assertSame('10', $inboundMessage->provider_event_key);
         $this->assertNull($inboundMessage->auto_reply_sent_at);
+    }
+
+    public function test_telegram_edited_message_updates_existing_message_and_keeps_revision_without_dispatching(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+
+        $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $this->telegramPayload(
+            userId: 200,
+            chatId: 300,
+            messageId: 9100,
+            text: 'Первый текст',
+            date: 1_711_539_200,
+        ))->assertOk();
+
+        $message = $this->inboundMessages()->firstOrFail();
+
+        $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", [
+            'update_id' => 9101,
+            'edited_message' => [
+                'message_id' => 9100,
+                'date' => 1_711_539_200,
+                'edit_date' => 1_711_542_800,
+                'text' => 'Обновленный текст',
+                'from' => [
+                    'id' => 200,
+                    'username' => 'telegram_user',
+                    'is_bot' => false,
+                ],
+                'chat' => [
+                    'id' => 300,
+                    'type' => 'private',
+                ],
+            ],
+        ])->assertOk();
+
+        $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", [
+            'update_id' => 9101,
+            'edited_message' => [
+                'message_id' => 9100,
+                'date' => 1_711_539_200,
+                'edit_date' => 1_711_542_800,
+                'text' => 'Обновленный текст',
+                'from' => [
+                    'id' => 200,
+                    'username' => 'telegram_user',
+                    'is_bot' => false,
+                ],
+                'chat' => [
+                    'id' => 300,
+                    'type' => 'private',
+                ],
+            ],
+        ])->assertOk();
+
+        Queue::assertPushed(ProcessAutoReplyJob::class, 1);
+        Http::assertNothingSent();
+
+        $this->assertDatabaseCount('messages', 1);
+        $this->assertDatabaseCount('message_revisions', 1);
+
+        $message->refresh();
+
+        $this->assertSame('Обновленный текст', $message->text);
+        $this->assertSame(1, $message->edit_count);
+        $this->assertSame('9101', $message->last_edit_provider_event_key);
+        $this->assertNotNull($message->edited_at);
+
+        $revision = MessageRevision::query()->firstOrFail();
+
+        $this->assertSame($message->id, $revision->message_id);
+        $this->assertSame(MessageRevision::TYPE_EDIT, $revision->revision_type);
+        $this->assertSame('9101', $revision->provider_event_key);
+        $this->assertSame('Первый текст', $revision->previous_text);
+        $this->assertSame('Обновленный текст', $revision->new_text);
+    }
+
+    public function test_telegram_orphaned_edited_message_is_logged_without_creating_message(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+
+        $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", [
+            'update_id' => 9111,
+            'edited_message' => [
+                'message_id' => 9110,
+                'date' => 1_711_539_200,
+                'edit_date' => 1_711_542_800,
+                'text' => 'Поздняя правка',
+                'from' => [
+                    'id' => 200,
+                    'username' => 'telegram_user',
+                    'is_bot' => false,
+                ],
+                'chat' => [
+                    'id' => 300,
+                    'type' => 'private',
+                ],
+            ],
+        ])->assertOk();
+
+        Queue::assertNothingPushed();
+        $this->assertDatabaseCount('messages', 0);
+        $this->assertDatabaseCount('message_revisions', 0);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'message_edit.orphaned',
+        ]);
+    }
+
+    public function test_telegram_edited_message_without_text_preserves_text_and_rich_text(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+        $payload = $this->telegramPayload(
+            userId: 200,
+            chatId: 300,
+            messageId: 9120,
+            text: 'bold text',
+            date: 1_711_539_200,
+        );
+        $payload['message']['entities'] = [
+            [
+                'type' => 'bold',
+                'offset' => 0,
+                'length' => 4,
+            ],
+        ];
+
+        $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $payload)->assertOk();
+
+        $message = $this->inboundMessages()->firstOrFail();
+        $previousRichText = $message->rich_text;
+
+        $this->assertIsArray($previousRichText);
+
+        $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", [
+            'update_id' => 9121,
+            'edited_message' => [
+                'message_id' => 9120,
+                'date' => 1_711_539_200,
+                'edit_date' => 1_711_542_800,
+                'from' => [
+                    'id' => 200,
+                    'username' => 'telegram_user',
+                    'is_bot' => false,
+                ],
+                'chat' => [
+                    'id' => 300,
+                    'type' => 'private',
+                ],
+            ],
+        ])->assertOk();
+
+        $message->refresh();
+        $revision = MessageRevision::query()->firstOrFail();
+
+        $this->assertSame('bold text', $message->text);
+        $this->assertSame($previousRichText, $message->rich_text);
+        $this->assertSame('bold text', $revision->new_text);
+        $this->assertSame($previousRichText, $revision->new_rich_text);
+    }
+
+    public function test_telegram_photo_webhook_downloads_previewable_message_attachment(): void
+    {
+        Queue::fake();
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        Http::fake([
+            'https://api.telegram.org/bottelegram-token/getFile*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_path' => 'photos/telegram-large-file.jpg',
+                    'file_size' => strlen('telegram-jpeg-bytes'),
+                ],
+            ]),
+            'https://api.telegram.org/file/bottelegram-token/photos/telegram-large-file.jpg' => Http::response(
+                'telegram-jpeg-bytes',
+                200,
+                ['Content-Type' => 'image/jpeg'],
+            ),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+        $payload = $this->telegramPayload(
+            messageId: 101,
+            text: null,
+        );
+        $payload['message']['caption'] = 'Фото';
+        $payload['message']['photo'] = [
+            [
+                'file_id' => 'telegram-small-file-id',
+                'file_unique_id' => 'telegram-small-unique-id',
+                'width' => 90,
+                'height' => 90,
+                'file_size' => 1200,
+            ],
+            [
+                'file_id' => 'telegram-large-file-id',
+                'file_unique_id' => 'telegram-large-unique-id',
+                'width' => 1280,
+                'height' => 720,
+                'file_size' => 8192,
+            ],
+        ];
+
+        $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $payload)->assertOk();
+
+        $inboundMessage = $this->inboundMessages()->firstOrFail();
+
+        $this->assertDatabaseHas('message_attachments', [
+            'message_id' => $inboundMessage->id,
+            'channel_id' => $channel->id,
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_BOT,
+            'provider_event_key' => '101',
+            'provider_attachment_key' => 'telegram-large-unique-id',
+            'media_kind' => MessageAttachment::MEDIA_KIND_IMAGE,
+            'provider_file_id' => 'telegram-large-file-id',
+            'provider_file_unique_id' => 'telegram-large-unique-id',
+            'file_size_bytes' => strlen('telegram-jpeg-bytes'),
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            'send_status' => MessageAttachment::SEND_STATUS_NOT_APPLICABLE,
+            'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+        ]);
+
+        $attachment = MessageAttachment::query()->where('message_id', $inboundMessage->id)->firstOrFail();
+
+        $this->assertTrue($attachment->isInlinePreviewable());
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
+
+        $storedPath = $attachment->local_path;
+
+        $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $payload)->assertOk();
+
+        $attachment->refresh();
+
+        $this->assertDatabaseCount('message_attachments', 1);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $attachment->download_status);
+        $this->assertSame(MessageAttachment::LOCAL_DISK_PRIVATE, $attachment->local_disk);
+        $this->assertSame($storedPath, $attachment->local_path);
+    }
+
+    public function test_telegram_voice_webhook_downloads_previewable_audio_attachment(): void
+    {
+        Queue::fake();
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        Http::fake([
+            'https://api.telegram.org/bottelegram-token/getFile*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_path' => 'voice/file_1.ogg',
+                    'file_size' => strlen('telegram-voice-bytes'),
+                ],
+            ]),
+            'https://api.telegram.org/file/bottelegram-token/voice/file_1.ogg' => Http::response(
+                'telegram-voice-bytes',
+                200,
+                ['Content-Type' => 'application/octet-stream'],
+            ),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+        $payload = $this->telegramPayload(
+            messageId: 102,
+            text: null,
+        );
+        unset($payload['message']['text']);
+        $payload['message']['voice'] = [
+            'file_id' => 'telegram-voice-file-id',
+            'file_unique_id' => 'telegram-voice-unique-id',
+            'duration' => 7,
+            'file_size' => 151_664,
+            'mime_type' => 'audio/ogg',
+        ];
+
+        $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $payload)->assertOk();
+
+        $inboundMessage = $this->inboundMessages()->firstOrFail();
+
+        $this->assertDatabaseHas('message_attachments', [
+            'message_id' => $inboundMessage->id,
+            'channel_id' => $channel->id,
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_BOT,
+            'provider_event_key' => '102',
+            'provider_attachment_key' => 'telegram-voice-unique-id',
+            'media_kind' => MessageAttachment::MEDIA_KIND_VOICE,
+            'provider_file_id' => 'telegram-voice-file-id',
+            'provider_file_unique_id' => 'telegram-voice-unique-id',
+            'mime_type' => 'audio/ogg',
+            'extension' => 'ogg',
+            'file_size_bytes' => strlen('telegram-voice-bytes'),
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            'send_status' => MessageAttachment::SEND_STATUS_NOT_APPLICABLE,
+            'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+        ]);
+
+        $attachment = MessageAttachment::query()->where('message_id', $inboundMessage->id)->firstOrFail();
+
+        $this->assertTrue($attachment->isInlinePreviewable());
+        $this->assertSame(MessageAttachment::PREVIEW_KIND_AUDIO, $attachment->previewKind());
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
+    }
+
+    public function test_telegram_document_webhook_downloads_previewable_pdf_attachment(): void
+    {
+        Queue::fake();
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        Http::fake([
+            'https://api.telegram.org/bottelegram-token/getFile*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_path' => 'documents/offer.pdf',
+                    'file_size' => strlen('%PDF-telegram-document-bytes'),
+                ],
+            ]),
+            'https://api.telegram.org/file/bottelegram-token/documents/offer.pdf' => Http::response(
+                '%PDF-telegram-document-bytes',
+                200,
+                ['Content-Type' => 'application/octet-stream'],
+            ),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+        $payload = $this->telegramPayload(
+            messageId: 103,
+            text: null,
+        );
+        unset($payload['message']['text']);
+        $payload['message']['caption'] = 'PDF';
+        $payload['message']['document'] = [
+            'file_id' => 'telegram-document-file-id',
+            'file_unique_id' => 'telegram-document-unique-id',
+            'file_name' => 'offer.pdf',
+            'mime_type' => 'application/pdf',
+            'file_size' => 333_000,
+        ];
+
+        $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $payload)->assertOk();
+
+        $inboundMessage = $this->inboundMessages()->firstOrFail();
+
+        $this->assertDatabaseHas('message_attachments', [
+            'message_id' => $inboundMessage->id,
+            'channel_id' => $channel->id,
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_BOT,
+            'provider_event_key' => '103',
+            'provider_attachment_key' => 'telegram-document-unique-id',
+            'media_kind' => MessageAttachment::MEDIA_KIND_DOCUMENT,
+            'provider_file_id' => 'telegram-document-file-id',
+            'provider_file_unique_id' => 'telegram-document-unique-id',
+            'original_filename' => 'offer.pdf',
+            'mime_type' => 'application/pdf',
+            'extension' => 'pdf',
+            'file_size_bytes' => strlen('%PDF-telegram-document-bytes'),
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            'send_status' => MessageAttachment::SEND_STATUS_NOT_APPLICABLE,
+            'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+        ]);
+
+        $attachment = MessageAttachment::query()->where('message_id', $inboundMessage->id)->firstOrFail();
+
+        $this->assertFalse($attachment->isInlinePreviewable());
+        $this->assertNull($attachment->previewKind());
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
+    }
+
+    public function test_telegram_video_webhook_downloads_previewable_video_attachment(): void
+    {
+        Queue::fake();
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        Http::fake([
+            'https://api.telegram.org/bottelegram-token/getFile*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_path' => 'videos/room-tour.mp4',
+                    'file_size' => strlen('telegram-video-bytes'),
+                ],
+            ]),
+            'https://api.telegram.org/file/bottelegram-token/videos/room-tour.mp4' => Http::response(
+                'telegram-video-bytes',
+                200,
+                ['Content-Type' => 'application/octet-stream'],
+            ),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+        $payload = $this->telegramPayload(
+            messageId: 104,
+            text: null,
+        );
+        unset($payload['message']['text']);
+        $payload['message']['caption'] = 'Видео';
+        $payload['message']['video'] = [
+            'file_id' => 'telegram-video-file-id',
+            'file_unique_id' => 'telegram-video-unique-id',
+            'file_name' => 'room-tour.mp4',
+            'mime_type' => 'video/mp4',
+            'duration' => 12,
+            'width' => 1280,
+            'height' => 720,
+            'file_size' => 444_000,
+        ];
+
+        $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $payload)->assertOk();
+
+        $inboundMessage = $this->inboundMessages()->firstOrFail();
+
+        $this->assertDatabaseHas('message_attachments', [
+            'message_id' => $inboundMessage->id,
+            'channel_id' => $channel->id,
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_BOT,
+            'provider_event_key' => '104',
+            'provider_attachment_key' => 'telegram-video-unique-id',
+            'media_kind' => MessageAttachment::MEDIA_KIND_VIDEO,
+            'provider_file_id' => 'telegram-video-file-id',
+            'provider_file_unique_id' => 'telegram-video-unique-id',
+            'original_filename' => 'room-tour.mp4',
+            'mime_type' => 'video/mp4',
+            'extension' => 'mp4',
+            'file_size_bytes' => strlen('telegram-video-bytes'),
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            'send_status' => MessageAttachment::SEND_STATUS_NOT_APPLICABLE,
+            'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+        ]);
+
+        $attachment = MessageAttachment::query()->where('message_id', $inboundMessage->id)->firstOrFail();
+
+        $this->assertTrue($attachment->isInlinePreviewable());
+        $this->assertSame(MessageAttachment::PREVIEW_KIND_VIDEO, $attachment->previewKind());
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
+    }
+
+    public function test_telegram_animation_webhook_treats_bot_api_document_copy_as_one_animation_attachment(): void
+    {
+        Queue::fake();
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        Http::fake([
+            'https://api.telegram.org/bottelegram-token/getFile*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_path' => 'animations/4ff.gif.mp4',
+                    'file_size' => strlen('telegram-animation-bytes'),
+                ],
+            ]),
+            'https://api.telegram.org/file/bottelegram-token/animations/4ff.gif.mp4' => Http::response(
+                'telegram-animation-bytes',
+                200,
+                ['Content-Type' => 'video/mp4'],
+            ),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+        $payload = $this->telegramPayload(
+            messageId: 108,
+            text: null,
+        );
+        unset($payload['message']['text']);
+        $animation = [
+            'file_id' => 'telegram-animation-file-id',
+            'file_unique_id' => 'telegram-animation-unique-id',
+            'file_name' => '4ff.gif.mp4',
+            'mime_type' => 'video/mp4',
+            'duration' => 1,
+            'width' => 320,
+            'height' => 180,
+            'file_size' => 32_519,
+        ];
+        $payload['message']['animation'] = $animation;
+        $payload['message']['document'] = $animation;
+
+        $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $payload)->assertOk();
+
+        $inboundMessage = $this->inboundMessages()->firstOrFail();
+
+        $this->assertSame(1, MessageAttachment::query()->where('message_id', $inboundMessage->id)->count());
+        $this->assertDatabaseHas('message_attachments', [
+            'message_id' => $inboundMessage->id,
+            'channel_id' => $channel->id,
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_BOT,
+            'provider_event_key' => '108',
+            'provider_attachment_key' => 'telegram-animation-unique-id',
+            'media_kind' => MessageAttachment::MEDIA_KIND_ANIMATION,
+            'provider_file_id' => 'telegram-animation-file-id',
+            'provider_file_unique_id' => 'telegram-animation-unique-id',
+            'original_filename' => '4ff.gif.mp4',
+            'mime_type' => 'video/mp4',
+            'extension' => 'mp4',
+            'file_size_bytes' => strlen('telegram-animation-bytes'),
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            'send_status' => MessageAttachment::SEND_STATUS_NOT_APPLICABLE,
+            'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+        ]);
+
+        $attachment = MessageAttachment::query()->where('message_id', $inboundMessage->id)->firstOrFail();
+
+        $this->assertTrue($attachment->isInlinePreviewable());
+        $this->assertSame(MessageAttachment::PREVIEW_KIND_VIDEO, $attachment->previewKind());
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
+    }
+
+    public function test_telegram_sticker_webhook_downloads_previewable_sticker_attachment(): void
+    {
+        Queue::fake();
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        Http::fake([
+            'https://api.telegram.org/bottelegram-token/getFile*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_path' => 'stickers/sticker.webp',
+                    'file_size' => strlen('telegram-webp-sticker-bytes'),
+                ],
+            ]),
+            'https://api.telegram.org/file/bottelegram-token/stickers/sticker.webp' => Http::response(
+                'RIFFtelegram-webp-sticker-bytesWEBP',
+                200,
+                ['Content-Type' => 'image/webp'],
+            ),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+        $payload = $this->telegramPayload(
+            messageId: 109,
+            text: null,
+        );
+        unset($payload['message']['text']);
+        $payload['message']['sticker'] = [
+            'file_id' => 'telegram-sticker-file-id',
+            'file_unique_id' => 'telegram-sticker-unique-id',
+            'type' => 'regular',
+            'emoji' => '😂',
+            'width' => 512,
+            'height' => 512,
+            'file_size' => 24_000,
+            'is_animated' => false,
+            'is_video' => false,
+        ];
+
+        $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $payload)->assertOk();
+
+        $inboundMessage = $this->inboundMessages()->firstOrFail();
+
+        $this->assertDatabaseHas('message_attachments', [
+            'message_id' => $inboundMessage->id,
+            'channel_id' => $channel->id,
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_BOT,
+            'provider_event_key' => '109',
+            'provider_attachment_key' => 'telegram-sticker-unique-id',
+            'media_kind' => MessageAttachment::MEDIA_KIND_STICKER,
+            'provider_file_id' => 'telegram-sticker-file-id',
+            'provider_file_unique_id' => 'telegram-sticker-unique-id',
+            'mime_type' => 'image/webp',
+            'extension' => 'webp',
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            'send_status' => MessageAttachment::SEND_STATUS_NOT_APPLICABLE,
+            'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+        ]);
+
+        $attachment = MessageAttachment::query()->where('message_id', $inboundMessage->id)->firstOrFail();
+
+        $this->assertTrue($attachment->isInlinePreviewable());
+        $this->assertSame(MessageAttachment::PREVIEW_KIND_IMAGE, $attachment->previewKind());
+        $this->assertSame('😂', $attachment->raw_payload_excerpt['emoji'] ?? null);
+    }
+
+    public function test_telegram_animated_sticker_uses_thumbnail_as_inline_preview(): void
+    {
+        Queue::fake();
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        Http::fake([
+            'https://api.telegram.org/bottelegram-token/getFile*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_path' => 'stickers/thumb.jpg',
+                    'file_size' => strlen('telegram-sticker-thumbnail-bytes'),
+                ],
+            ]),
+            'https://api.telegram.org/file/bottelegram-token/stickers/thumb.jpg' => Http::response(
+                "\xFF\xD8\xFF".'telegram-sticker-thumbnail-bytes',
+                200,
+                ['Content-Type' => 'application/octet-stream'],
+            ),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+        $payload = $this->telegramPayload(
+            messageId: 110,
+            text: null,
+        );
+        unset($payload['message']['text']);
+        $payload['message']['sticker'] = [
+            'file_id' => 'telegram-animated-sticker-file-id',
+            'file_unique_id' => 'telegram-animated-sticker-unique-id',
+            'type' => 'regular',
+            'emoji' => '😂',
+            'width' => 512,
+            'height' => 512,
+            'file_size' => 24_000,
+            'is_animated' => true,
+            'is_video' => false,
+            'thumbnail' => [
+                'file_id' => 'telegram-sticker-thumb-file-id',
+                'file_unique_id' => 'telegram-sticker-thumb-unique-id',
+                'width' => 128,
+                'height' => 128,
+                'file_size' => 5_772,
+            ],
+        ];
+
+        $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $payload)->assertOk();
+
+        $inboundMessage = $this->inboundMessages()->firstOrFail();
+
+        $this->assertDatabaseHas('message_attachments', [
+            'message_id' => $inboundMessage->id,
+            'channel_id' => $channel->id,
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_BOT,
+            'provider_event_key' => '110',
+            'provider_attachment_key' => 'telegram-animated-sticker-unique-id',
+            'media_kind' => MessageAttachment::MEDIA_KIND_STICKER,
+            'provider_file_id' => 'telegram-animated-sticker-file-id',
+            'provider_file_unique_id' => 'telegram-animated-sticker-unique-id',
+            'original_filename' => 'sticker-preview.jpg',
+            'mime_type' => 'image/jpeg',
+            'extension' => 'jpg',
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            'send_status' => MessageAttachment::SEND_STATUS_NOT_APPLICABLE,
+            'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+        ]);
+
+        $attachment = MessageAttachment::query()->where('message_id', $inboundMessage->id)->firstOrFail();
+
+        $this->assertTrue($attachment->isInlinePreviewable());
+        $this->assertSame(MessageAttachment::PREVIEW_KIND_IMAGE, $attachment->previewKind());
+        $this->assertSame('telegram-sticker-thumb-file-id', $attachment->raw_payload_excerpt['thumbnail_file_id'] ?? null);
+        $this->assertSame('thumbnail', $attachment->provider_metadata['telegram_preview_source'] ?? null);
+        $this->assertSame('telegram-animated-sticker-file-id', $attachment->provider_metadata['telegram_original_file_id'] ?? null);
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
+        Http::assertSent(fn ($request): bool => str_contains($request->url(), '/getFile')
+            && data_get($request->data(), 'file_id') === 'telegram-sticker-thumb-file-id');
+        Http::assertNotSent(fn ($request): bool => str_contains($request->url(), '/getFile')
+            && data_get($request->data(), 'file_id') === 'telegram-animated-sticker-file-id');
+    }
+
+    public function test_telegram_venue_webhook_stores_human_readable_location_text(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+        $payload = $this->telegramPayload(
+            messageId: 110,
+            text: null,
+        );
+        unset($payload['message']['text']);
+        $payload['message']['venue'] = [
+            'title' => 'Sorveteria Veneza',
+            'address' => 'Rua Barra Velha, 239',
+            'location' => [
+                'latitude' => -26.45135,
+                'longitude' => -48.620254,
+            ],
+        ];
+
+        $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $payload)->assertOk();
+
+        $inboundMessage = $this->inboundMessages()->firstOrFail();
+
+        $this->assertSame(Message::KIND_INBOUND_USER, $inboundMessage->message_kind);
+        $this->assertSame(
+            "Локация: Sorveteria Veneza\nRua Barra Velha, 239\n-26.45135, -48.620254",
+            $inboundMessage->text,
+        );
+        $this->assertSame(0, MessageAttachment::query()->where('message_id', $inboundMessage->id)->count());
+    }
+
+    public function test_telegram_video_note_webhook_downloads_previewable_round_video_attachment(): void
+    {
+        Queue::fake();
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        Http::fake([
+            'https://api.telegram.org/bottelegram-token/getFile*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_path' => 'video_notes/round.mp4',
+                    'file_size' => strlen('telegram-video-note-bytes'),
+                ],
+            ]),
+            'https://api.telegram.org/file/bottelegram-token/video_notes/round.mp4' => Http::response(
+                'telegram-video-note-bytes',
+                200,
+                ['Content-Type' => 'application/octet-stream'],
+            ),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+        $payload = $this->telegramPayload(
+            messageId: 105,
+            text: null,
+        );
+        unset($payload['message']['text']);
+        $payload['message']['video_note'] = [
+            'file_id' => 'telegram-video-note-file-id',
+            'file_unique_id' => 'telegram-video-note-unique-id',
+            'duration' => 21,
+            'length' => 384,
+            'file_size' => 456_789,
+        ];
+
+        $this->withHeaders([
+            'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+        ])->postJson("/webhooks/telegram/{$channel->id}", $payload)->assertOk();
+
+        $inboundMessage = $this->inboundMessages()->firstOrFail();
+
+        $this->assertDatabaseHas('message_attachments', [
+            'message_id' => $inboundMessage->id,
+            'channel_id' => $channel->id,
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_BOT,
+            'provider_event_key' => '105',
+            'provider_attachment_key' => 'telegram-video-note-unique-id',
+            'media_kind' => MessageAttachment::MEDIA_KIND_VIDEO_NOTE,
+            'provider_file_id' => 'telegram-video-note-file-id',
+            'provider_file_unique_id' => 'telegram-video-note-unique-id',
+            'mime_type' => 'video/mp4',
+            'extension' => 'mp4',
+            'file_size_bytes' => strlen('telegram-video-note-bytes'),
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            'send_status' => MessageAttachment::SEND_STATUS_NOT_APPLICABLE,
+            'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+        ]);
+
+        $attachment = MessageAttachment::query()->where('message_id', $inboundMessage->id)->firstOrFail();
+
+        $this->assertSame(21, data_get($attachment->provider_metadata, 'duration'));
+        $this->assertTrue(data_get($attachment->provider_metadata, 'is_video_note'));
+        $this->assertTrue($attachment->isInlinePreviewable());
+        $this->assertSame(MessageAttachment::PREVIEW_KIND_VIDEO, $attachment->previewKind());
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
     }
 
     public function test_telegram_start_payload_webhook_saves_message_parameter_and_queues_auto_reply(): void
@@ -312,6 +1160,592 @@ class BotWebhookAutoReplyTest extends TestCase
         ]);
         $this->assertSame('max-10', $inboundMessage->provider_event_key);
         $this->assertNull($inboundMessage->auto_reply_sent_at);
+    }
+
+    public function test_max_image_webhook_downloads_previewable_message_attachment_without_secret_fields(): void
+    {
+        Queue::fake();
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        config()->set('bots.max.trusted_media_hosts', ['max.example']);
+        Http::fake([
+            'https://max.example/*' => Http::response(
+                'max-jpeg-bytes',
+                200,
+                ['Content-Type' => 'image/jpeg'],
+            ),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+        $payload = $this->maxPayload(
+            messageId: 'max-photo-101',
+            text: null,
+        );
+        $payload['message']['body']['attachments'] = [
+            [
+                'type' => 'image',
+                'payload' => [
+                    'photo_id' => '25852958504',
+                    'url' => 'https://max.example/private/photo.jpg?access_token=secret-token',
+                    'token' => 'secret-token',
+                    'width' => 538,
+                    'height' => 1280,
+                ],
+            ],
+        ];
+
+        $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $payload)->assertOk();
+
+        $inboundMessage = $this->inboundMessages()->firstOrFail();
+        $attachment = MessageAttachment::query()->where('message_id', $inboundMessage->id)->firstOrFail();
+
+        $this->assertSame(MessageAttachment::PROVIDER_MAX_BOT, $attachment->provider);
+        $this->assertSame('max-photo-101', $attachment->provider_event_key);
+        $this->assertSame('25852958504', $attachment->provider_attachment_key);
+        $this->assertSame('25852958504', $attachment->provider_file_reference);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $attachment->download_status);
+        $this->assertSame(MessageAttachment::LOCAL_DISK_PRIVATE, $attachment->local_disk);
+        $this->assertTrue($attachment->isInlinePreviewable());
+        $this->assertStringNotContainsString('secret-token', json_encode($attachment->provider_metadata, JSON_THROW_ON_ERROR));
+        $this->assertStringNotContainsString('access_token', json_encode($attachment->raw_payload_excerpt, JSON_THROW_ON_ERROR));
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
+    }
+
+    public function test_max_sticker_webhook_downloads_real_asset_from_message_lookup_when_webhook_has_stub_url(): void
+    {
+        Queue::fake();
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        config()->set('bots.max.trusted_media_hosts', ['mycdn.me', 'oneme.ru']);
+        Http::fake([
+            'https://platform-api.max.ru/messages/max-sticker-101' => Http::response([
+                'body' => [
+                    'mid' => 'max-sticker-101',
+                    'attachments' => [
+                        [
+                            'type' => 'sticker',
+                            'width' => 170,
+                            'height' => 170,
+                            'payload' => [
+                                'url' => 'https://i.oneme.ru/getSmile?smileId=429b5&smileType=4',
+                                'code' => '429b5',
+                            ],
+                        ],
+                    ],
+                ],
+            ], 200),
+            'https://i.oneme.ru/getSmile?smileId=429b5&smileType=4' => Http::response(
+                "\x89PNG\r\n\x1A\n".'max-sticker-bytes',
+                200,
+                ['Content-Type' => 'image/png'],
+            ),
+            'https://st.mycdn.me/static/messages/res/images/stub/sticker_31856a27@2x.png' => Http::response(
+                "\x89PNG\r\n\x1A\n".'max-sticker-stub-bytes',
+                200,
+                ['Content-Type' => 'image/png'],
+            ),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+        $payload = $this->maxPayload(
+            messageId: 'max-sticker-101',
+            text: null,
+        );
+        $payload['message']['body']['attachments'] = [
+            [
+                'type' => 'sticker',
+                'width' => 144,
+                'height' => 144,
+                'payload' => [
+                    'url' => 'https://st.mycdn.me/static/messages/res/images/stub/sticker_31856a27@2x.png',
+                    'code' => '429b5',
+                ],
+            ],
+        ];
+
+        $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $payload)->assertOk();
+
+        $inboundMessage = $this->inboundMessages()->firstOrFail();
+        $attachment = MessageAttachment::query()->where('message_id', $inboundMessage->id)->firstOrFail();
+
+        $this->assertSame(MessageAttachment::PROVIDER_MAX_BOT, $attachment->provider);
+        $this->assertSame('max-sticker-101', $attachment->provider_event_key);
+        $this->assertSame('429b5', $attachment->provider_attachment_key);
+        $this->assertSame('429b5', $attachment->provider_file_reference);
+        $this->assertSame(MessageAttachment::MEDIA_KIND_STICKER, $attachment->media_kind);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $attachment->download_status);
+        $this->assertSame(MessageAttachment::LOCAL_DISK_PRIVATE, $attachment->local_disk);
+        $this->assertSame('image/png', $attachment->mime_type);
+        $this->assertSame('png', $attachment->extension);
+        $this->assertSame(170, data_get($attachment->provider_metadata, 'width'));
+        $this->assertSame(170, data_get($attachment->provider_metadata, 'height'));
+        $this->assertSame(MessageAttachment::PREVIEW_KIND_IMAGE, $attachment->previewKind());
+        $this->assertStringNotContainsString('st.mycdn.me', json_encode($attachment->provider_metadata, JSON_THROW_ON_ERROR));
+        $this->assertStringNotContainsString('st.mycdn.me', json_encode($attachment->raw_payload_excerpt, JSON_THROW_ON_ERROR));
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://platform-api.max.ru/messages/max-sticker-101');
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://i.oneme.ru/getSmile?smileId=429b5&smileType=4');
+        Http::assertNotSent(fn ($request): bool => $request->url() === 'https://st.mycdn.me/static/messages/res/images/stub/sticker_31856a27@2x.png');
+    }
+
+    public function test_max_audio_webhook_downloads_previewable_message_attachment_without_secret_fields(): void
+    {
+        Queue::fake();
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        config()->set('bots.max.trusted_media_hosts', ['max.example']);
+        Http::fake([
+            'https://max.example/*' => Http::response(
+                'max-audio-bytes',
+                200,
+                ['Content-Type' => 'audio/mpeg'],
+            ),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+        $payload = $this->maxPayload(
+            messageId: 'max-audio-102',
+            text: null,
+        );
+        $payload['message']['body']['attachments'] = [
+            [
+                'type' => 'audio',
+                'payload' => [
+                    'token' => 'max-audio-token',
+                    'url' => 'https://max.example/private/audio.mp3?access_token=secret-token',
+                    'duration' => 7,
+                ],
+            ],
+        ];
+
+        $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $payload)->assertOk();
+
+        $inboundMessage = $this->inboundMessages()->firstOrFail();
+        $attachment = MessageAttachment::query()->where('message_id', $inboundMessage->id)->firstOrFail();
+
+        $this->assertSame(MessageAttachment::PROVIDER_MAX_BOT, $attachment->provider);
+        $this->assertSame('max-audio-102', $attachment->provider_event_key);
+        $this->assertSame('token:'.sha1('max-audio-token'), $attachment->provider_attachment_key);
+        $this->assertSame('token:'.sha1('max-audio-token'), $attachment->provider_file_reference);
+        $this->assertSame(MessageAttachment::MEDIA_KIND_AUDIO, $attachment->media_kind);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $attachment->download_status);
+        $this->assertSame('audio/mpeg', $attachment->mime_type);
+        $this->assertSame('mp3', $attachment->extension);
+        $this->assertSame(MessageAttachment::LOCAL_DISK_PRIVATE, $attachment->local_disk);
+        $this->assertTrue($attachment->isInlinePreviewable());
+        $this->assertSame(MessageAttachment::PREVIEW_KIND_AUDIO, $attachment->previewKind());
+        $this->assertStringNotContainsString('max-audio-token', json_encode($attachment->provider_metadata, JSON_THROW_ON_ERROR));
+        $this->assertStringNotContainsString('secret-token', json_encode($attachment->provider_metadata, JSON_THROW_ON_ERROR));
+        $this->assertStringNotContainsString('access_token', json_encode($attachment->raw_payload_excerpt, JSON_THROW_ON_ERROR));
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
+    }
+
+    public function test_max_audio_webhook_downloads_real_okcdn_media_url_by_default(): void
+    {
+        Queue::fake();
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        Http::fake([
+            'https://maxvd126.okcdn.ru/*' => Http::response(
+                'max-okcdn-audio-bytes',
+                200,
+                ['Content-Type' => 'audio/ogg'],
+            ),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+        $payload = $this->maxPayload(
+            messageId: 'max-okcdn-audio-105',
+            text: null,
+        );
+        $payload['message']['body']['attachments'] = [
+            [
+                'type' => 'audio',
+                'payload' => [
+                    'id' => 15446112952411,
+                    'token' => 'max-okcdn-audio-token',
+                    'url' => 'https://maxvd126.okcdn.ru/?expires=1782842145216&srcIp=0.0.0.0&type=2&sig=signed&ct=2',
+                ],
+            ],
+        ];
+
+        $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $payload)->assertOk();
+
+        $inboundMessage = $this->inboundMessages()->firstOrFail();
+        $attachment = MessageAttachment::query()->where('message_id', $inboundMessage->id)->firstOrFail();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $attachment->download_status);
+        $this->assertSame('audio/ogg', $attachment->mime_type);
+        $this->assertSame('ogg', $attachment->extension);
+        $this->assertSame(MessageAttachment::LOCAL_DISK_PRIVATE, $attachment->local_disk);
+        $this->assertTrue($attachment->isInlinePreviewable());
+        $this->assertSame(MessageAttachment::PREVIEW_KIND_AUDIO, $attachment->previewKind());
+        $this->assertStringNotContainsString('max-okcdn-audio-token', json_encode($attachment->provider_metadata, JSON_THROW_ON_ERROR));
+        $this->assertStringNotContainsString('expires', json_encode($attachment->raw_payload_excerpt, JSON_THROW_ON_ERROR));
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
+    }
+
+    public function test_max_video_webhook_downloads_previewable_message_attachment_without_secret_fields(): void
+    {
+        Queue::fake();
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        config()->set('bots.max.trusted_media_hosts', ['max.example']);
+        Http::fake([
+            'https://platform-api.max.ru/videos/max-video-token' => Http::response([
+                'token' => 'max-video-token',
+                'urls' => [
+                    'mp4_720' => 'https://max.example/private/video-720.mp4?access_token=derived-secret',
+                ],
+                'width' => 1280,
+                'height' => 720,
+                'duration' => 14,
+            ]),
+            'https://max.example/private/video-720.mp4*' => Http::response(
+                'max-video-bytes',
+                200,
+                ['Content-Type' => 'video/mp4'],
+            ),
+            'https://max.example/private/video.mp4*' => Http::response('', 500),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+        $payload = $this->maxPayload(
+            messageId: 'max-video-103',
+            text: null,
+        );
+        $payload['message']['body']['attachments'] = [
+            [
+                'type' => 'video',
+                'payload' => [
+                    'token' => 'max-video-token',
+                    'url' => 'https://max.example/private/video.mp4?access_token=secret-token',
+                    'duration' => 14,
+                    'width' => 1280,
+                    'height' => 720,
+                ],
+            ],
+        ];
+
+        $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $payload)->assertOk();
+
+        $inboundMessage = $this->inboundMessages()->firstOrFail();
+        $attachment = MessageAttachment::query()->where('message_id', $inboundMessage->id)->firstOrFail();
+
+        $this->assertSame(MessageAttachment::PROVIDER_MAX_BOT, $attachment->provider);
+        $this->assertSame('max-video-103', $attachment->provider_event_key);
+        $this->assertSame('token:'.sha1('max-video-token'), $attachment->provider_attachment_key);
+        $this->assertSame('token:'.sha1('max-video-token'), $attachment->provider_file_reference);
+        $this->assertSame(MessageAttachment::MEDIA_KIND_VIDEO, $attachment->media_kind);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $attachment->download_status);
+        $this->assertSame('video/mp4', $attachment->mime_type);
+        $this->assertSame('mp4', $attachment->extension);
+        $this->assertSame(MessageAttachment::LOCAL_DISK_PRIVATE, $attachment->local_disk);
+        $this->assertTrue($attachment->isInlinePreviewable());
+        $this->assertSame(MessageAttachment::PREVIEW_KIND_VIDEO, $attachment->previewKind());
+        $this->assertStringNotContainsString('max-video-token', json_encode($attachment->provider_metadata, JSON_THROW_ON_ERROR));
+        $this->assertStringNotContainsString('secret-token', json_encode($attachment->provider_metadata, JSON_THROW_ON_ERROR));
+        $this->assertStringNotContainsString('access_token', json_encode($attachment->raw_payload_excerpt, JSON_THROW_ON_ERROR));
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://platform-api.max.ru/videos/max-video-token');
+        Http::assertSent(fn ($request): bool => str_starts_with($request->url(), 'https://max.example/private/video-720.mp4?'));
+    }
+
+    public function test_max_forwarded_video_webhook_downloads_link_message_attachment_as_video_note(): void
+    {
+        Queue::fake();
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        config()->set('bots.max.trusted_media_hosts', ['max.example']);
+        Http::fake([
+            'https://platform-api.max.ru/videos/forwarded-video-token' => Http::response([
+                'token' => 'forwarded-video-token',
+                'urls' => [
+                    'mp4_480' => 'https://max.example/private/forwarded-video-480.mp4?access_token=derived-secret',
+                ],
+                'width' => 480,
+                'height' => 480,
+                'duration' => 23000,
+            ]),
+            'https://max.example/private/forwarded-video-480.mp4*' => Http::response(
+                'max-forwarded-video-bytes',
+                200,
+                ['Content-Type' => 'video/mp4'],
+            ),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+        $payload = $this->maxPayload(
+            messageId: 'max-forwarded-video-103',
+            text: null,
+        );
+        unset($payload['message']['body']['attachments']);
+        $payload['message']['link'] = [
+            'type' => 'forward',
+            'sender' => [
+                'name' => 'Tanya',
+                'is_bot' => false,
+            ],
+            'message' => [
+                'mid' => 'forwarded-source-1',
+                'text' => null,
+                'attachments' => [
+                    [
+                        'type' => 'video',
+                        'payload' => [
+                            'token' => 'forwarded-video-token',
+                            'url' => 'https://max.example/private/payload-video.mp4?access_token=secret-token',
+                        ],
+                        'duration' => 23,
+                        'thumbnail' => [
+                            'url' => 'https://max.example/private/thumb.jpg?access_token=secret-token',
+                        ],
+                    ],
+                ],
+            ],
+        ];
+
+        $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $payload)->assertOk();
+
+        $inboundMessage = $this->inboundMessages()->firstOrFail();
+        $attachment = MessageAttachment::query()->where('message_id', $inboundMessage->id)->firstOrFail();
+
+        $this->assertSame(MessageAttachment::PROVIDER_MAX_BOT, $attachment->provider);
+        $this->assertSame('max-forwarded-video-103', $attachment->provider_event_key);
+        $this->assertSame('token:'.sha1('forwarded-video-token'), $attachment->provider_attachment_key);
+        $this->assertSame('token:'.sha1('forwarded-video-token'), $attachment->provider_file_reference);
+        $this->assertSame(MessageAttachment::MEDIA_KIND_VIDEO_NOTE, $attachment->media_kind);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $attachment->download_status);
+        $this->assertSame('video/mp4', $attachment->mime_type);
+        $this->assertSame('mp4', $attachment->extension);
+        $this->assertSame(MessageAttachment::LOCAL_DISK_PRIVATE, $attachment->local_disk);
+        $this->assertTrue($attachment->isInlinePreviewable());
+        $this->assertSame(MessageAttachment::PREVIEW_KIND_VIDEO, $attachment->previewKind());
+        $this->assertSame(480, data_get($attachment->provider_metadata, 'width'));
+        $this->assertSame(480, data_get($attachment->provider_metadata, 'height'));
+        $this->assertSame(23, data_get($attachment->provider_metadata, 'duration'));
+        $this->assertTrue(data_get($attachment->provider_metadata, 'is_video_note'));
+        $this->assertStringNotContainsString('forwarded-video-token', json_encode($attachment->provider_metadata, JSON_THROW_ON_ERROR));
+        $this->assertStringNotContainsString('secret-token', json_encode($attachment->provider_metadata, JSON_THROW_ON_ERROR));
+        $this->assertStringNotContainsString('access_token', json_encode($attachment->raw_payload_excerpt, JSON_THROW_ON_ERROR));
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://platform-api.max.ru/videos/forwarded-video-token');
+        Http::assertSent(fn ($request): bool => str_starts_with($request->url(), 'https://max.example/private/forwarded-video-480.mp4?'));
+    }
+
+    public function test_max_video_webhook_downloads_real_okcdn_media_url_by_default(): void
+    {
+        Queue::fake();
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        Http::fake([
+            'https://platform-api.max.ru/videos/max-okcdn-video-token' => Http::response([
+                'token' => 'max-okcdn-video-token',
+                'urls' => [
+                    'mp4_720' => 'https://maxvd369.okcdn.ru/?expires=1782842206501&srcIp=0.0.0.0&type=2&sig=signed&ct=0',
+                ],
+                'duration' => 21,
+            ]),
+            'https://maxvd369.okcdn.ru/*' => Http::response(
+                'max-okcdn-video-bytes',
+                200,
+                ['Content-Type' => 'video/mp4'],
+            ),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+        $payload = $this->maxPayload(
+            messageId: 'max-okcdn-video-106',
+            text: null,
+        );
+        $payload['message']['body']['attachments'] = [
+            [
+                'type' => 'video',
+                'payload' => [
+                    'id' => 14963193636361,
+                    'token' => 'max-okcdn-video-token',
+                    'url' => 'https://maxvd369.okcdn.ru/?expires=1782842206501&srcIp=0.0.0.0&type=2&sig=signed&ct=0',
+                ],
+                'duration' => 21,
+            ],
+        ];
+
+        $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $payload)->assertOk();
+
+        $inboundMessage = $this->inboundMessages()->firstOrFail();
+        $attachment = MessageAttachment::query()->where('message_id', $inboundMessage->id)->firstOrFail();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $attachment->download_status);
+        $this->assertSame('video/mp4', $attachment->mime_type);
+        $this->assertSame('mp4', $attachment->extension);
+        $this->assertSame(MessageAttachment::LOCAL_DISK_PRIVATE, $attachment->local_disk);
+        $this->assertTrue($attachment->isInlinePreviewable());
+        $this->assertSame(MessageAttachment::PREVIEW_KIND_VIDEO, $attachment->previewKind());
+        $this->assertStringNotContainsString('max-okcdn-video-token', json_encode($attachment->provider_metadata, JSON_THROW_ON_ERROR));
+        $this->assertStringNotContainsString('expires', json_encode($attachment->raw_payload_excerpt, JSON_THROW_ON_ERROR));
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://platform-api.max.ru/videos/max-okcdn-video-token');
+        Http::assertSent(fn ($request): bool => str_starts_with($request->url(), 'https://maxvd369.okcdn.ru/?'));
+    }
+
+    public function test_max_file_webhook_downloads_previewable_pdf_attachment_without_secret_fields(): void
+    {
+        Queue::fake();
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        config()->set('bots.max.trusted_media_hosts', ['max.example']);
+        Http::fake([
+            'https://max.example/*' => Http::response(
+                "%PDF-1.4\nmax-pdf-bytes",
+                200,
+                ['Content-Type' => 'application/pdf'],
+            ),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+        $payload = $this->maxPayload(
+            messageId: 'max-file-104',
+            text: null,
+        );
+        $payload['message']['body']['attachments'] = [
+            [
+                'type' => 'file',
+                'filename' => 'contract.pdf',
+                'size' => 12000,
+                'payload' => [
+                    'token' => 'max-file-token',
+                    'url' => 'https://max.example/private/contract.pdf?access_token=secret-token',
+                ],
+            ],
+        ];
+
+        $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $payload)->assertOk();
+
+        $inboundMessage = $this->inboundMessages()->firstOrFail();
+        $attachment = MessageAttachment::query()->where('message_id', $inboundMessage->id)->firstOrFail();
+
+        $this->assertSame(MessageAttachment::PROVIDER_MAX_BOT, $attachment->provider);
+        $this->assertSame('max-file-104', $attachment->provider_event_key);
+        $this->assertSame('token:'.sha1('max-file-token'), $attachment->provider_attachment_key);
+        $this->assertSame('token:'.sha1('max-file-token'), $attachment->provider_file_reference);
+        $this->assertSame(MessageAttachment::MEDIA_KIND_DOCUMENT, $attachment->media_kind);
+        $this->assertSame('contract.pdf', $attachment->original_filename);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $attachment->download_status);
+        $this->assertSame('application/pdf', $attachment->mime_type);
+        $this->assertSame('pdf', $attachment->extension);
+        $this->assertSame(MessageAttachment::LOCAL_DISK_PRIVATE, $attachment->local_disk);
+        $this->assertFalse($attachment->isInlinePreviewable());
+        $this->assertNull($attachment->previewKind());
+        $this->assertStringNotContainsString('max-file-token', json_encode($attachment->provider_metadata, JSON_THROW_ON_ERROR));
+        $this->assertStringNotContainsString('secret-token', json_encode($attachment->provider_metadata, JSON_THROW_ON_ERROR));
+        $this->assertStringNotContainsString('access_token', json_encode($attachment->raw_payload_excerpt, JSON_THROW_ON_ERROR));
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
+    }
+
+    public function test_max_media_download_rejects_urls_with_connection_parts(): void
+    {
+        Queue::fake();
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        config()->set('bots.max.trusted_media_hosts', ['max.example']);
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+
+        foreach ([
+            'port' => 'https://max.example:444/private/audio.mp3',
+            'user' => 'https://user@max.example/private/audio.mp3',
+            'password' => 'https://user:pass@max.example/private/audio.mp3',
+        ] as $case => $url) {
+            $payload = $this->maxPayload(
+                messageId: 'max-bad-url-'.$case,
+                text: null,
+            );
+            $payload['message']['body']['attachments'] = [
+                [
+                    'type' => 'audio',
+                    'payload' => [
+                        'token' => 'max-bad-url-token-'.$case,
+                        'url' => $url,
+                    ],
+                ],
+            ];
+
+            $this->withHeaders([
+                'X-Max-Bot-Api-Secret' => 'max-secret',
+            ])->postJson("/webhooks/max/{$channel->id}", $payload)->assertOk();
+
+            $attachment = MessageAttachment::query()
+                ->where('provider_event_key', 'max-bad-url-'.$case)
+                ->firstOrFail();
+
+            $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOAD_FAILED, $attachment->download_status);
+            $this->assertSame('bot_media_download_invalid_payload', $attachment->safe_error_code);
+            $this->assertNull($attachment->local_path);
+        }
+
+        Http::assertNothingSent();
     }
 
     public function test_max_bot_started_webhook_queues_only_auto_reply_runtime_job_when_parameter_is_present(): void
@@ -1121,6 +2555,7 @@ class BotWebhookAutoReplyTest extends TestCase
 
     public function test_telegram_contact_share_with_profile_name_still_asks_for_first_name(): void
     {
+        Queue::fake();
         config()->set('bots.phone_capture_confirmation_text', 'Спасибо, номер получили.');
         config()->set('bots.data_collection.first_question', 'Как вас зовут?');
 
@@ -1168,37 +2603,19 @@ class BotWebhookAutoReplyTest extends TestCase
             'ok' => true,
         ]);
 
-        Http::assertSentCount(3);
-        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
-            && $request['chat_id'] === '300'
-            && $request['text'] === 'Спасибо, номер получили.'
-            && data_get($request->data(), 'reply_markup.remove_keyboard') === true);
-        Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/sendMessage'
-            && $request['chat_id'] === '300'
-            && $request['text'] === 'Как вас зовут?');
-
         $storedMessage = $this->inboundMessages()->firstOrFail();
         $contact = $storedMessage->contact()->firstOrFail()->fresh();
         $identity = $storedMessage->contactIdentity()->firstOrFail()->fresh();
 
+        Http::assertNothingSent();
+        Queue::assertPushed(ProcessPhoneCaptureFollowUpJob::class, function (ProcessPhoneCaptureFollowUpJob $job) use ($storedMessage): bool {
+            return $job->inboundMessageId === $storedMessage->id
+                && $job->phoneCaptureStatus === StoredInboundMessageResult::PHONE_CAPTURE_STATUS_CAPTURED_NEW;
+        });
+
         $this->assertSame('German Abrikosov', $contact->first_name);
         $this->assertSame(Contact::FIRST_NAME_SOURCE_AUTO, $contact->first_name_source);
-        $this->assertSame(Contact::DATA_COLLECTION_STATUS_ACTIVE, $contact->data_collection_status);
-        $this->assertSame(Contact::DATA_COLLECTION_FIELD_FIRST_NAME, $contact->data_collection_current_field);
-        $this->assertSame(Contact::DATA_COLLECTION_FIELD_FIRST_NAME, $contact->data_collection_last_prompted_field);
         $this->assertSame('German Abrikosov', $identity->display_name);
-        $this->assertDatabaseHas('messages', [
-            'contact_id' => $contact->id,
-            'message_kind' => Message::KIND_OUTBOUND_PHONE_CAPTURE_CONFIRMATION,
-            'reply_to_message_id' => $storedMessage->id,
-            'text' => 'Спасибо, номер получили.',
-        ]);
-        $this->assertDatabaseHas('messages', [
-            'contact_id' => $contact->id,
-            'message_kind' => Message::KIND_OUTBOUND_DATA_COLLECTION_QUESTION,
-            'reply_to_message_id' => $storedMessage->id,
-            'text' => 'Как вас зовут?',
-        ]);
     }
 
     public function test_telegram_contact_share_skips_follow_up_when_scenario_dispatcher_consumes_message(): void

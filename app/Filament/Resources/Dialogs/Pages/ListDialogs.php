@@ -11,6 +11,20 @@ class ListDialogs extends ListRecords
 {
     protected static string $resource = DialogResource::class;
 
+    protected function loadTableColumnsFromSession(): array
+    {
+        return array_map(
+            static function (mixed $column): mixed {
+                if (is_array($column) && ($column['name'] ?? null) === 'id') {
+                    $column['isToggled'] = true;
+                }
+
+                return $column;
+            },
+            parent::loadTableColumnsFromSession(),
+        );
+    }
+
     public function mount(): void
     {
         parent::mount();

@@ -46,6 +46,7 @@ class StoreInboundMessageAction
         protected ResolveRootContactAction $resolveRootContactAction,
         protected ResolveNextDataCollectionFieldAction $resolveNextDataCollectionFieldAction,
         protected ChannelActivityLogger $channelActivityLogger,
+        protected SyncBotInboundMessageAttachmentsAction $syncBotInboundMessageAttachmentsAction,
         protected IsDialogReadyForBitrix24LiveBridgeAction $isDialogReadyForBitrix24LiveBridgeAction,
         protected QueueBitrix24LiveMessageExportAction $queueBitrix24LiveMessageExportAction,
         protected QueueContactIdentityAvatarSyncAction $queueContactIdentityAvatarSyncAction,
@@ -81,6 +82,7 @@ class StoreInboundMessageAction
                     }
 
                     $this->syncStoredInboundMessageMetadata($channel, $contact, $existingMessage, $message);
+                    $this->syncInboundMessageAttachments($channel, $existingMessage, $message);
                     $this->syncOpenCrossChannelIdentityReviewContextIfNeeded(
                         channel: $channel,
                         contact: $contact,
@@ -132,9 +134,11 @@ class StoreInboundMessageAction
                     'direction' => Message::DIRECTION_INBOUND,
                     'message_kind' => $this->resolveInboundMessageKind($message),
                     'provider_event_key' => $message->providerEventKey,
+                    'provider_group_key' => $message->providerGroupKey,
                     'external_chat_id' => $message->externalChatId,
                     'external_message_id' => $message->externalMessageId,
                     'text' => $message->text,
+                    'rich_text' => $message->richText,
                     'message_parameter' => $message->messageParameter,
                     'raw_payload' => $message->rawPayload,
                     'received_at' => $receivedAt,
@@ -147,6 +151,7 @@ class StoreInboundMessageAction
                 }
 
                 $this->syncStoredInboundMessageMetadata($channel, $contact, $storedMessage, $message);
+                $this->syncInboundMessageAttachments($channel, $storedMessage, $message);
                 $this->syncOpenCrossChannelIdentityReviewContextIfNeeded(
                     channel: $channel,
                     contact: $contact,
@@ -178,6 +183,7 @@ class StoreInboundMessageAction
                 }
 
                 $this->syncStoredInboundMessageMetadata($channel, $contact, $existingMessage, $message);
+                $this->syncInboundMessageAttachments($channel, $existingMessage, $message);
                 $this->syncOpenCrossChannelIdentityReviewContextIfNeeded(
                     channel: $channel,
                     contact: $contact,
@@ -246,6 +252,7 @@ class StoreInboundMessageAction
                 'external_chat_id' => $message->externalChatId,
                 'external_message_id' => $message->externalMessageId,
                 'text' => $message->text,
+                'rich_text' => $message->richText,
                 'message_parameter' => $message->messageParameter,
                 'raw_payload' => $message->rawPayload,
                 'received_at' => $receivedAt,
@@ -882,6 +889,18 @@ class StoreInboundMessageAction
             return;
         }
 
+        if ($message->providerGroupKey !== null && $storedMessage->provider_group_key !== $message->providerGroupKey) {
+            $storedMessage->forceFill([
+                'provider_group_key' => $message->providerGroupKey,
+            ])->save();
+        }
+
+        if ($message->richText !== null && $storedMessage->rich_text !== $message->richText) {
+            $storedMessage->forceFill([
+                'rich_text' => $message->richText,
+            ])->save();
+        }
+
         $this->syncMessageDialogMetadataAction->handle(
             $storedMessage,
             $contact,
@@ -891,6 +910,18 @@ class StoreInboundMessageAction
             $this->resolveInboundSentByType($message),
             sentBySystemCode: $this->resolveInboundSentBySystemCode($message),
         );
+    }
+
+    protected function syncInboundMessageAttachments(
+        Channel $channel,
+        Message $storedMessage,
+        IncomingBotMessage $message,
+    ): void {
+        if ($message->inboundKind !== IncomingBotMessage::KIND_INBOUND_USER) {
+            return;
+        }
+
+        $this->syncBotInboundMessageAttachmentsAction->handle($channel, $storedMessage, $message);
     }
 
     protected function syncOpenCrossChannelIdentityReviewContextIfNeeded(

@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Data\Bots\IncomingBotMessage;
 use App\Models\Channel;
+use App\Models\MessageAttachment;
 use App\Services\Bots\BotIncomingMessageNormalizer;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -142,6 +143,406 @@ class BotIncomingMessageNormalizerTest extends TestCase
         $this->assertInstanceOf(IncomingBotMessage::class, $message);
         $this->assertSame('hello', $message->text);
         $this->assertNull($message->messageParameter);
+        $this->assertSame([], $message->media);
+    }
+
+    public function test_telegram_text_entities_are_normalized_to_ab_rich_text(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $payload = [
+            'update_id' => 81,
+            'message' => [
+                'message_id' => 92,
+                'date' => 1_711_539_200,
+                'text' => '😀 bold link',
+                'entities' => [
+                    [
+                        'type' => 'bold',
+                        'offset' => 3,
+                        'length' => 4,
+                    ],
+                    [
+                        'type' => 'text_link',
+                        'offset' => 8,
+                        'length' => 4,
+                        'url' => 'https://example.test/path',
+                    ],
+                ],
+                'from' => [
+                    'id' => 200,
+                    'username' => 'telegram_user',
+                    'is_bot' => false,
+                ],
+                'chat' => [
+                    'id' => 300,
+                    'type' => 'private',
+                ],
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertSame('😀 bold link', $message->text);
+        $this->assertSame([
+            'version' => 1,
+            'plain_text' => '😀 bold link',
+            'runs' => [
+                [
+                    'text' => '😀 ',
+                    'marks' => [],
+                ],
+                [
+                    'text' => 'bold',
+                    'marks' => [
+                        ['type' => 'bold'],
+                    ],
+                ],
+                [
+                    'text' => ' ',
+                    'marks' => [],
+                ],
+                [
+                    'text' => 'link',
+                    'marks' => [
+                        ['type' => 'link', 'href' => 'https://example.test/path'],
+                    ],
+                ],
+            ],
+        ], $message->richText);
+    }
+
+    public function test_telegram_poll_payload_is_normalized_as_readable_text(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $payload = [
+            'update_id' => 81,
+            'message' => [
+                'message_id' => 92,
+                'date' => 1_711_539_200,
+                'from' => [
+                    'id' => 200,
+                    'username' => 'telegram_user',
+                    'is_bot' => false,
+                ],
+                'chat' => [
+                    'id' => 300,
+                    'type' => 'private',
+                ],
+                'poll' => [
+                    'id' => 'telegram-poll-1',
+                    'question' => 'Что делаем дальше?',
+                    'options' => [
+                        ['text' => 'Проверяем локально'],
+                        ['text' => 'Откладываем'],
+                    ],
+                ],
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertSame("Опрос: Что делаем дальше?\n• Проверяем локально\n• Откладываем", $message->text);
+        $this->assertSame([], $message->media);
+    }
+
+    public function test_telegram_dice_payload_is_normalized_as_readable_text(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $payload = [
+            'update_id' => 82,
+            'message' => [
+                'message_id' => 93,
+                'date' => 1_711_539_200,
+                'from' => [
+                    'id' => 200,
+                    'username' => 'telegram_user',
+                    'is_bot' => false,
+                ],
+                'chat' => [
+                    'id' => 300,
+                    'type' => 'private',
+                ],
+                'dice' => [
+                    'emoji' => '🎲',
+                    'value' => 5,
+                ],
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertSame('Бросок 🎲: 5', $message->text);
+        $this->assertSame([], $message->media);
+    }
+
+    public function test_telegram_photo_payload_is_normalized_as_single_largest_image_media_item(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $payload = [
+            'update_id' => 81,
+            'message' => [
+                'message_id' => 92,
+                'date' => 1_711_539_200,
+                'caption' => 'Фото объекта',
+                'media_group_id' => 'telegram-media-group-81',
+                'from' => [
+                    'id' => 200,
+                    'username' => 'telegram_user',
+                    'is_bot' => false,
+                ],
+                'chat' => [
+                    'id' => 300,
+                    'type' => 'private',
+                ],
+                'photo' => [
+                    [
+                        'file_id' => 'telegram-small-file-id',
+                        'file_unique_id' => 'telegram-small-unique-id',
+                        'file_size' => 600,
+                        'width' => 80,
+                        'height' => 60,
+                    ],
+                    [
+                        'file_id' => 'telegram-large-file-id',
+                        'file_unique_id' => 'telegram-large-unique-id',
+                        'file_size' => 4096,
+                        'width' => 1280,
+                        'height' => 720,
+                    ],
+                ],
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertSame('Фото объекта', $message->text);
+        $this->assertSame('telegram-media-group-81', $message->providerGroupKey);
+        $this->assertCount(1, $message->media);
+        $this->assertSame('image', $message->media[0]['media_kind']);
+        $this->assertSame('photo', $message->media[0]['type']);
+        $this->assertSame('telegram-large-unique-id', $message->media[0]['provider_attachment_key']);
+        $this->assertSame('telegram-large-file-id', $message->media[0]['provider_file_id']);
+        $this->assertSame('telegram-large-unique-id', $message->media[0]['provider_file_unique_id']);
+        $this->assertSame(4096, $message->media[0]['file_size_bytes']);
+        $this->assertSame(1280, $message->media[0]['width']);
+        $this->assertSame(720, $message->media[0]['height']);
+        $this->assertSame('telegram-media-group-81', $message->media[0]['media_group_id']);
+    }
+
+    public function test_telegram_voice_payload_is_normalized_as_voice_media_item(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $payload = [
+            'update_id' => 82,
+            'message' => [
+                'message_id' => 93,
+                'date' => 1_711_539_200,
+                'from' => [
+                    'id' => 200,
+                    'username' => 'telegram_user',
+                    'is_bot' => false,
+                ],
+                'chat' => [
+                    'id' => 300,
+                    'type' => 'private',
+                ],
+                'voice' => [
+                    'file_id' => 'telegram-voice-file-id',
+                    'file_unique_id' => 'telegram-voice-unique-id',
+                    'duration' => 7,
+                    'file_size' => 151_664,
+                    'mime_type' => 'audio/ogg',
+                ],
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertNull($message->text);
+        $this->assertSame('93', $message->externalMessageId);
+        $this->assertSame('82', $message->providerEventKey);
+        $this->assertCount(1, $message->media);
+        $this->assertSame('voice', $message->media[0]['media_kind']);
+        $this->assertSame('voice', $message->media[0]['type']);
+        $this->assertSame('telegram-voice-unique-id', $message->media[0]['provider_attachment_key']);
+        $this->assertSame('telegram-voice-file-id', $message->media[0]['provider_file_id']);
+        $this->assertSame('telegram-voice-unique-id', $message->media[0]['provider_file_unique_id']);
+        $this->assertSame('audio/ogg', $message->media[0]['mime_type']);
+        $this->assertSame('ogg', $message->media[0]['extension']);
+        $this->assertSame(7, $message->media[0]['duration']);
+        $this->assertSame(151_664, $message->media[0]['file_size_bytes']);
+    }
+
+    public function test_telegram_document_payload_is_normalized_as_document_media_item(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $payload = [
+            'update_id' => 83,
+            'message' => [
+                'message_id' => 94,
+                'date' => 1_711_539_200,
+                'caption' => 'Коммерческое предложение',
+                'from' => [
+                    'id' => 200,
+                    'username' => 'telegram_user',
+                    'is_bot' => false,
+                ],
+                'chat' => [
+                    'id' => 300,
+                    'type' => 'private',
+                ],
+                'document' => [
+                    'file_id' => 'telegram-document-file-id',
+                    'file_unique_id' => 'telegram-document-unique-id',
+                    'file_name' => 'offer.pdf',
+                    'mime_type' => 'application/pdf',
+                    'file_size' => 45_678,
+                ],
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertSame('Коммерческое предложение', $message->text);
+        $this->assertSame('94', $message->externalMessageId);
+        $this->assertSame('83', $message->providerEventKey);
+        $this->assertCount(1, $message->media);
+        $this->assertSame('document', $message->media[0]['media_kind']);
+        $this->assertSame('document', $message->media[0]['type']);
+        $this->assertSame('telegram-document-unique-id', $message->media[0]['provider_attachment_key']);
+        $this->assertSame('telegram-document-file-id', $message->media[0]['provider_file_id']);
+        $this->assertSame('telegram-document-unique-id', $message->media[0]['provider_file_unique_id']);
+        $this->assertSame('offer.pdf', $message->media[0]['file_name']);
+        $this->assertSame('application/pdf', $message->media[0]['mime_type']);
+        $this->assertSame('pdf', $message->media[0]['extension']);
+        $this->assertSame(45_678, $message->media[0]['file_size_bytes']);
+    }
+
+    public function test_telegram_video_payload_is_normalized_as_video_media_item(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $payload = [
+            'update_id' => 84,
+            'message' => [
+                'message_id' => 95,
+                'date' => 1_711_539_200,
+                'caption' => 'Видео объекта',
+                'media_group_id' => 'telegram-video-group-84',
+                'from' => [
+                    'id' => 200,
+                    'username' => 'telegram_user',
+                    'is_bot' => false,
+                ],
+                'chat' => [
+                    'id' => 300,
+                    'type' => 'private',
+                ],
+                'video' => [
+                    'file_id' => 'telegram-video-file-id',
+                    'file_unique_id' => 'telegram-video-unique-id',
+                    'file_name' => 'room-tour.mp4',
+                    'mime_type' => 'video/mp4',
+                    'duration' => 12,
+                    'width' => 1280,
+                    'height' => 720,
+                    'file_size' => 987_654,
+                ],
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertSame('Видео объекта', $message->text);
+        $this->assertSame('telegram-video-group-84', $message->providerGroupKey);
+        $this->assertCount(1, $message->media);
+        $this->assertSame('video', $message->media[0]['media_kind']);
+        $this->assertSame('video', $message->media[0]['type']);
+        $this->assertSame('telegram-video-unique-id', $message->media[0]['provider_attachment_key']);
+        $this->assertSame('telegram-video-file-id', $message->media[0]['provider_file_id']);
+        $this->assertSame('telegram-video-unique-id', $message->media[0]['provider_file_unique_id']);
+        $this->assertSame('room-tour.mp4', $message->media[0]['file_name']);
+        $this->assertSame('video/mp4', $message->media[0]['mime_type']);
+        $this->assertSame('mp4', $message->media[0]['extension']);
+        $this->assertSame(12, $message->media[0]['duration']);
+        $this->assertSame(1280, $message->media[0]['width']);
+        $this->assertSame(720, $message->media[0]['height']);
+        $this->assertSame(987_654, $message->media[0]['file_size_bytes']);
+        $this->assertSame('telegram-video-group-84', $message->media[0]['media_group_id']);
+    }
+
+    public function test_telegram_video_note_payload_is_normalized_as_video_note_media_item(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $payload = [
+            'update_id' => 85,
+            'message' => [
+                'message_id' => 96,
+                'date' => 1_711_539_200,
+                'from' => [
+                    'id' => 200,
+                    'username' => 'telegram_user',
+                    'is_bot' => false,
+                ],
+                'chat' => [
+                    'id' => 300,
+                    'type' => 'private',
+                ],
+                'video_note' => [
+                    'file_id' => 'telegram-video-note-file-id',
+                    'file_unique_id' => 'telegram-video-note-unique-id',
+                    'duration' => 21,
+                    'length' => 384,
+                    'file_size' => 456_789,
+                ],
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertCount(1, $message->media);
+        $this->assertSame(MessageAttachment::MEDIA_KIND_VIDEO_NOTE, $message->media[0]['media_kind']);
+        $this->assertSame('video_note', $message->media[0]['type']);
+        $this->assertSame('telegram-video-note-unique-id', $message->media[0]['provider_attachment_key']);
+        $this->assertSame('telegram-video-note-file-id', $message->media[0]['provider_file_id']);
+        $this->assertSame('telegram-video-note-unique-id', $message->media[0]['provider_file_unique_id']);
+        $this->assertSame('mp4', $message->media[0]['extension']);
+        $this->assertSame(21, $message->media[0]['duration']);
+        $this->assertSame(384, $message->media[0]['width']);
+        $this->assertSame(384, $message->media[0]['height']);
+        $this->assertSame(456_789, $message->media[0]['file_size_bytes']);
+        $this->assertTrue($message->media[0]['is_video_note']);
     }
 
     public function test_telegram_age_range_callback_query_is_normalized(): void
@@ -582,6 +983,49 @@ class BotIncomingMessageNormalizerTest extends TestCase
         $this->assertStringStartsWith('max-bot-started:', $message->providerEventKey ?? '');
     }
 
+    public function test_max_poll_attachment_payload_is_normalized_as_readable_text(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+
+        $payload = [
+            'update_type' => 'message_created',
+            'user_locale' => 'ru',
+            'message' => [
+                'sender' => [
+                    'user_id' => 500,
+                    'username' => 'max_user',
+                    'is_bot' => false,
+                ],
+                'recipient' => [
+                    'chat_id' => 700,
+                ],
+                'body' => [
+                    'mid' => 'max-poll-77',
+                    'text' => null,
+                    'attachments' => [[
+                        'type' => 'poll',
+                        'payload' => [
+                            'question' => 'Что делаем дальше?',
+                            'options' => [
+                                ['text' => 'Проверяем локально'],
+                                ['text' => 'Откладываем'],
+                            ],
+                        ],
+                    ]],
+                ],
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertSame("Опрос: Что делаем дальше?\n• Проверяем локально\n• Откладываем", $message->text);
+        $this->assertSame(IncomingBotMessage::KIND_INBOUND_USER, $message->inboundKind);
+        $this->assertSame([], $message->media);
+    }
+
     public function test_max_contact_share_payload_is_normalized(): void
     {
         $channel = Channel::factory()->create([
@@ -667,6 +1111,282 @@ class BotIncomingMessageNormalizerTest extends TestCase
         $this->assertNull($message->messageParameter);
         $this->assertSame('max-contact-vcf-1', $message->externalMessageId);
         $this->assertSame('max-contact-vcf-1', $message->providerEventKey);
+    }
+
+    public function test_max_image_and_file_attachments_are_normalized_without_secret_url_or_token(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+
+        $payload = [
+            'update_type' => 'message_created',
+            'user_locale' => 'ru',
+            'message' => [
+                'sender' => [
+                    'user_id' => 500,
+                    'username' => 'max_user',
+                    'is_bot' => false,
+                ],
+                'recipient' => [
+                    'chat_id' => 700,
+                ],
+                'body' => [
+                    'mid' => 'max-media-77',
+                    'text' => null,
+                    'attachments' => [
+                        [
+                            'type' => 'image',
+                            'payload' => [
+                                'photo_id' => 25852958504,
+                                'url' => 'https://i.oneme.ru/i?r=secret-url',
+                                'token' => 'secret-token',
+                                'width' => 538,
+                                'height' => 1280,
+                            ],
+                        ],
+                        [
+                            'type' => 'file',
+                            'payload' => [
+                                'file_id' => 'max-file-id',
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertSame('max-media-77', $message->providerEventKey);
+        $this->assertCount(2, $message->media);
+        $this->assertSame('image', $message->media[0]['media_kind']);
+        $this->assertSame('25852958504', $message->media[0]['provider_attachment_key']);
+        $this->assertSame('25852958504', $message->media[0]['provider_file_reference']);
+        $this->assertSame(538, $message->media[0]['width']);
+        $this->assertSame(1280, $message->media[0]['height']);
+        $this->assertSame('document', $message->media[1]['media_kind']);
+        $this->assertSame('max-file-id', $message->media[1]['provider_attachment_key']);
+        $this->assertSame('max-file-id', $message->media[1]['provider_file_reference']);
+        $this->assertStringNotContainsString('secret-url', json_encode($message->media[0], JSON_THROW_ON_ERROR));
+        $this->assertStringNotContainsString('secret-token', json_encode($message->media[0], JSON_THROW_ON_ERROR));
+    }
+
+    public function test_max_sticker_attachment_is_normalized_as_sticker_without_secret_url(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+
+        $payload = [
+            'update_type' => 'message_created',
+            'user_locale' => 'ru',
+            'message' => [
+                'sender' => [
+                    'user_id' => 500,
+                    'username' => 'max_user',
+                    'is_bot' => false,
+                ],
+                'recipient' => [
+                    'chat_id' => 700,
+                ],
+                'body' => [
+                    'mid' => 'max-sticker-77',
+                    'text' => null,
+                    'attachments' => [
+                        [
+                            'type' => 'sticker',
+                            'width' => 144,
+                            'height' => 144,
+                            'payload' => [
+                                'url' => 'https://st.mycdn.me/static/messages/res/images/stub/sticker_31856a27@2x.png',
+                                'code' => '429b5',
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertSame('max-sticker-77', $message->providerEventKey);
+        $this->assertCount(1, $message->media);
+        $this->assertSame(MessageAttachment::MEDIA_KIND_STICKER, $message->media[0]['media_kind']);
+        $this->assertSame('sticker', $message->media[0]['type']);
+        $this->assertSame('429b5', $message->media[0]['provider_attachment_key']);
+        $this->assertSame('429b5', $message->media[0]['provider_file_reference']);
+        $this->assertSame(144, $message->media[0]['width']);
+        $this->assertSame(144, $message->media[0]['height']);
+        $this->assertSame('429b5', data_get($message->media[0], 'raw_payload_excerpt.sticker_code'));
+        $this->assertStringNotContainsString('st.mycdn.me', json_encode($message->media[0], JSON_THROW_ON_ERROR));
+        $this->assertStringNotContainsString('sticker_31856a27', json_encode($message->media[0], JSON_THROW_ON_ERROR));
+    }
+
+    public function test_max_round_video_attachment_is_normalized_as_video_note_when_payload_has_explicit_marker(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+
+        $payload = [
+            'update_type' => 'message_created',
+            'user_locale' => 'ru',
+            'message' => [
+                'sender' => [
+                    'user_id' => 500,
+                    'username' => 'max_user',
+                    'is_bot' => false,
+                ],
+                'recipient' => [
+                    'chat_id' => 700,
+                ],
+                'body' => [
+                    'mid' => 'max-round-video-77',
+                    'text' => null,
+                    'attachments' => [
+                        [
+                            'type' => 'video',
+                            'payload' => [
+                                'token' => 'secret-video-token',
+                                'url' => 'https://max.example/private/round.mp4?access_token=secret-token',
+                                'is_video_note' => true,
+                                'duration' => 21,
+                                'width' => 384,
+                                'height' => 384,
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertSame('max-round-video-77', $message->providerEventKey);
+        $this->assertCount(1, $message->media);
+        $this->assertSame(MessageAttachment::MEDIA_KIND_VIDEO_NOTE, $message->media[0]['media_kind']);
+        $this->assertSame('video', $message->media[0]['type']);
+        $this->assertSame('token:'.sha1('secret-video-token'), $message->media[0]['provider_attachment_key']);
+        $this->assertSame(21, $message->media[0]['duration']);
+        $this->assertSame(384, $message->media[0]['width']);
+        $this->assertSame(384, $message->media[0]['height']);
+        $this->assertTrue($message->media[0]['is_video_note']);
+        $this->assertStringNotContainsString('secret-video-token', json_encode($message->media[0], JSON_THROW_ON_ERROR));
+        $this->assertStringNotContainsString('access_token', json_encode($message->media[0], JSON_THROW_ON_ERROR));
+    }
+
+    public function test_max_forwarded_video_attachment_is_normalized_from_link_message(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+
+        $payload = [
+            'update_type' => 'message_created',
+            'user_locale' => 'ru',
+            'message' => [
+                'sender' => [
+                    'user_id' => 500,
+                    'username' => 'max_user',
+                    'is_bot' => false,
+                ],
+                'recipient' => [
+                    'chat_id' => 700,
+                ],
+                'body' => [
+                    'mid' => 'max-forwarded-video-77',
+                    'text' => null,
+                ],
+                'link' => [
+                    'type' => 'forward',
+                    'sender' => [
+                        'name' => 'Tanya',
+                        'is_bot' => false,
+                    ],
+                    'message' => [
+                        'mid' => 'forwarded-source-1',
+                        'text' => null,
+                        'attachments' => [
+                            [
+                                'type' => 'video',
+                                'payload' => [
+                                    'id' => 14979531367945,
+                                    'token' => 'forwarded-video-token',
+                                    'url' => 'https://max.example/private/forwarded.mp4?access_token=secret-token',
+                                ],
+                                'duration' => 23,
+                                'thumbnail' => [
+                                    'url' => 'https://max.example/private/thumb.jpg?access_token=secret-token',
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertSame('max-forwarded-video-77', $message->providerEventKey);
+        $this->assertNull($message->text);
+        $this->assertCount(1, $message->media);
+        $this->assertSame(MessageAttachment::MEDIA_KIND_VIDEO, $message->media[0]['media_kind']);
+        $this->assertSame('video', $message->media[0]['type']);
+        $this->assertSame('token:'.sha1('forwarded-video-token'), $message->media[0]['provider_attachment_key']);
+        $this->assertSame('token:'.sha1('forwarded-video-token'), $message->media[0]['provider_file_reference']);
+        $this->assertSame(23, $message->media[0]['duration']);
+        $this->assertStringNotContainsString('forwarded-video-token', json_encode($message->media[0], JSON_THROW_ON_ERROR));
+        $this->assertStringNotContainsString('access_token', json_encode($message->media[0], JSON_THROW_ON_ERROR));
+    }
+
+    public function test_max_plain_video_attachment_stays_regular_video_without_round_marker(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+
+        $payload = [
+            'update_type' => 'message_created',
+            'user_locale' => 'ru',
+            'message' => [
+                'sender' => [
+                    'user_id' => 500,
+                    'username' => 'max_user',
+                    'is_bot' => false,
+                ],
+                'recipient' => [
+                    'chat_id' => 700,
+                ],
+                'body' => [
+                    'mid' => 'max-plain-video-77',
+                    'text' => null,
+                    'attachments' => [
+                        [
+                            'type' => 'video',
+                            'payload' => [
+                                'token' => 'plain-video-token',
+                                'url' => 'https://max.example/private/video.mp4?access_token=secret-token',
+                                'duration' => 14,
+                                'width' => 1280,
+                                'height' => 720,
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertCount(1, $message->media);
+        $this->assertSame(MessageAttachment::MEDIA_KIND_VIDEO, $message->media[0]['media_kind']);
+        $this->assertArrayNotHasKey('is_video_note', $message->media[0]);
     }
 
     public function test_max_contact_share_with_unknown_format_is_still_marked_as_contact_share(): void

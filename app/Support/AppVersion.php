@@ -85,7 +85,7 @@ class AppVersion
         if (str_starts_with($head, 'ref: ')) {
             $reference = trim(substr($head, 5));
 
-            return static::normalize(static::readFile($gitDirectory.DIRECTORY_SEPARATOR.$reference));
+            return static::normalize(static::resolveGitReference($gitDirectory, $reference));
         }
 
         return static::normalize($head);
@@ -130,6 +130,68 @@ class AppVersion
         $resolvedDirectory = dirname($path).DIRECTORY_SEPARATOR.$directory;
 
         return is_dir($resolvedDirectory) ? $resolvedDirectory : null;
+    }
+
+    protected static function resolveGitReference(string $gitDirectory, string $reference): ?string
+    {
+        $version = static::readFile($gitDirectory.DIRECTORY_SEPARATOR.$reference);
+
+        if ($version !== null) {
+            return $version;
+        }
+
+        $commonGitDirectory = static::resolveCommonGitDirectory($gitDirectory);
+
+        if ($commonGitDirectory === null) {
+            return null;
+        }
+
+        return static::readFile($commonGitDirectory.DIRECTORY_SEPARATOR.$reference)
+            ?? static::readPackedReference($commonGitDirectory, $reference);
+    }
+
+    protected static function resolveCommonGitDirectory(string $gitDirectory): ?string
+    {
+        $commonDirectory = static::readFile($gitDirectory.DIRECTORY_SEPARATOR.'commondir');
+
+        if ($commonDirectory === null || $commonDirectory === '') {
+            return null;
+        }
+
+        $candidate = str_starts_with($commonDirectory, DIRECTORY_SEPARATOR)
+            ? $commonDirectory
+            : $gitDirectory.DIRECTORY_SEPARATOR.$commonDirectory;
+
+        $resolvedDirectory = realpath($candidate);
+
+        return $resolvedDirectory !== false && is_dir($resolvedDirectory)
+            ? $resolvedDirectory
+            : null;
+    }
+
+    protected static function readPackedReference(string $gitDirectory, string $reference): ?string
+    {
+        $packedRefs = static::readFile($gitDirectory.DIRECTORY_SEPARATOR.'packed-refs');
+
+        if ($packedRefs === null) {
+            return null;
+        }
+
+        foreach (preg_split('/\R/', $packedRefs) ?: [] as $line) {
+            $line = trim($line);
+
+            if ($line === '' || str_starts_with($line, '#') || str_starts_with($line, '^')) {
+                continue;
+            }
+
+            [$hash, $packedReference] = array_pad(preg_split('/\s+/', $line, 2) ?: [], 2, null);
+
+            if ($packedReference === $reference && is_string($hash)) {
+                return $hash;
+            }
+        }
+
+        return null;
     }
 
     protected static function readEnvironmentValue(string $key): ?string

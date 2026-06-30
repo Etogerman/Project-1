@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Data\Bots\MaxChatAvatarData;
+use App\Data\Bots\MaxVideoAttachmentDownloadData;
 use App\Models\Channel;
 use App\Services\Bots\MaxBotApiService;
 use Illuminate\Http\Client\Request;
@@ -147,5 +148,37 @@ class MaxBotApiServiceTest extends TestCase
         $this->expectExceptionMessage("MAX API did not return dialog_with_user for channel [{$channel->id}] chat [65238156].");
 
         app(MaxBotApiService::class)->fetchChatAvatarData($channel, '65238156');
+    }
+
+    public function test_fetch_video_attachment_download_data_returns_url_and_dimensions(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => ['token' => 'max-token'],
+        ]);
+
+        Http::fake([
+            'https://platform-api.max.ru/videos/video-token' => Http::response([
+                'urls' => [
+                    'mp4_480' => 'https://max.example/private/video-480.mp4',
+                ],
+                'width' => '480',
+                'height' => 480,
+                'duration' => '21000',
+            ]),
+        ]);
+
+        $result = app(MaxBotApiService::class)->fetchVideoAttachmentDownloadData($channel, 'video-token');
+
+        $this->assertInstanceOf(MaxVideoAttachmentDownloadData::class, $result);
+        $this->assertSame('https://max.example/private/video-480.mp4', $result->downloadUrl);
+        $this->assertSame(480, $result->width);
+        $this->assertSame(480, $result->height);
+        $this->assertSame(21, $result->duration);
+        $this->assertSame([
+            'width' => 480,
+            'height' => 480,
+            'duration' => 21,
+        ], $result->metadata());
     }
 }

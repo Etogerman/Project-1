@@ -6,6 +6,7 @@ use App\Data\Bots\AutoReplyDeliveryResult;
 use App\Data\Bots\BotMetadata;
 use App\Data\Bots\IncomingBotMessage;
 use App\Data\Bots\MaxChatAvatarData;
+use App\Data\Bots\MaxVideoAttachmentDownloadData;
 use App\Models\Channel;
 use App\Models\Message;
 use Illuminate\Http\Client\PendingRequest;
@@ -226,6 +227,92 @@ class MaxBotApiService
         );
     }
 
+    public function fetchVideoAttachmentDownloadUrl(Channel $channel, string $videoToken): ?string
+    {
+        return $this->fetchVideoAttachmentDownloadData($channel, $videoToken)->downloadUrl;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function fetchMessage(Channel $channel, string $messageId): array
+    {
+        if (! filled($messageId)) {
+            throw new InvalidArgumentException("MAX message id is required for channel [{$channel->id}].");
+        }
+
+        $message = $this->client($channel)
+            ->get('https://platform-api.max.ru/messages/'.rawurlencode($messageId))
+            ->throw()
+            ->json();
+
+        if (! is_array($message)) {
+            throw new InvalidArgumentException("MAX API did not return message details for channel [{$channel->id}].");
+        }
+
+        return $message;
+    }
+
+    public function fetchVideoAttachmentDownloadData(Channel $channel, string $videoToken): MaxVideoAttachmentDownloadData
+    {
+        if (! filled($videoToken)) {
+            throw new InvalidArgumentException("MAX video token is required for channel [{$channel->id}].");
+        }
+
+        $details = $this->client($channel)
+            ->get('https://platform-api.max.ru/videos/'.rawurlencode($videoToken))
+            ->throw()
+            ->json();
+
+        if (! is_array($details)) {
+            throw new InvalidArgumentException("MAX API did not return video details for channel [{$channel->id}].");
+        }
+
+        $downloadUrl = null;
+        $urls = data_get($details, 'urls');
+
+        if (is_array($urls)) {
+            foreach ([
+                'mp4_720',
+                'mp4_480',
+                'mp4_360',
+                'mp4_240',
+                'mp4_144',
+                'mp4_1080',
+            ] as $key) {
+                $url = $this->normalizeOptionalUrl(data_get($urls, $key));
+
+                if ($url !== null) {
+                    $downloadUrl = $url;
+
+                    break;
+                }
+            }
+        }
+
+        return new MaxVideoAttachmentDownloadData(
+            downloadUrl: $downloadUrl,
+            width: $this->normalizeOptionalInteger(
+                data_get($details, 'width')
+                    ?? data_get($details, 'payload.width')
+                    ?? data_get($details, 'video.width')
+                    ?? data_get($details, 'metadata.width')
+            ),
+            height: $this->normalizeOptionalInteger(
+                data_get($details, 'height')
+                    ?? data_get($details, 'payload.height')
+                    ?? data_get($details, 'video.height')
+                    ?? data_get($details, 'metadata.height')
+            ),
+            duration: $this->normalizeMaxVideoDurationSeconds(
+                data_get($details, 'duration')
+                    ?? data_get($details, 'payload.duration')
+                    ?? data_get($details, 'video.duration')
+                    ?? data_get($details, 'metadata.duration')
+            ),
+        );
+    }
+
     protected function client(Channel $channel): PendingRequest
     {
         return Http::withHeaders([
@@ -269,6 +356,34 @@ class MaxBotApiService
         $normalized = trim((string) $value);
 
         return $normalized !== '' ? $normalized : null;
+    }
+
+    protected function normalizeOptionalInteger(mixed $value): ?int
+    {
+        if (is_int($value)) {
+            return $value >= 0 ? $value : null;
+        }
+
+        if (is_float($value)) {
+            return $value >= 0 ? (int) $value : null;
+        }
+
+        if (is_string($value) && preg_match('/^\d+$/', trim($value)) === 1) {
+            return (int) trim($value);
+        }
+
+        return null;
+    }
+
+    protected function normalizeMaxVideoDurationSeconds(mixed $value): ?int
+    {
+        $duration = $this->normalizeOptionalInteger($value);
+
+        if ($duration === null) {
+            return null;
+        }
+
+        return $duration > 1000 ? (int) ceil($duration / 1000) : $duration;
     }
 
     /**

@@ -297,11 +297,16 @@ return [
         ],
     ],
 
+    'media' => [
+        'download_max_bytes' => (int) env('BOT_MEDIA_DOWNLOAD_MAX_BYTES', 20 * 1024 * 1024),
+    ],
+
     'telegram' => [
         'webhook_secret_header' => 'X-Telegram-Bot-Api-Secret-Token',
         'webhook_ip_address' => env('TELEGRAM_WEBHOOK_IP_ADDRESS'),
         'allowed_updates' => [
             'message',
+            'edited_message',
             'callback_query',
             'my_chat_member',
         ],
@@ -310,6 +315,7 @@ return [
     'telegram_account' => [
         'gateway_shared_secret' => env('TELEGRAM_ACCOUNT_GATEWAY_SHARED_SECRET'),
         'gateway_rate_limit_per_minute' => (int) env('TELEGRAM_ACCOUNT_GATEWAY_RATE_LIMIT_PER_MINUTE', 120),
+        'media_download_max_bytes' => (int) env('TELEGRAM_ACCOUNT_MEDIA_DOWNLOAD_MAX_BYTES', 20 * 1024 * 1024),
         'external_outgoing_backfill_days' => (int) env('TELEGRAM_ACCOUNT_EXTERNAL_OUTGOING_BACKFILL_DAYS', 7),
         'external_outgoing_backfill_known_dialogs_only' => true,
         'external_outgoing_echo_deferral_seconds' => (int) env('TELEGRAM_ACCOUNT_EXTERNAL_OUTGOING_ECHO_DEFERRAL_SECONDS', 15),
@@ -323,6 +329,12 @@ return [
         'trusted_avatar_hosts' => [
             'max.ru',
             'oneme.ru',
+        ],
+        'trusted_media_hosts' => [
+            'max.ru',
+            'oneme.ru',
+            'mycdn.me',
+            'okcdn.ru',
         ],
         'update_types' => [
             'message_created',

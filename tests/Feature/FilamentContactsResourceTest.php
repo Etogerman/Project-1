@@ -4182,7 +4182,7 @@ class FilamentContactsResourceTest extends TestCase
         $this->assertStringContainsString('Телефон в этом канале не подтвержден', $dialogsHtml);
         $this->assertStringContainsString('ID: telegram-dialog-1', $dialogsHtml);
         $this->assertStringContainsString('Свежий ответ оператором в Telegram', $dialogsHtml);
-        $this->assertStringContainsString('Поделился номером телефона', $dialogsHtml);
+        $this->assertStringContainsString('Поделился контактом', $dialogsHtml);
         $this->assertStringContainsString('data-role="dialog-preview"', $dialogsHtml);
         $this->assertStringContainsString('data-role="dialog-preview-sender"', $dialogsHtml);
         $this->assertStringContainsString('Оператор', $dialogsHtml);
