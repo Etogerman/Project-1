@@ -46,6 +46,20 @@ class DispatchStoredInboundBotMessageAction
             $this->logOutOfOrderInboundIfNeeded($channel, $storedMessage);
         }
 
+        if (! $this->shouldDispatchAutomationFor($storedMessage)) {
+            $this->channelActivityLogger->info(
+                $channel,
+                'media_group.automation_sibling_skipped',
+                'Вложение из уже обработанного медиа-альбома сохранено без повторного запуска сценариев и автоответов.',
+                $duplicateContext + [
+                    'provider_group_key' => $storedMessage->provider_group_key,
+                    'dialog_id' => $storedMessage->dialog_id,
+                ],
+            );
+
+            return;
+        }
+
         if ($storedMessage->hasSuccessfulAutoReply()) {
             if (! $storedMessage->wasRecentlyCreated) {
                 $this->channelActivityLogger->info(
@@ -474,6 +488,28 @@ class DispatchStoredInboundBotMessageAction
                 'auto_reply_mode' => $channel->auto_reply_mode ?? Channel::AUTO_REPLY_MODE_RULES_ONLY,
             ],
         );
+    }
+
+    public function shouldDispatchAutomationFor(Message $storedMessage): bool
+    {
+        if (
+            $storedMessage->direction !== Message::DIRECTION_INBOUND
+            || $storedMessage->message_kind !== Message::KIND_INBOUND_USER
+            || $storedMessage->dialog_id === null
+            || ! filled($storedMessage->provider_group_key)
+        ) {
+            return true;
+        }
+
+        return ! Message::query()
+            ->where('channel_id', $storedMessage->channel_id)
+            ->where('dialog_id', $storedMessage->dialog_id)
+            ->where('direction', Message::DIRECTION_INBOUND)
+            ->where('message_kind', Message::KIND_INBOUND_USER)
+            ->where('provider_group_key', $storedMessage->provider_group_key)
+            ->whereKeyNot($storedMessage->id)
+            ->where('id', '<', $storedMessage->id)
+            ->exists();
     }
 
     /**

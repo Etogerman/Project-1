@@ -1352,6 +1352,57 @@ class TelegramAccountGatewayControllerTest extends TestCase
         ]);
     }
 
+    public function test_gateway_live_album_dispatches_auto_reply_only_for_first_group_message(): void
+    {
+        Queue::fake();
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel([
+            'name' => 'Telegram Account Album Automation Guard',
+        ]);
+
+        foreach ([900062 => 'album-photo-unique-a', 900063 => 'album-photo-unique-b'] as $messageId => $fileUniqueId) {
+            $this->withHeaders([
+                'Authorization' => 'Bearer gateway-secret',
+            ])->postJson(
+                route('internal.telegram-account.messages.handle', ['channel' => $channel]),
+                $this->payload(
+                    channel: $channel,
+                    externalChatId: '700062',
+                    externalUserId: 'tg-account-media-user-62',
+                    externalMessageId: (string) $messageId,
+                    text: $messageId === 900062 ? 'Подпись альбома' : null,
+                    media: [
+                        [
+                            'type' => 'photo',
+                            'file_id' => 'album-photo-file-'.$messageId,
+                            'file_unique_id' => $fileUniqueId,
+                            'mime_type' => 'image/jpeg',
+                            'file_size_bytes' => 3456,
+                        ],
+                    ],
+                    historySource: 'live',
+                    providerGroupKey: 'tdlib-album-automation-guard-62',
+                ),
+            )->assertOk()
+                ->assertJsonPath('stored', true);
+        }
+
+        $messages = Message::query()->orderBy('id')->get();
+
+        $this->assertCount(2, $messages);
+        $this->assertSame('tdlib-album-automation-guard-62', $messages[0]->provider_group_key);
+        $this->assertSame('tdlib-album-automation-guard-62', $messages[1]->provider_group_key);
+        Queue::assertPushed(ProcessAutoReplyJob::class, function (ProcessAutoReplyJob $job) use ($messages): bool {
+            return $job->inboundMessageId === $messages[0]->id;
+        });
+        Queue::assertPushed(ProcessAutoReplyJob::class, 1);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'media_group.automation_sibling_skipped',
+        ]);
+    }
+
     public function test_gateway_persists_telegram_file_id_alias_for_account_media(): void
     {
         Queue::fake();

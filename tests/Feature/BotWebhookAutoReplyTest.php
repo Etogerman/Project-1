@@ -144,6 +144,78 @@ class BotWebhookAutoReplyTest extends TestCase
         $this->assertNull($inboundMessage->auto_reply_sent_at);
     }
 
+    public function test_telegram_media_group_webhook_queues_auto_reply_only_for_first_group_message(): void
+    {
+        Queue::fake();
+        Http::fake([
+            'https://api.telegram.org/bottelegram-token/getFile*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_path' => 'photos/album-photo.jpg',
+                    'file_size' => 128,
+                ],
+            ]),
+            'https://api.telegram.org/file/bottelegram-token/*' => Http::response(
+                'telegram-album-photo-bytes',
+                200,
+                ['Content-Type' => 'image/jpeg'],
+            ),
+        ]);
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+                'webhook_secret' => 'telegram-secret',
+            ],
+        ]);
+
+        foreach ([101 => 'photo-unique-a', 102 => 'photo-unique-b'] as $messageId => $fileUniqueId) {
+            $this->withHeaders([
+                'X-Telegram-Bot-Api-Secret-Token' => 'telegram-secret',
+            ])->postJson("/webhooks/telegram/{$channel->id}", [
+                'update_id' => $messageId,
+                'message' => [
+                    'message_id' => $messageId,
+                    'date' => 1_711_539_200 + $messageId,
+                    'media_group_id' => 'telegram-media-group-guard-1',
+                    'caption' => $messageId === 101 ? 'Подпись альбома' : null,
+                    'from' => [
+                        'id' => 200,
+                        'username' => 'telegram_user',
+                        'is_bot' => false,
+                    ],
+                    'chat' => [
+                        'id' => 300,
+                        'type' => 'private',
+                    ],
+                    'photo' => [[
+                        'file_id' => 'file-'.$fileUniqueId,
+                        'file_unique_id' => $fileUniqueId,
+                        'width' => 640,
+                        'height' => 640,
+                        'file_size' => 128,
+                    ]],
+                ],
+            ])->assertOk();
+        }
+
+        $messages = Message::query()->orderBy('id')->get();
+
+        $this->assertCount(2, $messages);
+        $this->assertSame('telegram-media-group-guard-1', $messages[0]->provider_group_key);
+        $this->assertSame('telegram-media-group-guard-1', $messages[1]->provider_group_key);
+        Queue::assertPushed(ProcessAutoReplyJob::class, function (ProcessAutoReplyJob $job) use ($messages): bool {
+            return $job->inboundMessageId === $messages[0]->id;
+        });
+        Queue::assertPushed(ProcessAutoReplyJob::class, 1);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'media_group.automation_sibling_skipped',
+        ]);
+    }
+
     public function test_telegram_edited_message_updates_existing_message_and_keeps_revision_without_dispatching(): void
     {
         Queue::fake();
