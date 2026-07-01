@@ -7,6 +7,8 @@ use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\Message;
 use App\Models\MessageAttachment;
+use App\Services\Bots\DownloadBotMessageAttachmentsAction;
+use App\Services\Messages\StoreMessageAttachmentLocalFileAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
@@ -65,6 +67,33 @@ class DownloadPendingBotMediaAttachmentsCommandTest extends TestCase
         $this->assertSame('image/jpeg', $attachment->mime_type);
         $this->assertTrue($attachment->isInlinePreviewable());
         Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
+    }
+
+    public function test_download_action_does_not_reset_attachment_downloaded_after_stale_relation_was_loaded(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        Http::fake();
+
+        $attachment = $this->createPendingTelegramBotImageAttachment();
+        $staleMessage = Message::query()
+            ->with(['channel', 'attachments'])
+            ->findOrFail($attachment->message_id);
+
+        $storedAttachment = app(StoreMessageAttachmentLocalFileAction::class)
+            ->handle($attachment, 'already-downloaded-image-bytes', 'jpg');
+        $storedPath = $storedAttachment->local_path;
+
+        app(DownloadBotMessageAttachmentsAction::class)->handle($staleMessage);
+
+        Http::assertNothingSent();
+        $storedAttachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $storedAttachment->download_status);
+        $this->assertSame(MessageAttachment::LOCAL_DISK_PRIVATE, $storedAttachment->local_disk);
+        $this->assertSame($storedPath, $storedAttachment->local_path);
+        $this->assertNull($storedAttachment->safe_error_code);
+        $this->assertNull($storedAttachment->safe_error_message);
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $storedAttachment->local_path);
     }
 
     public function test_command_downloads_pending_telegram_bot_voice_when_forced(): void

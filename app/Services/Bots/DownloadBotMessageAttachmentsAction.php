@@ -9,6 +9,7 @@ use App\Models\Message;
 use App\Models\MessageAttachment;
 use App\Services\Messages\StoreMessageAttachmentLocalFileAction;
 use Illuminate\Http\Client\Response as HttpResponse;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use InvalidArgumentException;
 use Throwable;
@@ -87,9 +88,15 @@ class DownloadBotMessageAttachmentsAction
         ], true);
     }
 
-    private function download(Channel $channel, Message $message, MessageAttachment $attachment): MessageAttachment
+    private function download(Channel $channel, Message $message, MessageAttachment $attachment): ?MessageAttachment
     {
-        $this->markDownloading($attachment);
+        $claimedAttachment = $this->claimDownload($attachment);
+
+        if (! $claimedAttachment instanceof MessageAttachment) {
+            return $attachment->fresh();
+        }
+
+        $attachment = $claimedAttachment;
 
         try {
             $downloaded = match ($attachment->provider) {
@@ -344,26 +351,63 @@ class DownloadBotMessageAttachmentsAction
             && data_get($providerMetadata, 'telegram_preview_source') === 'thumbnail';
     }
 
-    private function markDownloading(MessageAttachment $attachment): void
+    private function claimDownload(MessageAttachment $attachment): ?MessageAttachment
     {
-        $attachment->forceFill([
-            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
-            'safe_error_code' => null,
-            'safe_error_message' => null,
-        ])->save();
+        return DB::transaction(function () use ($attachment): ?MessageAttachment {
+            $locked = MessageAttachment::query()
+                ->whereKey($attachment->id)
+                ->lockForUpdate()
+                ->first();
+
+            if (! $locked instanceof MessageAttachment || ! $this->shouldDownload($locked) || $this->hasLocalFile($locked)) {
+                return null;
+            }
+
+            $locked->forceFill([
+                'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
+                'safe_error_code' => null,
+                'safe_error_message' => null,
+            ])->save();
+
+            return $locked->fresh();
+        });
     }
 
     private function markFailed(MessageAttachment $attachment, string $errorCode, string $errorMessage): MessageAttachment
     {
-        $attachment->forceFill([
-            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOAD_FAILED,
-            'local_disk' => null,
-            'local_path' => null,
-            'safe_error_code' => $this->normalizeErrorCode($errorCode),
-            'safe_error_message' => $errorMessage,
-        ])->save();
+        return DB::transaction(function () use ($attachment, $errorCode, $errorMessage): MessageAttachment {
+            $locked = MessageAttachment::query()
+                ->whereKey($attachment->id)
+                ->lockForUpdate()
+                ->first();
 
-        return $attachment->refresh();
+            if (! $locked instanceof MessageAttachment) {
+                return $attachment;
+            }
+
+            if (
+                $locked->download_status === MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED
+                || $this->hasLocalFile($locked)
+                || $locked->download_status !== MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING
+            ) {
+                return $locked;
+            }
+
+            $locked->forceFill([
+                'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOAD_FAILED,
+                'local_disk' => null,
+                'local_path' => null,
+                'safe_error_code' => $this->normalizeErrorCode($errorCode),
+                'safe_error_message' => $errorMessage,
+            ])->save();
+
+            return $locked->refresh();
+        });
+    }
+
+    private function hasLocalFile(MessageAttachment $attachment): bool
+    {
+        return filled($attachment->local_disk) && filled($attachment->local_path);
     }
 
     private function resolveMaxMediaDownloadData(
