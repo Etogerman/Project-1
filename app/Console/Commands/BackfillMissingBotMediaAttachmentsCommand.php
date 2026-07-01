@@ -10,6 +10,7 @@ use App\Services\Bots\BotIncomingMessageNormalizer;
 use App\Services\Bots\DownloadBotMessageAttachmentsAction;
 use App\Services\Bots\SyncBotInboundMessageAttachmentsAction;
 use Illuminate\Console\Command;
+use Illuminate\Support\Collection;
 
 class BackfillMissingBotMediaAttachmentsCommand extends Command
 {
@@ -240,7 +241,7 @@ class BackfillMissingBotMediaAttachmentsCommand extends Command
 
     /**
      * @param  array<string, array{provider: string, channel_id: int, provider_event_key: string, provider_attachment_key: string}>  $identities
-     * @return \Illuminate\Support\Collection<int, MessageAttachment>
+     * @return Collection<int, MessageAttachment>
      */
     private function loadAttachmentsByIdentities(array $identities)
     {

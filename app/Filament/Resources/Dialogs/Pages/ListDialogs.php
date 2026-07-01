@@ -180,7 +180,7 @@ class ListDialogs extends ListRecords
         $this->rememberCurrentNavigationUrl();
     }
 
-    public function setPage(int | string $page, ?string $pageName = null): void
+    public function setPage(int|string $page, ?string $pageName = null): void
     {
         parent::setPage($page, $pageName);
         $this->clearDialogTableSelection();
@@ -236,7 +236,7 @@ class ListDialogs extends ListRecords
         }
 
         return collect($records)
-            ->mapWithKeys(function (Model | array $record, int | string $key): array {
+            ->mapWithKeys(function (Model|array $record, int|string $key): array {
                 if ($record instanceof Model) {
                     return [(string) $record->getKey() => true];
                 }
