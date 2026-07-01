@@ -34,6 +34,8 @@ final readonly class NormalizedInboundMessageEvent
         public array $rawPayload,
         public Carbon $occurredAt,
         public string $historySource,
+        public ?string $providerGroupKey = null,
+        public ?array $richText = null,
     ) {}
 
     public static function buildTelegramAccountPeerKey(int|string $channelId, int|string $externalChatId): string
@@ -99,6 +101,8 @@ final readonly class NormalizedInboundMessageEvent
             sharedContactUserId: null,
             rawPayload: $rawPayload,
             receivedAt: $this->occurredAt,
+            providerGroupKey: $this->providerGroupKey,
+            richText: $this->richText,
         );
     }
 }

@@ -1,13 +1,21 @@
 <?php
 
 use App\Http\Controllers\Admin\DialogNotificationsController;
+use App\Http\Controllers\Admin\MessageAttachmentDownloadController;
+use App\Http\Controllers\Admin\MessageAttachmentPosterController;
+use App\Http\Controllers\Admin\MessageAttachmentPreviewController;
 use App\Http\Controllers\Admin\ScenarioBuilderV3StateController;
 use App\Http\Controllers\Bitrix24AdminOAuthController;
 use App\Http\Controllers\Bitrix24CallbackController;
 use App\Http\Controllers\Bitrix24ProbeController;
 use App\Http\Controllers\BotWebhookController;
 use App\Http\Controllers\TelegramAccountGatewayController;
+use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
+use Illuminate\Cookie\Middleware\EncryptCookies;
+use Illuminate\Foundation\Http\Middleware\VerifyCsrfToken;
+use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Facades\Route;
+use Illuminate\View\Middleware\ShareErrorsFromSession;
 
 Route::get('/', function () {
     return redirect('/admin');
@@ -21,6 +29,13 @@ Route::post('/webhooks/max/{channel}', [BotWebhookController::class, 'max'])
 
 Route::middleware('throttle:telegram-account-gateway')
     ->prefix('/internal/gateway/telegram-account/{channel}')
+    ->withoutMiddleware([
+        EncryptCookies::class,
+        AddQueuedCookiesToResponse::class,
+        StartSession::class,
+        ShareErrorsFromSession::class,
+        VerifyCsrfToken::class,
+    ])
     ->group(function (): void {
         Route::get('/config', [TelegramAccountGatewayController::class, 'config'])
             ->name('internal.telegram-account.config.show');
@@ -42,6 +57,13 @@ Route::middleware('throttle:telegram-account-gateway')
 
         Route::post('/outgoing-messages/{outgoingMessage}/result', [TelegramAccountGatewayController::class, 'outgoingMessageResult'])
             ->name('internal.telegram-account.outgoing-messages.result');
+
+        Route::post('/media-downloads/claim', [TelegramAccountGatewayController::class, 'claimMediaDownload'])
+            ->name('internal.telegram-account.media-downloads.claim');
+
+        Route::post('/media-downloads/{attachment}/result', [TelegramAccountGatewayController::class, 'mediaDownloadResult'])
+            ->whereNumber('attachment')
+            ->name('internal.telegram-account.media-downloads.result');
     });
 
 Route::get('/admin/bitrix24/oauth/start', [Bitrix24AdminOAuthController::class, 'start'])
@@ -49,6 +71,18 @@ Route::get('/admin/bitrix24/oauth/start', [Bitrix24AdminOAuthController::class, 
 
 Route::get('/admin/bitrix24/oauth/callback', [Bitrix24AdminOAuthController::class, 'callback'])
     ->name('admin.bitrix24.oauth.callback');
+
+Route::get('/admin/message-attachments/{attachment}/download', MessageAttachmentDownloadController::class)
+    ->whereNumber('attachment')
+    ->name('admin.message-attachments.download');
+
+Route::get('/admin/message-attachments/{attachment}/preview', MessageAttachmentPreviewController::class)
+    ->whereNumber('attachment')
+    ->name('admin.message-attachments.preview');
+
+Route::get('/admin/message-attachments/{attachment}/poster', MessageAttachmentPosterController::class)
+    ->whereNumber('attachment')
+    ->name('admin.message-attachments.poster');
 
 Route::middleware('auth')
     ->prefix('/admin/dialog-notifications')

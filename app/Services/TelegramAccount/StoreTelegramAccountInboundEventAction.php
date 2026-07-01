@@ -17,6 +17,7 @@ class StoreTelegramAccountInboundEventAction
         private readonly TouchTelegramAccountRuntimeStateFromInboundEventAction $touchTelegramAccountRuntimeStateFromInboundEventAction,
         private readonly UpsertChannelPeerSyncStateFromInboundEventAction $upsertChannelPeerSyncStateFromInboundEventAction,
         private readonly StoreInboundMessageAction $storeInboundMessageAction,
+        private readonly SyncTelegramAccountInboundMessageAttachmentsAction $syncTelegramAccountInboundMessageAttachmentsAction,
         private readonly DispatchStoredInboundBotMessageAction $dispatchStoredInboundBotMessageAction,
         private readonly ChannelActivityLogger $channelActivityLogger,
     ) {}
@@ -63,6 +64,10 @@ class StoreTelegramAccountInboundEventAction
             }
 
             $result = $this->storeInboundMessageAction->handle($channel, $event->toIncomingBotMessage());
+
+            if ($result instanceof StoredInboundMessageResult) {
+                $this->syncTelegramAccountInboundMessageAttachmentsAction->handle($result->message, $event);
+            }
 
             $this->dispatchLiveInboundIfNeeded($channel, $event, $result);
 
