@@ -967,6 +967,61 @@ class FilamentChannelsResourceTest extends TestCase
         $this->assertStringContainsString('Техжурнал', $html);
     }
 
+    public function test_channel_view_modal_escapes_recent_feed_and_activity_values(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'user-<img src=x onerror=alert(1)>',
+        ]);
+        $messageText = '<script>alert("message")</script>';
+        $providerEventKey = 'event-<img src=x onerror=alert(2)>';
+        $activityMessage = '<img src=x onerror=alert(3)>';
+
+        Message::query()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'provider_event_key' => $providerEventKey,
+            'external_chat_id' => 'chat-escaped',
+            'external_message_id' => 'msg-escaped',
+            'text' => $messageText,
+            'raw_payload' => ['message' => $messageText],
+            'received_at' => now(),
+        ]);
+
+        ChannelActivityLog::query()->create([
+            'channel_id' => $channel->id,
+            'level' => 'info',
+            'event' => 'webhook.duplicate_ignored',
+            'message' => $activityMessage,
+            'context' => [
+                'provider_event_key' => $providerEventKey,
+            ],
+            'created_at' => now(),
+        ]);
+
+        $html = view(
+            'filament.channels.partials.channel-view-overview',
+            ChannelResource::buildChannelViewModalData($channel),
+        )->render();
+
+        $this->assertStringContainsString(e($messageText), $html);
+        $this->assertStringContainsString(e($providerEventKey), $html);
+        $this->assertStringContainsString(e($activityMessage), $html);
+        $this->assertStringNotContainsString($messageText, $html);
+        $this->assertStringNotContainsString($activityMessage, $html);
+        $this->assertStringNotContainsString('<img src=x onerror=alert(2)>', $html);
+    }
+
     public function test_stale_successful_connection_is_displayed_as_warning_in_table_and_modal(): void
     {
         config()->set('app.url', 'https://connector.example');

@@ -262,6 +262,72 @@ class StoreInboundMessageActionTest extends TestCase
         ]);
     }
 
+    public function test_store_inbound_message_replay_preserves_downloaded_telegram_bot_attachment_file_state(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $message = $this->makeInboundUserMessage(
+            channel: $channel,
+            providerEventKey: 'telegram-photo-update-downloaded',
+            externalMessageId: 'telegram-photo-message-downloaded',
+            text: null,
+            messageParameter: null,
+            receivedAt: Carbon::parse('2026-04-17 09:25:00'),
+            media: [[
+                'media_kind' => 'image',
+                'type' => 'photo',
+                'provider_attachment_key' => 'telegram-photo-downloaded-unique',
+                'provider_file_id' => 'telegram-photo-file-original',
+                'provider_file_unique_id' => 'telegram-photo-downloaded-unique',
+                'file_size_bytes' => 4096,
+            ]],
+        );
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle($channel, $message);
+        $localPath = MessageAttachment::LOCAL_PATH_PREFIX.'/'.$storedResult->message->id.'/photo.jpg';
+        $attachment = MessageAttachment::query()
+            ->where('provider_event_key', 'telegram-photo-update-downloaded')
+            ->firstOrFail();
+
+        $attachment->forceFill([
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+            'local_path' => $localPath,
+            'safe_error_code' => null,
+            'safe_error_message' => null,
+        ])->save();
+
+        $replayedMessage = $this->makeInboundUserMessage(
+            channel: $channel,
+            providerEventKey: 'telegram-photo-update-downloaded',
+            externalMessageId: 'telegram-photo-message-downloaded',
+            text: null,
+            messageParameter: null,
+            receivedAt: Carbon::parse('2026-04-17 09:25:00'),
+            media: [[
+                'media_kind' => 'image',
+                'type' => 'photo',
+                'provider_attachment_key' => 'telegram-photo-downloaded-unique',
+                'provider_file_id' => 'telegram-photo-file-replayed',
+                'provider_file_unique_id' => 'telegram-photo-downloaded-unique',
+                'file_size_bytes' => 8192,
+            ]],
+        );
+
+        app(StoreInboundMessageAction::class)->handle($channel, $replayedMessage);
+
+        $this->assertSame(1, MessageAttachment::query()->where('provider_event_key', 'telegram-photo-update-downloaded')->count());
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $attachment->download_status);
+        $this->assertSame(MessageAttachment::LOCAL_DISK_PRIVATE, $attachment->local_disk);
+        $this->assertSame($localPath, $attachment->local_path);
+        $this->assertSame('telegram-photo-file-replayed', $attachment->provider_file_id);
+        $this->assertSame(8192, $attachment->file_size_bytes);
+    }
+
     public function test_store_inbound_message_creates_max_image_attachment_without_secret_metadata(): void
     {
         $channel = Channel::factory()->create([
