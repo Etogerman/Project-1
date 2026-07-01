@@ -30,6 +30,25 @@ class AppVersionTest extends TestCase
         $this->assertSame('f8cb57f', AppVersion::resolveFromGitDirectory($directory));
     }
 
+    public function test_resolve_from_git_directory_reads_worktree_common_reference(): void
+    {
+        $root = sys_get_temp_dir().DIRECTORY_SEPARATOR.'app-version-worktree-'.uniqid();
+        $commonGitDirectory = $root.DIRECTORY_SEPARATOR.'.git';
+        $worktreeGitDirectory = $commonGitDirectory.DIRECTORY_SEPARATOR.'worktrees'.DIRECTORY_SEPARATOR.'feature';
+
+        mkdir($commonGitDirectory.DIRECTORY_SEPARATOR.'refs'.DIRECTORY_SEPARATOR.'heads', 0777, true);
+        mkdir($worktreeGitDirectory, 0777, true);
+
+        file_put_contents($worktreeGitDirectory.DIRECTORY_SEPARATOR.'HEAD', "ref: refs/heads/feature\n");
+        file_put_contents($worktreeGitDirectory.DIRECTORY_SEPARATOR.'commondir', "../..\n");
+        file_put_contents(
+            $commonGitDirectory.DIRECTORY_SEPARATOR.'refs'.DIRECTORY_SEPARATOR.'heads'.DIRECTORY_SEPARATOR.'feature',
+            "b9db2c6011111111111111111111111111111111\n",
+        );
+
+        $this->assertSame('b9db2c6', AppVersion::resolveFromGitDirectory($worktreeGitDirectory));
+    }
+
     public function test_resolve_from_file_reads_plain_version_label(): void
     {
         $path = sys_get_temp_dir().DIRECTORY_SEPARATOR.'app-version-file-'.uniqid();

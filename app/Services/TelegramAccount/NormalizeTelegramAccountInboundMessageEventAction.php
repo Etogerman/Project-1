@@ -11,6 +11,10 @@ use Illuminate\Validation\ValidationException;
 
 class NormalizeTelegramAccountInboundMessageEventAction
 {
+    public function __construct(
+        private readonly NormalizeTelegramAccountRichTextAction $normalizeTelegramAccountRichTextAction,
+    ) {}
+
     /**
      * @param  array<string, mixed>  $payload
      *
@@ -34,6 +38,12 @@ class NormalizeTelegramAccountInboundMessageEventAction
             'contact_name' => ['nullable', 'string'],
             'message_kind' => ['required', 'string'],
             'text' => ['nullable', 'string'],
+            'formatted_text' => ['nullable', 'array'],
+            'formatted_text.text' => ['nullable', 'string'],
+            'formatted_text.entities' => ['nullable', 'array'],
+            'provider_group_key' => ['nullable'],
+            'media_album_id' => ['nullable'],
+            'media_group_id' => ['nullable'],
             'media' => ['nullable', 'array'],
             'media.*' => ['array'],
             'media.*.download_status' => ['sometimes', 'nullable', 'string', 'in:'.implode(',', [
@@ -116,6 +126,11 @@ class NormalizeTelegramAccountInboundMessageEventAction
             rawPayload: is_array($validated['raw_payload'] ?? null) ? $validated['raw_payload'] : [],
             occurredAt: Carbon::parse((string) $validated['occurred_at']),
             historySource: (string) $validated['history_source'],
+            providerGroupKey: $this->resolveProviderGroupKey($payload),
+            richText: $this->normalizeTelegramAccountRichTextAction->handle(
+                $text,
+                $validated['formatted_text'] ?? null,
+            ),
         );
     }
 
@@ -128,6 +143,39 @@ class NormalizeTelegramAccountInboundMessageEventAction
         $trimmed = trim($value);
 
         return $trimmed === '' ? null : $trimmed;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    private function resolveProviderGroupKey(array $payload): ?string
+    {
+        foreach ([
+            data_get($payload, 'provider_group_key'),
+            data_get($payload, 'media_album_id'),
+            data_get($payload, 'media_group_id'),
+            data_get($payload, 'raw_payload.media_album_id'),
+            data_get($payload, 'raw_payload.media_group_id'),
+        ] as $value) {
+            $normalized = $this->normalizeProviderGroupKey($value);
+
+            if ($normalized !== null) {
+                return $normalized;
+            }
+        }
+
+        return null;
+    }
+
+    private function normalizeProviderGroupKey(mixed $value): ?string
+    {
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $normalized = trim((string) $value);
+
+        return $normalized !== '' && $normalized !== '0' ? $normalized : null;
     }
 
     /**

@@ -7,6 +7,7 @@ use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\Dialog;
 use App\Models\Message;
+use App\Models\MessageAttachment;
 use App\Models\User;
 use App\Services\Dialogs\BuildDialogMessageSnapshotPayloadAction;
 use App\Services\Dialogs\LoadContactDialogsOverviewAction;
@@ -307,6 +308,72 @@ class LoadContactDialogsOverviewActionTest extends TestCase
         $this->assertSame('Смотри вложение', $overview[0]['preview_text']);
         $this->assertSame([
             ['label' => 'Ожидает загрузки', 'tone' => 'gray'],
+        ], $overview[0]['preview_media_state_badges']);
+    }
+
+    public function test_overview_preview_meta_finds_grouped_item_when_latest_message_is_album_sibling(): void
+    {
+        $contact = Contact::factory()->create();
+        $channel = Channel::factory()->account()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'overview-album-user',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'overview-album-chat',
+        ]);
+        $baseTime = now()->subMinutes(2);
+
+        $messages = collect([0, 1])
+            ->map(function (int $index) use ($baseTime, $channel, $contact, $dialog, $identity): Message {
+                $message = Message::factory()->create([
+                    'dialog_id' => $dialog->id,
+                    'contact_id' => $contact->id,
+                    'contact_identity_id' => $identity->id,
+                    'channel_id' => $channel->id,
+                    'direction' => Message::DIRECTION_INBOUND,
+                    'message_kind' => Message::KIND_INBOUND_USER,
+                    'external_chat_id' => 'overview-album-chat',
+                    'external_message_id' => 'overview-album-message-'.($index + 1),
+                    'provider_event_key' => 'telegram-account:overview-album-chat:overview-album-message-'.($index + 1),
+                    'provider_group_key' => 'overview-album-group',
+                    'text' => $index === 1 ? 'Подпись последнего фото' : null,
+                    'received_at' => $baseTime->copy()->addSeconds($index),
+                ]);
+
+                MessageAttachment::factory()->create([
+                    'message_id' => $message->id,
+                    'channel_id' => $channel->id,
+                    'provider' => MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT,
+                    'provider_event_key' => $message->provider_event_key,
+                    'provider_attachment_key' => $index.':image:file-'.$index,
+                    'media_kind' => MessageAttachment::MEDIA_KIND_IMAGE,
+                    'original_filename' => 'overview-album-photo-'.($index + 1).'.jpg',
+                    'mime_type' => 'image/jpeg',
+                    'extension' => 'jpg',
+                    'download_status' => MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
+                ]);
+
+                return $message;
+            });
+
+        $this->syncDialogSnapshots($dialog);
+
+        $this->assertSame($messages[1]->id, $dialog->fresh()->last_message_id);
+
+        $overview = app(LoadContactDialogsOverviewAction::class)->handle($contact);
+
+        $this->assertCount(1, $overview);
+        $this->assertSame('Подпись последнего фото', $overview[0]['preview_text']);
+        $this->assertSame([
+            ['label' => 'Только метаданные x2', 'tone' => 'gray'],
         ], $overview[0]['preview_media_state_badges']);
     }
 

@@ -1,0 +1,697 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Models\Channel;
+use App\Models\Contact;
+use App\Models\ContactIdentity;
+use App\Models\Message;
+use App\Models\MessageAttachment;
+use App\Services\Bots\DownloadBotMessageAttachmentsAction;
+use App\Services\Messages\StoreMessageAttachmentLocalFileAction;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Storage;
+use Tests\TestCase;
+
+class DownloadPendingBotMediaAttachmentsCommandTest extends TestCase
+{
+    use RefreshDatabase;
+
+    public function test_command_dry_run_does_not_download_pending_bot_image(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        Http::fake();
+
+        $attachment = $this->createPendingTelegramBotImageAttachment();
+
+        $this->artisan('bot-media:download-pending-images')
+            ->assertExitCode(0);
+
+        Http::assertNothingSent();
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY, $attachment->download_status);
+        $this->assertNull($attachment->local_path);
+    }
+
+    public function test_command_downloads_pending_bot_image_when_forced(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        Http::fake([
+            'https://api.telegram.org/bottelegram-token/getFile*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_path' => 'photos/local-preview.jpg',
+                    'file_size' => strlen('telegram-image-bytes'),
+                ],
+            ]),
+            'https://api.telegram.org/file/bottelegram-token/photos/local-preview.jpg' => Http::response(
+                'telegram-image-bytes',
+                200,
+                []
+            ),
+        ]);
+
+        $attachment = $this->createPendingTelegramBotImageAttachment();
+
+        $this->artisan('bot-media:download-pending-images', [
+            '--force' => true,
+            '--limit' => 10,
+        ])->assertExitCode(0);
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $attachment->download_status);
+        $this->assertSame(MessageAttachment::LOCAL_DISK_PRIVATE, $attachment->local_disk);
+        $this->assertSame('image/jpeg', $attachment->mime_type);
+        $this->assertTrue($attachment->isInlinePreviewable());
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
+    }
+
+    public function test_download_action_does_not_reset_attachment_downloaded_after_stale_relation_was_loaded(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        Http::fake();
+
+        $attachment = $this->createPendingTelegramBotImageAttachment();
+        $staleMessage = Message::query()
+            ->with(['channel', 'attachments'])
+            ->findOrFail($attachment->message_id);
+
+        $storedAttachment = app(StoreMessageAttachmentLocalFileAction::class)
+            ->handle($attachment, 'already-downloaded-image-bytes', 'jpg');
+        $storedPath = $storedAttachment->local_path;
+
+        app(DownloadBotMessageAttachmentsAction::class)->handle($staleMessage);
+
+        Http::assertNothingSent();
+        $storedAttachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $storedAttachment->download_status);
+        $this->assertSame(MessageAttachment::LOCAL_DISK_PRIVATE, $storedAttachment->local_disk);
+        $this->assertSame($storedPath, $storedAttachment->local_path);
+        $this->assertNull($storedAttachment->safe_error_code);
+        $this->assertNull($storedAttachment->safe_error_message);
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $storedAttachment->local_path);
+    }
+
+    public function test_command_downloads_pending_telegram_bot_voice_when_forced(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        Http::fake([
+            'https://api.telegram.org/bottelegram-token/getFile*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_path' => 'voice/local-voice.ogg',
+                    'file_size' => strlen('telegram-voice-bytes'),
+                ],
+            ]),
+            'https://api.telegram.org/file/bottelegram-token/voice/local-voice.ogg' => Http::response(
+                'telegram-voice-bytes',
+                200,
+                []
+            ),
+        ]);
+
+        $attachment = $this->createPendingTelegramBotVoiceAttachment();
+
+        $this->artisan('bot-media:download-pending-images', [
+            '--force' => true,
+            '--limit' => 10,
+        ])->assertExitCode(0);
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $attachment->download_status);
+        $this->assertSame(MessageAttachment::LOCAL_DISK_PRIVATE, $attachment->local_disk);
+        $this->assertSame('audio/ogg', $attachment->mime_type);
+        $this->assertSame('ogg', $attachment->extension);
+        $this->assertTrue($attachment->isInlinePreviewable());
+        $this->assertSame(MessageAttachment::PREVIEW_KIND_AUDIO, $attachment->previewKind());
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
+    }
+
+    public function test_command_downloads_pending_telegram_bot_audio_when_forced(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        Http::fake([
+            'https://api.telegram.org/bottelegram-token/getFile*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_path' => 'audio/local-track.mp3',
+                    'file_size' => strlen('telegram-audio-bytes'),
+                ],
+            ]),
+            'https://api.telegram.org/file/bottelegram-token/audio/local-track.mp3' => Http::response(
+                'telegram-audio-bytes',
+                200,
+                []
+            ),
+        ]);
+
+        $attachment = $this->createPendingTelegramBotAudioAttachment();
+
+        $this->artisan('bot-media:download-pending-images', [
+            '--force' => true,
+            '--limit' => 10,
+        ])->assertExitCode(0);
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $attachment->download_status);
+        $this->assertSame(MessageAttachment::LOCAL_DISK_PRIVATE, $attachment->local_disk);
+        $this->assertSame('audio/mpeg', $attachment->mime_type);
+        $this->assertSame('mp3', $attachment->extension);
+        $this->assertTrue($attachment->isInlinePreviewable());
+        $this->assertSame(MessageAttachment::PREVIEW_KIND_AUDIO, $attachment->previewKind());
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
+    }
+
+    public function test_command_downloads_pending_telegram_bot_video_when_forced(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        Http::fake([
+            'https://api.telegram.org/bottelegram-token/getFile*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_path' => 'videos/local-clip.mp4',
+                    'file_size' => strlen('telegram-video-bytes'),
+                ],
+            ]),
+            'https://api.telegram.org/file/bottelegram-token/videos/local-clip.mp4' => Http::response(
+                'telegram-video-bytes',
+                200,
+                []
+            ),
+        ]);
+
+        $attachment = $this->createPendingTelegramBotVideoAttachment();
+
+        $this->artisan('bot-media:download-pending-images', [
+            '--force' => true,
+            '--limit' => 10,
+        ])->assertExitCode(0);
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $attachment->download_status);
+        $this->assertSame(MessageAttachment::LOCAL_DISK_PRIVATE, $attachment->local_disk);
+        $this->assertSame('video/mp4', $attachment->mime_type);
+        $this->assertSame('mp4', $attachment->extension);
+        $this->assertTrue($attachment->isInlinePreviewable());
+        $this->assertSame(MessageAttachment::PREVIEW_KIND_VIDEO, $attachment->previewKind());
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
+    }
+
+    public function test_command_downloads_pending_telegram_bot_video_note_when_forced(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        Http::fake([
+            'https://api.telegram.org/bottelegram-token/getFile*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_path' => 'video_notes/local-round.mp4',
+                    'file_size' => strlen('telegram-video-note-bytes'),
+                ],
+            ]),
+            'https://api.telegram.org/file/bottelegram-token/video_notes/local-round.mp4' => Http::response(
+                'telegram-video-note-bytes',
+                200,
+                []
+            ),
+        ]);
+
+        $attachment = $this->createPendingTelegramBotVideoNoteAttachment();
+
+        $this->artisan('bot-media:download-pending-images', [
+            '--force' => true,
+            '--limit' => 10,
+        ])->assertExitCode(0);
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $attachment->download_status);
+        $this->assertSame(MessageAttachment::LOCAL_DISK_PRIVATE, $attachment->local_disk);
+        $this->assertSame('video/mp4', $attachment->mime_type);
+        $this->assertSame('mp4', $attachment->extension);
+        $this->assertTrue($attachment->isInlinePreviewable());
+        $this->assertSame(MessageAttachment::PREVIEW_KIND_VIDEO, $attachment->previewKind());
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
+    }
+
+    public function test_command_downloads_pending_telegram_bot_document_when_forced(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        Http::fake([
+            'https://api.telegram.org/bottelegram-token/getFile*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_path' => 'documents/local-offer.pdf',
+                    'file_size' => strlen('%PDF-telegram-document-bytes'),
+                ],
+            ]),
+            'https://api.telegram.org/file/bottelegram-token/documents/local-offer.pdf' => Http::response(
+                '%PDF-telegram-document-bytes',
+                200,
+                []
+            ),
+        ]);
+
+        $attachment = $this->createPendingTelegramBotDocumentAttachment();
+
+        $this->artisan('bot-media:download-pending-images', [
+            '--force' => true,
+            '--limit' => 10,
+        ])->assertExitCode(0);
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $attachment->download_status);
+        $this->assertSame(MessageAttachment::LOCAL_DISK_PRIVATE, $attachment->local_disk);
+        $this->assertSame('application/pdf', $attachment->mime_type);
+        $this->assertSame('pdf', $attachment->extension);
+        $this->assertFalse($attachment->isInlinePreviewable());
+        $this->assertNull($attachment->previewKind());
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
+    }
+
+    public function test_command_downloads_pending_max_bot_video_when_forced(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        config()->set('bots.max.trusted_media_hosts', ['max.example']);
+        Http::fake([
+            'https://platform-api.max.ru/videos/max-command-video-token' => Http::response([
+                'token' => 'max-command-video-token',
+                'urls' => [
+                    'mp4_720' => 'https://max.example/private/command-video-720.mp4?access_token=derived-secret',
+                ],
+                'width' => 1280,
+                'height' => 720,
+                'duration' => 14,
+            ]),
+            'https://max.example/private/command-video-720.mp4*' => Http::response(
+                'max-command-video-bytes',
+                200,
+                ['Content-Type' => 'video/mp4'],
+            ),
+        ]);
+
+        $attachment = $this->createPendingMaxBotVideoAttachment();
+
+        $this->artisan('bot-media:download-pending-images', [
+            '--force' => true,
+            '--limit' => 10,
+        ])->assertExitCode(0);
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::MEDIA_KIND_VIDEO, $attachment->media_kind);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $attachment->download_status);
+        $this->assertSame(MessageAttachment::LOCAL_DISK_PRIVATE, $attachment->local_disk);
+        $this->assertSame('video/mp4', $attachment->mime_type);
+        $this->assertSame('mp4', $attachment->extension);
+        $this->assertSame(1280, data_get($attachment->provider_metadata, 'width'));
+        $this->assertSame(720, data_get($attachment->provider_metadata, 'height'));
+        $this->assertSame(14, data_get($attachment->provider_metadata, 'duration'));
+        $this->assertNull(data_get($attachment->provider_metadata, 'is_video_note'));
+        $this->assertTrue($attachment->isInlinePreviewable());
+        $this->assertSame(MessageAttachment::PREVIEW_KIND_VIDEO, $attachment->previewKind());
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://platform-api.max.ru/videos/max-command-video-token');
+        Http::assertSent(fn ($request): bool => str_starts_with($request->url(), 'https://max.example/private/command-video-720.mp4?'));
+    }
+
+    public function test_command_marks_square_short_max_bot_video_as_video_note_when_downloaded(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        config()->set('bots.max.trusted_media_hosts', ['max.example']);
+        Http::fake([
+            'https://platform-api.max.ru/videos/max-round-video-token' => Http::response([
+                'token' => 'max-round-video-token',
+                'urls' => [
+                    'mp4_480' => 'https://max.example/private/round-video-480.mp4?access_token=derived-secret',
+                ],
+                'width' => 480,
+                'height' => 480,
+                'duration' => 21000,
+            ]),
+            'https://max.example/private/round-video-480.mp4*' => Http::response(
+                'max-round-video-bytes',
+                200,
+                ['Content-Type' => 'video/mp4'],
+            ),
+        ]);
+
+        $attachment = $this->createPendingMaxBotVideoAttachment(videoToken: 'max-round-video-token');
+
+        $this->artisan('bot-media:download-pending-images', [
+            '--force' => true,
+            '--limit' => 10,
+        ])->assertExitCode(0);
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::MEDIA_KIND_VIDEO_NOTE, $attachment->media_kind);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $attachment->download_status);
+        $this->assertSame(MessageAttachment::LOCAL_DISK_PRIVATE, $attachment->local_disk);
+        $this->assertSame('video/mp4', $attachment->mime_type);
+        $this->assertSame('mp4', $attachment->extension);
+        $this->assertSame(480, data_get($attachment->provider_metadata, 'width'));
+        $this->assertSame(480, data_get($attachment->provider_metadata, 'height'));
+        $this->assertSame(21, data_get($attachment->provider_metadata, 'duration'));
+        $this->assertTrue(data_get($attachment->provider_metadata, 'is_video_note'));
+        $this->assertSame(MessageAttachment::MEDIA_KIND_VIDEO_NOTE, data_get($attachment->raw_payload_excerpt, 'media_kind'));
+        $this->assertTrue(data_get($attachment->raw_payload_excerpt, 'is_video_note'));
+        $this->assertTrue($attachment->isInlinePreviewable());
+        $this->assertSame(MessageAttachment::PREVIEW_KIND_VIDEO, $attachment->previewKind());
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
+    }
+
+    public function test_command_rejects_max_bot_media_when_content_length_exceeds_limit(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        config()->set('bots.media.download_max_bytes', 10);
+        config()->set('bots.max.trusted_media_hosts', ['max.example']);
+        Http::fake([
+            'https://platform-api.max.ru/videos/max-command-video-token' => Http::response([
+                'token' => 'max-command-video-token',
+                'urls' => [
+                    'mp4_720' => 'https://max.example/private/command-video-720.mp4?access_token=derived-secret',
+                ],
+                'width' => 1280,
+                'height' => 720,
+                'duration' => 14,
+            ]),
+            'https://max.example/private/command-video-720.mp4*' => Http::response(
+                'too-large-body',
+                200,
+                [
+                    'Content-Type' => 'video/mp4',
+                    'Content-Length' => '11',
+                ],
+            ),
+        ]);
+
+        $attachment = $this->createPendingMaxBotVideoAttachment();
+
+        $this->artisan('bot-media:download-pending-images', [
+            '--force' => true,
+            '--limit' => 10,
+        ])->assertExitCode(1);
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOAD_FAILED, $attachment->download_status);
+        $this->assertNull($attachment->local_disk);
+        $this->assertNull($attachment->local_path);
+        $this->assertSame('bot_media_download_invalid_payload', $attachment->safe_error_code);
+        $this->assertSame('Не удалось скачать медиафайл из MAX.', $attachment->safe_error_message);
+    }
+
+    public function test_command_downloads_max_bot_sticker_from_message_lookup_when_webhook_has_stub_url(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        config()->set('bots.max.trusted_media_hosts', ['mycdn.me', 'oneme.ru']);
+        Http::fake([
+            'https://platform-api.max.ru/messages/max-sticker-message-1' => Http::response([
+                'body' => [
+                    'mid' => 'max-sticker-message-1',
+                    'attachments' => [
+                        [
+                            'type' => 'sticker',
+                            'width' => 170,
+                            'height' => 170,
+                            'payload' => [
+                                'code' => '429b5',
+                                'url' => 'https://i.oneme.ru/getSmile?smileId=429b5&smileType=4',
+                            ],
+                        ],
+                    ],
+                ],
+            ], 200),
+            'https://i.oneme.ru/getSmile?smileId=429b5&smileType=4' => Http::response(
+                "\x89PNG\r\n\x1A\n".'max-sticker-bytes',
+                200,
+                ['Content-Type' => 'image/png'],
+            ),
+            'https://st.mycdn.me/static/messages/res/images/stub/sticker_31856a27@2x.png' => Http::response(
+                "\x89PNG\r\n\x1A\n".'max-sticker-stub-bytes',
+                200,
+                ['Content-Type' => 'image/png'],
+            ),
+        ]);
+
+        $attachment = $this->createPendingMaxBotStickerAttachment();
+
+        $this->artisan('bot-media:download-pending-images', [
+            '--force' => true,
+            '--limit' => 10,
+        ])->assertExitCode(0);
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::MEDIA_KIND_STICKER, $attachment->media_kind);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $attachment->download_status);
+        $this->assertSame(MessageAttachment::LOCAL_DISK_PRIVATE, $attachment->local_disk);
+        $this->assertSame('image/png', $attachment->mime_type);
+        $this->assertSame('png', $attachment->extension);
+        $this->assertSame(170, data_get($attachment->provider_metadata, 'width'));
+        $this->assertSame(170, data_get($attachment->provider_metadata, 'height'));
+        $this->assertTrue($attachment->isInlinePreviewable());
+        $this->assertSame(MessageAttachment::PREVIEW_KIND_IMAGE, $attachment->previewKind());
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://platform-api.max.ru/messages/max-sticker-message-1');
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://i.oneme.ru/getSmile?smileId=429b5&smileType=4');
+        Http::assertNotSent(fn ($request): bool => $request->url() === 'https://st.mycdn.me/static/messages/res/images/stub/sticker_31856a27@2x.png');
+    }
+
+    private function createPendingTelegramBotImageAttachment(): MessageAttachment
+    {
+        return $this->createPendingTelegramBotAttachment(
+            providerAttachmentKey: 'telegram-photo-unique',
+            mediaKind: MessageAttachment::MEDIA_KIND_IMAGE,
+            providerFileId: 'telegram-photo-file-id',
+            providerFileUniqueId: 'telegram-photo-unique',
+        );
+    }
+
+    private function createPendingTelegramBotVoiceAttachment(): MessageAttachment
+    {
+        return $this->createPendingTelegramBotAttachment(
+            providerAttachmentKey: 'telegram-voice-unique',
+            mediaKind: MessageAttachment::MEDIA_KIND_VOICE,
+            providerFileId: 'telegram-voice-file-id',
+            providerFileUniqueId: 'telegram-voice-unique',
+            mimeType: 'audio/ogg',
+            extension: 'ogg',
+        );
+    }
+
+    private function createPendingTelegramBotAudioAttachment(): MessageAttachment
+    {
+        return $this->createPendingTelegramBotAttachment(
+            providerAttachmentKey: 'telegram-audio-unique',
+            mediaKind: MessageAttachment::MEDIA_KIND_AUDIO,
+            providerFileId: 'telegram-audio-file-id',
+            providerFileUniqueId: 'telegram-audio-unique',
+            mimeType: 'audio/mpeg',
+            extension: 'mp3',
+        );
+    }
+
+    private function createPendingTelegramBotVideoAttachment(): MessageAttachment
+    {
+        return $this->createPendingTelegramBotAttachment(
+            providerAttachmentKey: 'telegram-video-unique',
+            mediaKind: MessageAttachment::MEDIA_KIND_VIDEO,
+            providerFileId: 'telegram-video-file-id',
+            providerFileUniqueId: 'telegram-video-unique',
+            mimeType: 'video/mp4',
+            extension: 'mp4',
+        );
+    }
+
+    private function createPendingTelegramBotVideoNoteAttachment(): MessageAttachment
+    {
+        return $this->createPendingTelegramBotAttachment(
+            providerAttachmentKey: 'telegram-video-note-unique',
+            mediaKind: MessageAttachment::MEDIA_KIND_VIDEO_NOTE,
+            providerFileId: 'telegram-video-note-file-id',
+            providerFileUniqueId: 'telegram-video-note-unique',
+            extension: 'mp4',
+        );
+    }
+
+    private function createPendingTelegramBotDocumentAttachment(): MessageAttachment
+    {
+        return $this->createPendingTelegramBotAttachment(
+            providerAttachmentKey: 'telegram-document-unique',
+            mediaKind: MessageAttachment::MEDIA_KIND_DOCUMENT,
+            providerFileId: 'telegram-document-file-id',
+            providerFileUniqueId: 'telegram-document-unique',
+            mimeType: 'application/pdf',
+            extension: 'pdf',
+        );
+    }
+
+    private function createPendingTelegramBotAttachment(
+        string $providerAttachmentKey,
+        string $mediaKind,
+        string $providerFileId,
+        string $providerFileUniqueId,
+        ?string $mimeType = null,
+        ?string $extension = null,
+    ): MessageAttachment {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'credentials' => [
+                'token' => 'telegram-token',
+            ],
+        ]);
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'provider_event_key' => 'telegram-update-1',
+            'external_message_id' => 'telegram-message-1',
+        ]);
+
+        return MessageAttachment::factory()->create([
+            'message_id' => $message->id,
+            'channel_id' => $channel->id,
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_BOT,
+            'provider_event_key' => 'telegram-update-1',
+            'provider_attachment_key' => $providerAttachmentKey,
+            'media_kind' => $mediaKind,
+            'mime_type' => $mimeType,
+            'extension' => $extension,
+            'original_filename' => null,
+            'provider_file_id' => $providerFileId,
+            'provider_file_unique_id' => $providerFileUniqueId,
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
+            'local_disk' => null,
+            'local_path' => null,
+        ]);
+    }
+
+    private function createPendingMaxBotVideoAttachment(string $videoToken = 'max-command-video-token'): MessageAttachment
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+            ],
+        ]);
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'provider_event_key' => 'max-command-message-1',
+            'external_message_id' => 'max-command-message-1',
+            'raw_payload' => [
+                'message' => [
+                    'body' => [
+                        'attachments' => [
+                            [
+                                'type' => 'video',
+                                'payload' => [
+                                    'token' => $videoToken,
+                                    'url' => 'https://max.example/private/payload-video.mp4?access_token=secret-token',
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ]);
+
+        return MessageAttachment::factory()->create([
+            'message_id' => $message->id,
+            'channel_id' => $channel->id,
+            'provider' => MessageAttachment::PROVIDER_MAX_BOT,
+            'provider_event_key' => 'max-command-message-1',
+            'provider_attachment_key' => 'token:'.sha1($videoToken),
+            'provider_file_reference' => 'token:'.sha1($videoToken),
+            'media_kind' => MessageAttachment::MEDIA_KIND_VIDEO,
+            'mime_type' => null,
+            'extension' => null,
+            'original_filename' => null,
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
+            'local_disk' => null,
+            'local_path' => null,
+        ]);
+    }
+
+    private function createPendingMaxBotStickerAttachment(): MessageAttachment
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+            ],
+        ]);
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'provider_event_key' => 'max-sticker-message-1',
+            'external_message_id' => 'max-sticker-message-1',
+            'raw_payload' => [
+                'message' => [
+                    'body' => [
+                        'attachments' => [
+                            [
+                                'type' => 'sticker',
+                                'width' => 144,
+                                'height' => 144,
+                                'payload' => [
+                                    'code' => '429b5',
+                                    'url' => 'https://st.mycdn.me/static/messages/res/images/stub/sticker_31856a27@2x.png',
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ]);
+
+        return MessageAttachment::factory()->create([
+            'message_id' => $message->id,
+            'channel_id' => $channel->id,
+            'provider' => MessageAttachment::PROVIDER_MAX_BOT,
+            'provider_event_key' => 'max-sticker-message-1',
+            'provider_attachment_key' => '429b5',
+            'provider_file_reference' => '429b5',
+            'media_kind' => MessageAttachment::MEDIA_KIND_STICKER,
+            'mime_type' => null,
+            'extension' => null,
+            'original_filename' => null,
+            'provider_metadata' => [
+                'width' => 144,
+                'height' => 144,
+            ],
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
+            'local_disk' => null,
+            'local_path' => null,
+        ]);
+    }
+}

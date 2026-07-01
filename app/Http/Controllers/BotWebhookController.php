@@ -11,7 +11,9 @@ use App\Services\Bots\BotWebhookRateLimiter;
 use App\Services\Bots\ChannelActivityLogger;
 use App\Services\Bots\ChannelWebhookUrlGenerator;
 use App\Services\Bots\DispatchStoredInboundBotMessageAction;
+use App\Services\Bots\DownloadBotMessageAttachmentsAction;
 use App\Services\Bots\StoreInboundMessageAction;
+use App\Services\Bots\StoreInboundMessageEditAction;
 use App\Services\Bots\TelegramBotApiService;
 use App\Services\Scenarios\ScenarioRegistry;
 use Illuminate\Http\JsonResponse;
@@ -27,6 +29,8 @@ class BotWebhookController extends Controller
         BotIncomingMessageNormalizer $botIncomingMessageNormalizer,
         StoreInboundMessageAction $storeInboundMessageAction,
         DispatchStoredInboundBotMessageAction $dispatchStoredInboundBotMessageAction,
+        DownloadBotMessageAttachmentsAction $downloadBotMessageAttachmentsAction,
+        StoreInboundMessageEditAction $storeInboundMessageEditAction,
         ChannelActivityLogger $channelActivityLogger,
         BotWebhookRateLimiter $botWebhookRateLimiter,
         ChannelWebhookUrlGenerator $channelWebhookUrlGenerator,
@@ -39,6 +43,8 @@ class BotWebhookController extends Controller
             botIncomingMessageNormalizer: $botIncomingMessageNormalizer,
             storeInboundMessageAction: $storeInboundMessageAction,
             dispatchStoredInboundBotMessageAction: $dispatchStoredInboundBotMessageAction,
+            downloadBotMessageAttachmentsAction: $downloadBotMessageAttachmentsAction,
+            storeInboundMessageEditAction: $storeInboundMessageEditAction,
             channelActivityLogger: $channelActivityLogger,
             botWebhookRateLimiter: $botWebhookRateLimiter,
             channelWebhookUrlGenerator: $channelWebhookUrlGenerator,
@@ -52,6 +58,8 @@ class BotWebhookController extends Controller
         BotIncomingMessageNormalizer $botIncomingMessageNormalizer,
         StoreInboundMessageAction $storeInboundMessageAction,
         DispatchStoredInboundBotMessageAction $dispatchStoredInboundBotMessageAction,
+        DownloadBotMessageAttachmentsAction $downloadBotMessageAttachmentsAction,
+        StoreInboundMessageEditAction $storeInboundMessageEditAction,
         ChannelActivityLogger $channelActivityLogger,
         BotWebhookRateLimiter $botWebhookRateLimiter,
         ChannelWebhookUrlGenerator $channelWebhookUrlGenerator,
@@ -63,6 +71,8 @@ class BotWebhookController extends Controller
             botIncomingMessageNormalizer: $botIncomingMessageNormalizer,
             storeInboundMessageAction: $storeInboundMessageAction,
             dispatchStoredInboundBotMessageAction: $dispatchStoredInboundBotMessageAction,
+            downloadBotMessageAttachmentsAction: $downloadBotMessageAttachmentsAction,
+            storeInboundMessageEditAction: $storeInboundMessageEditAction,
             channelActivityLogger: $channelActivityLogger,
             botWebhookRateLimiter: $botWebhookRateLimiter,
             channelWebhookUrlGenerator: $channelWebhookUrlGenerator,
@@ -76,6 +86,8 @@ class BotWebhookController extends Controller
         BotIncomingMessageNormalizer $botIncomingMessageNormalizer,
         StoreInboundMessageAction $storeInboundMessageAction,
         DispatchStoredInboundBotMessageAction $dispatchStoredInboundBotMessageAction,
+        DownloadBotMessageAttachmentsAction $downloadBotMessageAttachmentsAction,
+        StoreInboundMessageEditAction $storeInboundMessageEditAction,
         ChannelActivityLogger $channelActivityLogger,
         BotWebhookRateLimiter $botWebhookRateLimiter,
         ChannelWebhookUrlGenerator $channelWebhookUrlGenerator,
@@ -152,6 +164,16 @@ class BotWebhookController extends Controller
             );
         }
 
+        $messageEdit = $botIncomingMessageNormalizer->normalizeEdit($channel, $payload);
+
+        if ($messageEdit !== null) {
+            $storeInboundMessageEditAction->handle($channel, $messageEdit);
+
+            return response()->json([
+                'ok' => true,
+            ]);
+        }
+
         $message = $botIncomingMessageNormalizer->normalize($channel, $payload);
 
         if ($message === null && $expectedPlatform === Channel::PLATFORM_MAX) {
@@ -188,6 +210,7 @@ class BotWebhookController extends Controller
             $storedResult = $storeInboundMessageAction->handle($channel, $message);
 
             if ($storedResult !== null) {
+                $downloadBotMessageAttachmentsAction->handle($storedResult->message);
                 $dispatchStoredInboundBotMessageAction->handle($channel, $storedResult, $deliveryLagSeconds);
             }
         }
@@ -554,6 +577,10 @@ class BotWebhookController extends Controller
 
         if (isset($payload['my_chat_member'])) {
             return 'my_chat_member';
+        }
+
+        if (isset($payload['edited_message'])) {
+            return 'edited_message';
         }
 
         return isset($payload['message']) ? 'message' : null;

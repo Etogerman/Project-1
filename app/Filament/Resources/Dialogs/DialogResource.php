@@ -193,7 +193,7 @@ class DialogResource extends Resource
                 TextColumn::make('id')
                     ->label($dialogFieldLabel('id', 'ID'))
                     ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
+                    ->toggleable(),
                 TextColumn::make('external_user_id')
                     ->label('Внешний ID')
                     ->state(fn (Dialog $record): ?string => static::resolveDialogExternalUserId($record))

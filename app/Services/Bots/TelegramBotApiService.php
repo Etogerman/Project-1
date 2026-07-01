@@ -248,6 +248,52 @@ class TelegramBotApiService
         );
     }
 
+    public function downloadFile(Channel $channel, string $fileId, int $maxBytes): DownloadedAvatarData
+    {
+        if (! filled($fileId)) {
+            throw new InvalidArgumentException("Telegram file id is required for channel [{$channel->id}].");
+        }
+
+        $fileResponse = Http::asJson()
+            ->get(
+                sprintf('https://api.telegram.org/bot%s/getFile', $this->token($channel)),
+                ['file_id' => $fileId],
+            )
+            ->throw()
+            ->json();
+
+        $filePath = data_get($fileResponse, 'result.file_path');
+        $fileSize = data_get($fileResponse, 'result.file_size');
+
+        if (is_numeric($fileSize) && (int) $fileSize > $maxBytes) {
+            throw new InvalidArgumentException('Telegram Bot media file is larger than the local download limit.');
+        }
+
+        if (! filled($filePath)) {
+            throw new InvalidArgumentException("Telegram API did not return file path for channel [{$channel->id}].");
+        }
+
+        $downloadResponse = Http::timeout(30)
+            ->get(sprintf('https://api.telegram.org/file/bot%s/%s', $this->token($channel), ltrim((string) $filePath, '/')))
+            ->throw();
+
+        $contents = $downloadResponse->body();
+
+        if ($contents === '') {
+            throw new InvalidArgumentException("Telegram API returned an empty file for channel [{$channel->id}].");
+        }
+
+        if (strlen($contents) > $maxBytes) {
+            throw new InvalidArgumentException('Telegram Bot media file is larger than the local download limit.');
+        }
+
+        return new DownloadedAvatarData(
+            contents: $contents,
+            contentType: $downloadResponse->header('Content-Type'),
+            filenameHint: (string) $filePath,
+        );
+    }
+
     protected function token(Channel $channel): string
     {
         $token = $channel->getToken();

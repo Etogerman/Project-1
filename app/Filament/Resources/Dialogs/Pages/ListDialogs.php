@@ -11,6 +11,20 @@ class ListDialogs extends ListRecords
 {
     protected static string $resource = DialogResource::class;
 
+    protected function loadTableColumnsFromSession(): array
+    {
+        return array_map(
+            static function (mixed $column): mixed {
+                if (is_array($column) && ($column['name'] ?? null) === 'id') {
+                    $column['isToggled'] = true;
+                }
+
+                return $column;
+            },
+            parent::loadTableColumnsFromSession(),
+        );
+    }
+
     public function mount(): void
     {
         parent::mount();
@@ -166,7 +180,7 @@ class ListDialogs extends ListRecords
         $this->rememberCurrentNavigationUrl();
     }
 
-    public function setPage(int | string $page, ?string $pageName = null): void
+    public function setPage(int|string $page, ?string $pageName = null): void
     {
         parent::setPage($page, $pageName);
         $this->clearDialogTableSelection();
@@ -222,7 +236,7 @@ class ListDialogs extends ListRecords
         }
 
         return collect($records)
-            ->mapWithKeys(function (Model | array $record, int | string $key): array {
+            ->mapWithKeys(function (Model|array $record, int|string $key): array {
                 if ($record instanceof Model) {
                     return [(string) $record->getKey() => true];
                 }
