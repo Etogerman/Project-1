@@ -91,6 +91,22 @@ class AbRichTextHtmlRendererTest extends TestCase
         $this->assertSame('опасная ссылка', $html);
     }
 
+    public function test_renders_quote_mark_as_blockquote(): void
+    {
+        $html = app(AbRichTextHtmlRenderer::class)->render([
+            'version' => 1,
+            'plain_text' => 'Текст цитаты',
+            'runs' => [
+                [
+                    'text' => 'Текст цитаты',
+                    'marks' => [['type' => 'quote']],
+                ],
+            ],
+        ]);
+
+        $this->assertSame('<blockquote>Текст цитаты</blockquote>', $html);
+    }
+
     public function test_rejects_legacy_string_marks_and_inconsistent_plain_text(): void
     {
         $normalizer = app(AbRichTextNormalizer::class);
