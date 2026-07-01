@@ -22,10 +22,21 @@ class AbRichTextHtmlRenderer
         }
 
         $html = '';
+        $quoteHtml = '';
 
         foreach ($normalized['runs'] as $run) {
+            if ($this->hasMark($run, 'quote')) {
+                $quoteHtml .= $this->renderRun($this->withoutMark($run, 'quote'));
+
+                continue;
+            }
+
+            $html .= $this->flushQuoteHtml($quoteHtml);
+            $quoteHtml = '';
             $html .= $this->renderRun($run);
         }
+
+        $html .= $this->flushQuoteHtml($quoteHtml);
 
         return $html !== ''
             ? $html
@@ -44,6 +55,41 @@ class AbRichTextHtmlRenderer
         }
 
         return $html;
+    }
+
+    private function flushQuoteHtml(string $html): string
+    {
+        return $html !== ''
+            ? '<blockquote>'.$html.'</blockquote>'
+            : '';
+    }
+
+    /**
+     * @param  array{text: string, marks: list<array<string, mixed>>}  $run
+     */
+    private function hasMark(array $run, string $type): bool
+    {
+        foreach ($run['marks'] as $mark) {
+            if (($mark['type'] ?? null) === $type) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  array{text: string, marks: list<array<string, mixed>>}  $run
+     * @return array{text: string, marks: list<array<string, mixed>>}
+     */
+    private function withoutMark(array $run, string $type): array
+    {
+        $run['marks'] = array_values(array_filter(
+            $run['marks'],
+            fn (array $mark): bool => ($mark['type'] ?? null) !== $type,
+        ));
+
+        return $run;
     }
 
     /**

@@ -70,4 +70,35 @@ class NormalizeTelegramAccountRichTextActionTest extends TestCase
             ],
         ]));
     }
+
+    public function test_converts_tdlib_blockquote_entity_to_quote_mark(): void
+    {
+        $text = "Текст цитаты\nобычный текст";
+
+        $richText = app(NormalizeTelegramAccountRichTextAction::class)->handle($text, [
+            'text' => $text,
+            'entities' => [
+                [
+                    'offset' => 0,
+                    'length' => 12,
+                    'type' => ['_' => 'textEntityTypeBlockQuote'],
+                ],
+            ],
+        ]);
+
+        $this->assertSame([
+            'version' => 1,
+            'plain_text' => $text,
+            'runs' => [
+                [
+                    'text' => 'Текст цитаты',
+                    'marks' => [['type' => 'quote']],
+                ],
+                [
+                    'text' => "\nобычный текст",
+                    'marks' => [],
+                ],
+            ],
+        ], $richText);
+    }
 }

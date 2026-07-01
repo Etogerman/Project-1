@@ -91,6 +91,60 @@ class AbRichTextHtmlRendererTest extends TestCase
         $this->assertSame('опасная ссылка', $html);
     }
 
+    public function test_renders_quote_mark_as_blockquote(): void
+    {
+        $html = app(AbRichTextHtmlRenderer::class)->render([
+            'version' => 1,
+            'plain_text' => 'Текст цитаты',
+            'runs' => [
+                [
+                    'text' => 'Текст цитаты',
+                    'marks' => [['type' => 'quote']],
+                ],
+            ],
+        ]);
+
+        $this->assertSame('<blockquote>Текст цитаты</blockquote>', $html);
+    }
+
+    public function test_renders_split_quote_runs_as_single_blockquote_with_nested_marks(): void
+    {
+        $html = app(AbRichTextHtmlRenderer::class)->render([
+            'version' => 1,
+            'plain_text' => 'Цитата жирная и ссылка после',
+            'runs' => [
+                [
+                    'text' => 'Цитата ',
+                    'marks' => [['type' => 'quote']],
+                ],
+                [
+                    'text' => 'жирная',
+                    'marks' => [['type' => 'quote'], ['type' => 'bold']],
+                ],
+                [
+                    'text' => ' и ',
+                    'marks' => [['type' => 'quote']],
+                ],
+                [
+                    'text' => 'ссылка',
+                    'marks' => [
+                        ['type' => 'quote'],
+                        ['type' => 'link', 'href' => 'https://example.test/path?q=1&v=2'],
+                    ],
+                ],
+                [
+                    'text' => ' после',
+                    'marks' => [],
+                ],
+            ],
+        ]);
+
+        $this->assertSame(
+            '<blockquote>Цитата <strong>жирная</strong> и <a href="https://example.test/path?q=1&amp;v=2" target="_blank" rel="noopener noreferrer">ссылка</a></blockquote> после',
+            $html,
+        );
+    }
+
     public function test_rejects_legacy_string_marks_and_inconsistent_plain_text(): void
     {
         $normalizer = app(AbRichTextNormalizer::class);
