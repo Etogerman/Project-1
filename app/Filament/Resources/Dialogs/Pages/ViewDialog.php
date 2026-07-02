@@ -2032,8 +2032,14 @@ class ViewDialog extends ViewRecord
             return;
         }
 
-        $this->conversationMessages = $this->replaceConversationItemsByKey($this->conversationMessages, $refreshedViewData);
-        $this->conversationMessages = $this->sortConversationMessages($this->conversationMessages);
+        $nextConversationMessages = $this->replaceConversationItemsByKey($this->conversationMessages, $refreshedViewData);
+        $nextConversationMessages = $this->sortConversationMessages($nextConversationMessages);
+
+        if ($nextConversationMessages === $this->conversationMessages) {
+            return;
+        }
+
+        $this->conversationMessages = $nextConversationMessages;
     }
 
     /**

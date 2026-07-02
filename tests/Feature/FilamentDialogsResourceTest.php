@@ -1323,7 +1323,10 @@ class FilamentDialogsResourceTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
             ->assertSee('data-role="conversation-attachments"', false)
+            ->assertSee('wire:key="conversation-attachment-message:'.$message->id.'-'.$attachment->id.'"', false)
             ->assertSee('data-role="conversation-voice-player"', false)
+            ->assertSee('wire:ignore', false)
+            ->assertSee('wire:key="conversation-voice-player-message:'.$message->id.'-'.$attachment->id.'"', false)
             ->assertSee('data-role="conversation-attachment-audio"', false)
             ->assertSee('data-role="conversation-voice-toggle"', false)
             ->assertSee('data-role="conversation-voice-waveform"', false)
@@ -1337,6 +1340,22 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('2 КБ')
             ->assertSee(route('admin.message-attachments.preview', ['attachment' => $attachment->id]), false)
             ->assertSee(route('admin.message-attachments.download', ['attachment' => $attachment->id]), false);
+    }
+
+    public function test_dialog_view_live_refresh_defers_during_media_playback_and_text_selection(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(1);
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee('hasActiveMediaPlayback()', false)
+            ->assertSee('hasActiveConversationSelection()', false)
+            ->assertSee('shouldDeferLiveRefresh()', false)
+            ->assertSee('this.shouldDeferLiveRefresh()', false);
     }
 
     public function test_dialog_view_renders_previewable_image_as_gallery_without_technical_labels(): void
