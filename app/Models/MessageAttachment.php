@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Facades\Storage;
+use RuntimeException;
 
 class MessageAttachment extends Model
 {
@@ -232,7 +233,14 @@ class MessageAttachment extends Model
             return self::LOCAL_DISK_PRIVATE;
         }
 
-        return trim($disk);
+        $disk = trim($disk);
+        $configuredDisks = config('filesystems.disks', []);
+
+        if (! is_array($configuredDisks) || ! array_key_exists($disk, $configuredDisks)) {
+            throw new RuntimeException(sprintf('Message attachments storage disk [%s] is not configured.', $disk));
+        }
+
+        return $disk;
     }
 
     /**

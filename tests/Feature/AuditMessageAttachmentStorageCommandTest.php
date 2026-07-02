@@ -127,6 +127,42 @@ class AuditMessageAttachmentStorageCommandTest extends TestCase
         $this->assertNull($attachment->local_path);
     }
 
+    public function test_configured_message_attachment_disk_must_exist(): void
+    {
+        config()->set('filesystems.message_attachments_disk', 'missing_message_attachments_disk');
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Message attachments storage disk [missing_message_attachments_disk] is not configured.');
+
+        MessageAttachment::storageDiskName();
+    }
+
+    public function test_command_repair_aborts_on_storage_access_error_without_mutating_attachment(): void
+    {
+        config()->set('filesystems.message_attachments_disk', 'broken_message_attachments');
+        config()->set('filesystems.disks.broken_message_attachments', [
+            'driver' => 'unsupported-message-attachments-driver',
+        ]);
+
+        $attachment = $this->createDownloadedAttachment([
+            'provider_file_id' => 'telegram-account-file-id',
+            'local_disk' => 'broken_message_attachments',
+            'local_path' => MessageAttachment::LOCAL_PATH_PREFIX.'/present-but-unreadable/account.jpg',
+        ]);
+
+        $this->artisan('message-attachments:audit-storage', [
+            '--repair' => true,
+            '--attachment' => [$attachment->id],
+        ])->assertFailed();
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $attachment->download_status);
+        $this->assertSame('broken_message_attachments', $attachment->local_disk);
+        $this->assertSame(MessageAttachment::LOCAL_PATH_PREFIX.'/present-but-unreadable/account.jpg', $attachment->local_path);
+        $this->assertNull($attachment->safe_error_code);
+    }
+
     /**
      * @param  array<string, mixed>  $attachmentAttributes
      */

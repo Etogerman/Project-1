@@ -47,9 +47,15 @@ class AuditMessageAttachmentStorageCommand extends Command
                 'provider_attachment_key',
             ]);
 
-        $missing = $attachments
-            ->filter(fn (MessageAttachment $attachment): bool => ! $this->storedFileExists($attachment))
-            ->values();
+        try {
+            $missing = $attachments
+                ->filter(fn (MessageAttachment $attachment): bool => ! $this->storedFileExists($attachment))
+                ->values();
+        } catch (Throwable $exception) {
+            $this->error('Message attachment storage audit aborted: '.$exception->getMessage());
+
+            return self::FAILURE;
+        }
 
         $this->line($repair
             ? 'Message attachment storage repair started.'
@@ -89,10 +95,16 @@ class AuditMessageAttachmentStorageCommand extends Command
             return self::SUCCESS;
         }
 
-        $repaired = $missing
-            ->map(fn (MessageAttachment $attachment): ?string => $this->repairMissingAttachment((int) $attachment->id))
-            ->filter()
-            ->count();
+        try {
+            $repaired = $missing
+                ->map(fn (MessageAttachment $attachment): ?string => $this->repairMissingAttachment((int) $attachment->id))
+                ->filter()
+                ->count();
+        } catch (Throwable $exception) {
+            $this->error('Message attachment storage repair aborted: '.$exception->getMessage());
+
+            return self::FAILURE;
+        }
 
         $this->table(
             ['Result', 'Count'],
@@ -134,8 +146,13 @@ class AuditMessageAttachmentStorageCommand extends Command
 
         try {
             return Storage::disk($disk)->exists($path);
-        } catch (Throwable) {
-            return false;
+        } catch (Throwable $exception) {
+            throw new \RuntimeException(sprintf(
+                'Could not inspect attachment [%d] on disk [%s]: %s',
+                $attachment->id,
+                $disk,
+                $exception->getMessage(),
+            ), previous: $exception);
         }
     }
 
