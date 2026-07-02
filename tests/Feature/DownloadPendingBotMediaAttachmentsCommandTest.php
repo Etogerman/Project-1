@@ -276,6 +276,80 @@ class DownloadPendingBotMediaAttachmentsCommandTest extends TestCase
         Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
     }
 
+    public function test_command_downloads_pending_telegram_bot_sticker_when_forced(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        Http::fake([
+            'https://api.telegram.org/bottelegram-token/getFile*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_path' => 'stickers/local-sticker.webp',
+                    'file_size' => strlen('telegram-sticker-bytes'),
+                ],
+            ]),
+            'https://api.telegram.org/file/bottelegram-token/stickers/local-sticker.webp' => Http::response(
+                'telegram-sticker-bytes',
+                200,
+                ['Content-Type' => 'image/webp'],
+            ),
+        ]);
+
+        $attachment = $this->createPendingTelegramBotStickerAttachment();
+
+        $this->artisan('bot-media:download-pending-images', [
+            '--force' => true,
+            '--limit' => 10,
+        ])->assertExitCode(0);
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::MEDIA_KIND_STICKER, $attachment->media_kind);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $attachment->download_status);
+        $this->assertSame(MessageAttachment::LOCAL_DISK_PRIVATE, $attachment->local_disk);
+        $this->assertSame('image/webp', $attachment->mime_type);
+        $this->assertSame('webp', $attachment->extension);
+        $this->assertTrue($attachment->isInlinePreviewable());
+        $this->assertSame(MessageAttachment::PREVIEW_KIND_IMAGE, $attachment->previewKind());
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
+    }
+
+    public function test_command_downloads_pending_telegram_bot_animation_when_forced(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        Http::fake([
+            'https://api.telegram.org/bottelegram-token/getFile*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_path' => 'animations/local-animation.mp4',
+                    'file_size' => strlen('telegram-animation-bytes'),
+                ],
+            ]),
+            'https://api.telegram.org/file/bottelegram-token/animations/local-animation.mp4' => Http::response(
+                'telegram-animation-bytes',
+                200,
+                ['Content-Type' => 'video/mp4'],
+            ),
+        ]);
+
+        $attachment = $this->createPendingTelegramBotAnimationAttachment();
+
+        $this->artisan('bot-media:download-pending-images', [
+            '--force' => true,
+            '--limit' => 10,
+        ])->assertExitCode(0);
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::MEDIA_KIND_ANIMATION, $attachment->media_kind);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $attachment->download_status);
+        $this->assertSame(MessageAttachment::LOCAL_DISK_PRIVATE, $attachment->local_disk);
+        $this->assertSame('video/mp4', $attachment->mime_type);
+        $this->assertSame('mp4', $attachment->extension);
+        $this->assertTrue($attachment->isInlinePreviewable());
+        $this->assertSame(MessageAttachment::PREVIEW_KIND_VIDEO, $attachment->previewKind());
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
+    }
+
     public function test_command_downloads_pending_max_bot_video_when_forced(): void
     {
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
@@ -532,6 +606,30 @@ class DownloadPendingBotMediaAttachmentsCommandTest extends TestCase
             providerFileUniqueId: 'telegram-document-unique',
             mimeType: 'application/pdf',
             extension: 'pdf',
+        );
+    }
+
+    private function createPendingTelegramBotStickerAttachment(): MessageAttachment
+    {
+        return $this->createPendingTelegramBotAttachment(
+            providerAttachmentKey: 'telegram-sticker-unique',
+            mediaKind: MessageAttachment::MEDIA_KIND_STICKER,
+            providerFileId: 'telegram-sticker-file-id',
+            providerFileUniqueId: 'telegram-sticker-unique',
+            mimeType: 'image/webp',
+            extension: 'webp',
+        );
+    }
+
+    private function createPendingTelegramBotAnimationAttachment(): MessageAttachment
+    {
+        return $this->createPendingTelegramBotAttachment(
+            providerAttachmentKey: 'telegram-animation-unique',
+            mediaKind: MessageAttachment::MEDIA_KIND_ANIMATION,
+            providerFileId: 'telegram-animation-file-id',
+            providerFileUniqueId: 'telegram-animation-unique',
+            mimeType: 'video/mp4',
+            extension: 'mp4',
         );
     }
 
