@@ -58,6 +58,32 @@ class AuditMessageAttachmentStorageCommandTest extends TestCase
         $this->assertSame('local_file_missing', $attachment->safe_error_code);
     }
 
+    public function test_command_repair_resets_retryable_missing_telegram_bot_animation_to_pending_download(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+
+        $attachment = $this->createDownloadedAttachment([
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_BOT,
+            'provider_file_id' => 'telegram-animation-file-id',
+            'media_kind' => MessageAttachment::MEDIA_KIND_ANIMATION,
+            'mime_type' => 'video/mp4',
+            'extension' => 'mp4',
+            'local_path' => MessageAttachment::LOCAL_PATH_PREFIX.'/missing/bot-animation.mp4',
+        ]);
+
+        $this->artisan('message-attachments:audit-storage', [
+            '--repair' => true,
+            '--attachment' => [$attachment->id],
+        ])->assertExitCode(0);
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD, $attachment->download_status);
+        $this->assertNull($attachment->local_disk);
+        $this->assertNull($attachment->local_path);
+        $this->assertSame('local_file_missing', $attachment->safe_error_code);
+    }
+
     public function test_command_repair_keeps_existing_downloaded_attachment_unchanged(): void
     {
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);

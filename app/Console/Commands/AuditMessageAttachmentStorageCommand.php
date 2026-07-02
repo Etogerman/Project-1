@@ -213,6 +213,7 @@ class AuditMessageAttachmentStorageCommand extends Command
             MessageAttachment::MEDIA_KIND_AUDIO,
             MessageAttachment::MEDIA_KIND_VOICE,
             MessageAttachment::MEDIA_KIND_STICKER,
+            MessageAttachment::MEDIA_KIND_ANIMATION,
         ], true);
     }
 
@@ -226,6 +227,7 @@ class AuditMessageAttachmentStorageCommand extends Command
             MessageAttachment::MEDIA_KIND_AUDIO,
             MessageAttachment::MEDIA_KIND_VOICE,
             MessageAttachment::MEDIA_KIND_STICKER,
+            MessageAttachment::MEDIA_KIND_ANIMATION,
         ], true);
     }
 
