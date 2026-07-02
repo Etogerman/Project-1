@@ -16,8 +16,9 @@ class StoreMessageAttachmentLocalFileAction
         }
 
         $path = $this->buildPath($attachment, $extension ?? $attachment->extension);
+        $disk = MessageAttachment::storageDiskName();
 
-        $stored = Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->put($path, $contents);
+        $stored = Storage::disk($disk)->put($path, $contents);
 
         if ($stored === false) {
             throw new RuntimeException('Failed to store message attachment local file.');
@@ -25,7 +26,7 @@ class StoreMessageAttachmentLocalFileAction
 
         $attachment->forceFill([
             'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
-            'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+            'local_disk' => $disk,
             'local_path' => $path,
             'file_size_bytes' => $attachment->file_size_bytes ?? strlen($contents),
             'safe_error_code' => null,

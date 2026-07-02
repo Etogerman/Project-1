@@ -19,6 +19,8 @@ class MessageAttachment extends Model
 
     public const LOCAL_DISK_PRIVATE = 'local';
 
+    public const LOCAL_DISK_MESSAGE_ATTACHMENTS = 'message_attachments';
+
     public const LOCAL_PATH_PREFIX = 'message-attachments';
 
     public const MEDIA_KIND_IMAGE = 'image';
@@ -222,10 +224,32 @@ class MessageAttachment extends Model
         return true;
     }
 
+    public static function storageDiskName(): string
+    {
+        $disk = config('filesystems.message_attachments_disk', self::LOCAL_DISK_PRIVATE);
+
+        if (! is_string($disk) || trim($disk) === '') {
+            return self::LOCAL_DISK_PRIVATE;
+        }
+
+        return trim($disk);
+    }
+
+    /**
+     * @return list<string>
+     */
+    public static function readableStorageDiskNames(): array
+    {
+        return array_values(array_unique(array_filter([
+            self::LOCAL_DISK_PRIVATE,
+            self::storageDiskName(),
+        ], fn ($disk): bool => is_string($disk) && $disk !== '')));
+    }
+
     public function isLocallyDownloadable(): bool
     {
         return $this->download_status === self::DOWNLOAD_STATUS_DOWNLOADED
-            && $this->local_disk === self::LOCAL_DISK_PRIVATE
+            && in_array($this->local_disk, self::readableStorageDiskNames(), true)
             && self::isSafeLocalPath($this->local_path);
     }
 

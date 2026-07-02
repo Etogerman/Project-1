@@ -17,6 +17,8 @@ return [
 
     'contact_avatars_disk' => env('CONTACT_AVATARS_DISK', 'contact_avatars'),
 
+    'message_attachments_disk' => env('MESSAGE_ATTACHMENTS_DISK', 'local'),
+
     /*
     |--------------------------------------------------------------------------
     | Filesystem Disks
@@ -72,6 +74,20 @@ return [
             'endpoint' => env('CONTACT_AVATARS_ENDPOINT', env('AWS_ENDPOINT')),
             'use_path_style_endpoint' => env('CONTACT_AVATARS_USE_PATH_STYLE_ENDPOINT', env('AWS_USE_PATH_STYLE_ENDPOINT', false)),
             'visibility' => 'public',
+            'throw' => false,
+            'report' => false,
+        ],
+
+        'message_attachments' => [
+            'driver' => env('MESSAGE_ATTACHMENTS_DRIVER', 's3'),
+            'key' => env('MESSAGE_ATTACHMENTS_ACCESS_KEY_ID', env('AWS_ACCESS_KEY_ID')),
+            'secret' => env('MESSAGE_ATTACHMENTS_SECRET_ACCESS_KEY', env('AWS_SECRET_ACCESS_KEY')),
+            'region' => env('MESSAGE_ATTACHMENTS_DEFAULT_REGION', env('AWS_DEFAULT_REGION')),
+            'bucket' => env('MESSAGE_ATTACHMENTS_BUCKET', env('AWS_BUCKET')),
+            'url' => env('MESSAGE_ATTACHMENTS_URL', env('AWS_URL')),
+            'endpoint' => env('MESSAGE_ATTACHMENTS_ENDPOINT', env('AWS_ENDPOINT')),
+            'use_path_style_endpoint' => env('MESSAGE_ATTACHMENTS_USE_PATH_STYLE_ENDPOINT', env('AWS_USE_PATH_STYLE_ENDPOINT', false)),
+            'visibility' => 'private',
             'throw' => false,
             'report' => false,
         ],
