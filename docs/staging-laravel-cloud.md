@@ -194,8 +194,41 @@ Recommended rule of thumb:
 
 If the staging environment is reused continuously, avoid creating extra bots unless the platform or product boundary really requires it.
 
+## Durable media storage
+
+Inbound message attachments must not depend on the ephemeral Laravel Cloud
+local filesystem. Keep `FILESYSTEM_DISK=local` for the framework default, but
+configure message attachments separately:
+
+```dotenv
+MESSAGE_ATTACHMENTS_DISK=message_attachments
+MESSAGE_ATTACHMENTS_DRIVER=s3
+MESSAGE_ATTACHMENTS_ACCESS_KEY_ID=...
+MESSAGE_ATTACHMENTS_SECRET_ACCESS_KEY=...
+MESSAGE_ATTACHMENTS_DEFAULT_REGION=...
+MESSAGE_ATTACHMENTS_BUCKET=...
+MESSAGE_ATTACHMENTS_URL=...
+MESSAGE_ATTACHMENTS_ENDPOINT=...
+MESSAGE_ATTACHMENTS_USE_PATH_STYLE_ENDPOINT=false
+```
+
+Existing attachments stored on `local` remain readable when their files still
+exist. New downloads use `MESSAGE_ATTACHMENTS_DISK`.
+
+To inspect stale database pointers after a deploy, run:
+
+```bash
+php artisan message-attachments:audit-storage --limit=500
+```
+
+If the audit confirms missing files, repair only the affected records:
+
+```bash
+php artisan message-attachments:audit-storage --repair --limit=500
+php artisan bot-media:download-pending-images --force --limit=500
+```
+
 ## Notes
 
 - Do not reuse the temporary Cloudflare tunnel URL as the permanent `APP_URL`.
 - A dedicated staging database is safer than pointing staging to the local PostgreSQL instance.
-- If you later add uploads or durable bot artifacts, switch those parts from local disk to a managed storage service.
