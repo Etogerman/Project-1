@@ -58,6 +58,71 @@ class MessageAttachmentDownloadTest extends TestCase
         );
     }
 
+    public function test_store_action_uses_configured_message_attachment_disk(): void
+    {
+        config()->set('filesystems.message_attachments_disk', MessageAttachment::LOCAL_DISK_MESSAGE_ATTACHMENTS);
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        Storage::fake(MessageAttachment::LOCAL_DISK_MESSAGE_ATTACHMENTS);
+
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+            'role' => User::ROLE_ADMIN,
+        ]);
+        $attachment = $this->createAttachment([
+            'extension' => 'pdf',
+            'mime_type' => 'application/pdf',
+            'original_filename' => 'durable.pdf',
+        ]);
+
+        $storedAttachment = app(StoreMessageAttachmentLocalFileAction::class)
+            ->handle($attachment, 'durable-pdf-bytes');
+
+        $this->assertSame(MessageAttachment::LOCAL_DISK_MESSAGE_ATTACHMENTS, $storedAttachment->local_disk);
+        $this->assertTrue($storedAttachment->isLocallyDownloadable());
+        Storage::disk(MessageAttachment::LOCAL_DISK_MESSAGE_ATTACHMENTS)
+            ->assertExists((string) $storedAttachment->local_path);
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)
+            ->assertMissing((string) $storedAttachment->local_path);
+
+        $response = $this->actingAs($admin)
+            ->get(route('admin.message-attachments.download', $storedAttachment));
+
+        $response->assertOk();
+        $this->assertSame('durable-pdf-bytes', $response->streamedContent());
+    }
+
+    public function test_existing_local_attachment_remains_downloadable_when_message_attachment_disk_is_configured(): void
+    {
+        config()->set('filesystems.message_attachments_disk', MessageAttachment::LOCAL_DISK_MESSAGE_ATTACHMENTS);
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        Storage::fake(MessageAttachment::LOCAL_DISK_MESSAGE_ATTACHMENTS);
+
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+            'role' => User::ROLE_ADMIN,
+        ]);
+        $attachment = $this->createAttachment([
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+            'local_path' => MessageAttachment::LOCAL_PATH_PREFIX.'/legacy/local.txt',
+            'mime_type' => 'text/plain',
+            'extension' => 'txt',
+        ]);
+
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)
+            ->put((string) $attachment->local_path, 'legacy-local-bytes');
+
+        $this->assertTrue($attachment->isLocallyDownloadable());
+
+        $response = $this->actingAs($admin)
+            ->get(route('admin.message-attachments.download', $attachment));
+
+        $response->assertOk();
+        $this->assertSame('legacy-local-bytes', $response->streamedContent());
+    }
+
     public function test_guest_is_redirected_before_downloading_attachment(): void
     {
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
