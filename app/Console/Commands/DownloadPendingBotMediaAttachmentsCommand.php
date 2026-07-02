@@ -41,6 +41,8 @@ class DownloadPendingBotMediaAttachmentsCommand extends Command
                                 MessageAttachment::MEDIA_KIND_VIDEO_NOTE,
                                 MessageAttachment::MEDIA_KIND_AUDIO,
                                 MessageAttachment::MEDIA_KIND_VOICE,
+                                MessageAttachment::MEDIA_KIND_STICKER,
+                                MessageAttachment::MEDIA_KIND_ANIMATION,
                             ]);
                     })
                     ->orWhere(function ($query): void {
