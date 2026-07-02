@@ -7008,11 +7008,20 @@
     }
 
     .ac-message__forwarded-summary {
+        display: inline-flex;
+        gap: 0.18rem;
+        align-items: baseline;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        text-align: left;
         cursor: pointer;
         outline: none;
     }
 
-    .ac-message__forwarded-summary::marker {
+    .ac-message__forwarded-summary-icon {
         color: color-mix(in srgb, var(--ac-text-soft) 78%, transparent);
     }
 
@@ -7060,6 +7069,16 @@
 
     .ac-message__forwarded-value--warning {
         color: var(--ac-warning);
+    }
+
+    .ac-message__forwarded-link {
+        color: inherit;
+        text-decoration: underline;
+        text-underline-offset: 0.12em;
+    }
+
+    .ac-message__forwarded-link:hover {
+        color: var(--ac-primary);
     }
 
     .ac-message__edit-history,
