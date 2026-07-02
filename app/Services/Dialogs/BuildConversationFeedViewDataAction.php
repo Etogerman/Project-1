@@ -2,6 +2,7 @@
 
 namespace App\Services\Dialogs;
 
+use App\Filament\Resources\Contacts\ContactResource;
 use App\Models\Channel;
 use App\Models\ContactIdentity;
 use App\Models\Message;
@@ -486,6 +487,7 @@ class BuildConversationFeedViewDataAction
             'contact_found' => $contactIdentity !== null,
             'contact_label' => $contactLabel,
             'contact_id' => $contactIdentity?->contact_id,
+            'contact_url' => $this->resolveForwardedContactUrl($contactIdentity),
             'original_message_id' => $originalMessageId,
             'details' => $details,
         ];
@@ -856,6 +858,15 @@ class BuildConversationFeedViewDataAction
         }
 
         return $label;
+    }
+
+    protected function resolveForwardedContactUrl(?ContactIdentity $identity): ?string
+    {
+        if ($identity?->contact_id === null) {
+            return null;
+        }
+
+        return ContactResource::getUrl('view', ['record' => $identity->contact_id]);
     }
 
     protected function resolveConversationDirectionLabel(Message $message): string

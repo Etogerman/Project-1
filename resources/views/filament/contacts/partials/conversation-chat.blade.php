@@ -87,13 +87,35 @@
 
                         @if (! $isSystemMessage && filled($message['forwarded_label'] ?? null))
                             @php($forwardedDetails = $message['forwarded_context']['details'] ?? [])
-                            <details data-role="conversation-forwarded" class="ac-message__forwarded">
-                                <summary class="ac-message__forwarded-summary">
+                            @php($forwardedContactUrl = $message['forwarded_context']['contact_url'] ?? null)
+                            @php($forwardedStateKey = 'ac-forwarded-'.$message['id'])
+                            <div
+                                data-role="conversation-forwarded"
+                                class="ac-message__forwarded"
+                                x-data="{
+                                    key: @js($forwardedStateKey),
+                                    open: false,
+                                    init() {
+                                        this.open = window.sessionStorage.getItem(this.key) === '1'
+                                    },
+                                    toggle() {
+                                        this.open = ! this.open
+                                        window.sessionStorage.setItem(this.key, this.open ? '1' : '0')
+                                    },
+                                }"
+                            >
+                                <button
+                                    type="button"
+                                    class="ac-message__forwarded-summary"
+                                    x-bind:aria-expanded="open.toString()"
+                                    x-on:click.stop="toggle()"
+                                >
+                                    <span class="ac-message__forwarded-summary-icon" aria-hidden="true" x-text="open ? '▾' : '▸'"></span>
                                     {{ $message['forwarded_label'] }}
-                                </summary>
+                                </button>
 
                                 @if (! empty($forwardedDetails))
-                                    <dl class="ac-message__forwarded-details">
+                                    <dl class="ac-message__forwarded-details" x-show="open" x-cloak>
                                         @foreach ($forwardedDetails as $forwardedDetail)
                                             <div class="ac-message__forwarded-row">
                                                 <dt>{{ $forwardedDetail['label'] }}</dt>
@@ -102,13 +124,23 @@
                                                     'ac-message__forwarded-value--success' => ($forwardedDetail['tone'] ?? null) === 'success',
                                                     'ac-message__forwarded-value--warning' => ($forwardedDetail['tone'] ?? null) === 'warning',
                                                 ])>
-                                                    {{ $forwardedDetail['value'] }}
+                                                    @if (($forwardedDetail['label'] ?? null) === 'AB контакт' && filled($forwardedContactUrl))
+                                                        <a
+                                                            href="{{ $forwardedContactUrl }}"
+                                                            class="ac-message__forwarded-link"
+                                                            x-on:click.stop
+                                                        >
+                                                            {{ $forwardedDetail['value'] }}
+                                                        </a>
+                                                    @else
+                                                        {{ $forwardedDetail['value'] }}
+                                                    @endif
                                                 </dd>
                                             </div>
                                         @endforeach
                                     </dl>
                                 @endif
-                            </details>
+                            </div>
                         @endif
 
                         @if (! $isSystemMessage && is_array($contactShareContext))

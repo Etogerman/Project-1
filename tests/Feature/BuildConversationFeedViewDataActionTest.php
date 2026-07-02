@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Filament\Resources\Contacts\ContactResource;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
@@ -938,6 +939,10 @@ class BuildConversationFeedViewDataActionTest extends TestCase
         $this->assertTrue($feed[0]['forwarded_context']['contact_found']);
         $this->assertSame($contact->id, $feed[0]['forwarded_context']['contact_id']);
         $this->assertSame('#'.$contact->id.' Tanya Local', $feed[0]['forwarded_context']['contact_label']);
+        $this->assertSame(
+            ContactResource::getUrl('view', ['record' => $contact->id]),
+            $feed[0]['forwarded_context']['contact_url'],
+        );
         $this->assertSame([
             [
                 'label' => 'MAX user_id',
@@ -1088,6 +1093,10 @@ class BuildConversationFeedViewDataActionTest extends TestCase
         $this->assertSame('93372553', $feed[0]['forwarded_context']['sender_user_id']);
         $this->assertTrue($feed[0]['forwarded_context']['contact_found']);
         $this->assertSame($forwardedContact->id, $feed[0]['forwarded_context']['contact_id']);
+        $this->assertSame(
+            ContactResource::getUrl('view', ['record' => $forwardedContact->id]),
+            $feed[0]['forwarded_context']['contact_url'],
+        );
         $this->assertSame('77', $feed[0]['forwarded_context']['original_message_id']);
         $this->assertSame([
             [
