@@ -309,6 +309,7 @@
                                     @php($videoNoteMeta = collect([$mediaItem['duration_label'] ?? null, $mediaItem['file_size_label'] ?? null])->filter()->implode(' · '))
                                     @php($videoMeta = collect([$mediaItem['duration_label'] ?? null, $mediaItem['file_size_label'] ?? null])->filter()->implode(' · '))
                                     <div
+                                        wire:key="conversation-attachment-{{ $message['item_key'] ?? $message['id'] }}-{{ $mediaItem['attachment_id'] ?? $loop->index }}"
                                         data-role="conversation-attachment"
                                         data-status="{{ $mediaItem['status'] ?? 'unknown' }}"
                                         @class([
@@ -321,6 +322,8 @@
                                         <div class="ac-message-attachment__main">
                                             @if ($isInlineAudioAttachment)
                                                 <div
+                                                    wire:ignore
+                                                    wire:key="conversation-voice-player-{{ $message['item_key'] ?? $message['id'] }}-{{ $mediaItem['attachment_id'] ?? $loop->index }}"
                                                     data-role="conversation-voice-player"
                                                     class="ac-voice-player"
                                                     data-voice-title="{{ $mediaItem['media_kind_label'] ?? 'Аудио' }} {{ $mediaItem['title'] ?? '' }}"
@@ -382,6 +385,8 @@
                                                 </div>
                                             @elseif ($isInlineVideoNoteAttachment)
                                                 <div
+                                                    wire:ignore
+                                                    wire:key="conversation-video-note-player-{{ $message['item_key'] ?? $message['id'] }}-{{ $mediaItem['attachment_id'] ?? $loop->index }}"
                                                     data-role="conversation-video-note-player"
                                                     class="ac-video-note-player"
                                                     data-video-note-title="{{ $mediaItem['media_kind_label'] ?? 'Кружок' }} {{ $mediaItem['title'] ?? '' }}"
@@ -427,6 +432,8 @@
                                                 </div>
                                             @elseif ($isInlineVideoAttachment)
                                                 <div
+                                                    wire:ignore
+                                                    wire:key="conversation-video-player-{{ $message['item_key'] ?? $message['id'] }}-{{ $mediaItem['attachment_id'] ?? $loop->index }}"
                                                     data-role="conversation-video-player"
                                                     class="ac-video-player"
                                                     data-video-title="{{ $mediaItem['media_kind_label'] ?? 'Видео' }} {{ $mediaItem['title'] ?? '' }}"
