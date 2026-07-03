@@ -895,6 +895,12 @@ class StoreInboundMessageAction
             ])->save();
         }
 
+        if ($storedMessage->text === null && $message->text !== null) {
+            $storedMessage->forceFill([
+                'text' => $message->text,
+            ])->save();
+        }
+
         if ($message->richText !== null && $storedMessage->rich_text !== $message->richText) {
             $storedMessage->forceFill([
                 'rich_text' => $message->richText,

@@ -1471,6 +1471,122 @@ class BotIncomingMessageNormalizerTest extends TestCase
         $this->assertStringNotContainsString('access_token', json_encode($message->media[0], JSON_THROW_ON_ERROR));
     }
 
+    public function test_max_forwarded_media_message_uses_link_text_and_markup(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+
+        $payload = [
+            'update_type' => 'message_created',
+            'user_locale' => 'ru',
+            'message' => [
+                'sender' => [
+                    'user_id' => 500,
+                    'username' => 'max_user',
+                    'is_bot' => false,
+                ],
+                'recipient' => [
+                    'chat_id' => 700,
+                ],
+                'body' => [
+                    'mid' => 'max-forwarded-gallery-77',
+                    'text' => null,
+                ],
+                'link' => [
+                    'type' => 'forward',
+                    'sender' => [
+                        'name' => 'Герман Абрикосов',
+                        'is_bot' => false,
+                        'user_id' => 228532008,
+                    ],
+                    'message' => [
+                        'mid' => 'forwarded-source-2',
+                        'text' => "plain\nbold\nitalic under\nstrike",
+                        'markup' => [
+                            [
+                                'from' => 6,
+                                'type' => 'strong',
+                                'length' => 4,
+                            ],
+                            [
+                                'from' => 11,
+                                'type' => 'emphasized',
+                                'length' => 12,
+                            ],
+                            [
+                                'from' => 11,
+                                'type' => 'underline',
+                                'length' => 12,
+                            ],
+                            [
+                                'from' => 24,
+                                'type' => 'strikethrough',
+                                'length' => 6,
+                            ],
+                        ],
+                        'attachments' => [
+                            [
+                                'type' => 'image',
+                                'payload' => [
+                                    'photo_id' => 'forwarded-photo-1',
+                                    'url' => 'https://max.example/private/photo.jpg?access_token=secret-token',
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertSame("plain\nbold\nitalic under\nstrike", $message->text);
+        $this->assertSame([
+            'version' => 1,
+            'plain_text' => "plain\nbold\nitalic under\nstrike",
+            'runs' => [
+                [
+                    'text' => "plain\n",
+                    'marks' => [],
+                ],
+                [
+                    'text' => 'bold',
+                    'marks' => [
+                        ['type' => 'bold'],
+                    ],
+                ],
+                [
+                    'text' => "\n",
+                    'marks' => [],
+                ],
+                [
+                    'text' => 'italic under',
+                    'marks' => [
+                        ['type' => 'italic'],
+                        ['type' => 'underline'],
+                    ],
+                ],
+                [
+                    'text' => "\n",
+                    'marks' => [],
+                ],
+                [
+                    'text' => 'strike',
+                    'marks' => [
+                        ['type' => 'strikethrough'],
+                    ],
+                ],
+            ],
+        ], $message->richText);
+        $this->assertCount(1, $message->media);
+        $this->assertSame(MessageAttachment::MEDIA_KIND_IMAGE, $message->media[0]['media_kind']);
+        $this->assertSame('forwarded-photo-1', $message->media[0]['provider_attachment_key']);
+        $this->assertStringNotContainsString('secret-token', json_encode($message->media[0], JSON_THROW_ON_ERROR));
+        $this->assertStringNotContainsString('access_token', json_encode($message->media[0], JSON_THROW_ON_ERROR));
+    }
+
     public function test_max_plain_video_attachment_stays_regular_video_without_round_marker(): void
     {
         $channel = Channel::factory()->create([

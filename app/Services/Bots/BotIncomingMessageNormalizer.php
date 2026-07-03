@@ -1111,7 +1111,7 @@ class BotIncomingMessageNormalizer
      */
     protected function resolveMaxTextAndRichText(array $message): array
     {
-        foreach ([
+        $candidates = [
             [
                 'text' => data_get($message, 'body.text'),
                 'markup' => data_get($message, 'body.markup'),
@@ -1120,15 +1120,28 @@ class BotIncomingMessageNormalizer
                 'text' => data_get($message, 'text'),
                 'markup' => data_get($message, 'markup'),
             ],
-            [
-                'text' => data_get($message, 'link.message.body.text'),
-                'markup' => data_get($message, 'link.message.body.markup'),
-            ],
-            [
-                'text' => data_get($message, 'link.message.text'),
-                'markup' => data_get($message, 'link.message.markup'),
-            ],
-        ] as $candidate) {
+        ];
+
+        // Текст пересланного сообщения используем только для link.type=forward:
+        // у reply в link.message лежит ЦИТИРУЕМОЕ сообщение, его текст не наш.
+        $forwardedLink = $this->resolveMaxForwardedLink($message);
+
+        if ($forwardedLink !== null) {
+            $candidates[] = [
+                'text' => data_get($forwardedLink, 'message.body.text'),
+                'markup' => data_get($forwardedLink, 'message.body.markup'),
+            ];
+            $candidates[] = [
+                'text' => data_get($forwardedLink, 'message.text'),
+                'markup' => data_get($forwardedLink, 'message.markup'),
+            ];
+            $candidates[] = [
+                'text' => data_get($forwardedLink, 'message.caption'),
+                'markup' => null,
+            ];
+        }
+
+        foreach ($candidates as $candidate) {
             $text = $this->normalizeText($candidate['text'] ?? null);
 
             if ($text === null) {
@@ -1142,6 +1155,25 @@ class BotIncomingMessageNormalizer
         }
 
         return [null, null];
+    }
+
+    /**
+     * @param  array<string, mixed>  $message
+     * @return array<string, mixed>|null
+     */
+    protected function resolveMaxForwardedLink(array $message): ?array
+    {
+        $link = data_get($message, 'link');
+
+        if (! is_array($link)) {
+            return null;
+        }
+
+        $type = $this->normalizeText(data_get($link, 'type'));
+
+        return strtolower((string) $type) === 'forward'
+            ? $link
+            : null;
     }
 
     /**
@@ -1161,7 +1193,7 @@ class BotIncomingMessageNormalizer
             }
 
             $type = $this->mapMaxMarkupType(data_get($element, 'type'));
-            $from = $this->normalizeNonNegativeInteger(data_get($element, 'from'));
+            $from = $this->normalizeNonNegativeInteger(data_get($element, 'from') ?? data_get($element, 'offset'));
             $length = $this->normalizeNonNegativeInteger(data_get($element, 'length'));
 
             if ($type === null || $from === null || $length === null || $length <= 0) {
