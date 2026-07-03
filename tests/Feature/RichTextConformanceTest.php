@@ -106,10 +106,6 @@ class RichTextConformanceTest extends TestCase
     public static function telegramDroppedEntities(): array
     {
         return [
-            'mention (Bot API)' => ['mention'],
-            'mention (TDLib)' => [['_' => 'textEntityTypeMention']],
-            'text_mention (Bot API)' => ['text_mention'],
-            'mention_name (TDLib)' => [['_' => 'textEntityTypeMentionName', 'user_id' => 123]],
             'custom_emoji (Bot API)' => ['custom_emoji'],
             'custom_emoji (TDLib)' => [['_' => 'textEntityTypeCustomEmoji']],
             'hashtag' => ['hashtag'],
@@ -138,6 +134,126 @@ class RichTextConformanceTest extends TestCase
         // Контракт деградации: тип отброшен ЦЕЛИКОМ (rich_text = null),
         // plain-текст живёт отдельно в messages.text и не затрагивается.
         $this->assertNull($richText, 'Неподдерживаемый тип должен деградировать до plain (клетка degrades в матрице)');
+    }
+
+    // ── mention (S1, ТЗ tz-mention-mark-v1.1-final) ──────────────────────────
+
+    public function test_telegram_username_mention_maps_to_mention_mark(): void
+    {
+        $text = 'привет @durov смотри';
+        $offset = mb_strlen('привет ');
+        $length = mb_strlen('@durov');
+
+        foreach (['mention', ['_' => 'textEntityTypeMention']] as $type) {
+            $richText = app(NormalizeTelegramAccountRichTextAction::class)->handle($text, [
+                'text' => $text,
+                'entities' => [['type' => $type, 'offset' => $offset, 'length' => $length]],
+            ]);
+
+            $this->assertNotNull($richText);
+            $marks = collect($richText['runs'])->firstWhere('text', '@durov')['marks'] ?? [];
+            $this->assertContainsEquals(['type' => 'mention', 'username' => 'durov'], $marks);
+        }
+    }
+
+    public function test_telegram_text_mention_maps_to_mention_mark_with_user_id(): void
+    {
+        $text = 'prefix target suffix';
+
+        // Bot API: user на уровне entity; TDLib: user_id внутри type.
+        $cases = [
+            ['type' => 'text_mention', 'user' => ['id' => 9223372036854775807], 'offset' => 7, 'length' => 6],
+            ['type' => ['_' => 'textEntityTypeMentionName', 'user_id' => 9223372036854775807], 'offset' => 7, 'length' => 6],
+        ];
+
+        foreach ($cases as $entity) {
+            $richText = app(NormalizeTelegramAccountRichTextAction::class)->handle($text, [
+                'text' => $text,
+                'entities' => [$entity],
+            ]);
+
+            $this->assertNotNull($richText);
+            $marks = collect($richText['runs'])->firstWhere('text', 'target')['marks'] ?? [];
+            // int64 хранится строкой — провайдерский id не влезает в js-int.
+            $this->assertContainsEquals(['type' => 'mention', 'user_id' => '9223372036854775807'], $marks);
+        }
+    }
+
+    public function test_emoji_before_mention_does_not_shift_marks(): void
+    {
+        $text = '😀😀 @durov хвост';
+        // offset в UTF-16 code units: каждый эмодзи — 2 единицы.
+        $offset = 5; // 2+2 (эмодзи) + 1 (пробел)
+        $length = mb_strlen('@durov');
+
+        $richText = app(NormalizeTelegramAccountRichTextAction::class)->handle($text, [
+            'text' => $text,
+            'entities' => [['type' => 'mention', 'offset' => $offset, 'length' => $length]],
+        ]);
+
+        $this->assertNotNull($richText);
+        $marks = collect($richText['runs'])->firstWhere('text', '@durov')['marks'] ?? [];
+        $this->assertContainsEquals(['type' => 'mention', 'username' => 'durov'], $marks);
+    }
+
+    public function test_invalid_mention_mark_is_dropped_pointwise_not_whole_rich_text(): void
+    {
+        $normalized = app(\App\Services\Messages\AbRichTextNormalizer::class)->normalize([
+            'version' => 1,
+            'plain_text' => 'ab',
+            'runs' => [
+                ['text' => 'a', 'marks' => [['type' => 'mention'], ['type' => 'bold']]],
+                ['text' => 'b', 'marks' => []],
+            ],
+        ]);
+
+        // Невалидный mention (без username и user_id) удалён точечно:
+        // текст цел, bold сохранился, rich_text НЕ забракован.
+        $this->assertNotNull($normalized);
+        $this->assertSame('ab', $normalized['plain_text']);
+        $marksA = collect($normalized['runs'])->firstWhere('text', 'a')['marks'] ?? [];
+        $this->assertContainsEquals(['type' => 'bold'], $marksA);
+        $this->assertNotContains('mention', array_column($marksA, 'type'));
+    }
+
+    public function test_mention_renderer_escapes_data_attributes_against_xss(): void
+    {
+        $html = app(AbRichTextHtmlRenderer::class)->render([
+            'version' => 1,
+            'plain_text' => 'x',
+            'runs' => [['text' => 'x', 'marks' => [[
+                'type' => 'mention',
+                'username' => '" onmouseover="alert(1)',
+                'user_id' => '"><script>alert(2)</script>',
+            ]]]],
+        ]);
+
+        $this->assertNotNull($html);
+        $this->assertStringContainsString('ac-rich-text-mention', $html);
+        $this->assertStringNotContainsString('<script>', $html);
+        $this->assertStringNotContainsString('onmouseover="alert', $html);
+        $this->assertStringContainsString('&quot;', $html);
+    }
+
+    public function test_mention_nests_inside_link_keeping_it_clickable(): void
+    {
+        $html = app(AbRichTextHtmlRenderer::class)->render([
+            'version' => 1,
+            'plain_text' => 'x',
+            'runs' => [['text' => 'x', 'marks' => [
+                ['type' => 'bold'],
+                ['type' => 'link', 'href' => 'https://example.test/u'],
+                ['type' => 'mention', 'username' => 'durov'],
+            ]]],
+        ]);
+
+        $this->assertNotNull($html);
+        // MARK_PRIORITY: link(30) снаружи, mention(33) внутри, bold(40) глубже —
+        // ссылка остаётся кликабельной, mention не разрывает <a>.
+        $this->assertMatchesRegularExpression(
+            '#<a [^>]*href="https://example\.test/u"[^>]*><span class="ac-rich-text-mention"[^>]*><strong>x</strong></span></a>#',
+            $html
+        );
     }
 
     // ── MAX (markup → пре-конверсия в entities → общий конвейер) ─────────────

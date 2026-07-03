@@ -223,12 +223,46 @@ class NormalizeTelegramAccountRichTextAction
             'highlight' => ['type' => 'highlight'],
             'highlighted' => ['type' => 'highlight'],
             'list' => ['type' => 'list'],
+            'mention' => $this->resolveMentionUsernameMark($entityText),
+            'textEntityTypeMention' => $this->resolveMentionUsernameMark($entityText),
+            'text_mention' => $this->resolveMentionUserIdMark(data_get($entity, 'user.id')),
+            'textEntityTypeMentionName' => $this->resolveMentionUserIdMark(
+                data_get($entity, 'type.user_id') ?? data_get($entity, 'user_id')
+            ),
             'textEntityTypeTextUrl' => $this->resolveLinkMark(data_get($entity, 'type.url')),
             'text_link' => $this->resolveLinkMark(data_get($entity, 'url')),
             'textEntityTypeUrl' => $this->resolveLinkMark($entityText),
             'url' => $this->resolveLinkMark($entityText),
             default => null,
         };
+    }
+
+    /**
+     * @return array{type: 'mention', username: string}|null
+     */
+    private function resolveMentionUsernameMark(string $entityText): ?array
+    {
+        $username = ltrim(trim($entityText), '@');
+
+        return $username !== ''
+            ? ['type' => 'mention', 'username' => $username]
+            : null;
+    }
+
+    /**
+     * @return array{type: 'mention', user_id: string}|null
+     */
+    private function resolveMentionUserIdMark(mixed $userId): ?array
+    {
+        if (! is_string($userId) && ! is_int($userId)) {
+            return null;
+        }
+
+        $userId = trim((string) $userId);
+
+        return $userId !== ''
+            ? ['type' => 'mention', 'user_id' => $userId]
+            : null;
     }
 
     /**

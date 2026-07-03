@@ -7301,6 +7301,14 @@
         padding: 0 0.12rem;
     }
 
+    .ac-message__text--html .ac-rich-text-mention {
+        border-radius: 6px;
+        background: color-mix(in srgb, var(--ac-primary) 13%, transparent);
+        color: var(--ac-primary);
+        padding: 0 0.2rem;
+        font-weight: 600;
+    }
+
     .ac-message__text--html .ac-rich-text-list {
         display: block;
         padding-left: 1.1em;

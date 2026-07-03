@@ -15,6 +15,7 @@ class AbRichTextNormalizer
         'quote' => 10,
         'pre' => 20,
         'link' => 30,
+        'mention' => 33,
         'heading' => 35,
         'bold' => 40,
         'italic' => 50,
@@ -110,14 +111,24 @@ class AbRichTextNormalizer
                 return null;
             }
 
-            $normalizedMark = match ($type) {
-                'link' => $this->normalizeLinkMark($mark),
-                'pre' => $this->normalizePreMark($mark),
-                default => ['type' => $type],
-            };
+            // Невалидный mention удаляется ТОЧЕЧНО (contract v1.1): текст и
+            // остальные marks сохраняются, rich_text не бракуется целиком.
+            if ($type === 'mention') {
+                $normalizedMark = $this->normalizeMentionMark($mark);
 
-            if ($normalizedMark === null) {
-                return null;
+                if ($normalizedMark === null) {
+                    continue;
+                }
+            } else {
+                $normalizedMark = match ($type) {
+                    'link' => $this->normalizeLinkMark($mark),
+                    'pre' => $this->normalizePreMark($mark),
+                    default => ['type' => $type],
+                };
+
+                if ($normalizedMark === null) {
+                    return null;
+                }
             }
 
             $key = $this->markKey($normalizedMark);
@@ -141,6 +152,35 @@ class AbRichTextNormalizer
         });
 
         return $normalizedMarks;
+    }
+
+    /**
+     * @param  array<string, mixed>  $mark
+     * @return array{type: 'link', href: string}|null
+     */
+    private function normalizeMentionMark(array $mark): ?array
+    {
+        $username = $mark['username'] ?? null;
+        $username = is_string($username) ? ltrim(trim($username), '@') : '';
+
+        $userId = $mark['user_id'] ?? null;
+        $userId = is_string($userId) || is_int($userId) ? trim((string) $userId) : '';
+
+        if ($username === '' && $userId === '') {
+            return null;
+        }
+
+        $normalized = ['type' => 'mention'];
+
+        if ($username !== '') {
+            $normalized['username'] = $username;
+        }
+
+        if ($userId !== '') {
+            $normalized['user_id'] = $userId;
+        }
+
+        return $normalized;
     }
 
     /**
