@@ -7302,7 +7302,28 @@
     }
 
     .ac-message__text--html .ac-rich-text-list {
-        display: inline;
+        display: block;
+        padding-left: 1.1em;
+        position: relative;
+    }
+
+    .ac-message__text--html .ac-rich-text-list::before {
+        content: '\2022';
+        position: absolute;
+        left: 0.15em;
+        color: var(--ac-text-soft);
+    }
+
+    /* Спойлер: отправитель скрыл текст — показываем размытым, раскрытие по hover. */
+    .ac-message__text--html .ac-rich-text-spoiler {
+        filter: blur(4px);
+        border-radius: 4px;
+        cursor: pointer;
+        transition: filter 0.15s ease;
+    }
+
+    .ac-message__text--html .ac-rich-text-spoiler:hover {
+        filter: none;
     }
 
     .ac-message__timestamp {

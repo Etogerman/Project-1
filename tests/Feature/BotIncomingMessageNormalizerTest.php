@@ -1692,6 +1692,74 @@ class BotIncomingMessageNormalizerTest extends TestCase
         $this->assertSame('Да, подходит', $message->text);
     }
 
+    public function test_max_multiline_monospaced_becomes_pre_block(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $text = "обычный текст\nstrpos(\$a);\nreturn;\nи хвост";
+        // monospaced-фрагмент "strpos($a);\nreturn;" — многострочный (содержит \n)
+        $from = mb_strpos($text, 'strpos');
+        $length = mb_strlen("strpos(\$a);\nreturn;");
+
+        $payload = [
+            'update_type' => 'message_created',
+            'user_locale' => 'ru',
+            'message' => [
+                'sender' => ['user_id' => 503, 'username' => 'max_user', 'is_bot' => false],
+                'recipient' => ['chat_id' => 703],
+                'body' => [
+                    'mid' => 'max-mono-block-1',
+                    'text' => $text,
+                    'markup' => [
+                        ['type' => 'monospaced', 'from' => $from, 'length' => $length],
+                    ],
+                ],
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertNotNull($message->richText);
+        $marks = collect($message->richText['runs'])->flatMap(fn (array $run): array => $run['marks']);
+        $this->assertTrue($marks->contains(fn (array $mark): bool => $mark['type'] === 'pre'));
+        $this->assertFalse($marks->contains(fn (array $mark): bool => $mark['type'] === 'code'));
+    }
+
+    public function test_max_single_line_monospaced_stays_inline_code(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $text = 'вызови strpos($a) и всё';
+        $from = mb_strpos($text, 'strpos');
+        $length = mb_strlen('strpos($a)');
+
+        $payload = [
+            'update_type' => 'message_created',
+            'user_locale' => 'ru',
+            'message' => [
+                'sender' => ['user_id' => 504, 'username' => 'max_user', 'is_bot' => false],
+                'recipient' => ['chat_id' => 704],
+                'body' => [
+                    'mid' => 'max-mono-inline-1',
+                    'text' => $text,
+                    'markup' => [
+                        ['type' => 'monospaced', 'from' => $from, 'length' => $length],
+                    ],
+                ],
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertNotNull($message->richText);
+        $marks = collect($message->richText['runs'])->flatMap(fn (array $run): array => $run['marks']);
+        $this->assertTrue($marks->contains(fn (array $mark): bool => $mark['type'] === 'code'));
+    }
+
     public function test_max_link_without_type_is_fail_closed(): void
     {
         $channel = Channel::factory()->create([

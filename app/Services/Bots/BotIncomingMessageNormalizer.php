@@ -1210,6 +1210,12 @@ class BotIncomingMessageNormalizer
                 continue;
             }
 
+            // MAX не различает инлайновый `code` и блок ```: многострочный
+            // monospaced-фрагмент считаем код-блоком (pre), однострочный — code.
+            if ($type === 'code' && str_contains(mb_substr($plainText, $from, $length), "\n")) {
+                $type = 'pre';
+            }
+
             $range = $this->maxMarkupRangeToUtf16Range($plainText, $from, $length);
 
             if ($range === null) {
