@@ -3022,6 +3022,55 @@ class StoreInboundMessageActionTest extends TestCase
         // Инвариант: rich_text либо null, либо согласован с text.
     }
 
+    public function test_redelivery_does_not_rollback_formatting_only_edit(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $originalRich = [
+            'version' => 1,
+            'plain_text' => 'Тот же текст',
+            'runs' => [['text' => 'Тот же текст', 'marks' => [['type' => 'bold']]]],
+        ];
+        $editedRich = [
+            'version' => 1,
+            'plain_text' => 'Тот же текст',
+            'runs' => [['text' => 'Тот же текст', 'marks' => [['type' => 'italic']]]],
+        ];
+
+        app(StoreInboundMessageAction::class)->handle($channel, $this->makeInboundUserMessage(
+            channel: $channel,
+            providerEventKey: 'rich-sync-update-3',
+            externalMessageId: 'rich-sync-message-3',
+            text: 'Тот же текст',
+            messageParameter: null,
+            receivedAt: Carbon::parse('2026-07-03 10:10:00'),
+            richText: $originalRich,
+        ));
+
+        // Правка МЕНЯЕТ ТОЛЬКО форматирование: text тот же, разметка другая.
+        $stored = Message::query()->where('provider_event_key', 'rich-sync-update-3')->firstOrFail();
+        $stored->forceFill([
+            'rich_text' => $editedRich,
+            'edited_at' => Carbon::parse('2026-07-03 10:11:00'),
+        ])->save();
+
+        // Redelivery ОРИГИНАЛА: text совпадает с plain_text — без edited_at-гейта
+        // guard пропустил бы обновление и откатил разметку правки.
+        app(StoreInboundMessageAction::class)->handle($channel, $this->makeInboundUserMessage(
+            channel: $channel,
+            providerEventKey: 'rich-sync-update-3',
+            externalMessageId: 'rich-sync-message-3',
+            text: 'Тот же текст',
+            messageParameter: null,
+            receivedAt: Carbon::parse('2026-07-03 10:10:00'),
+            richText: $originalRich,
+        ));
+
+        $stored->refresh();
+        $this->assertEquals($editedRich, $stored->rich_text);
+    }
+
     private function makeInboundUserMessage(
         Channel $channel,
         string $providerEventKey,

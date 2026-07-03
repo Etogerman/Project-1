@@ -382,6 +382,37 @@ class RichTextConformanceTest extends TestCase
         $this->assertStringContainsString($expectedFragment, $html);
     }
 
+    public function test_every_mark_priority_type_has_renderer_branch(): void
+    {
+        // Инвариант: нормализатор (MARK_PRIORITY) и рендерер (wrapHtml) ведут
+        // параллельные списки типов. Новый тип, добавленный в MARK_PRIORITY без
+        // рендер-ветки, молча срендерился бы default-веткой без обёртки.
+        $reflection = new \ReflectionClassConstant(
+            \App\Services\Messages\AbRichTextNormalizer::class,
+            'MARK_PRIORITY'
+        );
+        $requiredData = [
+            'link' => ['href' => 'https://example.test/i'],
+            'mention' => ['username' => 'durov'],
+        ];
+
+        foreach (array_keys($reflection->getValue()) as $type) {
+            $mark = array_merge(['type' => $type], $requiredData[$type] ?? []);
+            $html = app(AbRichTextHtmlRenderer::class)->render([
+                'version' => 1,
+                'plain_text' => 'x',
+                'runs' => [['text' => 'x', 'marks' => [$mark]]],
+            ]);
+
+            $this->assertNotNull($html, "Тип {$type} не прошёл нормализацию");
+            $this->assertNotSame(
+                'x',
+                $html,
+                "Тип {$type} есть в MARK_PRIORITY, но wrapHtml не имеет для него ветки (default)"
+            );
+        }
+    }
+
     public function test_renderer_link_has_safe_attributes(): void
     {
         $html = app(AbRichTextHtmlRenderer::class)->render([
