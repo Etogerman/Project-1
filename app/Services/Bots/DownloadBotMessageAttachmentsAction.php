@@ -703,6 +703,11 @@ class DownloadBotMessageAttachmentsAction
     {
         $candidates = [];
 
+        // Здесь link.message.* читается НАМЕРЕННО без forward-гейта (в отличие от
+        // BotIncomingMessageNormalizer): это lookup-стог для матчинга по уже
+        // сохранённому provider_file_reference, свои вложения идут в стоге раньше
+        // link-овских, а строки MessageAttachment, созданные из reply-цитат до
+        // f207b891, должны оставаться скачиваемыми (грандфазеринг).
         foreach ([
             data_get($payload, 'attachments'),
             data_get($payload, 'body.attachments'),
