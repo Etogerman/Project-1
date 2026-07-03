@@ -266,7 +266,15 @@ class DownloadBotMessageAttachmentsAction
         $mimeType = $headerMimeType
             ?? ($isTelegramStickerThumbnail ? $this->mimeTypeFromExtension($extension) : null)
             ?? $attachment->mime_type
-            ?? $this->mimeTypeFromExtension($extension);
+            ?? $this->mimeTypeFromExtension($extension)
+            // CDN MAX может не прислать Content-Type, а payload — mime/extension:
+            // последний рубеж — определить тип по первым байтам самого файла
+            // (без типа previewKind пуст, и вместо плеера оператор видит карточку).
+            ?? $this->mimeTypeFromContents($downloaded->contents);
+
+        if ($extension === null && $mimeType !== null) {
+            $extension = $this->extensionFromMimeType($mimeType);
+        }
 
         $values = [
             'mime_type' => $mimeType,
@@ -825,6 +833,27 @@ class DownloadBotMessageAttachmentsAction
         $extension = MessageAttachment::sanitizeExtension(pathinfo((string) $filename, PATHINFO_EXTENSION));
 
         return $extension !== '' ? $extension : null;
+    }
+
+    private function mimeTypeFromContents(string $contents): ?string
+    {
+        if ($contents === '') {
+            return null;
+        }
+
+        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+
+        if ($finfo === false) {
+            return null;
+        }
+
+        try {
+            $detected = finfo_buffer($finfo, $contents);
+        } finally {
+            finfo_close($finfo);
+        }
+
+        return $this->normalizeMimeType(is_string($detected) ? $detected : null);
     }
 
     private function extensionFromMimeType(?string $mimeType): ?string
