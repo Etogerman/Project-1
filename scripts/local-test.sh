@@ -17,6 +17,7 @@ TEST_DB="${LOCAL_TEST_DB:-abrikosoff_connector_recovery_test}"
 
 exec docker exec \
     -e APP_ENV=testing \
+    -e APP_URL=http://localhost \
     -e DB_DATABASE="$TEST_DB" \
     -e CACHE_STORE=array \
     -e QUEUE_CONNECTION=sync \
