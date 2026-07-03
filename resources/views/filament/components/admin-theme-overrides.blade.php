@@ -7282,6 +7282,58 @@
         white-space: pre-wrap;
     }
 
+    .ac-message__text--html blockquote {
+        margin: 0.55rem 0;
+        border-left: 3px solid color-mix(in srgb, var(--ac-primary) 72%, transparent);
+        border-radius: 10px;
+        background: color-mix(in srgb, var(--ac-primary) 11%, transparent);
+        padding: 0.38rem 0.62rem;
+    }
+
+    .ac-message__text--html .ac-rich-text-heading {
+        font-weight: 800;
+    }
+
+    .ac-message__text--html .ac-rich-text-highlight {
+        border-radius: 6px;
+        background: color-mix(in srgb, var(--ac-warning) 26%, transparent);
+        color: inherit;
+        padding: 0 0.12rem;
+    }
+
+    .ac-message__text--html .ac-rich-text-mention {
+        border-radius: 6px;
+        background: color-mix(in srgb, var(--ac-primary) 13%, transparent);
+        color: var(--ac-primary);
+        padding: 0 0.2rem;
+        font-weight: 600;
+    }
+
+    .ac-message__text--html .ac-rich-text-list {
+        display: block;
+        padding-left: 1.1em;
+        position: relative;
+    }
+
+    .ac-message__text--html .ac-rich-text-list::before {
+        content: '\2022';
+        position: absolute;
+        left: 0.15em;
+        color: var(--ac-text-soft);
+    }
+
+    /* Спойлер: отправитель скрыл текст — показываем размытым, раскрытие по hover. */
+    .ac-message__text--html .ac-rich-text-spoiler {
+        filter: blur(4px);
+        border-radius: 4px;
+        cursor: pointer;
+        transition: filter 0.15s ease;
+    }
+
+    .ac-message__text--html .ac-rich-text-spoiler:hover {
+        filter: none;
+    }
+
     .ac-message__timestamp {
         flex: 0 0 auto;
         font-size: 0.72rem;

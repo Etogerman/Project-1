@@ -145,6 +145,33 @@ class AbRichTextHtmlRendererTest extends TestCase
         );
     }
 
+    public function test_renders_heading_highlight_and_list_marks(): void
+    {
+        $html = app(AbRichTextHtmlRenderer::class)->render([
+            'version' => 1,
+            'plain_text' => 'Заголовок важно пункт',
+            'runs' => [
+                [
+                    'text' => 'Заголовок',
+                    'marks' => [['type' => 'heading']],
+                ],
+                [
+                    'text' => ' важно',
+                    'marks' => [['type' => 'highlight']],
+                ],
+                [
+                    'text' => ' пункт',
+                    'marks' => [['type' => 'list']],
+                ],
+            ],
+        ]);
+
+        $this->assertSame(
+            '<strong class="ac-rich-text-heading">Заголовок</strong><mark class="ac-rich-text-highlight"> важно</mark><span class="ac-rich-text-list"> пункт</span>',
+            $html,
+        );
+    }
+
     public function test_rejects_legacy_string_marks_and_inconsistent_plain_text(): void
     {
         $normalizer = app(AbRichTextNormalizer::class);
