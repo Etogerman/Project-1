@@ -106,6 +106,9 @@ class AbRichTextHtmlRenderer
             'code' => '<code>'.$html.'</code>',
             'pre' => $this->wrapPreHtml($html, $mark),
             'quote' => '<blockquote>'.$html.'</blockquote>',
+            'heading' => '<strong class="ac-rich-text-heading">'.$html.'</strong>',
+            'highlight' => '<mark class="ac-rich-text-highlight">'.$html.'</mark>',
+            'list' => '<span class="ac-rich-text-list">'.$html.'</span>',
             'link' => $this->wrapLinkHtml($html, $mark),
             default => $html,
         };

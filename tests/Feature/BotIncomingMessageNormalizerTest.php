@@ -1113,6 +1113,133 @@ class BotIncomingMessageNormalizerTest extends TestCase
         $this->assertSame('max-contact-vcf-1', $message->providerEventKey);
     }
 
+    public function test_max_text_markup_is_normalized_to_ab_rich_text(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+
+        $text = "😀 обычный\nЖирный\nКурсив\nПодчеркнутый\nЗачеркнутый\nЦитата\nПодсветка\nМоно\nСсылка";
+        $offsetOf = fn (string $needle): int => (int) mb_strpos($text, $needle);
+        $lengthOf = fn (string $needle): int => mb_strlen($needle);
+
+        $payload = [
+            'update_type' => 'message_created',
+            'user_locale' => 'ru',
+            'message' => [
+                'sender' => [
+                    'user_id' => 500,
+                    'username' => 'max_user',
+                    'is_bot' => false,
+                ],
+                'recipient' => [
+                    'chat_id' => 700,
+                ],
+                'body' => [
+                    'mid' => 'max-rich-text-77',
+                    'text' => $text,
+                    'markup' => [
+                        ['type' => 'strong', 'from' => $offsetOf('Жирный'), 'length' => $lengthOf('Жирный')],
+                        ['type' => 'emphasized', 'from' => $offsetOf('Курсив'), 'length' => $lengthOf('Курсив')],
+                        ['type' => 'underline', 'from' => $offsetOf('Подчеркнутый'), 'length' => $lengthOf('Подчеркнутый')],
+                        ['type' => 'strikethrough', 'from' => $offsetOf('Зачеркнутый'), 'length' => $lengthOf('Зачеркнутый')],
+                        ['type' => 'quote', 'from' => $offsetOf('Цитата'), 'length' => $lengthOf('Цитата')],
+                        ['type' => 'highlighted', 'from' => $offsetOf('Подсветка'), 'length' => $lengthOf('Подсветка')],
+                        ['type' => 'monospaced', 'from' => $offsetOf('Моно'), 'length' => $lengthOf('Моно')],
+                        ['type' => 'link', 'from' => $offsetOf('Ссылка'), 'length' => $lengthOf('Ссылка'), 'url' => 'https://example.test/max'],
+                    ],
+                ],
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertSame($text, $message->text);
+        $this->assertIsArray($message->richText);
+
+        $markedRuns = collect($message->richText['runs'])
+            ->filter(fn (array $run): bool => $run['marks'] !== [])
+            ->mapWithKeys(fn (array $run): array => [$run['text'] => $run['marks']])
+            ->all();
+
+        $this->assertSame([['type' => 'bold']], $markedRuns['Жирный']);
+        $this->assertSame([['type' => 'italic']], $markedRuns['Курсив']);
+        $this->assertSame([['type' => 'underline']], $markedRuns['Подчеркнутый']);
+        $this->assertSame([['type' => 'strikethrough']], $markedRuns['Зачеркнутый']);
+        $this->assertSame([['type' => 'quote']], $markedRuns['Цитата']);
+        $this->assertSame([['type' => 'highlight']], $markedRuns['Подсветка']);
+        $this->assertSame([['type' => 'code']], $markedRuns['Моно']);
+        $this->assertSame([['type' => 'link', 'href' => 'https://example.test/max']], $markedRuns['Ссылка']);
+    }
+
+    public function test_max_forwarded_message_uses_nested_body_text_and_markup(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+
+        $text = "Пересланный текст\nЖирная подпись";
+        $offset = (int) mb_strpos($text, 'Жирная подпись');
+
+        $payload = [
+            'update_type' => 'message_created',
+            'user_locale' => 'ru',
+            'message' => [
+                'sender' => [
+                    'user_id' => 500,
+                    'username' => 'max_user',
+                    'is_bot' => false,
+                ],
+                'recipient' => [
+                    'chat_id' => 700,
+                ],
+                'body' => [
+                    'mid' => 'max-forwarded-rich-text-77',
+                    'text' => null,
+                ],
+                'link' => [
+                    'type' => 'forward',
+                    'sender' => [
+                        'name' => 'Tanya',
+                        'is_bot' => false,
+                    ],
+                    'message' => [
+                        'body' => [
+                            'text' => $text,
+                            'markup' => [
+                                [
+                                    'type' => 'strong',
+                                    'from' => $offset,
+                                    'length' => mb_strlen('Жирная подпись'),
+                                ],
+                            ],
+                            'attachments' => [
+                                [
+                                    'type' => 'image',
+                                    'payload' => [
+                                        'photo_id' => 25852958504,
+                                        'url' => 'https://i.oneme.ru/i?r=secret-url',
+                                        'token' => 'secret-token',
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertSame($text, $message->text);
+        $this->assertSame([['type' => 'bold']], collect($message->richText['runs'])
+            ->firstWhere('text', 'Жирная подпись')['marks']);
+        $this->assertCount(1, $message->media);
+        $this->assertSame('image', $message->media[0]['media_kind']);
+    }
+
     public function test_max_image_and_file_attachments_are_normalized_without_secret_url_or_token(): void
     {
         $channel = Channel::factory()->create([

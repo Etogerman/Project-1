@@ -755,6 +755,7 @@ class BotIncomingMessageNormalizer
         foreach ([
             data_get($message, 'attachments'),
             data_get($message, 'body.attachments'),
+            data_get($message, 'link.message.body.attachments'),
             data_get($message, 'link.message.attachments'),
         ] as $attachments) {
             if (! is_array($attachments)) {
@@ -1069,6 +1070,8 @@ class BotIncomingMessageNormalizer
 
         $externalMessageId = $this->resolveMaxMessageId($message);
         $sharedContact = $this->extractMaxSharedContact($message);
+        $specialText = $this->resolveMaxSpecialDisplayText($message);
+        [$text, $richText] = $this->resolveMaxTextAndRichText($message);
 
         return new IncomingBotMessage(
             platform: $channel->platform,
@@ -1081,8 +1084,7 @@ class BotIncomingMessageNormalizer
             contactName: $this->resolvePersonName(data_get($message, 'sender')),
             text: $sharedContact['is_contact_share']
                 ? null
-                : ($this->resolveMaxSpecialDisplayText($message)
-                    ?? $this->normalizeText(data_get($message, 'body.text'))),
+                : ($specialText ?? $text),
             inboundKind: $sharedContact['is_contact_share']
                 ? IncomingBotMessage::KIND_INBOUND_CONTACT_SHARE
                 : IncomingBotMessage::KIND_INBOUND_USER,
@@ -1097,7 +1099,188 @@ class BotIncomingMessageNormalizer
             ]),
             avatarUrl: $this->resolveMaxAvatarUrl(data_get($message, 'sender')),
             media: $this->normalizeMaxMedia($message),
+            richText: $sharedContact['is_contact_share'] || $specialText !== null
+                ? null
+                : $richText,
         );
+    }
+
+    /**
+     * @param  array<string, mixed>  $message
+     * @return array{0: ?string, 1: array{version: 1, plain_text: string, runs: list<array{text: string, marks: list<array<string, mixed>>}>}|null}
+     */
+    protected function resolveMaxTextAndRichText(array $message): array
+    {
+        foreach ([
+            [
+                'text' => data_get($message, 'body.text'),
+                'markup' => data_get($message, 'body.markup'),
+            ],
+            [
+                'text' => data_get($message, 'text'),
+                'markup' => data_get($message, 'markup'),
+            ],
+            [
+                'text' => data_get($message, 'link.message.body.text'),
+                'markup' => data_get($message, 'link.message.body.markup'),
+            ],
+            [
+                'text' => data_get($message, 'link.message.text'),
+                'markup' => data_get($message, 'link.message.markup'),
+            ],
+        ] as $candidate) {
+            $text = $this->normalizeText($candidate['text'] ?? null);
+
+            if ($text === null) {
+                continue;
+            }
+
+            return [
+                $text,
+                $this->normalizeMaxRichText($text, $candidate['markup'] ?? null),
+            ];
+        }
+
+        return [null, null];
+    }
+
+    /**
+     * @return array{version: 1, plain_text: string, runs: list<array{text: string, marks: list<array<string, mixed>>}>}|null
+     */
+    protected function normalizeMaxRichText(string $plainText, mixed $markup): ?array
+    {
+        if (! is_array($markup) || ! array_is_list($markup) || $markup === []) {
+            return null;
+        }
+
+        $entities = [];
+
+        foreach ($markup as $element) {
+            if (! is_array($element)) {
+                continue;
+            }
+
+            $type = $this->mapMaxMarkupType(data_get($element, 'type'));
+            $from = $this->normalizeNonNegativeInteger(data_get($element, 'from'));
+            $length = $this->normalizeNonNegativeInteger(data_get($element, 'length'));
+
+            if ($type === null || $from === null || $length === null || $length <= 0) {
+                continue;
+            }
+
+            $range = $this->maxMarkupRangeToUtf16Range($plainText, $from, $length);
+
+            if ($range === null) {
+                continue;
+            }
+
+            $entity = [
+                'type' => $type,
+                'offset' => $range['offset'],
+                'length' => $range['length'],
+            ];
+
+            if ($type === 'text_link') {
+                $href = $this->resolveMaxMarkupHref($element);
+
+                if ($href === null) {
+                    continue;
+                }
+
+                $entity['url'] = $href;
+            }
+
+            $entities[] = $entity;
+        }
+
+        if ($entities === []) {
+            return null;
+        }
+
+        return $this->normalizeTelegramRichTextAction->handle($plainText, [
+            'text' => $plainText,
+            'entities' => $entities,
+        ]);
+    }
+
+    protected function mapMaxMarkupType(mixed $type): ?string
+    {
+        if (! is_string($type)) {
+            return null;
+        }
+
+        return match (mb_strtolower(trim($type))) {
+            'strong', 'bold', 'b' => 'bold',
+            'emphasized', 'emphasis', 'italic', 'em', 'i' => 'italic',
+            'monospaced', 'monospace', 'mono', 'code', 'inline_code', 'code_inline' => 'code',
+            'link', 'text_link' => 'text_link',
+            'url' => 'url',
+            'strikethrough', 'strike', 'strikethru', 's', 'del' => 'strikethrough',
+            'underline', 'underlined', 'u' => 'underline',
+            'spoiler', 'hidden' => 'spoiler',
+            'quote', 'blockquote', 'block_quote', 'quoted' => 'blockquote',
+            'highlighted', 'highlight', 'mark', 'marked' => 'highlight',
+            'heading', 'header', 'title', 'h1', 'h2', 'h3' => 'heading',
+            'list' => 'list',
+            default => null,
+        };
+    }
+
+    /**
+     * MAX markup offsets are character offsets. AB rich text normalizer expects UTF-16 units.
+     *
+     * @return array{offset: int, length: int}|null
+     */
+    protected function maxMarkupRangeToUtf16Range(string $plainText, int $from, int $length): ?array
+    {
+        preg_match_all('/./us', $plainText, $matches);
+        $characters = $matches[0] ?? [];
+        $end = $from + $length;
+
+        if ($from < 0 || $length <= 0 || $from >= count($characters) || $end > count($characters)) {
+            return null;
+        }
+
+        $offset = 0;
+        $utf16Length = 0;
+
+        foreach ($characters as $index => $character) {
+            $units = intdiv(strlen(mb_convert_encoding($character, 'UTF-16LE', 'UTF-8')), 2);
+
+            if ($index < $from) {
+                $offset += $units;
+
+                continue;
+            }
+
+            if ($index < $end) {
+                $utf16Length += $units;
+
+                continue;
+            }
+
+            break;
+        }
+
+        return $utf16Length > 0
+            ? ['offset' => $offset, 'length' => $utf16Length]
+            : null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $element
+     */
+    protected function resolveMaxMarkupHref(array $element): ?string
+    {
+        foreach (['url', 'href', 'link', 'payload.url'] as $key) {
+            $href = $this->normalizeText(data_get($element, $key));
+
+            if ($href !== null) {
+                return $href;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -1111,6 +1294,7 @@ class BotIncomingMessageNormalizer
         foreach ([
             data_get($message, 'attachments'),
             data_get($message, 'body.attachments'),
+            data_get($message, 'link.message.body.attachments'),
             data_get($message, 'link.message.attachments'),
         ] as $candidate) {
             if (! is_array($candidate)) {

@@ -15,12 +15,15 @@ class AbRichTextNormalizer
         'quote' => 10,
         'pre' => 20,
         'link' => 30,
+        'heading' => 35,
         'bold' => 40,
         'italic' => 50,
         'underline' => 60,
         'strikethrough' => 70,
         'spoiler' => 80,
+        'highlight' => 85,
         'code' => 90,
+        'list' => 95,
     ];
 
     /**

@@ -396,6 +396,37 @@ class DownloadPendingBotMediaAttachmentsCommandTest extends TestCase
         Http::assertSent(fn ($request): bool => str_starts_with($request->url(), 'https://max.example/private/command-video-720.mp4?'));
     }
 
+    public function test_command_downloads_forwarded_max_bot_image_from_nested_body_attachments(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        config()->set('bots.max.trusted_media_hosts', ['max.example']);
+        Http::fake([
+            'https://max.example/private/forwarded-image.jpg*' => Http::response(
+                "\xFF\xD8\xFF".'max-forwarded-image-bytes',
+                200,
+                ['Content-Type' => 'image/jpeg'],
+            ),
+        ]);
+
+        $attachment = $this->createPendingForwardedMaxBotImageAttachment();
+
+        $this->artisan('bot-media:download-pending-images', [
+            '--force' => true,
+            '--limit' => 10,
+        ])->assertExitCode(0);
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::MEDIA_KIND_IMAGE, $attachment->media_kind);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $attachment->download_status);
+        $this->assertSame(MessageAttachment::LOCAL_DISK_PRIVATE, $attachment->local_disk);
+        $this->assertSame('image/jpeg', $attachment->mime_type);
+        $this->assertSame('jpg', $attachment->extension);
+        $this->assertTrue($attachment->isInlinePreviewable());
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
+        Http::assertSent(fn ($request): bool => str_starts_with($request->url(), 'https://max.example/private/forwarded-image.jpg?'));
+    }
+
     public function test_command_marks_square_short_max_bot_video_as_video_note_when_downloaded(): void
     {
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
@@ -724,6 +755,65 @@ class DownloadPendingBotMediaAttachmentsCommandTest extends TestCase
             'provider_attachment_key' => 'token:'.sha1($videoToken),
             'provider_file_reference' => 'token:'.sha1($videoToken),
             'media_kind' => MessageAttachment::MEDIA_KIND_VIDEO,
+            'mime_type' => null,
+            'extension' => null,
+            'original_filename' => null,
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
+            'local_disk' => null,
+            'local_path' => null,
+        ]);
+    }
+
+    private function createPendingForwardedMaxBotImageAttachment(): MessageAttachment
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+            ],
+        ]);
+        $contact = Contact::factory()->create();
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'provider_event_key' => 'max-forwarded-message-1',
+            'external_message_id' => 'max-forwarded-message-1',
+            'raw_payload' => [
+                'message' => [
+                    'link' => [
+                        'type' => 'forward',
+                        'message' => [
+                            'body' => [
+                                'attachments' => [
+                                    [
+                                        'type' => 'image',
+                                        'payload' => [
+                                            'photo_id' => 'max-forwarded-photo-1',
+                                            'url' => 'https://max.example/private/forwarded-image.jpg?access_token=secret-token',
+                                        ],
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ]);
+
+        return MessageAttachment::factory()->create([
+            'message_id' => $message->id,
+            'channel_id' => $channel->id,
+            'provider' => MessageAttachment::PROVIDER_MAX_BOT,
+            'provider_event_key' => 'max-forwarded-message-1',
+            'provider_attachment_key' => 'max-forwarded-photo-1',
+            'provider_file_reference' => 'max-forwarded-photo-1',
+            'media_kind' => MessageAttachment::MEDIA_KIND_IMAGE,
             'mime_type' => null,
             'extension' => null,
             'original_filename' => null,

@@ -708,6 +708,7 @@ class DownloadBotMessageAttachmentsAction
             data_get($payload, 'body.attachments'),
             data_get($payload, 'message.attachments'),
             data_get($payload, 'message.body.attachments'),
+            data_get($payload, 'message.link.message.body.attachments'),
             data_get($payload, 'message.link.message.attachments'),
         ] as $attachments) {
             if (! is_array($attachments)) {

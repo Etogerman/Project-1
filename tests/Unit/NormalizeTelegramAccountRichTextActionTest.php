@@ -101,4 +101,57 @@ class NormalizeTelegramAccountRichTextActionTest extends TestCase
             ],
         ], $richText);
     }
+
+    public function test_converts_max_extra_markup_entities_to_ab_marks(): void
+    {
+        $text = "Заголовок\nЦитата\nПодсветка";
+
+        $richText = app(NormalizeTelegramAccountRichTextAction::class)->handle($text, [
+            'text' => $text,
+            'entities' => [
+                [
+                    'offset' => 0,
+                    'length' => 9,
+                    'type' => 'heading',
+                ],
+                [
+                    'offset' => 10,
+                    'length' => 6,
+                    'type' => 'blockquote',
+                ],
+                [
+                    'offset' => 17,
+                    'length' => 9,
+                    'type' => 'highlight',
+                ],
+            ],
+        ]);
+
+        $this->assertSame([
+            'version' => 1,
+            'plain_text' => $text,
+            'runs' => [
+                [
+                    'text' => 'Заголовок',
+                    'marks' => [['type' => 'heading']],
+                ],
+                [
+                    'text' => "\n",
+                    'marks' => [],
+                ],
+                [
+                    'text' => 'Цитата',
+                    'marks' => [['type' => 'quote']],
+                ],
+                [
+                    'text' => "\n",
+                    'marks' => [],
+                ],
+                [
+                    'text' => 'Подсветка',
+                    'marks' => [['type' => 'highlight']],
+                ],
+            ],
+        ], $richText);
+    }
 }
