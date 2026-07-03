@@ -103,9 +103,13 @@ class MessageAttachmentPosterController extends Controller
         $payload = is_array($attachment->message?->raw_payload) ? $attachment->message->raw_payload : [];
         $candidates = [];
 
+        // link.message.* намеренно без forward-гейта — lookup-стог по референсу,
+        // как в DownloadBotMessageAttachmentsAction (грандфазеринг до-f207b891 строк).
+        // Набор источников выровнен с даунлоадером.
         foreach ([
             data_get($payload, 'message.body.attachments'),
             data_get($payload, 'message.attachments'),
+            data_get($payload, 'message.link.message.body.attachments'),
             data_get($payload, 'message.link.message.attachments'),
             data_get($payload, 'body.attachments'),
             data_get($payload, 'attachments'),

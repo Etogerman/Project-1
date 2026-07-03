@@ -895,7 +895,24 @@ class StoreInboundMessageAction
             ])->save();
         }
 
-        if ($message->richText !== null && $storedMessage->rich_text !== $message->richText) {
+        if ($storedMessage->text === null && $message->text !== null) {
+            $storedMessage->forceFill([
+                'text' => $message->text,
+            ])->save();
+        }
+
+        // Инвариант rich-text контракта: messages.text === rich_text.plain_text.
+        // Обновляем rich_text только когда сохранённый text совпадает с его
+        // plain_text (fail-closed): иначе повторная доставка рассинхронизировала
+        // бы поиск/списки (text) и bubble (rich_text), а правка из edit-контура
+        // могла бы быть перекрыта разметкой исходного сообщения.
+        // Отредактированные сообщения (edited_at) не трогаем вовсе: правка может
+        // менять ТОЛЬКО форматирование при том же тексте, и redelivery оригинала
+        // иначе откатил бы её разметку (finding финального ревью хвоста).
+        if ($message->richText !== null
+            && $storedMessage->edited_at === null
+            && $storedMessage->rich_text !== $message->richText
+            && $storedMessage->text === data_get($message->richText, 'plain_text')) {
             $storedMessage->forceFill([
                 'rich_text' => $message->richText,
             ])->save();

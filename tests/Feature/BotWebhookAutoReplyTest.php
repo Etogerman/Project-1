@@ -1647,6 +1647,131 @@ class BotWebhookAutoReplyTest extends TestCase
         Http::assertSent(fn ($request): bool => str_starts_with($request->url(), 'https://max.example/private/forwarded-video-480.mp4?'));
     }
 
+    public function test_max_forwarded_media_webhook_stores_link_message_text_and_markup(): void
+    {
+        Queue::fake();
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        config()->set('bots.max.trusted_media_hosts', ['max.example']);
+        Http::fake([
+            'https://max.example/*' => Http::response(
+                'max-forwarded-jpeg-bytes',
+                200,
+                ['Content-Type' => 'image/jpeg'],
+            ),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+        $payload = $this->maxPayload(
+            messageId: 'max-forwarded-rich-media-101',
+            text: null,
+        );
+        unset($payload['message']['body']['attachments']);
+        $payload['message']['link'] = [
+            'type' => 'forward',
+            'sender' => [
+                'name' => 'Герман Абрикосов',
+                'is_bot' => false,
+                'user_id' => 228532008,
+            ],
+            'message' => [
+                'mid' => 'forwarded-source-101',
+                'text' => "plain\nbold\nitalic under\nstrike",
+                'markup' => [
+                    [
+                        'from' => 6,
+                        'type' => 'strong',
+                        'length' => 4,
+                    ],
+                    [
+                        'from' => 11,
+                        'type' => 'emphasized',
+                        'length' => 12,
+                    ],
+                    [
+                        'from' => 11,
+                        'type' => 'underline',
+                        'length' => 12,
+                    ],
+                    [
+                        'from' => 24,
+                        'type' => 'strikethrough',
+                        'length' => 6,
+                    ],
+                ],
+                'attachments' => [
+                    [
+                        'type' => 'image',
+                        'payload' => [
+                            'photo_id' => 'forwarded-photo-101',
+                            'url' => 'https://max.example/private/photo.jpg?access_token=secret-token',
+                            'token' => 'secret-token',
+                        ],
+                    ],
+                ],
+            ],
+        ];
+
+        $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $payload)->assertOk();
+
+        $inboundMessage = $this->inboundMessages()->firstOrFail();
+        $attachment = MessageAttachment::query()->where('message_id', $inboundMessage->id)->firstOrFail();
+
+        $this->assertSame("plain\nbold\nitalic under\nstrike", $inboundMessage->text);
+        $this->assertEquals([
+            'version' => 1,
+            'plain_text' => "plain\nbold\nitalic under\nstrike",
+            'runs' => [
+                [
+                    'text' => "plain\n",
+                    'marks' => [],
+                ],
+                [
+                    'text' => 'bold',
+                    'marks' => [
+                        ['type' => 'bold'],
+                    ],
+                ],
+                [
+                    'text' => "\n",
+                    'marks' => [],
+                ],
+                [
+                    'text' => 'italic under',
+                    'marks' => [
+                        ['type' => 'italic'],
+                        ['type' => 'underline'],
+                    ],
+                ],
+                [
+                    'text' => "\n",
+                    'marks' => [],
+                ],
+                [
+                    'text' => 'strike',
+                    'marks' => [
+                        ['type' => 'strikethrough'],
+                    ],
+                ],
+            ],
+        ], $inboundMessage->rich_text);
+        $this->assertSame(MessageAttachment::PROVIDER_MAX_BOT, $attachment->provider);
+        $this->assertSame('max-forwarded-rich-media-101', $attachment->provider_event_key);
+        $this->assertSame('forwarded-photo-101', $attachment->provider_attachment_key);
+        $this->assertSame(MessageAttachment::MEDIA_KIND_IMAGE, $attachment->media_kind);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $attachment->download_status);
+        $this->assertStringNotContainsString('secret-token', json_encode($attachment->provider_metadata, JSON_THROW_ON_ERROR));
+        $this->assertStringNotContainsString('access_token', json_encode($attachment->raw_payload_excerpt, JSON_THROW_ON_ERROR));
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
+    }
+
     public function test_max_video_webhook_downloads_real_okcdn_media_url_by_default(): void
     {
         Queue::fake();

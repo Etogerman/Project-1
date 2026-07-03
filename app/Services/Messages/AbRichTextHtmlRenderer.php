@@ -106,9 +106,32 @@ class AbRichTextHtmlRenderer
             'code' => '<code>'.$html.'</code>',
             'pre' => $this->wrapPreHtml($html, $mark),
             'quote' => '<blockquote>'.$html.'</blockquote>',
+            'heading' => '<strong class="ac-rich-text-heading">'.$html.'</strong>',
+            'highlight' => '<mark class="ac-rich-text-highlight">'.$html.'</mark>',
+            'list' => '<span class="ac-rich-text-list">'.$html.'</span>',
             'link' => $this->wrapLinkHtml($html, $mark),
+            'mention' => $this->wrapMentionHtml($html, $mark),
             default => $html,
         };
+    }
+
+    /**
+     * @param  array<string, mixed>  $mark
+     */
+    private function wrapMentionHtml(string $html, array $mark): string
+    {
+        $attributes = '';
+
+        foreach (['user_id' => 'data-user-id', 'username' => 'data-username'] as $key => $attribute) {
+            $value = $mark[$key] ?? null;
+
+            if (is_string($value) && $value !== '') {
+                $attributes .= ' '.$attribute.'="'
+                    .htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8').'"';
+            }
+        }
+
+        return '<span class="ac-rich-text-mention"'.$attributes.'>'.$html.'</span>';
     }
 
     /**
