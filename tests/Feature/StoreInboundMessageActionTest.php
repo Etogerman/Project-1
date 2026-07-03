@@ -2938,6 +2938,90 @@ class StoreInboundMessageActionTest extends TestCase
         $this->assertDatabaseCount('messages', 2);
     }
 
+    public function test_redelivery_fills_null_text_and_rich_text_consistently(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $richText = [
+            'version' => 1,
+            'plain_text' => 'Жирный текст',
+            'runs' => [
+                ['text' => 'Жирный', 'marks' => [['type' => 'bold']]],
+                ['text' => ' текст', 'marks' => []],
+            ],
+        ];
+
+        // Первая доставка: text ещё не распарсен (null).
+        app(StoreInboundMessageAction::class)->handle($channel, $this->makeInboundUserMessage(
+            channel: $channel,
+            providerEventKey: 'rich-sync-update-1',
+            externalMessageId: 'rich-sync-message-1',
+            text: null,
+            messageParameter: null,
+            receivedAt: Carbon::parse('2026-07-03 10:00:00'),
+        ));
+
+        // Повторная доставка с текстом и разметкой: оба поля дозаполняются консистентно.
+        app(StoreInboundMessageAction::class)->handle($channel, $this->makeInboundUserMessage(
+            channel: $channel,
+            providerEventKey: 'rich-sync-update-1',
+            externalMessageId: 'rich-sync-message-1',
+            text: 'Жирный текст',
+            messageParameter: null,
+            receivedAt: Carbon::parse('2026-07-03 10:00:00'),
+            richText: $richText,
+        ));
+
+        $stored = Message::query()->where('provider_event_key', 'rich-sync-update-1')->firstOrFail();
+        $this->assertSame('Жирный текст', $stored->text);
+        $this->assertEquals($richText, $stored->rich_text);
+        $this->assertSame($stored->text, data_get($stored->rich_text, 'plain_text'));
+    }
+
+    public function test_redelivery_does_not_desync_rich_text_from_diverged_text(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        app(StoreInboundMessageAction::class)->handle($channel, $this->makeInboundUserMessage(
+            channel: $channel,
+            providerEventKey: 'rich-sync-update-2',
+            externalMessageId: 'rich-sync-message-2',
+            text: 'Исходный текст',
+            messageParameter: null,
+            receivedAt: Carbon::parse('2026-07-03 10:05:00'),
+        ));
+
+        // Текст сообщения изменился (например, правкой из edit-контура).
+        $stored = Message::query()->where('provider_event_key', 'rich-sync-update-2')->firstOrFail();
+        $stored->forceFill(['text' => 'Правленый текст'])->save();
+
+        // Повторная доставка исходного вебхука с разметкой исходного текста:
+        // rich_text НЕ должен обновиться — иначе text (поиск/списки) и bubble разъедутся.
+        app(StoreInboundMessageAction::class)->handle($channel, $this->makeInboundUserMessage(
+            channel: $channel,
+            providerEventKey: 'rich-sync-update-2',
+            externalMessageId: 'rich-sync-message-2',
+            text: 'Исходный текст',
+            messageParameter: null,
+            receivedAt: Carbon::parse('2026-07-03 10:05:00'),
+            richText: [
+                'version' => 1,
+                'plain_text' => 'Исходный текст',
+                'runs' => [
+                    ['text' => 'Исходный текст', 'marks' => [['type' => 'bold']]],
+                ],
+            ],
+        ));
+
+        $stored->refresh();
+        $this->assertSame('Правленый текст', $stored->text);
+        $this->assertNull($stored->rich_text);
+        // Инвариант: rich_text либо null, либо согласован с text.
+    }
+
     private function makeInboundUserMessage(
         Channel $channel,
         string $providerEventKey,
@@ -2949,6 +3033,7 @@ class StoreInboundMessageActionTest extends TestCase
         string $externalChatId = '300',
         array $media = [],
         ?string $providerGroupKey = null,
+        ?array $richText = null,
     ): IncomingBotMessage {
         return new IncomingBotMessage(
             platform: $channel->platform,
@@ -2968,6 +3053,7 @@ class StoreInboundMessageActionTest extends TestCase
             receivedAt: $receivedAt,
             media: $media,
             providerGroupKey: $providerGroupKey,
+            richText: $richText,
         );
     }
 

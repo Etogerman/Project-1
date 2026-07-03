@@ -901,7 +901,14 @@ class StoreInboundMessageAction
             ])->save();
         }
 
-        if ($message->richText !== null && $storedMessage->rich_text !== $message->richText) {
+        // Инвариант rich-text контракта: messages.text === rich_text.plain_text.
+        // Обновляем rich_text только когда сохранённый text совпадает с его
+        // plain_text (fail-closed): иначе повторная доставка рассинхронизировала
+        // бы поиск/списки (text) и bubble (rich_text), а правка из edit-контура
+        // могла бы быть перекрыта разметкой исходного сообщения.
+        if ($message->richText !== null
+            && $storedMessage->rich_text !== $message->richText
+            && $storedMessage->text === data_get($message->richText, 'plain_text')) {
             $storedMessage->forceFill([
                 'rich_text' => $message->richText,
             ])->save();
