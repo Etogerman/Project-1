@@ -1664,6 +1664,22 @@ class BotIncomingMessageNormalizerTest extends TestCase
                     'message' => [
                         'mid' => 'quoted-source-2',
                         'text' => 'Какой вариант выбираете?',
+                        // Опрос в цитате: до gate в maxPollCandidates он через
+                        // specialText ПОДМЕНЯЛ собственный текст пользователя.
+                        'body' => [
+                            'attachments' => [
+                                [
+                                    'type' => 'poll',
+                                    'payload' => [
+                                        'question' => 'Какой вариант выбираете?',
+                                        'options' => [
+                                            ['text' => 'Первый'],
+                                            ['text' => 'Второй'],
+                                        ],
+                                    ],
+                                ],
+                            ],
+                        ],
                     ],
                 ],
             ],
@@ -1672,7 +1688,55 @@ class BotIncomingMessageNormalizerTest extends TestCase
         $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
 
         $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        // Собственный текст клиента не подменяется отрисовкой чужого опроса.
         $this->assertSame('Да, подходит', $message->text);
+    }
+
+    public function test_max_link_without_type_is_fail_closed(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+
+        $payload = [
+            'update_type' => 'message_created',
+            'user_locale' => 'ru',
+            'message' => [
+                'sender' => [
+                    'user_id' => 502,
+                    'username' => 'max_user',
+                    'is_bot' => false,
+                ],
+                'recipient' => [
+                    'chat_id' => 702,
+                ],
+                'body' => [
+                    'mid' => 'max-link-no-type-1',
+                    'text' => null,
+                ],
+                'link' => [
+                    'message' => [
+                        'mid' => 'linked-source-3',
+                        'text' => 'Текст из link без type',
+                        'attachments' => [
+                            [
+                                'type' => 'image',
+                                'payload' => [
+                                    'photo_id' => 'linked-photo-3',
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        // Fail-closed: link без type не считается пересылкой.
+        $this->assertNull($message->text);
+        $this->assertSame([], $message->media);
     }
 
     public function test_max_plain_video_attachment_stays_regular_video_without_round_marker(): void
