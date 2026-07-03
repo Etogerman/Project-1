@@ -752,12 +752,22 @@ class BotIncomingMessageNormalizer
             $candidates[] = $body;
         }
 
-        foreach ([
+        $attachmentSources = [
             data_get($message, 'attachments'),
             data_get($message, 'body.attachments'),
-            data_get($message, 'link.message.body.attachments'),
-            data_get($message, 'link.message.attachments'),
-        ] as $attachments) {
+        ];
+
+        // Опросы из link.message берём только для пересылок (link.type=forward):
+        // у reply в link.message лежит цитируемый опрос — он не должен подменять
+        // собственный текст пользователя через specialText.
+        $forwardedLink = $this->resolveMaxForwardedLink($message);
+
+        if ($forwardedLink !== null) {
+            $attachmentSources[] = data_get($forwardedLink, 'message.body.attachments');
+            $attachmentSources[] = data_get($forwardedLink, 'message.attachments');
+        }
+
+        foreach ($attachmentSources as $attachments) {
             if (! is_array($attachments)) {
                 continue;
             }
@@ -1323,12 +1333,21 @@ class BotIncomingMessageNormalizer
     {
         $attachments = [];
 
-        foreach ([
+        $candidates = [
             data_get($message, 'attachments'),
             data_get($message, 'body.attachments'),
-            data_get($message, 'link.message.body.attachments'),
-            data_get($message, 'link.message.attachments'),
-        ] as $candidate) {
+        ];
+
+        // Вложения из link.message берём только для пересылок (link.type=forward):
+        // у reply в link.message лежит цитируемое сообщение — его медиа не наше.
+        $forwardedLink = $this->resolveMaxForwardedLink($message);
+
+        if ($forwardedLink !== null) {
+            $candidates[] = data_get($forwardedLink, 'message.body.attachments');
+            $candidates[] = data_get($forwardedLink, 'message.attachments');
+        }
+
+        foreach ($candidates as $candidate) {
             if (! is_array($candidate)) {
                 continue;
             }

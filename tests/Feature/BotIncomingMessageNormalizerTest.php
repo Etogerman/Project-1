@@ -1587,6 +1587,94 @@ class BotIncomingMessageNormalizerTest extends TestCase
         $this->assertStringNotContainsString('access_token', json_encode($message->media[0], JSON_THROW_ON_ERROR));
     }
 
+    public function test_max_reply_link_message_content_is_not_ingested_as_own(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+
+        $payload = [
+            'update_type' => 'message_created',
+            'user_locale' => 'ru',
+            'message' => [
+                'sender' => [
+                    'user_id' => 500,
+                    'username' => 'max_user',
+                    'is_bot' => false,
+                ],
+                'recipient' => [
+                    'chat_id' => 700,
+                ],
+                'body' => [
+                    'mid' => 'max-reply-quote-1',
+                    'text' => null,
+                ],
+                'link' => [
+                    'type' => 'reply',
+                    'message' => [
+                        'mid' => 'quoted-source-1',
+                        'text' => 'Текст цитируемого сообщения',
+                        'attachments' => [
+                            [
+                                'type' => 'image',
+                                'payload' => [
+                                    'photo_id' => 'quoted-photo-1',
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        // Текст цитаты — не наш текст.
+        $this->assertNull($message->text);
+        $this->assertNull($message->richText);
+        // Медиа цитаты — не наше медиа.
+        $this->assertSame([], $message->media);
+    }
+
+    public function test_max_reply_with_own_text_keeps_own_text_not_quote(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+
+        $payload = [
+            'update_type' => 'message_created',
+            'user_locale' => 'ru',
+            'message' => [
+                'sender' => [
+                    'user_id' => 501,
+                    'username' => 'max_user',
+                    'is_bot' => false,
+                ],
+                'recipient' => [
+                    'chat_id' => 701,
+                ],
+                'body' => [
+                    'mid' => 'max-reply-own-text-1',
+                    'text' => 'Да, подходит',
+                ],
+                'link' => [
+                    'type' => 'reply',
+                    'message' => [
+                        'mid' => 'quoted-source-2',
+                        'text' => 'Какой вариант выбираете?',
+                    ],
+                ],
+            ],
+        ];
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, $payload);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertSame('Да, подходит', $message->text);
+    }
+
     public function test_max_plain_video_attachment_stays_regular_video_without_round_marker(): void
     {
         $channel = Channel::factory()->create([
