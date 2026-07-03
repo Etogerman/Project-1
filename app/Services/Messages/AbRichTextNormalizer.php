@@ -156,7 +156,7 @@ class AbRichTextNormalizer
 
     /**
      * @param  array<string, mixed>  $mark
-     * @return array{type: 'link', href: string}|null
+     * @return array{type: 'mention', username?: string, user_id?: string}|null
      */
     private function normalizeMentionMark(array $mark): ?array
     {
