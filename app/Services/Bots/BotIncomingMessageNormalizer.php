@@ -1258,22 +1258,21 @@ class BotIncomingMessageNormalizer
                 continue;
             }
 
+            // MAX шлёт from/length в UTF-16 code units (живой payload id71,
+            // 04.07.2026: «😄😄 жирный» -> from=5 = 2+2+1 юнитов), как и Telegram.
+            // Конверсия из кодпойнтов была ошибкой и ломала разметку после эмодзи;
+            // границы валидирует общий нормализатор (NormalizeTelegramAccountRichText).
+
             // MAX не различает инлайновый `code` и блок ```: многострочный
             // monospaced-фрагмент считаем код-блоком (pre), однострочный — code.
-            if ($type === 'code' && str_contains(mb_substr($plainText, $from, $length), "\n")) {
+            if ($type === 'code' && str_contains($this->utf16Substring($plainText, $from, $length), "\n")) {
                 $type = 'pre';
-            }
-
-            $range = $this->maxMarkupRangeToUtf16Range($plainText, $from, $length);
-
-            if ($range === null) {
-                continue;
             }
 
             $entity = [
                 'type' => $type,
-                'offset' => $range['offset'],
-                'length' => $range['length'],
+                'offset' => $from,
+                'length' => $length,
             ];
 
             if ($type === 'text_link') {
@@ -1327,40 +1326,19 @@ class BotIncomingMessageNormalizer
      *
      * @return array{offset: int, length: int}|null
      */
-    protected function maxMarkupRangeToUtf16Range(string $plainText, int $from, int $length): ?array
+    /**
+     * Вырезка по UTF-16 code units (единицы MAX/Telegram offsets).
+     * Используется только для эвристик над фрагментом; разрез суррогатной
+     * пары на границе безопасен для поиска подстрок.
+     */
+    protected function utf16Substring(string $plainText, int $from, int $length): string
     {
-        preg_match_all('/./us', $plainText, $matches);
-        $characters = $matches[0] ?? [];
-        $end = $from + $length;
+        $utf16 = mb_convert_encoding($plainText, 'UTF-16BE', 'UTF-8');
+        $slice = substr($utf16, $from * 2, $length * 2);
 
-        if ($from < 0 || $length <= 0 || $from >= count($characters) || $end > count($characters)) {
-            return null;
-        }
-
-        $offset = 0;
-        $utf16Length = 0;
-
-        foreach ($characters as $index => $character) {
-            $units = intdiv(strlen(mb_convert_encoding($character, 'UTF-16LE', 'UTF-8')), 2);
-
-            if ($index < $from) {
-                $offset += $units;
-
-                continue;
-            }
-
-            if ($index < $end) {
-                $utf16Length += $units;
-
-                continue;
-            }
-
-            break;
-        }
-
-        return $utf16Length > 0
-            ? ['offset' => $offset, 'length' => $utf16Length]
-            : null;
+        return $slice === false || $slice === ''
+            ? ''
+            : (string) @mb_convert_encoding($slice, 'UTF-8', 'UTF-16BE');
     }
 
     /**
