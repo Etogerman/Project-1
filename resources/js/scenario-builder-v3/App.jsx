@@ -707,6 +707,7 @@ export default function App({
     const [sheetImportJson, setSheetImportJson] = useState('');
     const [sheetImportPreview, setSheetImportPreview] = useState(null);
     const [sheetImportSelection, setSheetImportSelection] = useState({});
+    const [sheetImportTagMappings, setSheetImportTagMappings] = useState({});
     const [sheetImportError, setSheetImportError] = useState(null);
     const [autoReplyImportFile, setAutoReplyImportFile] = useState(null);
     const [autoReplyImportPreview, setAutoReplyImportPreview] = useState(null);
@@ -721,6 +722,7 @@ export default function App({
     const [autoReplyImportError, setAutoReplyImportError] = useState(null);
     const [isImportingAutoReplies, setIsImportingAutoReplies] = useState(false);
     const [isApplyingAutoReplyImport, setIsApplyingAutoReplyImport] = useState(false);
+    const [creatingSheetImportTagKey, setCreatingSheetImportTagKey] = useState('');
     const [creatingAutoReplyTagName, setCreatingAutoReplyTagName] = useState('');
     const [sheetDialog, setSheetDialog] = useState(null);
     const [isSheetListOpen, setIsSheetListOpen] = useState(false);
@@ -970,6 +972,8 @@ export default function App({
         && ! isApplyingAutoReplyImport
         && Boolean(autoReplyExportUrl);
     const canCreateAutoReplyTags = state?.permissions?.can_create_tags === true
+        && Boolean(autoReplyImportTagStoreUrl);
+    const canCreateSheetImportTags = state?.permissions?.can_create_tags === true
         && Boolean(autoReplyImportTagStoreUrl);
     const canvasBounds = useMemo(() => graphBounds(blocks, edges), [blocks, edges]);
     const inspectorBlock = mode === 'auto_reply' ? selectedAutoReplyBlock : selectedBlock;
@@ -3047,7 +3051,7 @@ export default function App({
         setNotice(null);
 
         try {
-            const document = await exportScenarioBuilderSheet(sheetExportUrl);
+            const document = await exportScenarioBuilderSheet(sheetExportUrl, activeSheet.id);
             downloadJsonDocument(sheetExportFilename(document), document);
             setNotice('Активный лист экспортирован из сохранённого черновика.');
         } catch (requestError) {
@@ -3107,6 +3111,7 @@ export default function App({
             setSheetImportJson(json);
             setSheetImportPreview(preview);
             setSheetImportSelection(defaultSheetImportSelection(preview));
+            setSheetImportTagMappings(defaultSheetImportTagMappings(preview));
         } catch (requestError) {
             setError(errorText(requestError));
         } finally {
@@ -3122,7 +3127,9 @@ export default function App({
         setSheetImportJson('');
         setSheetImportPreview(null);
         setSheetImportSelection({});
+        setSheetImportTagMappings({});
         setSheetImportError(null);
+        setCreatingSheetImportTagKey('');
     }
 
     function updateSheetImportChannels(blockExportKey, channelIds) {
@@ -3132,13 +3139,71 @@ export default function App({
         }));
     }
 
+    function updateSheetImportTagMapping(sourceTagId, tagId) {
+        const key = String(sourceTagId);
+        const nextId = Number(tagId);
+
+        setSheetImportTagMappings((current) => {
+            const nextMappings = { ...current };
+
+            if (nextId > 0) {
+                nextMappings[key] = nextId;
+            } else {
+                delete nextMappings[key];
+            }
+
+            return nextMappings;
+        });
+    }
+
+    async function createSheetImportTag(sourceTagId, name, color = 'gray') {
+        const key = String(sourceTagId);
+        const tagName = String(name ?? '').trim();
+
+        if (! key || ! tagName || ! autoReplyImportTagStoreUrl || creatingSheetImportTagKey) {
+            return;
+        }
+
+        setCreatingSheetImportTagKey(key);
+        setError(null);
+        setNotice(null);
+        setSheetImportError(null);
+
+        try {
+            const response = await createScenarioBuilderAutoReplyImportTag(autoReplyImportTagStoreUrl, csrfToken, {
+                name: tagName,
+                color: color || 'gray',
+            });
+            const tag = response?.tag;
+            const tagId = Number(tag?.id);
+
+            if (! tag || tagId <= 0) {
+                throw new Error('Тег создан, но сервер не вернул его ID.');
+            }
+
+            setState((current) => stateWithCatalogTag(current, tag));
+            setSheetImportPreview((current) => current ? previewWithAvailableTag(current, tag) : current);
+            setSheetImportTagMappings((current) => ({
+                ...current,
+                [key]: tagId,
+            }));
+        } catch (requestError) {
+            const message = errorText(requestError);
+
+            setSheetImportError(message);
+            setError(message);
+        } finally {
+            setCreatingSheetImportTagKey('');
+        }
+    }
+
     async function downloadSheetBackup() {
         if (! sheetExportUrl) {
             return;
         }
 
         try {
-            const document = await exportScenarioBuilderSheet(sheetExportUrl);
+            const document = await exportScenarioBuilderSheet(sheetExportUrl, activeSheet.id);
             downloadJsonDocument(`backup-${sheetExportFilename(document)}`, document);
             setSheetImportError(null);
         } catch (requestError) {
@@ -3162,6 +3227,7 @@ export default function App({
                 draft_version_id: sheetImportPreview.draft_version_id,
                 base_builder_revision: sheetImportPreview.base_builder_revision,
                 selected_channels: sheetImportSelection,
+                tag_mappings: sheetImportTagPayload(sheetImportTagMappings),
             });
             const focusKey = resolveReturnedKey(response.import?.focus_block_client_key, response.id_map?.blocks, 'block');
             const focusedState = stateWithSheetImportFocus(response, focusKey);
@@ -3176,7 +3242,9 @@ export default function App({
             setSheetImportJson('');
             setSheetImportPreview(null);
             setSheetImportSelection({});
+            setSheetImportTagMappings({});
             setSheetImportError(null);
+            setCreatingSheetImportTagKey('');
         } catch (requestError) {
             if (requestError.status === 409) {
                 setStatus('conflict');
@@ -3868,9 +3936,14 @@ export default function App({
                 <SheetImportPreviewDialog
                     preview={sheetImportPreview}
                     selection={sheetImportSelection}
+                    tagMappings={sheetImportTagMappings}
                     error={sheetImportError}
                     isApplying={isApplyingSheetImport}
+                    canCreateTag={canCreateSheetImportTags}
+                    creatingTagKey={creatingSheetImportTagKey}
                     onChangeChannels={updateSheetImportChannels}
+                    onTagMapping={updateSheetImportTagMapping}
+                    onCreateTag={createSheetImportTag}
                     onDownloadBackup={downloadSheetBackup}
                     onApply={applySheetImport}
                     onClose={closeSheetImportPreview}
@@ -5210,9 +5283,14 @@ function AutoReplyImportPublishDialog({ warning, isPublishing, onConfirm, onClos
 function SheetImportPreviewDialog({
     preview,
     selection,
+    tagMappings,
     error,
     isApplying,
+    canCreateTag,
+    creatingTagKey,
     onChangeChannels,
+    onTagMapping,
+    onCreateTag,
     onDownloadBackup,
     onApply,
     onClose,
@@ -5220,7 +5298,11 @@ function SheetImportPreviewDialog({
     const counts = preview?.counts ?? {};
     const startBlocks = Array.isArray(preview?.start_blocks) ? preview.start_blocks : [];
     const channels = Array.isArray(preview?.available_channels) ? preview.available_channels : [];
+    const tags = Array.isArray(preview?.available_tags) ? preview.available_tags : [];
+    const unresolvedTags = Array.isArray(preview?.unresolved_tags) ? preview.unresolved_tags : [];
     const channelHints = new Map((preview?.channel_hints ?? []).map((hint) => [hint.export_key, hint]));
+    const missingTagMappings = unresolvedTags.filter((tag) => Number(tagMappings?.[String(tag.source_tag_id)] ?? 0) <= 0);
+    const canApply = missingTagMappings.length === 0 && ! isApplying;
 
     return (
         <div className="ac-v3-builder__dialog-backdrop" role="presentation">
@@ -5236,6 +5318,7 @@ function SheetImportPreviewDialog({
                         <span><strong>{counts.edges ?? 0}</strong> связей</span>
                         <span><strong>{counts.start_blocks ?? 0}</strong> стартовых</span>
                         <span><strong>{counts.channel_hints ?? 0}</strong> подсказок каналов</span>
+                        <span><strong>{counts.tag_hints ?? 0}</strong> тегов</span>
                     </div>
 
                     <div className="ac-v3-builder__sheet-import-warnings">
@@ -5283,6 +5366,61 @@ function SheetImportPreviewDialog({
                         </div>
                     ) : null}
 
+                    {unresolvedTags.length > 0 ? (
+                        <div className="ac-v3-builder__auto-reply-import-section">
+                            <h3>Теги из файла</h3>
+                            {unresolvedTags.map((tag) => {
+                                const sourceTagId = Number(tag.source_tag_id);
+                                const key = String(sourceTagId);
+                                const selectedTagId = tagMappings?.[key] ?? '';
+                                const isLegacyTag = tag.reason === 'legacy_missing_metadata';
+                                const createName = tag.can_create === true
+                                    ? String(tag.name ?? '').trim()
+                                    : defaultLegacySheetImportTagName(sourceTagId);
+                                const canCreateThisTag = canCreateTag && createName !== '';
+                                const isCreating = creatingTagKey === key;
+                                const contexts = Array.isArray(tag.contexts) ? tag.contexts : [];
+
+                                return (
+                                    <label key={key} className="ac-v3-builder__auto-reply-import-mapping">
+                                        <span>
+                                            <strong>{tag.label || `Тег #${sourceTagId}`}</strong>
+                                            <small>Источник #{sourceTagId}</small>
+                                            {contexts.length > 0 ? <small>{contexts.join(', ')}</small> : null}
+                                            {isLegacyTag ? (
+                                                <small>Можно создать локальный технический тег «{createName}» без изменений на продакшене.</small>
+                                            ) : null}
+                                        </span>
+                                        <div className="ac-v3-builder__auto-reply-import-map-control">
+                                            <select
+                                                value={selectedTagId}
+                                                disabled={isApplying}
+                                                onChange={(event) => onTagMapping(sourceTagId, event.target.value)}
+                                            >
+                                                <option value="">Выбрать тег</option>
+                                                {tags.map((item) => (
+                                                    <option key={item.id} value={item.id}>
+                                                        {item.name}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            {canCreateThisTag ? (
+                                                <button
+                                                    type="button"
+                                                    className="ac-v3-builder__auto-reply-import-create"
+                                                    disabled={isApplying || isCreating}
+                                                    onClick={() => onCreateTag(sourceTagId, createName, tag.color)}
+                                                >
+                                                    {isCreating ? 'Создаю...' : (isLegacyTag ? 'Создать локально' : 'Создать')}
+                                                </button>
+                                            ) : null}
+                                        </div>
+                                    </label>
+                                );
+                            })}
+                        </div>
+                    ) : null}
+
                     {error ? <p className="ac-v3-builder__sheet-import-error">{error}</p> : null}
                 </div>
 
@@ -5293,7 +5431,7 @@ function SheetImportPreviewDialog({
                     <button type="button" disabled={isApplying} onClick={onClose}>
                         Отмена
                     </button>
-                    <button type="button" className="is-danger" disabled={isApplying} onClick={onApply}>
+                    <button type="button" className="is-danger" disabled={! canApply} onClick={onApply}>
                         {isApplying ? 'Импортирую...' : 'Импортировать'}
                     </button>
                 </div>
@@ -12116,6 +12254,62 @@ function defaultSheetImportSelection(preview) {
     });
 
     return selection;
+}
+
+function defaultSheetImportTagMappings(preview) {
+    const mappings = {};
+
+    Object.entries(preview?.default_tag_mappings ?? {}).forEach(([sourceTagId, tagId]) => {
+        const sourceId = Number(sourceTagId);
+        const targetId = Number(tagId);
+
+        if (sourceId > 0 && targetId > 0) {
+            mappings[String(sourceId)] = targetId;
+        }
+    });
+
+    return mappings;
+}
+
+function sheetImportTagPayload(mappings) {
+    return Object.entries(mappings ?? {})
+        .map(([sourceTagId, tagId]) => ({
+            source_tag_id: Number(sourceTagId),
+            tag_id: Number(tagId),
+        }))
+        .filter((mapping) => mapping.source_tag_id > 0 && mapping.tag_id > 0);
+}
+
+function defaultLegacySheetImportTagName(sourceTagId) {
+    return `Prod tag #${Number(sourceTagId) || 0}`;
+}
+
+function previewWithAvailableTag(preview, tag) {
+    if (! preview || ! tag) {
+        return preview;
+    }
+
+    const tagId = Number(tag.id);
+
+    if (tagId <= 0) {
+        return preview;
+    }
+
+    const nextTag = {
+        id: tagId,
+        name: String(tag.name ?? ''),
+        color: String(tag.color ?? 'gray'),
+        is_active: tag.is_active !== false,
+    };
+    const tags = [
+        ...(preview.available_tags ?? []).filter((item) => Number(item.id) !== tagId),
+        nextTag,
+    ].sort((left, right) => String(left.name).localeCompare(String(right.name), 'ru'));
+
+    return {
+        ...preview,
+        available_tags: tags,
+    };
 }
 
 function autoReplyImportStatusLabel(status) {

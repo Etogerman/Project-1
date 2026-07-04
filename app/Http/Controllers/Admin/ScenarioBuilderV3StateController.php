@@ -117,7 +117,11 @@ class ScenarioBuilderV3StateController extends Controller
         ScenarioBuilderV3SheetTransferService $sheetTransferService,
     ): JsonResponse {
         $user = $this->authorizeScenarioBuilderAccess($request, $scenario);
-        $document = $sheetTransferService->export($scenario, $user);
+        $document = $sheetTransferService->export(
+            $scenario,
+            $user,
+            $request->query('sheet_id'),
+        );
         $sheetId = preg_replace('/[^A-Za-z0-9_-]+/', '-', (string) data_get($document, 'sheet.source_sheet_id', 'main'));
 
         return response()
@@ -212,9 +216,11 @@ class ScenarioBuilderV3StateController extends Controller
 
         if ($existingTag instanceof Tag) {
             if (! $existingTag->isActive()) {
-                throw ValidationException::withMessages([
-                    'name' => 'Тег с таким названием уже есть, но он выключен. Включите его в справочнике тегов.',
-                ]);
+                $existingTag->forceFill([
+                    'color' => (string) ($validated['color'] ?? $existingTag->color),
+                    'is_active' => true,
+                ])->save();
+                $existingTag->refresh();
             }
 
             return response()->json([
@@ -276,7 +282,7 @@ class ScenarioBuilderV3StateController extends Controller
     }
 
     /**
-     * @return array{id: int, name: string, slug: string, color: string}
+     * @return array{id: int, name: string, slug: string, color: string, is_active: bool}
      */
     private function tagPayload(Tag $tag): array
     {
@@ -285,6 +291,7 @@ class ScenarioBuilderV3StateController extends Controller
             'name' => (string) $tag->name,
             'slug' => (string) $tag->slug,
             'color' => (string) $tag->color,
+            'is_active' => (bool) $tag->is_active,
         ];
     }
 }
