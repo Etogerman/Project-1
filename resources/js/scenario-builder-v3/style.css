@@ -47,7 +47,7 @@
 }
 
 .ac-v3-builder.is-auto-reply-mode {
-    grid-template-rows: auto 32px auto;
+    grid-template-rows: max-content 32px minmax(0, 1fr);
 }
 
 :where(.dark, [data-theme="dark"]) .ac-v3-builder {
@@ -4431,8 +4431,11 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
 
 .ac-v3-builder__sheet-import-dialog {
     display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
     width: min(760px, calc(100vw - 32px));
+    height: min(760px, calc(100vh - 48px));
     max-height: min(760px, calc(100vh - 48px));
+    min-height: 0;
     overflow: hidden;
     border: 1px solid var(--border-strong);
     border-radius: 14px;
@@ -4817,6 +4820,7 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
 
 .ac-v3-builder__sheet-import-body {
     display: grid;
+    min-height: 0;
     overflow: auto;
     gap: 16px;
     padding: 20px 26px;
@@ -4824,7 +4828,7 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
 
 .ac-v3-builder__sheet-import-summary {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
     gap: 10px;
 }
 
