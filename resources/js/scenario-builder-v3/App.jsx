@@ -3195,7 +3195,7 @@ export default function App({
             }
 
             setState((current) => stateWithCatalogTag(current, tag));
-            setSheetImportPreview((current) => current ? previewWithAvailableTag(current, tag) : current);
+            setSheetImportPreview((current) => current ? previewWithAvailableTag(current, tag, sourceTagId) : current);
             setSheetImportTagMappings((current) => ({
                 ...current,
                 [key]: tagId,
@@ -12348,7 +12348,7 @@ function defaultLegacySheetImportTagName(sourceTagId) {
     return `Prod tag #${Number(sourceTagId) || 0}`;
 }
 
-function previewWithAvailableTag(preview, tag) {
+function previewWithAvailableTag(preview, tag, sourceTagId = null) {
     if (! preview || ! tag) {
         return preview;
     }
@@ -12370,9 +12370,15 @@ function previewWithAvailableTag(preview, tag) {
         nextTag,
     ].sort((left, right) => String(left.name).localeCompare(String(right.name), 'ru'));
 
+    const resolvedSourceTagId = Number(sourceTagId);
+    const unresolvedTags = Array.isArray(preview.unresolved_tags) && resolvedSourceTagId > 0
+        ? preview.unresolved_tags.filter((item) => Number(item?.source_tag_id) !== resolvedSourceTagId)
+        : preview.unresolved_tags;
+
     return {
         ...preview,
         available_tags: tags,
+        unresolved_tags: unresolvedTags,
     };
 }
 
