@@ -5000,6 +5000,18 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
     gap: 8px;
 }
 
+.ac-v3-builder__sheet-import-tag-name {
+    grid-column: 1 / -1;
+    width: 100%;
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--text);
+    min-height: 38px;
+    outline: 0;
+    padding: 0 10px;
+}
+
 .ac-v3-builder__auto-reply-import-create {
     min-height: 38px !important;
     border: 1px solid color-mix(in oklch, var(--accent) 38%, var(--border)) !important;

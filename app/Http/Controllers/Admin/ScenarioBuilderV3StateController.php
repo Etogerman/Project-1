@@ -207,17 +207,24 @@ class ScenarioBuilderV3StateController extends Controller
         $validated = $request->validate([
             'name' => ['required', 'string', 'max:255'],
             'color' => ['nullable', 'string', 'in:'.implode(',', array_keys(Tag::colorOptions()))],
+            'reactivate_existing' => ['sometimes', 'boolean'],
         ]);
 
         $name = trim((string) $validated['name']);
+        $reactivateExisting = (bool) ($validated['reactivate_existing'] ?? false);
         $existingTag = Tag::query()
             ->where('name', $name)
             ->first();
 
         if ($existingTag instanceof Tag) {
             if (! $existingTag->isActive()) {
+                if (! $reactivateExisting) {
+                    throw ValidationException::withMessages([
+                        'name' => 'Тег с таким названием уже есть, но он выключен. Подтвердите включение существующего тега.',
+                    ]);
+                }
+
                 $existingTag->forceFill([
-                    'color' => (string) ($validated['color'] ?? $existingTag->color),
                     'is_active' => true,
                 ])->save();
                 $existingTag->refresh();

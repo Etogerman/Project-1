@@ -564,6 +564,7 @@ class ScenarioBuilderV3SheetTransferService
         $references = $this->tagReferenceContexts($document['blocks'], $document['edges']);
         $hints = $this->documentTagHints($document);
         $mappings = $this->defaultTagMappings($references, $hints);
+        $inactiveTagsByName = $this->inactiveTagsByNormalizedName();
         $unresolved = [];
 
         foreach ($references as $sourceTagId => $contexts) {
@@ -573,14 +574,21 @@ class ScenarioBuilderV3SheetTransferService
 
             $hint = $hints[$sourceTagId] ?? [];
             $name = trim((string) ($hint['name'] ?? ''));
+            $inactiveTag = $name !== ''
+                ? ($inactiveTagsByName[$this->normalizeTagName($name)] ?? null)
+                : null;
 
             $unresolved[] = [
                 'source_tag_id' => $sourceTagId,
                 'name' => $name,
                 'label' => $name !== '' ? $name : 'Тег #'.$sourceTagId,
                 'color' => (string) ($hint['color'] ?? Tag::COLOR_GRAY),
-                'can_create' => $name !== '',
-                'reason' => $name !== '' ? 'not_found' : 'legacy_missing_metadata',
+                'can_create' => $name !== '' && ! ($inactiveTag instanceof Tag),
+                'can_reactivate' => $inactiveTag instanceof Tag,
+                'inactive_tag' => $inactiveTag instanceof Tag ? $this->tagPreviewPayload($inactiveTag) : null,
+                'reason' => $inactiveTag instanceof Tag
+                    ? 'inactive_match'
+                    : ($name !== '' ? 'not_found' : 'legacy_missing_metadata'),
                 'contexts' => array_slice(array_values(array_unique($contexts)), 0, 3),
             ];
         }
@@ -641,6 +649,32 @@ class ScenarioBuilderV3SheetTransferService
         }
 
         return $mappings;
+    }
+
+    /**
+     * @return array<string, Tag>
+     */
+    private function inactiveTagsByNormalizedName(): array
+    {
+        return Tag::query()
+            ->where('is_active', false)
+            ->get(['id', 'name', 'slug', 'color', 'is_active'])
+            ->mapWithKeys(fn (Tag $tag): array => [$this->normalizeTagName($tag->name) => $tag])
+            ->all();
+    }
+
+    /**
+     * @return array{id: int, name: string, slug: string, color: string, is_active: bool}
+     */
+    private function tagPreviewPayload(Tag $tag): array
+    {
+        return [
+            'id' => (int) $tag->id,
+            'name' => (string) $tag->name,
+            'slug' => (string) $tag->slug,
+            'color' => (string) $tag->color,
+            'is_active' => (bool) $tag->is_active,
+        ];
     }
 
     /**
