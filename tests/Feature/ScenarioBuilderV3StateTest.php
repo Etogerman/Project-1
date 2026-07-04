@@ -875,6 +875,55 @@ class ScenarioBuilderV3StateTest extends TestCase
         );
     }
 
+    public function test_sheet_import_preview_reports_inactive_tag_match(): void
+    {
+        $admin = $this->adminUser();
+        $inactiveTag = Tag::factory()->create([
+            'name' => 'VIP выключен',
+            'color' => Tag::COLOR_DANGER,
+            'is_active' => false,
+        ]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_sheet_inactive_tag_preview',
+            'name' => 'V3 Sheet Inactive Tag Preview',
+        ]);
+        $settings = $this->messageSettings('Импорт с выключенным тегом');
+        $settings['modules'][] = [
+            'id' => 'mod_tag_effects',
+            'type' => 'action',
+            'enabled' => true,
+            'payload' => [
+                'actions' => [[
+                    'type' => 'tag_effects',
+                    'assign_tag_ids' => [9002],
+                    'remove_tag_ids' => [],
+                ]],
+            ],
+        ];
+        $document = $this->sheetImportDocument([
+            $this->sheetImportBlock('block_000001', 'Импорт с выключенным тегом', $settings),
+        ]);
+        $document['export_format_version'] = 2;
+        $document['tag_hints'] = [[
+            'source_tag_id' => 9002,
+            'name' => 'VIP выключен',
+            'slug' => 'vip-vykliuchen',
+            'color' => Tag::COLOR_SUCCESS,
+            'is_active' => true,
+        ]];
+
+        $this->actingAs($admin)
+            ->postJson($this->sheetImportPreviewUrl($scenario), [
+                'json' => json_encode($document, JSON_UNESCAPED_UNICODE),
+            ])
+            ->assertOk()
+            ->assertJsonPath('unresolved_tags.0.reason', 'inactive_match')
+            ->assertJsonPath('unresolved_tags.0.can_create', false)
+            ->assertJsonPath('unresolved_tags.0.can_reactivate', true)
+            ->assertJsonPath('unresolved_tags.0.inactive_tag.id', $inactiveTag->id)
+            ->assertJsonPath('unresolved_tags.0.inactive_tag.color', Tag::COLOR_DANGER);
+    }
+
     public function test_put_state_preserves_v3_block_kind_in_settings_payload(): void
     {
         $admin = $this->adminUser();
@@ -4269,11 +4318,12 @@ class ScenarioBuilderV3StateTest extends TestCase
         $this->assertContains($tagId, collect($state['catalogs']['tags'])->pluck('id')->all());
     }
 
-    public function test_auto_reply_import_tag_store_enables_existing_inactive_tag(): void
+    public function test_auto_reply_import_tag_store_requires_explicit_reactivation_for_inactive_tag(): void
     {
         $admin = $this->adminUser();
         $tag = Tag::factory()->create([
             'name' => 'спящий тег',
+            'color' => Tag::COLOR_PRIMARY,
             'is_active' => false,
         ]);
         $scenario = app(CreateScenarioAction::class)->handle([
@@ -4286,15 +4336,30 @@ class ScenarioBuilderV3StateTest extends TestCase
                 'name' => 'спящий тег',
                 'color' => Tag::COLOR_WARNING,
             ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['name']);
+
+        $this->assertDatabaseHas('tags', [
+            'id' => $tag->id,
+            'is_active' => false,
+            'color' => Tag::COLOR_PRIMARY,
+        ]);
+
+        $this->actingAs($admin)
+            ->postJson($this->autoReplyImportTagStoreUrl($scenario), [
+                'name' => 'спящий тег',
+                'color' => Tag::COLOR_WARNING,
+                'reactivate_existing' => true,
+            ])
             ->assertOk()
             ->assertJsonPath('tag.id', $tag->id)
             ->assertJsonPath('tag.is_active', true)
-            ->assertJsonPath('tag.color', Tag::COLOR_WARNING);
+            ->assertJsonPath('tag.color', Tag::COLOR_PRIMARY);
 
         $this->assertDatabaseHas('tags', [
             'id' => $tag->id,
             'is_active' => true,
-            'color' => Tag::COLOR_WARNING,
+            'color' => Tag::COLOR_PRIMARY,
         ]);
     }
 

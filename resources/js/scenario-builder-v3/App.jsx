@@ -708,6 +708,7 @@ export default function App({
     const [sheetImportPreview, setSheetImportPreview] = useState(null);
     const [sheetImportSelection, setSheetImportSelection] = useState({});
     const [sheetImportTagMappings, setSheetImportTagMappings] = useState({});
+    const [sheetImportTagDrafts, setSheetImportTagDrafts] = useState({});
     const [sheetImportError, setSheetImportError] = useState(null);
     const [autoReplyImportFile, setAutoReplyImportFile] = useState(null);
     const [autoReplyImportPreview, setAutoReplyImportPreview] = useState(null);
@@ -3112,6 +3113,7 @@ export default function App({
             setSheetImportPreview(preview);
             setSheetImportSelection(defaultSheetImportSelection(preview));
             setSheetImportTagMappings(defaultSheetImportTagMappings(preview));
+            setSheetImportTagDrafts(defaultSheetImportTagDrafts(preview));
         } catch (requestError) {
             setError(errorText(requestError));
         } finally {
@@ -3128,6 +3130,7 @@ export default function App({
         setSheetImportPreview(null);
         setSheetImportSelection({});
         setSheetImportTagMappings({});
+        setSheetImportTagDrafts({});
         setSheetImportError(null);
         setCreatingSheetImportTagKey('');
     }
@@ -3156,7 +3159,16 @@ export default function App({
         });
     }
 
-    async function createSheetImportTag(sourceTagId, name, color = 'gray') {
+    function updateSheetImportTagDraft(sourceTagId, name) {
+        const key = String(sourceTagId);
+
+        setSheetImportTagDrafts((current) => ({
+            ...current,
+            [key]: String(name ?? ''),
+        }));
+    }
+
+    async function createSheetImportTag(sourceTagId, name, color = 'gray', reactivateExisting = false) {
         const key = String(sourceTagId);
         const tagName = String(name ?? '').trim();
 
@@ -3173,6 +3185,7 @@ export default function App({
             const response = await createScenarioBuilderAutoReplyImportTag(autoReplyImportTagStoreUrl, csrfToken, {
                 name: tagName,
                 color: color || 'gray',
+                reactivate_existing: reactivateExisting === true,
             });
             const tag = response?.tag;
             const tagId = Number(tag?.id);
@@ -3243,6 +3256,7 @@ export default function App({
             setSheetImportPreview(null);
             setSheetImportSelection({});
             setSheetImportTagMappings({});
+            setSheetImportTagDrafts({});
             setSheetImportError(null);
             setCreatingSheetImportTagKey('');
         } catch (requestError) {
@@ -3937,12 +3951,14 @@ export default function App({
                     preview={sheetImportPreview}
                     selection={sheetImportSelection}
                     tagMappings={sheetImportTagMappings}
+                    tagDrafts={sheetImportTagDrafts}
                     error={sheetImportError}
                     isApplying={isApplyingSheetImport}
                     canCreateTag={canCreateSheetImportTags}
                     creatingTagKey={creatingSheetImportTagKey}
                     onChangeChannels={updateSheetImportChannels}
                     onTagMapping={updateSheetImportTagMapping}
+                    onTagDraft={updateSheetImportTagDraft}
                     onCreateTag={createSheetImportTag}
                     onDownloadBackup={downloadSheetBackup}
                     onApply={applySheetImport}
@@ -5284,12 +5300,14 @@ function SheetImportPreviewDialog({
     preview,
     selection,
     tagMappings,
+    tagDrafts,
     error,
     isApplying,
     canCreateTag,
     creatingTagKey,
     onChangeChannels,
     onTagMapping,
+    onTagDraft,
     onCreateTag,
     onDownloadBackup,
     onApply,
@@ -5374,10 +5392,11 @@ function SheetImportPreviewDialog({
                                 const key = String(sourceTagId);
                                 const selectedTagId = tagMappings?.[key] ?? '';
                                 const isLegacyTag = tag.reason === 'legacy_missing_metadata';
-                                const createName = tag.can_create === true
-                                    ? String(tag.name ?? '').trim()
-                                    : defaultLegacySheetImportTagName(sourceTagId);
-                                const canCreateThisTag = canCreateTag && createName !== '';
+                                const inactiveTag = tag.inactive_tag && Number(tag.inactive_tag.id) > 0 ? tag.inactive_tag : null;
+                                const draftName = tagDrafts?.[key] ?? defaultSheetImportTagDraft(tag);
+                                const createName = String(draftName ?? '').trim();
+                                const canReactivateThisTag = canCreateTag && tag.can_reactivate === true && inactiveTag;
+                                const canCreateThisTag = canCreateTag && ! inactiveTag && createName !== '';
                                 const isCreating = creatingTagKey === key;
                                 const contexts = Array.isArray(tag.contexts) ? tag.contexts : [];
 
@@ -5388,10 +5407,23 @@ function SheetImportPreviewDialog({
                                             <small>Источник #{sourceTagId}</small>
                                             {contexts.length > 0 ? <small>{contexts.join(', ')}</small> : null}
                                             {isLegacyTag ? (
-                                                <small>Можно создать локальный технический тег «{createName}» без изменений на продакшене.</small>
+                                                <small>Можно создать локальный технический тег без изменений на продакшене.</small>
+                                            ) : null}
+                                            {inactiveTag ? (
+                                                <small>Локальный тег «{inactiveTag.name}» найден, но выключен. Включение требует отдельного действия.</small>
                                             ) : null}
                                         </span>
                                         <div className="ac-v3-builder__auto-reply-import-map-control">
+                                            {! inactiveTag ? (
+                                                <input
+                                                    type="text"
+                                                    className="ac-v3-builder__sheet-import-tag-name"
+                                                    value={draftName}
+                                                    disabled={isApplying}
+                                                    onChange={(event) => onTagDraft(sourceTagId, event.target.value)}
+                                                    placeholder="Название нового тега"
+                                                />
+                                            ) : null}
                                             <select
                                                 value={selectedTagId}
                                                 disabled={isApplying}
@@ -5412,6 +5444,16 @@ function SheetImportPreviewDialog({
                                                     onClick={() => onCreateTag(sourceTagId, createName, tag.color)}
                                                 >
                                                     {isCreating ? 'Создаю...' : (isLegacyTag ? 'Создать локально' : 'Создать')}
+                                                </button>
+                                            ) : null}
+                                            {canReactivateThisTag ? (
+                                                <button
+                                                    type="button"
+                                                    className="ac-v3-builder__auto-reply-import-create"
+                                                    disabled={isApplying || isCreating}
+                                                    onClick={() => onCreateTag(sourceTagId, inactiveTag.name, inactiveTag.color, true)}
+                                                >
+                                                    {isCreating ? 'Включаю...' : 'Включить'}
                                                 </button>
                                             ) : null}
                                         </div>
@@ -12269,6 +12311,28 @@ function defaultSheetImportTagMappings(preview) {
     });
 
     return mappings;
+}
+
+function defaultSheetImportTagDrafts(preview) {
+    const drafts = {};
+
+    (preview?.unresolved_tags ?? []).forEach((tag) => {
+        const sourceTagId = Number(tag?.source_tag_id);
+
+        if (sourceTagId > 0) {
+            drafts[String(sourceTagId)] = defaultSheetImportTagDraft(tag);
+        }
+    });
+
+    return drafts;
+}
+
+function defaultSheetImportTagDraft(tag) {
+    const name = String(tag?.name ?? '').trim();
+
+    return name !== ''
+        ? name
+        : defaultLegacySheetImportTagName(tag?.source_tag_id);
 }
 
 function sheetImportTagPayload(mappings) {
