@@ -37,6 +37,7 @@ class BotIncomingMessageNormalizer
     {
         return match ($channel->platform) {
             Channel::PLATFORM_TELEGRAM => $this->normalizeTelegramEdit($channel, $payload),
+            Channel::PLATFORM_MAX => $this->normalizeMaxEdit($channel, $payload),
             default => null,
         };
     }
@@ -1130,6 +1131,67 @@ class BotIncomingMessageNormalizer
     /**
      * @param  array<string, mixed>  $payload
      */
+    protected function normalizeMaxEdit(Channel $channel, array $payload): ?IncomingBotMessageEdit
+    {
+        if ((string) ($payload['update_type'] ?? '') !== 'message_edited') {
+            return null;
+        }
+
+        $message = $payload['message'] ?? null;
+
+        if (! is_array($message) || data_get($message, 'sender.is_bot') === true) {
+            return null;
+        }
+
+        $isDialog = filled($payload['user_locale'] ?? null)
+            || filled(data_get($message, 'recipient.user_id'))
+            || ! filled(data_get($message, 'recipient.chat_id'));
+
+        if (! $isDialog) {
+            return null;
+        }
+
+        $userId = $this->normalizeExternalId(data_get($message, 'sender.user_id'))
+            ?? $this->resolveMaxRemovalUserId($payload);
+        $chatId = $this->normalizeExternalId(data_get($message, 'recipient.chat_id'))
+            ?? $this->resolveMaxRemovalChatId($payload);
+        $externalMessageId = $this->resolveMaxMessageId($message)
+            ?? $this->resolveMaxRemovedMessageId($payload);
+
+        if (! filled($userId) || ! filled($chatId) || ! filled($externalMessageId)) {
+            return null;
+        }
+
+        $specialText = $this->resolveMaxSpecialDisplayText($message);
+        [$text, $richText] = $this->resolveMaxTextAndRichText($message);
+        $hasTextContent = $this->maxMessageHasTextContent($message) || $specialText !== null;
+
+        return new IncomingBotMessageEdit(
+            platform: $channel->platform,
+            channelId: $channel->id,
+            externalChatId: $chatId,
+            externalUserId: $userId,
+            providerEventKey: $this->resolveMaxEditEventKey($payload, $chatId, $userId, $externalMessageId, $specialText ?? $text),
+            externalMessageId: $externalMessageId,
+            externalUsername: $this->normalizeUsername(data_get($message, 'sender.username')),
+            contactName: $this->resolvePersonName(data_get($message, 'sender')),
+            text: $specialText ?? $text,
+            richText: $specialText !== null ? null : $richText,
+            hasTextContent: $hasTextContent,
+            rawPayload: $payload,
+            editedAt: $this->resolveReceivedAt([
+                data_get($message, 'edited_at'),
+                data_get($message, 'updated_at'),
+                data_get($message, 'timestamp'),
+                data_get($payload, 'timestamp'),
+                data_get($payload, 'created_at'),
+            ]),
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
     protected function normalizeMaxRemoval(Channel $channel, array $payload): ?IncomingBotMessageRemoval
     {
         if ((string) ($payload['update_type'] ?? '') !== 'message_removed') {
@@ -1789,6 +1851,54 @@ class BotIncomingMessageNormalizer
     }
 
     /**
+     * @param  array<string, mixed>  $message
+     */
+    protected function maxMessageHasTextContent(array $message): bool
+    {
+        $body = data_get($message, 'body');
+
+        return (is_array($body) && array_key_exists('text', $body))
+            || array_key_exists('text', $message);
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected function resolveMaxEditEventKey(
+        array $payload,
+        string $chatId,
+        string $userId,
+        string $externalMessageId,
+        ?string $text,
+    ): string {
+        $explicitEventKey = $this->normalizeExternalId(
+            data_get($payload, 'update_id')
+                ?? data_get($payload, 'event_id')
+        );
+
+        if ($explicitEventKey !== null) {
+            return $explicitEventKey;
+        }
+
+        $fingerprint = [
+            'update_type' => 'message_edited',
+            'chat_id' => $chatId,
+            'user_id' => $userId,
+            'message_id' => $externalMessageId,
+            'timestamp' => $this->normalizeExternalId(
+                data_get($payload, 'timestamp')
+                    ?? data_get($payload, 'created_at')
+                    ?? data_get($payload, 'message.timestamp')
+                    ?? data_get($payload, 'message.updated_at')
+                    ?? data_get($payload, 'message.edited_at')
+            ),
+            'text' => $text,
+        ];
+
+        return 'max-message-edited:'.sha1((string) json_encode($fingerprint, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    }
+
+    /**
      * @param  array<string, mixed>  $payload
      */
     protected function resolveMaxRemovalChatId(array $payload): ?string
@@ -2041,10 +2151,12 @@ class BotIncomingMessageNormalizer
         $timestamp = ltrim(trim($timestamp), '+');
         $absoluteTimestamp = ltrim($timestamp, '-');
 
-        return match (strlen($absoluteTimestamp)) {
+        $dateTime = match (strlen($absoluteTimestamp)) {
             16 => Carbon::createFromTimestampUTC((float) $timestamp / 1_000_000),
             13 => Carbon::createFromTimestampMsUTC((int) $timestamp),
             default => Carbon::createFromTimestampUTC((int) $timestamp),
         };
+
+        return $dateTime->timezone(config('app.timezone', 'UTC'));
     }
 }
