@@ -7519,11 +7519,16 @@
     }
 
     .ac-media-viewer {
+        --ac-media-viewer-frame-height: min(46rem, calc(100dvh - clamp(1.5rem, 4vw, 3rem)));
+        --ac-media-viewer-figure-padding: clamp(0.75rem, 2vw, 1.35rem);
+        --ac-media-viewer-toolbar-space: 3.75rem;
         position: fixed;
         inset: 0;
         z-index: 120;
+        box-sizing: border-box;
         display: grid;
         place-items: center;
+        min-height: 100dvh;
         padding: clamp(0.75rem, 2vw, 1.5rem);
     }
 
@@ -7616,16 +7621,11 @@
         padding: 0.45rem 0.7rem;
         font-size: 0.78rem;
         font-weight: 700;
-        --ac-media-viewer-frame-height: min(46rem, calc(100dvh - clamp(1.5rem, 4vw, 3rem)));
-        --ac-media-viewer-figure-padding: clamp(0.75rem, 2vw, 1.35rem);
-        --ac-media-viewer-toolbar-space: 3.75rem;
         line-height: 1.1;
     }
 
-        box-sizing: border-box;
     .ac-media-viewer__button--icon {
         width: 2.1rem;
-        min-height: 100dvh;
         padding: 0;
         font-size: 1.35rem;
         line-height: 1;
@@ -7690,6 +7690,8 @@
     .ac-media-viewer__figure {
         display: grid;
         place-items: center;
+        width: 100%;
+        height: 100%;
         min-width: 0;
         min-height: 0;
         margin: 0;
@@ -7717,6 +7719,20 @@
         object-fit: contain;
         border-radius: 10px;
         user-select: auto;
+    }
+
+    .ac-media-viewer__figure img {
+        width: auto;
+        height: auto;
+        max-height: max(
+            8rem,
+            calc(
+                var(--ac-media-viewer-frame-height)
+                - var(--ac-media-viewer-toolbar-space)
+                - var(--ac-media-viewer-figure-padding)
+                - var(--ac-media-viewer-figure-padding)
+            )
+        );
     }
 
     .ac-media-viewer__figure video {
@@ -7786,8 +7802,6 @@
     }
 
     .ac-media-viewer__nav--next {
-        width: 100%;
-        height: 100%;
         right: 0.85rem;
     }
 
@@ -7818,20 +7832,6 @@
     }
 
     .ac-message-attachment--video-note {
-    .ac-media-viewer__figure img {
-        width: auto;
-        height: auto;
-        max-height: max(
-            8rem,
-            calc(
-                var(--ac-media-viewer-frame-height)
-                - var(--ac-media-viewer-toolbar-space)
-                - var(--ac-media-viewer-figure-padding)
-                - var(--ac-media-viewer-figure-padding)
-            )
-        );
-    }
-
         grid-template-columns: minmax(0, 1fr);
         gap: 0.42rem;
     }
