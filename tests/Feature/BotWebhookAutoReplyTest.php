@@ -348,6 +348,152 @@ class BotWebhookAutoReplyTest extends TestCase
         ]);
     }
 
+    public function test_max_removed_message_marks_existing_message_without_dispatching_again(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+
+        $createdPayload = $this->maxPayload(
+            userId: 228532008,
+            chatId: 35194279,
+            messageId: 'mid.00000000021905a7019f323237d24307',
+            text: 'DEL-01 удалить меня',
+            timestamp: '2026-07-05T15:13:18+03:00',
+        );
+
+        $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $createdPayload)->assertOk();
+
+        $message = $this->inboundMessages()->firstOrFail();
+
+        Queue::assertPushed(ProcessAutoReplyJob::class, 1);
+
+        $removedPayload = [
+            'update_type' => 'message_removed',
+            'timestamp' => '2026-07-05T15:13:19+03:00',
+            'chat_id' => '35194279',
+            'user_id' => '228532008',
+            'message_id' => 'mid.00000000021905a7019f323237d24307',
+        ];
+
+        $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $removedPayload)->assertOk();
+
+        Queue::assertPushed(ProcessAutoReplyJob::class, 1);
+
+        $message->refresh();
+
+        $this->assertSame('DEL-01 удалить меня', $message->text);
+        $this->assertNotNull($message->removed_at);
+        $this->assertSame(1, $message->remove_count);
+        $this->assertEquals($removedPayload, data_get($message->raw_payload, 'provider_remove_event.payload'));
+        $this->assertStringStartsWith('max-message-removed:', (string) $message->last_remove_provider_event_key);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'message_remove.applied',
+        ]);
+
+        $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $removedPayload)->assertOk();
+
+        $message->refresh();
+
+        $this->assertSame(1, $message->remove_count);
+        Queue::assertPushed(ProcessAutoReplyJob::class, 1);
+    }
+
+    public function test_max_orphaned_removed_message_is_logged_without_creating_message(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+
+        $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", [
+            'update_type' => 'message_removed',
+            'timestamp' => '2026-07-05T15:13:19+03:00',
+            'chat_id' => '35194279',
+            'user_id' => '228532008',
+            'message_id' => 'mid.orphaned',
+        ])->assertOk();
+
+        Queue::assertNothingPushed();
+        $this->assertDatabaseCount('messages', 0);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'message_remove.orphaned',
+        ]);
+    }
+
+    public function test_max_removed_message_without_chat_id_does_not_mark_existing_message(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+
+        $createdPayload = $this->maxPayload(
+            userId: 228532008,
+            chatId: 35194279,
+            messageId: 'mid.00000000021905a7019f323237d24307',
+            text: 'DEL-01 удалить меня',
+            timestamp: '2026-07-05T15:13:18+03:00',
+        );
+
+        $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $createdPayload)->assertOk();
+
+        $message = $this->inboundMessages()->firstOrFail();
+
+        Queue::assertPushed(ProcessAutoReplyJob::class, 1);
+
+        $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", [
+            'update_type' => 'message_removed',
+            'timestamp' => '2026-07-05T15:13:19+03:00',
+            'user_id' => '228532008',
+            'message_id' => 'mid.00000000021905a7019f323237d24307',
+        ])->assertOk();
+
+        $message->refresh();
+
+        $this->assertNull($message->removed_at);
+        $this->assertSame(0, $message->remove_count);
+        $this->assertNull($message->last_remove_provider_event_key);
+        Queue::assertPushed(ProcessAutoReplyJob::class, 1);
+        $this->assertDatabaseHas('channel_activity_logs', [
+            'channel_id' => $channel->id,
+            'event' => 'message_remove.orphaned',
+        ]);
+    }
+
     public function test_telegram_edited_message_without_text_preserves_text_and_rich_text(): void
     {
         Queue::fake();

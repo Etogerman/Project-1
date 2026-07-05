@@ -7082,12 +7082,25 @@
     }
 
     .ac-message__edit-history,
-    .ac-message__edited-label {
+    .ac-message__edited-label,
+    .ac-message__removed-label {
         margin: 0.45rem 0 0.08rem;
         color: var(--ac-text-soft);
         font-size: 0.74rem;
         font-weight: 700;
         line-height: 1.25;
+    }
+
+    .ac-message__removed-label {
+        color: #b45309;
+    }
+
+    html.dark .ac-message__removed-label {
+        color: #fbbf24;
+    }
+
+    .ac-message__bubble--removed .ac-message__text {
+        color: color-mix(in srgb, var(--ac-text) 66%, var(--ac-text-soft));
     }
 
     .ac-message__edit-summary {
