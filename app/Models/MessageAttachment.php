@@ -308,6 +308,12 @@ class MessageAttachment extends Model
             return $extensionMimeType;
         }
 
+        $localPathExtensionMimeType = $this->previewMimeTypeFromLocalPathExtension();
+
+        if ($localPathExtensionMimeType !== null) {
+            return $localPathExtensionMimeType;
+        }
+
         if (in_array($this->media_kind, [self::MEDIA_KIND_IMAGE, self::MEDIA_KIND_STICKER], true) && $this->isLocallyDownloadable()) {
             return $this->previewMimeTypeFromLocalFile();
         }
@@ -430,6 +436,23 @@ class MessageAttachment extends Model
             'ogv', 'ogg' => 'video/ogg',
             default => null,
         };
+    }
+
+    private function previewMimeTypeFromLocalPathExtension(): ?string
+    {
+        if (! $this->isLocallyDownloadable()) {
+            return null;
+        }
+
+        $extension = self::sanitizeExtension(pathinfo((string) $this->local_path, PATHINFO_EXTENSION));
+
+        if ($extension === '') {
+            return null;
+        }
+
+        return in_array($this->media_kind, [self::MEDIA_KIND_AUDIO, self::MEDIA_KIND_VOICE], true)
+            ? self::previewAudioMimeTypeFromExtension($extension)
+            : self::previewMimeTypeFromExtension($extension);
     }
 
     private function previewMimeTypeFromLocalFile(): ?string
