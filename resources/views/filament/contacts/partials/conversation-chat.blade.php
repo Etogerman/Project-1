@@ -35,13 +35,15 @@
                 @php($previewableFileMediaItems = $previewableMediaItems->reject(fn ($mediaItem): bool => ($mediaItem['preview_kind'] ?? null) === \App\Models\MessageAttachment::PREVIEW_KIND_IMAGE)->values())
                 @php($nonPreviewableMediaItems = $messageMediaCollection->reject(fn ($mediaItem): bool => ! empty($mediaItem['is_previewable']) && filled($mediaItem['preview_url'] ?? null))->values())
                 @php($attachmentMediaItems = $previewableFileMediaItems->merge($nonPreviewableMediaItems)->values())
+                @php($hasNormalizedAttachmentCards = $attachmentMediaItems->contains(fn ($mediaItem): bool => ($mediaItem['source'] ?? null) === 'attachment'))
                 @php($hasPreviewableMedia = $previewableMediaItems->isNotEmpty())
                 @php($hasPreviewableImages = $previewableImageMediaItems->isNotEmpty())
                 @php($hasOnlyStickerPreviewImages = $hasPreviewableImages && $previewableImageMediaItems->every(fn ($mediaItem): bool => ($mediaItem['media_kind'] ?? null) === \App\Models\MessageAttachment::MEDIA_KIND_STICKER))
                 @php($hasInlineVideoAttachments = $attachmentMediaItems->contains(fn ($mediaItem): bool => empty($mediaItem['is_video_note']) && ($mediaItem['preview_kind'] ?? null) === \App\Models\MessageAttachment::PREVIEW_KIND_VIDEO && ! empty($mediaItem['is_previewable']) && filled($mediaItem['preview_url'] ?? null)))
                 @php($hasOnlyPreviewableMedia = $messageMediaItems !== [] && $nonPreviewableMediaItems->isEmpty())
-                @php($hideGeneratedMediaSummary = $hasOnlyPreviewableMedia && ! empty($message['is_media_only_display_text'] ?? false))
+                @php($hideGeneratedMediaSummary = $messageMediaItems !== [] && ! empty($message['is_media_only_display_text'] ?? false))
                 @php($contactShareContext = $message['contact_share_context'] ?? null)
+                @php($buttonContext = $message['button_context'] ?? null)
                 @php($hideGeneratedContactShareSummary = is_array($contactShareContext) && ($message['kind'] ?? null) === \App\Models\Message::KIND_INBOUND_CONTACT_SHARE)
                 @php($isRemoved = ! empty($message['is_removed'] ?? false))
                 <div
@@ -145,6 +147,18 @@
                             </div>
                         @endif
 
+                        @php($replyContext = $message['reply_context'] ?? null)
+                        @if (! $isSystemMessage && is_array($replyContext))
+                            <div data-role="conversation-reply-context" class="ac-message__reply-context">
+                                <div class="ac-message__reply-label">
+                                    {{ $replyContext['label'] ?? 'Ответ на сообщение' }}
+                                </div>
+                                <div class="ac-message__reply-text">
+                                    {{ $replyContext['preview_text'] ?? 'Сообщение без доступного текста' }}
+                                </div>
+                            </div>
+                        @endif
+
                         @if (! $isSystemMessage && is_array($contactShareContext))
                             @php($contactShareDetails = $contactShareContext['details'] ?? [])
                             <div data-role="conversation-contact-share" class="ac-message__contact-share">
@@ -222,6 +236,32 @@
                             <div class="ac-message__text">{{ $message['display_text'] }}</div>
                         @endif
 
+                        @if (! $isSystemMessage && is_array($buttonContext) && ! empty($buttonContext['rows'] ?? []))
+                            <div data-role="conversation-button-preview" class="ac-message__button-preview" aria-label="{{ $buttonContext['label'] ?? 'Отправленные кнопки' }}">
+                                <div class="ac-message__button-preview-label">
+                                    {{ $buttonContext['label'] ?? 'Отправленные кнопки' }}
+                                </div>
+                                @foreach ($buttonContext['rows'] as $buttonRow)
+                                    <div data-role="conversation-button-row" class="ac-message__button-preview-row">
+                                        @foreach ($buttonRow as $button)
+                                            <button
+                                                type="button"
+                                                data-role="conversation-button-chip"
+                                                class="ac-message__button-preview-button"
+                                                data-button-type="{{ $button['type'] ?? 'button' }}"
+                                                disabled
+                                            >
+                                                <span class="ac-message__button-preview-text">{{ $button['text'] ?? 'Кнопка' }}</span>
+                                                @if (filled($button['type_label'] ?? null))
+                                                    <span class="ac-message__button-preview-kind">{{ $button['type_label'] }}</span>
+                                                @endif
+                                            </button>
+                                        @endforeach
+                                    </div>
+                                @endforeach
+                            </div>
+                        @endif
+
                         @if (! $isSystemMessage && filled($message['removed_label'] ?? null))
                             <div data-role="conversation-message-removed" class="ac-message__removed-label">
                                 {{ $message['removed_label'] }}
@@ -271,7 +311,7 @@
                             @endif
                         @endif
 
-                        @if (! $hasPreviewableMedia && ! empty($message['media_badges'] ?? []))
+                        @if (! $hasPreviewableMedia && ! $hasNormalizedAttachmentCards && ! empty($message['media_badges'] ?? []))
                             <div data-role="conversation-media" class="ac-message__meta-main">
                                 @foreach ($message['media_badges'] as $mediaBadge)
                                     <span
@@ -316,6 +356,10 @@
                                     @php($audioSizeLabel = collect($mediaItem['meta'] ?? [])->first(fn ($part) => is_string($part) && preg_match('/\b(?:байт|Б|КБ|МБ|ГБ|B|KB|MB|GB)\b/u', $part) === 1))
                                     @php($videoNoteMeta = collect([$mediaItem['duration_label'] ?? null, $mediaItem['file_size_label'] ?? null])->filter()->implode(' · '))
                                     @php($videoMeta = collect([$mediaItem['duration_label'] ?? null, $mediaItem['file_size_label'] ?? null])->filter()->implode(' · '))
+                                    @php($attachmentKindLabel = $mediaItem['media_kind_label'] ?? 'Медиа')
+                                    @php($attachmentTitle = $mediaItem['title'] ?? null)
+                                    @php($shouldShowAttachmentTitle = filled($attachmentTitle) && $attachmentTitle !== $attachmentKindLabel)
+                                    @php($attachmentAccessibleTitle = $shouldShowAttachmentTitle ? $attachmentKindLabel.' '.$attachmentTitle : $attachmentKindLabel)
                                     <div
                                         wire:key="conversation-attachment-{{ $message['item_key'] ?? $message['id'] }}-{{ $mediaItem['attachment_id'] ?? $loop->index }}"
                                         data-role="conversation-attachment"
@@ -334,14 +378,14 @@
                                                     wire:key="conversation-voice-player-{{ $message['item_key'] ?? $message['id'] }}-{{ $mediaItem['attachment_id'] ?? $loop->index }}"
                                                     data-role="conversation-voice-player"
                                                     class="ac-voice-player"
-                                                    data-voice-title="{{ $mediaItem['media_kind_label'] ?? 'Аудио' }} {{ $mediaItem['title'] ?? '' }}"
+                                                    data-voice-title="{{ $attachmentAccessibleTitle }}"
                                                 >
                                                     <audio
                                                         data-role="conversation-attachment-audio"
                                                         class="ac-voice-player__audio"
                                                         preload="metadata"
                                                         src="{{ $mediaItem['preview_url'] }}"
-                                                        aria-label="{{ $mediaItem['media_kind_label'] ?? 'Аудио' }} {{ $mediaItem['title'] ?? '' }}"
+                                                        aria-label="{{ $attachmentAccessibleTitle }}"
                                                     ></audio>
                                                     <button
                                                         type="button"
@@ -397,7 +441,7 @@
                                                     wire:key="conversation-video-note-player-{{ $message['item_key'] ?? $message['id'] }}-{{ $mediaItem['attachment_id'] ?? $loop->index }}"
                                                     data-role="conversation-video-note-player"
                                                     class="ac-video-note-player"
-                                                    data-video-note-title="{{ $mediaItem['media_kind_label'] ?? 'Кружок' }} {{ $mediaItem['title'] ?? '' }}"
+                                                    data-video-note-title="{{ $attachmentAccessibleTitle }}"
                                                 >
                                                     <video
                                                         data-role="conversation-video-note-video"
@@ -405,7 +449,7 @@
                                                         preload="metadata"
                                                         playsinline
                                                         src="{{ $mediaItem['preview_url'] }}"
-                                                        aria-label="{{ $mediaItem['media_kind_label'] ?? 'Кружок' }} {{ $mediaItem['title'] ?? '' }}"
+                                                        aria-label="{{ $attachmentAccessibleTitle }}"
                                                     ></video>
                                                     <button
                                                         type="button"
@@ -444,7 +488,7 @@
                                                     wire:key="conversation-video-player-{{ $message['item_key'] ?? $message['id'] }}-{{ $mediaItem['attachment_id'] ?? $loop->index }}"
                                                     data-role="conversation-video-player"
                                                     class="ac-video-player"
-                                                    data-video-title="{{ $mediaItem['media_kind_label'] ?? 'Видео' }} {{ $mediaItem['title'] ?? '' }}"
+                                                    data-video-title="{{ $attachmentAccessibleTitle }}"
                                                 >
                                                     <video
                                                         data-role="conversation-attachment-video"
@@ -456,7 +500,7 @@
                                                         @if (filled($mediaItem['poster_url'] ?? null))
                                                             poster="{{ $mediaItem['poster_url'] }}"
                                                         @endif
-                                                        aria-label="{{ $mediaItem['media_kind_label'] ?? 'Видео' }} {{ $mediaItem['title'] ?? '' }}"
+                                                        aria-label="{{ $attachmentAccessibleTitle }}"
                                                     ></video>
                                                     <div class="ac-video-player__footer">
                                                         @if (filled($videoMeta))
@@ -496,8 +540,10 @@
                                                 </div>
                                             @else
                                                 <div class="ac-message-attachment__title">
-                                                    <span class="ac-message-attachment__kind">{{ $mediaItem['media_kind_label'] ?? 'Медиа' }}</span>
-                                                    <span>{{ $mediaItem['title'] ?? 'Вложение' }}</span>
+                                                    <span class="ac-message-attachment__kind">{{ $attachmentKindLabel }}</span>
+                                                    @if ($shouldShowAttachmentTitle)
+                                                        <span>{{ $attachmentTitle }}</span>
+                                                    @endif
                                                 </div>
                                             @endif
 

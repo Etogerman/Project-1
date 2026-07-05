@@ -1235,10 +1235,10 @@ class FilamentDialogsResourceTest extends TestCase
             'provider_attachment_key' => 'max-video-attachment-1',
             'provider_file_reference' => 'token:'.sha1('max-video-preview-token'),
             'media_kind' => MessageAttachment::MEDIA_KIND_VIDEO,
-            'original_filename' => 'clip.mp4',
-            'mime_type' => 'video/mp4',
-            'extension' => 'mp4',
-            'file_size_bytes' => 4096,
+            'original_filename' => null,
+            'mime_type' => null,
+            'extension' => null,
+            'file_size_bytes' => null,
             'provider_metadata' => [
                 'duration' => 20,
             ],
@@ -1261,7 +1261,11 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('playsinline', false)
             ->assertDontSee('data-role="conversation-media-gallery"', false)
             ->assertDontSee('data-role="conversation-attachment-status"', false)
-            ->assertSee('0:20 · 4 КБ')
+            ->assertSee('data-video-title="Видео"', false)
+            ->assertSee('aria-label="Видео"', false)
+            ->assertSee('0:20')
+            ->assertDontSee('Видео Видео')
+            ->assertDontSee('0:20 · 4 КБ')
             ->assertDontSee('video/mp4 · 0:20 · 4 КБ')
             ->assertSee(route('admin.message-attachments.preview', ['attachment' => $attachment->id]), false)
             ->assertSee(route('admin.message-attachments.download', ['attachment' => $attachment->id]), false);
@@ -1340,6 +1344,171 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('2 КБ')
             ->assertSee(route('admin.message-attachments.preview', ['attachment' => $attachment->id]), false)
             ->assertSee(route('admin.message-attachments.download', ['attachment' => $attachment->id]), false);
+    }
+
+    public function test_dialog_view_renders_downloaded_max_audio_without_metadata_as_inline_audio_player(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(1);
+        $message = Message::query()
+            ->where('dialog_id', $dialog->id)
+            ->firstOrFail();
+        $message->update([
+            'text' => null,
+            'external_message_id' => 'max-audio-preview-message-1',
+            'provider_event_key' => 'max-audio-preview-event-1',
+        ]);
+        $attachment = MessageAttachment::factory()->create([
+            'message_id' => $message->id,
+            'channel_id' => $dialog->channel_id,
+            'provider' => MessageAttachment::PROVIDER_MAX_BOT,
+            'provider_event_key' => 'max-audio-preview-event-1',
+            'provider_attachment_key' => 'max-audio-attachment-1',
+            'media_kind' => MessageAttachment::MEDIA_KIND_AUDIO,
+            'original_filename' => null,
+            'mime_type' => null,
+            'extension' => null,
+            'file_size_bytes' => null,
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+            'local_path' => MessageAttachment::LOCAL_PATH_PREFIX.'/'.$message->id.'/94.mp3',
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee('data-role="conversation-attachments"', false)
+            ->assertSee('data-role="conversation-voice-player"', false)
+            ->assertSee('data-role="conversation-attachment-audio"', false)
+            ->assertSee('data-voice-title="Аудио"', false)
+            ->assertSee('aria-label="Аудио"', false)
+            ->assertDontSee('data-role="conversation-media-badge"', false)
+            ->assertDontSee('data-role="conversation-attachment-status"', false)
+            ->assertDontSee('<div class="ac-message__text">Аудио</div>', false)
+            ->assertDontSee('Аудио Аудио')
+            ->assertSee(route('admin.message-attachments.preview', ['attachment' => $attachment->id]), false)
+            ->assertSee(route('admin.message-attachments.download', ['attachment' => $attachment->id]), false);
+    }
+
+    public function test_dialog_view_hides_generated_media_summary_for_downloaded_document_card(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(1);
+        $message = Message::query()
+            ->where('dialog_id', $dialog->id)
+            ->firstOrFail();
+        $message->update([
+            'text' => null,
+            'external_message_id' => 'max-document-card-message-1',
+            'provider_event_key' => 'max-document-card-event-1',
+        ]);
+        $attachment = MessageAttachment::factory()->create([
+            'message_id' => $message->id,
+            'channel_id' => $dialog->channel_id,
+            'provider' => MessageAttachment::PROVIDER_MAX_BOT,
+            'provider_event_key' => 'max-document-card-event-1',
+            'provider_attachment_key' => 'max-document-attachment-1',
+            'media_kind' => MessageAttachment::MEDIA_KIND_DOCUMENT,
+            'original_filename' => 'Comprovante de pagamento.pdf',
+            'mime_type' => 'application/pdf',
+            'extension' => 'pdf',
+            'file_size_bytes' => 1766,
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+            'local_path' => MessageAttachment::LOCAL_PATH_PREFIX.'/'.$message->id.'/95.pdf',
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee('data-role="conversation-attachments"', false)
+            ->assertSee('data-role="conversation-attachment"', false)
+            ->assertSee('Comprovante de pagamento.pdf')
+            ->assertSee('application/pdf · 1,7 КБ')
+            ->assertSee(route('admin.message-attachments.download', ['attachment' => $attachment->id]), false)
+            ->assertDontSee('data-role="conversation-media-badge"', false)
+            ->assertDontSee('data-role="conversation-attachment-status"', false)
+            ->assertDontSee('<div class="ac-message__text">Документ</div>', false)
+            ->assertDontSee('Документ: Comprovante de pagamento.pdf');
+    }
+
+    public function test_dialog_view_renders_outbound_max_buttons_as_disabled_preview(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(0);
+        $identity = $dialog->currentContactIdentity;
+        $message = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $identity?->id,
+            'channel_id' => $dialog->channel_id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_SCENARIO_MESSAGE,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_system_code' => 'scenario___scenario_constructor_workspace',
+            'external_chat_id' => $dialog->external_chat_id,
+            'external_message_id' => 'max-button-preview-message-1',
+            'provider_event_key' => null,
+            'text' => 'QA MAX BTN-01: нажми кнопку ниже',
+            'raw_payload' => [
+                'v3' => [
+                    'buttons' => [
+                        'rows' => [
+                            [
+                                [
+                                    'text' => 'Поделиться номером телефона',
+                                    'type' => 'request_phone',
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+                'message' => [
+                    'body' => [
+                        'attachments' => [
+                            [
+                                'type' => 'inline_keyboard',
+                                'payload' => [
+                                    'buttons' => [
+                                        [
+                                            [
+                                                'text' => 'Поделиться номером телефона',
+                                                'type' => 'request_contact',
+                                            ],
+                                        ],
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee('QA MAX BTN-01: нажми кнопку ниже')
+            ->assertSee('data-role="conversation-button-preview"', false)
+            ->assertSee('Отправленные кнопки')
+            ->assertSee('data-role="conversation-button-chip"', false)
+            ->assertSee('data-button-type="request_contact"', false)
+            ->assertSee('Поделиться номером телефона')
+            ->assertSee('Запрос телефона')
+            ->assertSee('disabled', false)
+            ->assertDontSee('href="Поделиться номером телефона"', false);
+
+        $this->assertDatabaseHas('messages', [
+            'id' => $message->id,
+            'message_kind' => Message::KIND_OUTBOUND_SCENARIO_MESSAGE,
+        ]);
     }
 
     public function test_dialog_view_live_refresh_defers_during_media_playback_and_text_selection(): void

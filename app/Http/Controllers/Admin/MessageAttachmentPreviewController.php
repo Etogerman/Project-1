@@ -4,16 +4,18 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\MessageAttachment;
+use Illuminate\Filesystem\FilesystemAdapter;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Storage;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class MessageAttachmentPreviewController extends Controller
 {
-    public function __invoke(string $attachment): RedirectResponse|StreamedResponse
+    public function __invoke(string $attachment): RedirectResponse|StreamedResponse|BinaryFileResponse
     {
         if (! Auth::check()) {
             return redirect('/admin/login');
@@ -37,8 +39,9 @@ class MessageAttachmentPreviewController extends Controller
 
         $disk = (string) $attachment->local_disk;
         $path = (string) $attachment->local_path;
+        $storage = Storage::disk($disk);
 
-        if (! Storage::disk($disk)->exists($path)) {
+        if (! $storage->exists($path)) {
             abort(Response::HTTP_NOT_FOUND);
         }
 
@@ -48,10 +51,32 @@ class MessageAttachmentPreviewController extends Controller
             'X-Content-Type-Options' => 'nosniff',
         ];
 
-        return Storage::disk($disk)->response(
+        $localPath = $this->resolveLocalPreviewPath($storage, $path);
+
+        if ($localPath !== null) {
+            return response()->download(
+                $localPath,
+                $attachment->downloadFilename(),
+                $headers,
+                'inline',
+            );
+        }
+
+        return $storage->response(
             $path,
             $attachment->downloadFilename(),
             $headers,
         );
+    }
+
+    private function resolveLocalPreviewPath(FilesystemAdapter $storage, string $path): ?string
+    {
+        try {
+            $localPath = $storage->path($path);
+        } catch (\Throwable) {
+            return null;
+        }
+
+        return is_file($localPath) ? $localPath : null;
     }
 }
