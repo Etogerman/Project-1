@@ -57,6 +57,7 @@ class BuildConversationFeedViewDataAction
                 $forwardedContext = $this->resolveConversationForwardedContext($message, $forwardedIdentityIndex);
                 $contactShareContext = $this->resolveConversationContactShareContext($message, $contactShareIdentityIndex);
                 $editContext = $this->resolveConversationEditContext($groupMessages);
+                $removalContext = $this->resolveConversationRemovalContext($groupMessages);
 
                 return [
                     'id' => $message->id,
@@ -85,6 +86,9 @@ class BuildConversationFeedViewDataAction
                     'is_edited' => $editContext['is_edited'],
                     'edited_label' => $editContext['label'],
                     'edit_history' => $editContext['history'],
+                    'is_removed' => $removalContext['is_removed'],
+                    'removed_label' => $removalContext['label'],
+                    'removed_at_iso' => $removalContext['removed_at_iso'],
                     'direction_label' => $this->resolveConversationDirectionLabel($message),
                     'direction_tone' => $this->resolveConversationDirectionTone($message),
                     'sender_tone' => $this->resolveConversationSenderTone($message),
@@ -251,6 +255,25 @@ class BuildConversationFeedViewDataAction
                 ? 'изменено '.$latestEditedAt->format('H:i')
                 : ($history !== [] ? 'изменено' : null),
             'history' => $history,
+        ];
+    }
+
+    /**
+     * @param  Collection<int, Message>  $groupMessages
+     * @return array{is_removed: bool, label: ?string, removed_at_iso: ?string}
+     */
+    protected function resolveConversationRemovalContext(Collection $groupMessages): array
+    {
+        $latestRemovedAt = $groupMessages
+            ->map(fn (Message $message): ?Carbon => $message->removed_at)
+            ->filter()
+            ->sortBy(fn (Carbon $removedAt): int => $removedAt->getTimestamp())
+            ->last();
+
+        return [
+            'is_removed' => $latestRemovedAt instanceof Carbon,
+            'label' => $latestRemovedAt instanceof Carbon ? 'удалено '.$latestRemovedAt->format('H:i') : null,
+            'removed_at_iso' => $latestRemovedAt instanceof Carbon ? $latestRemovedAt->toIso8601String() : null,
         ];
     }
 

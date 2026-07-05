@@ -109,6 +109,7 @@ class Message extends Model
         'provider_event_key',
         'provider_group_key',
         'last_edit_provider_event_key',
+        'last_remove_provider_event_key',
         'external_chat_id',
         'external_message_id',
         'text',
@@ -120,6 +121,8 @@ class Message extends Model
         'received_at',
         'edited_at',
         'edit_count',
+        'removed_at',
+        'remove_count',
         'auto_reply_sent_at',
     ];
 
@@ -132,6 +135,8 @@ class Message extends Model
         'received_at' => 'datetime',
         'edited_at' => 'datetime',
         'edit_count' => 'integer',
+        'removed_at' => 'datetime',
+        'remove_count' => 'integer',
         'auto_reply_sent_at' => 'datetime',
     ];
 
