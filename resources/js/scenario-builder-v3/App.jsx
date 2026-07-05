@@ -2953,10 +2953,7 @@ export default function App({
 
             await publishSavedState(savedState, blockBeforePublish, edgeBeforePublish);
         } catch (requestError) {
-            if (
-                requestError?.data?.code === 'scheduled_transitions_pending'
-                || requestError?.data?.code === 'auto_reply_import_double_response_risk'
-            ) {
+            if (requestError?.data?.code === 'scheduled_transitions_pending') {
                 return;
             }
 
@@ -2971,7 +2968,6 @@ export default function App({
         blockBeforePublish,
         edgeBeforePublish,
         scheduledTransitionPolicy = null,
-        confirmAutoReplyImportRisk = false,
     ) {
         const payload = {
             draft_version_id: savedState.scenario.draft_version_id,
@@ -2980,10 +2976,6 @@ export default function App({
 
         if (scheduledTransitionPolicy) {
             payload.scheduled_transition_policy = scheduledTransitionPolicy;
-        }
-
-        if (confirmAutoReplyImportRisk) {
-            payload.confirm_auto_reply_import_double_response_risk = true;
         }
 
         try {
@@ -3014,20 +3006,6 @@ export default function App({
             setError(null);
             setPendingPublishWarning({
                 type: 'scheduled_transitions',
-                savedState,
-                blockBeforePublish,
-                edgeBeforePublish,
-                warning: requestError.data.warning ?? {},
-            });
-            setStatus('ready');
-
-            return;
-        }
-
-        if (requestError.status === 409 && requestError.data?.code === 'auto_reply_import_double_response_risk' && savedState) {
-            setError(null);
-            setPendingPublishWarning({
-                type: 'auto_reply_import',
                 savedState,
                 blockBeforePublish,
                 edgeBeforePublish,
@@ -3570,22 +3548,12 @@ export default function App({
         setNotice(null);
 
         try {
-            if (warning.type === 'auto_reply_import') {
-                await publishSavedState(
-                    warning.savedState,
-                    warning.blockBeforePublish,
-                    warning.edgeBeforePublish,
-                    null,
-                    true,
-                );
-            } else {
-                await publishSavedState(
-                    warning.savedState,
-                    warning.blockBeforePublish,
-                    warning.edgeBeforePublish,
-                    policy,
-                );
-            }
+            await publishSavedState(
+                warning.savedState,
+                warning.blockBeforePublish,
+                warning.edgeBeforePublish,
+                policy,
+            );
         } catch {
             // Error state is already rendered by publishSavedState.
         } finally {
@@ -3980,22 +3948,13 @@ export default function App({
             ) : null}
 
             {pendingPublishWarning ? (
-                pendingPublishWarning.type === 'auto_reply_import' ? (
-                    <AutoReplyImportPublishDialog
-                        warning={pendingPublishWarning.warning}
-                        isPublishing={isPublishing}
-                        onConfirm={() => resolvePendingPublishWarning('confirm')}
-                        onClose={() => setPendingPublishWarning(null)}
-                    />
-                ) : (
-                    <ScheduledPublishDialog
-                        warning={pendingPublishWarning.warning}
-                        isPublishing={isPublishing}
-                        onKeep={() => resolvePendingPublishWarning('keep')}
-                        onCancelScheduled={() => resolvePendingPublishWarning('cancel')}
-                        onClose={() => setPendingPublishWarning(null)}
-                    />
-                )
+                <ScheduledPublishDialog
+                    warning={pendingPublishWarning.warning}
+                    isPublishing={isPublishing}
+                    onKeep={() => resolvePendingPublishWarning('keep')}
+                    onCancelScheduled={() => resolvePendingPublishWarning('cancel')}
+                    onClose={() => setPendingPublishWarning(null)}
+                />
             ) : null}
 
             {sheetImportPreview ? (
@@ -5309,38 +5268,6 @@ function ScheduledPublishDialog({ warning, isPublishing, onKeep, onCancelSchedul
                     </button>
                     <button type="button" className="is-danger" disabled={isPublishing} onClick={onCancelScheduled}>
                         Отменить переходы
-                    </button>
-                </div>
-            </div>
-        </div>
-    );
-}
-
-function AutoReplyImportPublishDialog({ warning, isPublishing, onConfirm, onClose }) {
-    const summary = warning?.auto_reply_import ?? {};
-    const count = Number(summary.count ?? 0);
-
-    return (
-        <div className="ac-v3-builder__dialog-backdrop" role="presentation">
-            <div className="ac-v3-builder__publish-dialog" role="dialog" aria-modal="true" aria-labelledby="auto-reply-import-warning-title">
-                <div className="ac-v3-builder__publish-dialog-head">
-                    <h2 id="auto-reply-import-warning-title">Есть импортированные автоответы</h2>
-                    <button type="button" title="Закрыть" disabled={isPublishing} onClick={onClose}>×</button>
-                </div>
-
-                <div className="ac-v3-builder__publish-dialog-body">
-                    <p>
-                        В сценарии есть импортированные автоответы: <strong>{count}</strong>.
-                        Старый модуль автоответов не отключается автоматически, поэтому перед публикацией проверьте, что не будет двойных ответов клиенту.
-                    </p>
-                </div>
-
-                <div className="ac-v3-builder__publish-dialog-footer">
-                    <button type="button" disabled={isPublishing} onClick={onClose}>
-                        Отмена
-                    </button>
-                    <button type="button" className="is-danger" disabled={isPublishing} onClick={onConfirm}>
-                        Опубликовать с подтверждением
                     </button>
                 </div>
             </div>
