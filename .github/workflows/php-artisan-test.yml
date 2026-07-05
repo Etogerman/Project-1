@@ -62,16 +62,24 @@ jobs:
         env:
           CI_TEST_SHARD_TOTAL: 4
         run: |
+          set -euo pipefail
+
           tmpdir="$(mktemp -d)"
           trap 'rm -rf "$tmpdir"' EXIT
 
-          php vendor/bin/phpunit --list-test-files | sed -n 's/^ - //p' | sort > "$tmpdir/all"
+          CI_TEST_SHARD_INDEX=0 \
+          CI_TEST_SHARD_TOTAL=1 \
+          CI_TEST_SHARD_DRY_RUN=1 \
+            bash scripts/ci-run-phpunit-shard.sh > "$tmpdir/all.raw"
+          sed '/^Running PHPUnit shard /d' "$tmpdir/all.raw" > "$tmpdir/all.unsorted"
+          sort "$tmpdir/all.unsorted" > "$tmpdir/all"
 
           for shard in 0 1 2 3; do
             CI_TEST_SHARD_INDEX="$shard" \
             CI_TEST_SHARD_TOTAL="$CI_TEST_SHARD_TOTAL" \
             CI_TEST_SHARD_DRY_RUN=1 \
-              bash scripts/ci-run-phpunit-shard.sh | sed '/^Running PHPUnit shard /d' >> "$tmpdir/combined"
+              bash scripts/ci-run-phpunit-shard.sh > "$tmpdir/shard-$shard.raw"
+            sed '/^Running PHPUnit shard /d' "$tmpdir/shard-$shard.raw" >> "$tmpdir/combined"
           done
 
           sort "$tmpdir/combined" > "$tmpdir/combined.sorted"
