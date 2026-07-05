@@ -11,9 +11,11 @@ use App\Models\MessageAttachment;
 use App\Models\User;
 use App\Services\Messages\StoreMessageAttachmentLocalFileAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Response;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Tests\TestCase;
 
 class MessageAttachmentDownloadTest extends TestCase
@@ -160,7 +162,7 @@ class MessageAttachmentDownloadTest extends TestCase
             ->get(route('admin.message-attachments.preview', $storedAttachment));
 
         $response->assertOk();
-        $this->assertSame('private-jpeg-bytes', $response->streamedContent());
+        $this->assertBinaryFileResponseContent($response, 'private-jpeg-bytes');
         $this->assertSame('image/jpeg', $response->headers->get('Content-Type'));
         $this->assertSame('nosniff', $response->headers->get('X-Content-Type-Options'));
         $this->assertStringContainsString('inline', (string) $response->headers->get('Content-Disposition'));
@@ -244,7 +246,7 @@ class MessageAttachmentDownloadTest extends TestCase
             ->get(route('admin.message-attachments.preview', $attachment));
 
         $response->assertOk();
-        $this->assertSame('private-video-bytes', $response->streamedContent());
+        $this->assertBinaryFileResponseContent($response, 'private-video-bytes');
         $this->assertSame('video/mp4', $response->headers->get('Content-Type'));
         $this->assertSame('nosniff', $response->headers->get('X-Content-Type-Options'));
         $this->assertStringContainsString('inline', (string) $response->headers->get('Content-Disposition'));
@@ -280,7 +282,7 @@ class MessageAttachmentDownloadTest extends TestCase
             ->get(route('admin.message-attachments.preview', $attachment));
 
         $response->assertOk();
-        $this->assertSame('private-video-bytes', $response->streamedContent());
+        $this->assertBinaryFileResponseContent($response, 'private-video-bytes');
         $this->assertSame('video/mp4', $response->headers->get('Content-Type'));
     }
 
@@ -416,10 +418,41 @@ class MessageAttachmentDownloadTest extends TestCase
             ->get(route('admin.message-attachments.preview', $attachment));
 
         $response->assertOk();
-        $this->assertSame('private-audio-bytes', $response->streamedContent());
+        $this->assertBinaryFileResponseContent($response, 'private-audio-bytes');
         $this->assertSame('audio/mpeg', $response->headers->get('Content-Type'));
         $this->assertSame('nosniff', $response->headers->get('X-Content-Type-Options'));
         $this->assertStringContainsString('inline', (string) $response->headers->get('Content-Disposition'));
+    }
+
+    public function test_preview_supports_byte_range_requests_for_browser_video_playback(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+            'role' => User::ROLE_ADMIN,
+        ]);
+        $attachment = app(StoreMessageAttachmentLocalFileAction::class)
+            ->handle($this->createAttachment([
+                'media_kind' => MessageAttachment::MEDIA_KIND_VIDEO,
+                'mime_type' => null,
+                'extension' => 'mp4',
+                'original_filename' => 'clip.mp4',
+            ]), '0123456789', 'mp4');
+
+        $this->assertTrue($attachment->isInlinePreviewable());
+        $this->assertSame('video/mp4', $attachment->previewMimeType());
+
+        $response = $this->actingAs($admin)
+            ->withHeader('Range', 'bytes=0-0')
+            ->get(route('admin.message-attachments.preview', $attachment));
+
+        $response->assertStatus(Response::HTTP_PARTIAL_CONTENT);
+        $this->assertSame('video/mp4', $response->headers->get('Content-Type'));
+        $this->assertSame('bytes', $response->headers->get('Accept-Ranges'));
+        $this->assertSame('bytes 0-0/10', $response->headers->get('Content-Range'));
+        $this->assertSame('1', $response->headers->get('Content-Length'));
     }
 
     public function test_preview_uses_local_path_extension_for_downloaded_audio_when_metadata_is_missing(): void
@@ -452,7 +485,7 @@ class MessageAttachmentDownloadTest extends TestCase
             ->get(route('admin.message-attachments.preview', $attachment));
 
         $response->assertOk();
-        $this->assertSame('private-audio-bytes', $response->streamedContent());
+        $this->assertBinaryFileResponseContent($response, 'private-audio-bytes');
         $this->assertSame('audio/mpeg', $response->headers->get('Content-Type'));
     }
 
@@ -684,6 +717,14 @@ class MessageAttachmentDownloadTest extends TestCase
         $this->actingAs($admin)
             ->get(route('admin.message-attachments.download', $attachment))
             ->assertNotFound();
+    }
+
+    private function assertBinaryFileResponseContent(mixed $response, string $expectedContent): void
+    {
+        $baseResponse = $response->baseResponse;
+
+        $this->assertInstanceOf(BinaryFileResponse::class, $baseResponse);
+        $this->assertSame($expectedContent, file_get_contents($baseResponse->getFile()->getPathname()));
     }
 
     /**
