@@ -741,6 +741,7 @@ export default function App({
     const [pendingButtonFocus, setPendingButtonFocus] = useState(null);
     const [pendingConnection, setPendingConnection] = useState(null);
     const [pendingPublishWarning, setPendingPublishWarning] = useState(null);
+    const [publishIssue, setPublishIssue] = useState(null);
     const [rewireTargetKey, setRewireTargetKey] = useState(null);
     const [anchors, setAnchors] = useState({ ports: {} });
     const [panelWidth, setPanelWidth] = useState(() => storedPanelWidth());
@@ -2941,6 +2942,7 @@ export default function App({
         setIsPublishing(true);
         setError(null);
         setNotice(null);
+        setPublishIssue(null);
 
         try {
             const savedState = await persistCurrentState(null);
@@ -2994,6 +2996,7 @@ export default function App({
             setSelectedEdgeKey(selection.edgeKey);
             setSelectedWaypoint(null);
             setPendingPublishWarning(null);
+            setPublishIssue(null);
             cancelConnection();
             setStatus('ready');
             setNotice([
@@ -3035,7 +3038,22 @@ export default function App({
             return;
         }
 
+        const issue = publishIssueFromError(
+            requestError,
+            savedState?.builder?.blocks ?? allBlocks,
+            savedState?.builder?.sheets ?? sheets,
+        );
+
+        if (issue) {
+            setError(null);
+            setPublishIssue(issue);
+            setStatus('ready');
+
+            return;
+        }
+
         setError(errorText(requestError));
+        setPublishIssue(null);
 
         if (requestError.status === 409) {
             setStatus('conflict');
@@ -3604,6 +3622,21 @@ export default function App({
         setPendingButtonFocus({ blockKey: issue.blockKey, buttonId: issue.buttonId });
     }
 
+    function openPublishIssueBlock(issue) {
+        const block = allBlocks.find((item) => item.client_key === issue.blockKey)
+            ?? allBlocks.find((item) => Number(item.id) === Number(issue.blockId))
+            ?? issue.block;
+
+        if (! block) {
+            setNotice('Блок из ошибки не найден в текущем черновике.');
+
+            return;
+        }
+
+        openAutoReplyBlockInConstructor(block);
+        setPublishIssue(null);
+    }
+
     function clearPendingButtonFocus() {
         setPendingButtonFocus(null);
     }
@@ -3903,6 +3936,25 @@ export default function App({
             {error ? (
                 <Notice kind={status === 'conflict' ? 'conflict' : 'error'} onClose={() => setError(null)}>
                     {error}
+                </Notice>
+            ) : null}
+
+            {publishIssue ? (
+                <Notice kind="error" onClose={() => setPublishIssue(null)}>
+                    <span>
+                        {publishIssue.message}
+                        {publishIssue.block ? (
+                            <>
+                                {' '}
+                                Лист: «{publishIssue.sheetName}», блок {publishIssue.blockLabel} · {publishIssue.blockTitle}.
+                            </>
+                        ) : null}
+                    </span>
+                    {publishIssue.block ? (
+                        <button type="button" className="ac-v3-builder__notice-action" onClick={() => openPublishIssueBlock(publishIssue)}>
+                            Открыть блок
+                        </button>
+                    ) : null}
                 </Notice>
             ) : null}
 
@@ -12571,6 +12623,55 @@ function errorText(error) {
     }
 
     return error.message || 'Не удалось выполнить запрос.';
+}
+
+export function publishIssueFromError(error, blocks = [], sheets = []) {
+    if (error?.status !== 422 || ! error?.data?.errors) {
+        return null;
+    }
+
+    const message = validationErrorText(error, 'builder.telegram_account_gateway');
+
+    if (message === '') {
+        return null;
+    }
+
+    const blockDisplayMatch = message.match(/блок\s+#([A-Za-zА-Яа-я0-9_-]+)/iu);
+    const blockDisplayId = blockDisplayMatch?.[1] ?? '';
+    const block = blockDisplayId !== ''
+        ? findBlockByDisplayId(blocks, blockDisplayId)
+        : null;
+    const sheetId = block ? blockSheetId(block) : MAIN_SHEET.id;
+    const sheet = sheetsFrom({ sheets }).find((item) => String(item.id) === sheetId) ?? MAIN_SHEET;
+
+    return {
+        message,
+        block,
+        blockId: block?.id ?? null,
+        blockKey: block?.client_key ?? null,
+        blockLabel: block ? shortBlockId(block) : (blockDisplayId ? `#${blockDisplayId}` : ''),
+        blockTitle: block?.title || 'Без названия',
+        sheetId,
+        sheetName: sheet.name || sheet.id || 'Главный',
+    };
+}
+
+function validationErrorText(error, key) {
+    const messages = error?.data?.errors?.[key] ?? [];
+
+    return Array.isArray(messages)
+        ? messages.filter(Boolean).join(' ')
+        : String(messages ?? '');
+}
+
+function findBlockByDisplayId(blocks, displayId) {
+    const normalizedDisplayId = normalizeSearchValue(displayId);
+
+    return (Array.isArray(blocks) ? blocks : []).find((block) => (
+        normalizeSearchValue(blockDisplayId(block)) === normalizedDisplayId
+        || normalizeSearchValue(copyableBlockId(block)) === normalizedDisplayId
+        || normalizeSearchValue(shortBlockId(block)) === normalizedDisplayId
+    )) ?? null;
 }
 
 function blockPosition(block) {

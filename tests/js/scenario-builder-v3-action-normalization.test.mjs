@@ -173,6 +173,42 @@ test('auto reply table filters by search status channel match sheet and continua
     assert.deepEqual(withContinuation.rows.map((row) => row.block.client_key), ['with_continuation']);
 });
 
+test('publish issue links validation error to block across sheets', async () => {
+    const { publishIssueFromError } = await viteServer.ssrLoadModule('/resources/js/scenario-builder-v3/App.jsx');
+    const issue = publishIssueFromError({
+        status: 422,
+        data: {
+            errors: {
+                'builder.telegram_account_gateway': [
+                    'Telegram Account Gateway пока поддерживает только текстовые V3-сообщения без кнопок. Проверьте блок #24.',
+                ],
+            },
+        },
+    }, [
+        {
+            id: 155,
+            client_key: 'block_155',
+            title: 'Старт 1',
+            settings_payload: { ui: { display_number: '1', sheet_id: 'sheet_1' } },
+        },
+        {
+            id: 2469,
+            client_key: 'block_2469',
+            title: 'Старт: нет номера',
+            settings_payload: { ui: { display_number: '24', sheet_id: 'main' } },
+        },
+    ], [
+        { id: 'main', name: 'Главный' },
+        { id: 'sheet_1', name: 'Лист 1' },
+    ]);
+
+    assert.equal(issue.blockKey, 'block_2469');
+    assert.equal(issue.blockLabel, '#24');
+    assert.equal(issue.blockTitle, 'Старт: нет номера');
+    assert.equal(issue.sheetId, 'main');
+    assert.equal(issue.sheetName, 'Главный');
+});
+
 test('auto reply table sorts paginates and normalizes visible columns', async () => {
     const { autoReplyTableView } = await viteServer.ssrLoadModule('/resources/js/scenario-builder-v3/App.jsx');
     const startBlock = (clientKey, title, displayNumber) => ({
