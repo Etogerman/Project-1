@@ -31,10 +31,73 @@ jobs:
       - name: Build frontend assets
         run: npm run build
 
+      - name: Upload frontend build
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build
+          path: public/build
+          if-no-files-found: error
+
+  phpunit-shard-coverage:
+    name: phpunit-shard-coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          coverage: none
+          tools: composer:v2
+          extensions: mbstring, dom, fileinfo, pgsql, pdo_pgsql
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --prefer-dist --optimize-autoloader
+
+      - name: Verify PHPUnit shard coverage
+        env:
+          CI_TEST_SHARD_TOTAL: 4
+        run: |
+          tmpdir="$(mktemp -d)"
+          trap 'rm -rf "$tmpdir"' EXIT
+
+          php vendor/bin/phpunit --list-test-files | sed -n 's/^ - //p' | sort > "$tmpdir/all"
+
+          for shard in 0 1 2 3; do
+            CI_TEST_SHARD_INDEX="$shard" \
+            CI_TEST_SHARD_TOTAL="$CI_TEST_SHARD_TOTAL" \
+            CI_TEST_SHARD_DRY_RUN=1 \
+              bash scripts/ci-run-phpunit-shard.sh | sed '/^Running PHPUnit shard /d' >> "$tmpdir/combined"
+          done
+
+          sort "$tmpdir/combined" > "$tmpdir/combined.sorted"
+          sort "$tmpdir/combined" | uniq -d > "$tmpdir/duplicates"
+          comm -23 "$tmpdir/all" "$tmpdir/combined.sorted" > "$tmpdir/missing"
+          comm -13 "$tmpdir/all" "$tmpdir/combined.sorted" > "$tmpdir/extra"
+
+          if [ -s "$tmpdir/missing" ] || [ -s "$tmpdir/extra" ] || [ -s "$tmpdir/duplicates" ]; then
+            echo "PHPUnit shard coverage mismatch" >&2
+            echo "Missing files:" >&2
+            cat "$tmpdir/missing" >&2
+            echo "Extra files:" >&2
+            cat "$tmpdir/extra" >&2
+            echo "Duplicate files:" >&2
+            cat "$tmpdir/duplicates" >&2
+            exit 1
+          fi
+
+          echo "PHPUnit shard coverage ok: $(wc -l < "$tmpdir/all") files"
+
   phpunit-shards:
     name: phpunit-shard-${{ matrix.shard }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    needs:
+      - frontend-build
     strategy:
       fail-fast: false
       matrix:
@@ -90,6 +153,12 @@ jobs:
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist --optimize-autoloader
 
+      - name: Download frontend build
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-build
+          path: public/build
+
       - name: Run CI test suite
         env:
           CI_TEST_SHARD_INDEX: ${{ matrix.shard }}
@@ -102,6 +171,7 @@ jobs:
     timeout-minutes: 5
     needs:
       - frontend-build
+      - phpunit-shard-coverage
       - phpunit-shards
     if: ${{ always() }}
 
@@ -110,6 +180,11 @@ jobs:
         run: |
           if [ "${{ needs.frontend-build.result }}" != "success" ]; then
             echo "frontend-build failed or did not complete successfully" >&2
+            exit 1
+          fi
+
+          if [ "${{ needs.phpunit-shard-coverage.result }}" != "success" ]; then
+            echo "phpunit-shard-coverage failed or did not complete successfully" >&2
             exit 1
           fi
 
