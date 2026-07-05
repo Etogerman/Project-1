@@ -1180,11 +1180,11 @@ class BotIncomingMessageNormalizer
             hasTextContent: $hasTextContent,
             rawPayload: $payload,
             editedAt: $this->resolveReceivedAt([
+                data_get($payload, 'timestamp'),
+                data_get($payload, 'created_at'),
                 data_get($message, 'edited_at'),
                 data_get($message, 'updated_at'),
                 data_get($message, 'timestamp'),
-                data_get($payload, 'timestamp'),
-                data_get($payload, 'created_at'),
             ]),
         );
     }
