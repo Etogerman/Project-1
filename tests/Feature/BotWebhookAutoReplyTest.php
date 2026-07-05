@@ -348,6 +348,70 @@ class BotWebhookAutoReplyTest extends TestCase
         ]);
     }
 
+    public function test_max_edited_message_updates_existing_message_and_keeps_revision_without_dispatching(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+
+        $createdPayload = $this->maxPayload(
+            userId: 228532008,
+            chatId: 35194279,
+            messageId: 'mid.00000000021905a7019f323237d24307',
+            text: 'Ответ на твое сообщение',
+            timestamp: '2026-07-05T20:27:00+03:00',
+        );
+
+        $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $createdPayload)->assertOk();
+
+        $message = $this->inboundMessages()->firstOrFail();
+        $editedAt = Carbon::parse('2026-07-05 20:28:00', config('app.timezone'));
+        $editedPayload = $createdPayload;
+        $editedPayload['update_type'] = 'message_edited';
+        $editedPayload['timestamp'] = $editedAt->getTimestamp();
+        $editedPayload['message']['timestamp'] = $editedAt->getTimestamp();
+        $editedPayload['message']['body']['text'] = 'Ответ на твое сообщение исправлен';
+
+        $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $editedPayload)->assertOk();
+
+        $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $editedPayload)->assertOk();
+
+        Queue::assertPushed(ProcessAutoReplyJob::class, 1);
+        Http::assertNothingSent();
+
+        $this->assertDatabaseCount('messages', 1);
+        $this->assertDatabaseCount('message_revisions', 1);
+
+        $message->refresh();
+
+        $this->assertSame('Ответ на твое сообщение исправлен', $message->text);
+        $this->assertSame(1, $message->edit_count);
+        $this->assertStringStartsWith('max-message-edited:', (string) $message->last_edit_provider_event_key);
+        $this->assertSame('2026-07-05 20:28:00', $message->edited_at?->format('Y-m-d H:i:s'));
+
+        $revision = MessageRevision::query()->firstOrFail();
+
+        $this->assertSame($message->id, $revision->message_id);
+        $this->assertSame(MessageRevision::TYPE_EDIT, $revision->revision_type);
+        $this->assertStringStartsWith('max-message-edited:', (string) $revision->provider_event_key);
+        $this->assertSame('Ответ на твое сообщение', $revision->previous_text);
+        $this->assertSame('Ответ на твое сообщение исправлен', $revision->new_text);
+        $this->assertSame('2026-07-05 20:28:00', $revision->provider_edited_at?->format('Y-m-d H:i:s'));
+    }
+
     public function test_max_removed_message_marks_existing_message_without_dispatching_again(): void
     {
         Queue::fake();
@@ -377,9 +441,10 @@ class BotWebhookAutoReplyTest extends TestCase
 
         Queue::assertPushed(ProcessAutoReplyJob::class, 1);
 
+        $removedAt = Carbon::parse('2026-07-05 20:46:00', config('app.timezone'));
         $removedPayload = [
             'update_type' => 'message_removed',
-            'timestamp' => '2026-07-05T15:13:19+03:00',
+            'timestamp' => $removedAt->getTimestamp(),
             'chat_id' => '35194279',
             'user_id' => '228532008',
             'message_id' => 'mid.00000000021905a7019f323237d24307',
@@ -395,6 +460,7 @@ class BotWebhookAutoReplyTest extends TestCase
 
         $this->assertSame('DEL-01 удалить меня', $message->text);
         $this->assertNotNull($message->removed_at);
+        $this->assertSame('2026-07-05 20:46:00', $message->removed_at->format('Y-m-d H:i:s'));
         $this->assertSame(1, $message->remove_count);
         $this->assertEquals($removedPayload, data_get($message->raw_payload, 'provider_remove_event.payload'));
         $this->assertStringStartsWith('max-message-removed:', (string) $message->last_remove_provider_event_key);

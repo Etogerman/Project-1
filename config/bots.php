@@ -339,6 +339,7 @@ return [
         'update_types' => [
             'message_created',
             'bot_started',
+            'message_edited',
             'message_removed',
         ],
     ],
