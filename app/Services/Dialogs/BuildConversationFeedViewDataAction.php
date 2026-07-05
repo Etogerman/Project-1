@@ -29,6 +29,7 @@ class BuildConversationFeedViewDataAction
                 $mediaBadges = $this->resolveConversationMediaBadges($message, $mediaItems);
                 $mediaStateBadges = $this->resolveConversationMediaStateBadges($message, $mediaItems);
                 $isSystemMessage = $this->isConversationSystemMessage($message);
+                $removalContext = $this->resolveConversationRemovalContext($message);
 
                 return [
                     'id' => $message->id,
@@ -43,6 +44,9 @@ class BuildConversationFeedViewDataAction
                     'channel_label' => $this->resolveConversationChannelLabel($message),
                     'sender_label' => $this->resolveConversationSenderLabel($message),
                     'sender_type' => $message->sent_by_type,
+                    'is_removed' => $removalContext['is_removed'],
+                    'removed_label' => $removalContext['label'],
+                    'removed_at_iso' => $removalContext['removed_at_iso'],
                     'direction_label' => $this->resolveConversationDirectionLabel($message),
                     'direction_tone' => $this->resolveConversationDirectionTone($message),
                     'sender_tone' => $this->resolveConversationSenderTone($message),
@@ -63,6 +67,20 @@ class BuildConversationFeedViewDataAction
                 ];
             })
             ->all();
+    }
+
+    /**
+     * @return array{is_removed: bool, label: ?string, removed_at_iso: ?string}
+     */
+    protected function resolveConversationRemovalContext(Message $message): array
+    {
+        $removedAt = $message->removed_at;
+
+        return [
+            'is_removed' => $removedAt instanceof Carbon,
+            'label' => $removedAt instanceof Carbon ? 'удалено '.$removedAt->format('H:i') : null,
+            'removed_at_iso' => $removedAt instanceof Carbon ? $removedAt->toIso8601String() : null,
+        ];
     }
 
     protected function isConversationSystemMessage(Message $message): bool

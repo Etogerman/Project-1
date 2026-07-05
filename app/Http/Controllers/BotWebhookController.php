@@ -12,6 +12,7 @@ use App\Services\Bots\ChannelActivityLogger;
 use App\Services\Bots\ChannelWebhookUrlGenerator;
 use App\Services\Bots\DispatchStoredInboundBotMessageAction;
 use App\Services\Bots\StoreInboundMessageAction;
+use App\Services\Bots\StoreInboundMessageRemovalAction;
 use App\Services\Bots\TelegramBotApiService;
 use App\Services\Scenarios\ScenarioRegistry;
 use Illuminate\Http\JsonResponse;
@@ -27,6 +28,7 @@ class BotWebhookController extends Controller
         BotIncomingMessageNormalizer $botIncomingMessageNormalizer,
         StoreInboundMessageAction $storeInboundMessageAction,
         DispatchStoredInboundBotMessageAction $dispatchStoredInboundBotMessageAction,
+        StoreInboundMessageRemovalAction $storeInboundMessageRemovalAction,
         ChannelActivityLogger $channelActivityLogger,
         BotWebhookRateLimiter $botWebhookRateLimiter,
         ChannelWebhookUrlGenerator $channelWebhookUrlGenerator,
@@ -39,6 +41,7 @@ class BotWebhookController extends Controller
             botIncomingMessageNormalizer: $botIncomingMessageNormalizer,
             storeInboundMessageAction: $storeInboundMessageAction,
             dispatchStoredInboundBotMessageAction: $dispatchStoredInboundBotMessageAction,
+            storeInboundMessageRemovalAction: $storeInboundMessageRemovalAction,
             channelActivityLogger: $channelActivityLogger,
             botWebhookRateLimiter: $botWebhookRateLimiter,
             channelWebhookUrlGenerator: $channelWebhookUrlGenerator,
@@ -52,6 +55,7 @@ class BotWebhookController extends Controller
         BotIncomingMessageNormalizer $botIncomingMessageNormalizer,
         StoreInboundMessageAction $storeInboundMessageAction,
         DispatchStoredInboundBotMessageAction $dispatchStoredInboundBotMessageAction,
+        StoreInboundMessageRemovalAction $storeInboundMessageRemovalAction,
         ChannelActivityLogger $channelActivityLogger,
         BotWebhookRateLimiter $botWebhookRateLimiter,
         ChannelWebhookUrlGenerator $channelWebhookUrlGenerator,
@@ -63,6 +67,7 @@ class BotWebhookController extends Controller
             botIncomingMessageNormalizer: $botIncomingMessageNormalizer,
             storeInboundMessageAction: $storeInboundMessageAction,
             dispatchStoredInboundBotMessageAction: $dispatchStoredInboundBotMessageAction,
+            storeInboundMessageRemovalAction: $storeInboundMessageRemovalAction,
             channelActivityLogger: $channelActivityLogger,
             botWebhookRateLimiter: $botWebhookRateLimiter,
             channelWebhookUrlGenerator: $channelWebhookUrlGenerator,
@@ -76,6 +81,7 @@ class BotWebhookController extends Controller
         BotIncomingMessageNormalizer $botIncomingMessageNormalizer,
         StoreInboundMessageAction $storeInboundMessageAction,
         DispatchStoredInboundBotMessageAction $dispatchStoredInboundBotMessageAction,
+        StoreInboundMessageRemovalAction $storeInboundMessageRemovalAction,
         ChannelActivityLogger $channelActivityLogger,
         BotWebhookRateLimiter $botWebhookRateLimiter,
         ChannelWebhookUrlGenerator $channelWebhookUrlGenerator,
@@ -150,6 +156,16 @@ class BotWebhookController extends Controller
                 storeInboundMessageAction: $storeInboundMessageAction,
                 dispatchStoredInboundBotMessageAction: $dispatchStoredInboundBotMessageAction,
             );
+        }
+
+        $messageRemoval = $botIncomingMessageNormalizer->normalizeRemoval($channel, $payload);
+
+        if ($messageRemoval !== null) {
+            $storeInboundMessageRemovalAction->handle($channel, $messageRemoval);
+
+            return response()->json([
+                'ok' => true,
+            ]);
         }
 
         $message = $botIncomingMessageNormalizer->normalize($channel, $payload);
@@ -284,6 +300,18 @@ class BotWebhookController extends Controller
             }
 
             return 'unknown';
+        }
+
+        if ($updateType === 'message_removed') {
+            if (! filled(data_get($payload, 'message_id'))
+                && ! filled(data_get($payload, 'mid'))
+                && ! filled(data_get($payload, 'message.message_id'))
+                && ! filled(data_get($payload, 'message.body.mid'))
+            ) {
+                return 'missing_message_id';
+            }
+
+            return 'unmatched_removed_message';
         }
 
         if ($updateType !== 'message_created') {

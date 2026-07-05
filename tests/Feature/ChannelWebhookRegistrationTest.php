@@ -210,7 +210,7 @@ class ChannelWebhookRegistrationTest extends TestCase
             return $request->hasHeader('Authorization', 'max-token')
                 && $request['url'] === "https://connector.example/webhooks/max/{$channel->id}"
                 && $request['secret'] === $channel->getWebhookSecret()
-                && $request['update_types'] === ['message_created', 'bot_started'];
+                && $request['update_types'] === ['message_created', 'bot_started', 'message_removed'];
         });
 
         Http::assertSent(fn ($request): bool => $request->url() === 'https://platform-api.max.ru/me');

@@ -3,6 +3,7 @@
 namespace App\Services\Bots;
 
 use App\Data\Bots\IncomingBotMessage;
+use App\Data\Bots\IncomingBotMessageRemoval;
 use App\Models\Channel;
 use Illuminate\Support\Carbon;
 use InvalidArgumentException;
@@ -19,6 +20,17 @@ class BotIncomingMessageNormalizer
             Channel::PLATFORM_TELEGRAM => $this->normalizeTelegram($channel, $payload),
             Channel::PLATFORM_MAX => $this->normalizeMax($channel, $payload),
             default => throw new InvalidArgumentException("Unsupported bot platform [{$channel->platform}]."),
+        };
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    public function normalizeRemoval(Channel $channel, array $payload): ?IncomingBotMessageRemoval
+    {
+        return match ($channel->platform) {
+            Channel::PLATFORM_MAX => $this->normalizeMaxRemoval($channel, $payload),
+            default => null,
         };
     }
 
@@ -302,6 +314,42 @@ class BotIncomingMessageNormalizer
     /**
      * @param  array<string, mixed>  $payload
      */
+    protected function normalizeMaxRemoval(Channel $channel, array $payload): ?IncomingBotMessageRemoval
+    {
+        if ((string) ($payload['update_type'] ?? '') !== 'message_removed') {
+            return null;
+        }
+
+        $externalMessageId = $this->resolveMaxRemovedMessageId($payload);
+
+        if (! filled($externalMessageId)) {
+            return null;
+        }
+
+        $chatId = $this->resolveMaxRemovalChatId($payload);
+        $userId = $this->resolveMaxRemovalUserId($payload);
+        $removedAt = $this->resolveReceivedAt([
+            data_get($payload, 'timestamp'),
+            data_get($payload, 'created_at'),
+            data_get($payload, 'message.timestamp'),
+            data_get($payload, 'message.created_at'),
+        ]);
+
+        return new IncomingBotMessageRemoval(
+            platform: $channel->platform,
+            channelId: $channel->id,
+            externalChatId: $chatId,
+            externalUserId: $userId,
+            externalMessageId: $externalMessageId,
+            providerEventKey: $this->resolveMaxRemovalEventKey($payload, $chatId, $userId, $externalMessageId),
+            rawPayload: $payload,
+            removedAt: $removedAt,
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
     protected function normalizeMaxBotStarted(Channel $channel, array $payload): ?IncomingBotMessage
     {
         $chatId = $this->normalizeExternalId($payload['chat_id'] ?? null);
@@ -426,6 +474,110 @@ class BotIncomingMessageNormalizer
         ];
 
         return 'max-bot-started:'.sha1((string) json_encode($fingerprint, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected function resolveMaxRemovedMessageId(array $payload): ?string
+    {
+        foreach ([
+            data_get($payload, 'message_id'),
+            data_get($payload, 'mid'),
+            data_get($payload, 'id'),
+            data_get($payload, 'message.message_id'),
+            data_get($payload, 'message.body.mid'),
+            data_get($payload, 'message.body.seq'),
+            data_get($payload, 'message.id'),
+            data_get($payload, 'body.mid'),
+            data_get($payload, 'body.seq'),
+        ] as $candidate) {
+            $messageId = $this->normalizeExternalId($candidate);
+
+            if ($messageId !== null) {
+                return $messageId;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected function resolveMaxRemovalChatId(array $payload): ?string
+    {
+        foreach ([
+            data_get($payload, 'chat_id'),
+            data_get($payload, 'recipient.chat_id'),
+            data_get($payload, 'chat.id'),
+            data_get($payload, 'message.recipient.chat_id'),
+            data_get($payload, 'message.chat_id'),
+            data_get($payload, 'message.chat.id'),
+        ] as $candidate) {
+            $chatId = $this->normalizeExternalId($candidate);
+
+            if ($chatId !== null) {
+                return $chatId;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected function resolveMaxRemovalUserId(array $payload): ?string
+    {
+        foreach ([
+            data_get($payload, 'user_id'),
+            data_get($payload, 'user.user_id'),
+            data_get($payload, 'sender.user_id'),
+            data_get($payload, 'message.sender.user_id'),
+        ] as $candidate) {
+            $userId = $this->normalizeExternalId($candidate);
+
+            if ($userId !== null) {
+                return $userId;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected function resolveMaxRemovalEventKey(
+        array $payload,
+        ?string $chatId,
+        ?string $userId,
+        string $externalMessageId,
+    ): string {
+        $explicitEventKey = $this->normalizeExternalId(
+            data_get($payload, 'update_id')
+                ?? data_get($payload, 'event_id')
+        );
+
+        if ($explicitEventKey !== null) {
+            return $explicitEventKey;
+        }
+
+        $fingerprint = [
+            'update_type' => 'message_removed',
+            'chat_id' => $chatId,
+            'user_id' => $userId,
+            'message_id' => $externalMessageId,
+            'timestamp' => $this->normalizeExternalId(
+                data_get($payload, 'timestamp')
+                    ?? data_get($payload, 'created_at')
+                    ?? data_get($payload, 'message.timestamp')
+                    ?? data_get($payload, 'message.created_at')
+            ),
+        ];
+
+        return 'max-message-removed:'.sha1((string) json_encode($fingerprint, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
     }
 
     /**

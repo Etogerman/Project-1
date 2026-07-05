@@ -6985,6 +6985,21 @@
         text-align: left;
     }
 
+    .ac-message__removed-label {
+        margin-top: 0.28rem;
+        font-size: 0.78rem;
+        font-weight: 700;
+        color: var(--ac-danger);
+    }
+
+    html.dark .ac-message__removed-label {
+        color: #f97316;
+    }
+
+    .ac-message__bubble--removed .ac-message__text {
+        color: color-mix(in srgb, var(--ac-text) 72%, var(--ac-text-soft));
+    }
+
     .ac-message--system .ac-message__text {
         color: #374151;
         font-size: 0.9rem;

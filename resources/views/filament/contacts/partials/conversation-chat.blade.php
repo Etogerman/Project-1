@@ -28,6 +28,7 @@
                 @endif
 
                 @php($isSystemMessage = $message['is_system_message'] ?? ($message['is_system_event'] ?? false))
+                @php($isRemoved = ! empty($message['is_removed'] ?? false))
                 <div
                     wire:key="conversation-message-{{ $message['id'] }}"
                     data-role="conversation-message"
@@ -40,7 +41,10 @@
                         'ac-message--inbound' => ! $message['is_outbound'] && ! $isSystemMessage,
                     ])
                 >
-                    <article class="ac-message__bubble">
+                    <article @class([
+                        'ac-message__bubble',
+                        'ac-message__bubble--removed' => $isRemoved,
+                    ])>
                         <div data-role="conversation-meta" class="ac-message__meta">
                             <div class="ac-message__meta-main">
                                 <span
@@ -100,6 +104,12 @@
                                         {{ $mediaStateBadge['label'] ?? 'Статус не определён' }}
                                     </span>
                                 @endforeach
+                            </div>
+                        @endif
+
+                        @if (! $isSystemMessage && filled($message['removed_label'] ?? null))
+                            <div data-role="conversation-message-removed" class="ac-message__removed-label">
+                                {{ $message['removed_label'] }}
                             </div>
                         @endif
                     </article>

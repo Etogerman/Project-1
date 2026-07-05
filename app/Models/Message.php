@@ -107,6 +107,7 @@ class Message extends Model
         'sent_by_system_code',
         'reply_to_message_id',
         'provider_event_key',
+        'last_remove_provider_event_key',
         'external_chat_id',
         'external_message_id',
         'text',
@@ -115,6 +116,8 @@ class Message extends Model
         'message_parameter',
         'raw_payload',
         'received_at',
+        'removed_at',
+        'remove_count',
         'auto_reply_sent_at',
     ];
 
@@ -124,6 +127,8 @@ class Message extends Model
     protected $casts = [
         'raw_payload' => 'array',
         'received_at' => 'datetime',
+        'removed_at' => 'datetime',
+        'remove_count' => 'integer',
         'auto_reply_sent_at' => 'datetime',
     ];
 
