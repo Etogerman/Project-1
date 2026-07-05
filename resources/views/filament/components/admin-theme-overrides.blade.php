@@ -7478,8 +7478,8 @@
         display: grid;
         grid-template-rows: auto minmax(0, 1fr);
         width: min(100%, 72rem);
-        height: min(100%, 46rem);
-        max-height: calc(100vh - clamp(1.5rem, 4vw, 3rem));
+        height: var(--ac-media-viewer-frame-height);
+        max-height: var(--ac-media-viewer-frame-height);
         overflow: hidden;
         border: 1px solid rgba(226, 232, 240, 0.16);
         border-radius: 18px;
@@ -7550,11 +7550,16 @@
         padding: 0.45rem 0.7rem;
         font-size: 0.78rem;
         font-weight: 700;
+        --ac-media-viewer-frame-height: min(46rem, calc(100dvh - clamp(1.5rem, 4vw, 3rem)));
+        --ac-media-viewer-figure-padding: clamp(0.75rem, 2vw, 1.35rem);
+        --ac-media-viewer-toolbar-space: 3.75rem;
         line-height: 1.1;
     }
 
+        box-sizing: border-box;
     .ac-media-viewer__button--icon {
         width: 2.1rem;
+        min-height: 100dvh;
         padding: 0;
         font-size: 1.35rem;
         line-height: 1;
@@ -7622,7 +7627,8 @@
         min-width: 0;
         min-height: 0;
         margin: 0;
-        padding: clamp(0.75rem, 2vw, 1.35rem);
+        overflow: hidden;
+        padding: var(--ac-media-viewer-figure-padding);
     }
 
     .ac-media-viewer__figure[data-media-viewer-kind="pdf"],
@@ -7640,8 +7646,6 @@
     .ac-media-viewer__figure video,
     .ac-media-viewer__figure audio {
         display: block;
-        width: auto;
-        height: auto;
         max-width: 100%;
         max-height: 100%;
         object-fit: contain;
@@ -7716,6 +7720,8 @@
     }
 
     .ac-media-viewer__nav--next {
+        width: 100%;
+        height: 100%;
         right: 0.85rem;
     }
 
@@ -7746,6 +7752,20 @@
     }
 
     .ac-message-attachment--video-note {
+    .ac-media-viewer__figure img {
+        width: auto;
+        height: auto;
+        max-height: max(
+            8rem,
+            calc(
+                var(--ac-media-viewer-frame-height)
+                - var(--ac-media-viewer-toolbar-space)
+                - var(--ac-media-viewer-figure-padding)
+                - var(--ac-media-viewer-figure-padding)
+            )
+        );
+    }
+
         grid-template-columns: minmax(0, 1fr);
         gap: 0.42rem;
     }
