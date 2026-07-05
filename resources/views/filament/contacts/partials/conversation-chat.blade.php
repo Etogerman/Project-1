@@ -32,12 +32,16 @@
                 @php($messageMediaCollection = collect($messageMediaItems))
                 @php($previewableMediaItems = $messageMediaCollection->filter(fn ($mediaItem): bool => ! empty($mediaItem['is_previewable']) && filled($mediaItem['preview_url'] ?? null))->values())
                 @php($previewableImageMediaItems = $previewableMediaItems->filter(fn ($mediaItem): bool => ($mediaItem['preview_kind'] ?? null) === \App\Models\MessageAttachment::PREVIEW_KIND_IMAGE)->values())
-                @php($previewableFileMediaItems = $previewableMediaItems->reject(fn ($mediaItem): bool => ($mediaItem['preview_kind'] ?? null) === \App\Models\MessageAttachment::PREVIEW_KIND_IMAGE)->values())
+                @php($previewableRegularVideoMediaItems = $previewableMediaItems->filter(fn ($mediaItem): bool => empty($mediaItem['is_video_note']) && ($mediaItem['preview_kind'] ?? null) === \App\Models\MessageAttachment::PREVIEW_KIND_VIDEO)->values())
+                @php($shouldMergeVideosIntoGallery = $previewableImageMediaItems->isNotEmpty() && $previewableRegularVideoMediaItems->isNotEmpty())
+                @php($galleryMediaItems = $shouldMergeVideosIntoGallery ? $previewableImageMediaItems->merge($previewableRegularVideoMediaItems)->values() : $previewableImageMediaItems)
+                @php($previewableFileMediaItems = $previewableMediaItems->reject(fn ($mediaItem): bool => ($mediaItem['preview_kind'] ?? null) === \App\Models\MessageAttachment::PREVIEW_KIND_IMAGE || ($shouldMergeVideosIntoGallery && empty($mediaItem['is_video_note']) && ($mediaItem['preview_kind'] ?? null) === \App\Models\MessageAttachment::PREVIEW_KIND_VIDEO))->values())
                 @php($nonPreviewableMediaItems = $messageMediaCollection->reject(fn ($mediaItem): bool => ! empty($mediaItem['is_previewable']) && filled($mediaItem['preview_url'] ?? null))->values())
                 @php($attachmentMediaItems = $previewableFileMediaItems->merge($nonPreviewableMediaItems)->values())
                 @php($hasNormalizedAttachmentCards = $attachmentMediaItems->contains(fn ($mediaItem): bool => ($mediaItem['source'] ?? null) === 'attachment'))
                 @php($hasPreviewableMedia = $previewableMediaItems->isNotEmpty())
                 @php($hasPreviewableImages = $previewableImageMediaItems->isNotEmpty())
+                @php($hasGalleryMedia = $galleryMediaItems->isNotEmpty())
                 @php($hasOnlyStickerPreviewImages = $hasPreviewableImages && $previewableImageMediaItems->every(fn ($mediaItem): bool => ($mediaItem['media_kind'] ?? null) === \App\Models\MessageAttachment::MEDIA_KIND_STICKER))
                 @php($hasInlineVideoAttachments = $attachmentMediaItems->contains(fn ($mediaItem): bool => empty($mediaItem['is_video_note']) && ($mediaItem['preview_kind'] ?? null) === \App\Models\MessageAttachment::PREVIEW_KIND_VIDEO && ! empty($mediaItem['is_previewable']) && filled($mediaItem['preview_url'] ?? null)))
                 @php($hasOnlyPreviewableMedia = $messageMediaItems !== [] && $nonPreviewableMediaItems->isEmpty())
@@ -60,7 +64,7 @@
                 >
                     <article @class([
                         'ac-message__bubble',
-                        'ac-message__bubble--has-gallery' => $hasPreviewableImages,
+                        'ac-message__bubble--has-gallery' => $hasGalleryMedia,
                         'ac-message__bubble--removed' => $isRemoved,
                     ])>
                         <div data-role="conversation-meta" class="ac-message__meta">
@@ -191,7 +195,7 @@
                             </div>
                         @endif
 
-                        @if ($hasPreviewableImages)
+                        @if ($hasGalleryMedia)
                             <div
                                 data-role="conversation-media-gallery"
                                 data-media-viewer-gallery
@@ -199,30 +203,50 @@
                                     'ac-message-gallery',
                                     'ac-message-gallery--stickers' => $hasOnlyStickerPreviewImages,
                                 ])
-                                data-count="{{ min($previewableImageMediaItems->count(), 4) }}"
+                                data-count="{{ min($galleryMediaItems->count(), 4) }}"
                             >
-                                @foreach ($previewableImageMediaItems as $mediaItem)
+                                @foreach ($galleryMediaItems as $mediaItem)
+                                    @php($galleryPreviewKind = $mediaItem['preview_kind'] ?? \App\Models\MessageAttachment::PREVIEW_KIND_IMAGE)
+                                    @php($isGalleryVideo = $galleryPreviewKind === \App\Models\MessageAttachment::PREVIEW_KIND_VIDEO)
+                                    @php($galleryTitle = $mediaItem['media_kind_label'] ?? ($isGalleryVideo ? 'Видео' : 'Изображение'))
                                     <a
                                         data-role="conversation-attachment-preview"
                                         data-media-viewer-trigger
-                                        data-media-viewer-type="{{ \App\Models\MessageAttachment::PREVIEW_KIND_IMAGE }}"
-                                        data-media-viewer-title="{{ $mediaItem['media_kind_label'] ?? 'Изображение' }}"
+                                        data-media-viewer-type="{{ $galleryPreviewKind }}"
+                                        data-media-viewer-title="{{ $galleryTitle }}"
                                         data-media-viewer-download-url="{{ $mediaItem['download_url'] ?? '' }}"
                                         @class([
                                             'ac-message-gallery__item',
                                             'ac-message-gallery__item--sticker' => ($mediaItem['media_kind'] ?? null) === \App\Models\MessageAttachment::MEDIA_KIND_STICKER,
+                                            'ac-message-gallery__item--video' => $isGalleryVideo,
                                         ])
                                         href="{{ $mediaItem['preview_url'] }}"
                                         target="_blank"
                                         rel="noopener"
-                                        aria-label="Открыть изображение"
-                                        title="Открыть изображение"
+                                        aria-label="{{ $isGalleryVideo ? 'Открыть видео' : 'Открыть изображение' }}"
+                                        title="{{ $isGalleryVideo ? 'Открыть видео' : 'Открыть изображение' }}"
                                     >
-                                        <img
-                                            src="{{ $mediaItem['preview_url'] }}"
-                                            alt="{{ $mediaItem['media_kind_label'] ?? 'Изображение' }}"
-                                            loading="lazy"
-                                        >
+                                        @if ($isGalleryVideo)
+                                            <video
+                                                src="{{ $mediaItem['preview_url'] }}"
+                                                @if (filled($mediaItem['poster_url'] ?? null))
+                                                    poster="{{ $mediaItem['poster_url'] }}"
+                                                @endif
+                                                preload="metadata"
+                                                muted
+                                                playsinline
+                                                aria-hidden="true"
+                                            ></video>
+                                            <span class="ac-message-gallery__play-indicator" aria-hidden="true">
+                                                <x-filament::icon icon="heroicon-m-play" />
+                                            </span>
+                                        @else
+                                            <img
+                                                src="{{ $mediaItem['preview_url'] }}"
+                                                alt="{{ $mediaItem['media_kind_label'] ?? 'Изображение' }}"
+                                                loading="lazy"
+                                            >
+                                        @endif
                                     </a>
                                 @endforeach
                             </div>
@@ -342,7 +366,7 @@
                         @if ($attachmentMediaItems->isNotEmpty())
                             <div data-role="conversation-attachments" @class([
                                 'ac-message__attachments',
-                                'ac-message__attachments--after-gallery' => $hasPreviewableImages,
+                                'ac-message__attachments--after-gallery' => $hasGalleryMedia,
                                 'ac-message__attachments--inline-video' => $hasInlineVideoAttachments,
                             ])
                                 @if ($previewableFileMediaItems->isNotEmpty())

@@ -7531,14 +7531,20 @@
         aspect-ratio: 1 / 1;
     }
 
-    .ac-message-gallery__item img {
+    .ac-message-gallery__item img,
+    .ac-message-gallery__item video {
         display: block;
         width: 100%;
         height: 100%;
         object-fit: cover;
     }
 
-    .ac-message-gallery[data-count="1"] .ac-message-gallery__item img {
+    .ac-message-gallery__item video {
+        background: color-mix(in srgb, var(--ac-surface-muted) 82%, #000 18%);
+    }
+
+    .ac-message-gallery[data-count="1"] .ac-message-gallery__item img,
+    .ac-message-gallery[data-count="1"] .ac-message-gallery__item video {
         height: auto;
         max-height: 24rem;
         object-fit: contain;
@@ -7548,6 +7554,28 @@
     .ac-message-gallery[data-count="1"] .ac-message-gallery__item--sticker img {
         max-height: 10rem;
         background: transparent;
+    }
+
+    .ac-message-gallery__play-indicator {
+        position: absolute;
+        inset: 50% auto auto 50%;
+        display: inline-grid;
+        width: 2.55rem;
+        height: 2.55rem;
+        transform: translate(-50%, -50%);
+        place-items: center;
+        border: 1px solid rgba(255, 255, 255, 0.44);
+        border-radius: 999px;
+        background: rgba(15, 23, 42, 0.64);
+        color: #fff;
+        pointer-events: none;
+        box-shadow: 0 14px 28px -18px rgba(15, 23, 42, 0.9);
+    }
+
+    .ac-message-gallery__play-indicator svg {
+        width: 1.24rem;
+        height: 1.24rem;
+        margin-left: 0.12rem;
     }
 
     body.ac-media-viewer-open {
