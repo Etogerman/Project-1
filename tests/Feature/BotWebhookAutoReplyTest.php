@@ -377,8 +377,8 @@ class BotWebhookAutoReplyTest extends TestCase
         $editedAt = Carbon::parse('2026-07-05 20:28:00', config('app.timezone'));
         $editedPayload = $createdPayload;
         $editedPayload['update_type'] = 'message_edited';
-        $editedPayload['timestamp'] = $editedAt->getTimestamp();
-        $editedPayload['message']['timestamp'] = $editedAt->getTimestamp();
+        $editedPayload['timestamp'] = $editedAt->getTimestampMs();
+        $editedPayload['message']['timestamp'] = Carbon::parse('2026-07-05 20:27:00', config('app.timezone'))->getTimestampMs();
         $editedPayload['message']['body']['text'] = 'Ответ на твое сообщение исправлен';
 
         $this->withHeaders([

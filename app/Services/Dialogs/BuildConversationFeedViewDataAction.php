@@ -246,7 +246,7 @@ class BuildConversationFeedViewDataAction
             ->map(function (MessageRevision $revision): array {
                 return [
                     'id' => $revision->id,
-                    'label' => $revision->provider_edited_at?->format('H:i d.m.Y') ?? 'время неизвестно',
+                    'label' => $revision->provider_edited_at?->format('H:i:s d.m.Y') ?? 'время неизвестно',
                     'previous_text' => $this->formatRevisionText($revision->previous_text),
                     'new_text' => $this->formatRevisionText($revision->new_text),
                 ];
@@ -257,7 +257,7 @@ class BuildConversationFeedViewDataAction
         return [
             'is_edited' => $latestEditedAt instanceof Carbon || $history !== [],
             'label' => $latestEditedAt instanceof Carbon
-                ? 'изменено '.$latestEditedAt->format('H:i')
+                ? 'изменено '.$latestEditedAt->format('H:i:s')
                 : ($history !== [] ? 'изменено' : null),
             'history' => $history,
         ];
