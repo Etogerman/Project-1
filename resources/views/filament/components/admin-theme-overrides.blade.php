@@ -7478,14 +7478,21 @@
         display: grid;
         grid-template-rows: auto minmax(0, 1fr);
         width: min(100%, 72rem);
-        height: min(100%, 46rem);
-        max-height: calc(100vh - clamp(1.5rem, 4vw, 3rem));
+        height: min(46rem, calc(100dvh - clamp(1.5rem, 4vw, 3rem)));
+        max-height: calc(100dvh - clamp(1.5rem, 4vw, 3rem));
         overflow: hidden;
         border: 1px solid rgba(226, 232, 240, 0.16);
         border-radius: 18px;
         background: rgba(15, 23, 42, 0.94);
         box-shadow: 0 32px 90px -44px rgba(0, 0, 0, 0.88);
         color: #f8fafc;
+    }
+
+    @supports not (height: 100dvh) {
+        .ac-media-viewer__dialog {
+            height: min(46rem, calc(100vh - clamp(1.5rem, 4vw, 3rem)));
+            max-height: calc(100vh - clamp(1.5rem, 4vw, 3rem));
+        }
     }
 
     .ac-media-viewer__toolbar {
@@ -7621,7 +7628,10 @@
         place-items: center;
         min-width: 0;
         min-height: 0;
+        width: 100%;
+        height: 100%;
         margin: 0;
+        overflow: hidden;
         padding: clamp(0.75rem, 2vw, 1.35rem);
     }
 
@@ -7637,11 +7647,10 @@
     }
 
     .ac-media-viewer__figure img,
-    .ac-media-viewer__figure video,
-    .ac-media-viewer__figure audio {
+    .ac-media-viewer__figure video {
         display: block;
-        width: auto;
-        height: auto;
+        width: 100%;
+        height: 100%;
         max-width: 100%;
         max-height: 100%;
         object-fit: contain;
@@ -7650,14 +7659,17 @@
     }
 
     .ac-media-viewer__figure video {
-        width: 100%;
-        height: 100%;
         background: #020617;
     }
 
     .ac-media-viewer__figure audio {
+        display: block;
         width: min(100%, 34rem);
+        height: auto;
+        max-width: 100%;
         max-height: 4rem;
+        border-radius: 10px;
+        user-select: auto;
     }
 
     .ac-media-viewer__audio-panel {
