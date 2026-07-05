@@ -6903,6 +6903,11 @@
         box-shadow: 0 10px 24px -22px rgba(15, 23, 42, 0.5);
     }
 
+    .ac-message__bubble--has-gallery {
+        width: fit-content;
+        max-width: min(24rem, 72%);
+    }
+
     .ac-message--outbound .ac-message__bubble {
         border-top-right-radius: 6px;
         border-color: color-mix(in srgb, var(--ac-success) 24%, var(--ac-border));
@@ -12058,6 +12063,10 @@
     @media (max-width: 960px) {
         .ac-message__bubble {
             max-width: 100%;
+        }
+
+        .ac-message__bubble--has-gallery {
+            max-width: min(24rem, 100%);
         }
     }
 
