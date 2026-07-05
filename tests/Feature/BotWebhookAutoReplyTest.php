@@ -1526,6 +1526,11 @@ class BotWebhookAutoReplyTest extends TestCase
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
         config()->set('bots.max.trusted_media_hosts', ['max.example']);
         Http::fake([
+            // Аудио скачивается через свежий URL из videos-API (payload.url одноразовый).
+            'https://platform-api.max.ru/videos/max-audio-token' => Http::response([
+                'token' => 'max-audio-token',
+                'urls' => ['mp4_480' => 'https://max.example/private/audio.mp3?fresh=1'],
+            ]),
             'https://max.example/*' => Http::response(
                 'max-audio-bytes',
                 200,
@@ -1584,6 +1589,10 @@ class BotWebhookAutoReplyTest extends TestCase
         Queue::fake();
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
         Http::fake([
+            'https://platform-api.max.ru/videos/max-okcdn-audio-token' => Http::response([
+                'token' => 'max-okcdn-audio-token',
+                'urls' => ['mp4_480' => 'https://maxvd126.okcdn.ru/?expires=fresh&type=2&sig=signed&ct=2&fn=audio.ogg'],
+            ]),
             'https://maxvd126.okcdn.ru/*' => Http::response(
                 'max-okcdn-audio-bytes',
                 200,
@@ -2065,11 +2074,12 @@ class BotWebhookAutoReplyTest extends TestCase
                 messageId: 'max-bad-url-'.$case,
                 text: null,
             );
+            // Без token: audio уходит в fallback-ветку прямого URL — именно её
+            // и проверяет validate (с токеном путь шёл бы через videos-API).
             $payload['message']['body']['attachments'] = [
                 [
                     'type' => 'audio',
                     'payload' => [
-                        'token' => 'max-bad-url-token-'.$case,
                         'url' => $url,
                     ],
                 ],

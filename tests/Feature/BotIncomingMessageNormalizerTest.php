@@ -1120,8 +1120,11 @@ class BotIncomingMessageNormalizerTest extends TestCase
         ]);
 
         $text = "😀 обычный\nЖирный\nКурсив\nПодчеркнутый\nЗачеркнутый\nЦитата\nПодсветка\nМоно\nСсылка";
-        $offsetOf = fn (string $needle): int => (int) mb_strpos($text, $needle);
-        $lengthOf = fn (string $needle): int => mb_strlen($needle);
+        // MAX шлёт from/length в UTF-16 code units (эмодзи = 2 юнита) —
+        // подтверждено живым payload id71 (04.07.2026).
+        $utf16Len = fn (string $s): int => intdiv(strlen(mb_convert_encoding($s, 'UTF-16BE', 'UTF-8')), 2);
+        $offsetOf = fn (string $needle): int => $utf16Len(mb_substr($text, 0, (int) mb_strpos($text, $needle)));
+        $lengthOf = fn (string $needle): int => $utf16Len($needle);
 
         $payload = [
             'update_type' => 'message_created',
@@ -1171,6 +1174,37 @@ class BotIncomingMessageNormalizerTest extends TestCase
         $this->assertSame([['type' => 'highlight']], $markedRuns['Подсветка']);
         $this->assertSame([['type' => 'code']], $markedRuns['Моно']);
         $this->assertSame([['type' => 'link', 'href' => 'https://example.test/max']], $markedRuns['Ссылка']);
+    }
+
+    public function test_max_markup_offsets_are_utf16_units_live_payload(): void
+    {
+        // Дословный живой payload (сообщение id71, 04.07.2026):
+        // «😄😄 жирный», markup [{from: 5, type: strong, length: 6}] —
+        // from=5 это 2+2+1 UTF-16-юнитов, НЕ 3 кодпойнта.
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+
+        $message = app(BotIncomingMessageNormalizer::class)->normalize($channel, [
+            'update_type' => 'message_created',
+            'user_locale' => 'ru',
+            'message' => [
+                'sender' => ['user_id' => 500, 'username' => 'max_user', 'is_bot' => false],
+                'recipient' => ['chat_id' => 700],
+                'body' => [
+                    'mid' => 'max-utf16-live-71',
+                    'text' => '😄😄 жирный',
+                    'markup' => [
+                        ['from' => 5, 'type' => 'strong', 'length' => 6],
+                    ],
+                ],
+            ],
+        ]);
+
+        $this->assertInstanceOf(IncomingBotMessage::class, $message);
+        $this->assertNotNull($message->richText, 'Разметка после эмодзи не должна выбрасываться');
+        $marks = collect($message->richText['runs'])->firstWhere('text', 'жирный')['marks'] ?? [];
+        $this->assertContainsEquals(['type' => 'bold'], $marks);
     }
 
     public function test_max_forwarded_message_uses_nested_body_text_and_markup(): void

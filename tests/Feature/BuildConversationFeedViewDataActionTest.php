@@ -1007,6 +1007,270 @@ class BuildConversationFeedViewDataActionTest extends TestCase
         ], $feed[0]['forwarded_context']['details']);
     }
 
+    public function test_max_reply_context_uses_link_message_without_replacing_own_text(): void
+    {
+        $contact = Contact::factory()->create();
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'max-reply-user',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'max-reply-chat',
+        ]);
+        $sourceMessage = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'max-reply-chat',
+            'external_message_id' => 'mid.reply.source',
+            'provider_event_key' => 'mid.reply.source',
+            'text' => 'TQ-01 обычный текст без форматирования',
+            'received_at' => now()->subMinute(),
+        ]);
+        $replyMessage = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'max-reply-chat',
+            'external_message_id' => 'mid.reply.current',
+            'provider_event_key' => 'mid.reply.current',
+            'text' => 'TQ-03 это reply на TQ-01',
+            'raw_payload' => [
+                'message' => [
+                    'body' => [
+                        'mid' => 'mid.reply.current',
+                        'text' => 'TQ-03 это reply на TQ-01',
+                    ],
+                    'link' => [
+                        'type' => 'reply',
+                        'message' => [
+                            'mid' => 'mid.reply.source',
+                            'text' => 'TQ-01 обычный текст без форматирования',
+                        ],
+                    ],
+                ],
+            ],
+            'received_at' => now(),
+        ]);
+
+        $feed = app(BuildConversationFeedViewDataAction::class)->handle(
+            Message::query()
+                ->whereKey($replyMessage->id)
+                ->with(['channel', 'dialog.channel', 'sentByUser'])
+                ->get(),
+        );
+
+        $this->assertSame('TQ-03 это reply на TQ-01', $feed[0]['display_text']);
+        $this->assertNull($feed[0]['forwarded_label']);
+        $this->assertNull($feed[0]['forwarded_context']);
+        $this->assertSame([
+            'label' => 'Ответ на сообщение',
+            'original_message_id' => 'mid.reply.source',
+            'local_message_id' => $sourceMessage->id,
+            'has_local_message' => true,
+            'preview_text' => 'TQ-01 обычный текст без форматирования',
+        ], $feed[0]['reply_context']);
+    }
+
+    public function test_max_reply_context_matches_source_message_within_same_external_chat(): void
+    {
+        $contact = Contact::factory()->create();
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'max-reply-chat-scope-user',
+        ]);
+        $otherContact = Contact::factory()->create();
+        $otherIdentity = ContactIdentity::factory()->create([
+            'contact_id' => $otherContact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'max-reply-chat-scope-other-user',
+        ]);
+        $targetDialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'max-reply-chat-target',
+        ]);
+        $otherDialog = Dialog::factory()->create([
+            'contact_id' => $otherContact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $otherIdentity->id,
+            'external_chat_id' => 'max-reply-chat-other',
+        ]);
+        $sourceMessage = Message::factory()->create([
+            'dialog_id' => $targetDialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'max-reply-chat-target',
+            'external_message_id' => 'mid.reply.shared',
+            'provider_event_key' => 'mid.reply.shared.target',
+            'text' => 'RIGHT chat source',
+            'received_at' => now()->subMinutes(2),
+        ]);
+        $otherSourceMessage = Message::factory()->create([
+            'dialog_id' => $otherDialog->id,
+            'contact_id' => $otherContact->id,
+            'contact_identity_id' => $otherIdentity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'max-reply-chat-other',
+            'external_message_id' => 'mid.reply.shared',
+            'provider_event_key' => 'mid.reply.shared.other',
+            'text' => 'WRONG chat source',
+            'received_at' => now()->subMinute(),
+        ]);
+        $replyMessage = Message::factory()->create([
+            'dialog_id' => $targetDialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'max-reply-chat-target',
+            'external_message_id' => 'mid.reply.current',
+            'provider_event_key' => 'mid.reply.current',
+            'text' => 'Reply to shared mid',
+            'raw_payload' => [
+                'message' => [
+                    'body' => [
+                        'mid' => 'mid.reply.current',
+                        'text' => 'Reply to shared mid',
+                    ],
+                    'link' => [
+                        'type' => 'reply',
+                        'message' => [
+                            'mid' => 'mid.reply.shared',
+                        ],
+                    ],
+                ],
+            ],
+            'received_at' => now(),
+        ]);
+
+        $feed = app(BuildConversationFeedViewDataAction::class)->handle(
+            Message::query()
+                ->whereKey($replyMessage->id)
+                ->with(['channel', 'dialog.channel', 'sentByUser'])
+                ->get(),
+        );
+
+        $this->assertSame($sourceMessage->id, $feed[0]['reply_context']['local_message_id']);
+        $this->assertNotSame($otherSourceMessage->id, $feed[0]['reply_context']['local_message_id']);
+        $this->assertSame('RIGHT chat source', $feed[0]['reply_context']['preview_text']);
+    }
+
+    public function test_outbound_max_button_context_uses_sent_keyboard_payload(): void
+    {
+        $contact = Contact::factory()->create();
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'max-button-user',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'max-button-chat',
+        ]);
+        $message = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_SCENARIO_MESSAGE,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_system_code' => 'scenario___scenario_constructor_workspace',
+            'external_chat_id' => 'max-button-chat',
+            'external_message_id' => 'mid.max.button.current',
+            'text' => 'QA MAX BTN-01: нажми кнопку ниже',
+            'raw_payload' => [
+                'v3' => [
+                    'buttons' => [
+                        'rows' => [
+                            [
+                                [
+                                    'text' => 'Fallback button',
+                                    'type' => 'text',
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+                'message' => [
+                    'body' => [
+                        'attachments' => [
+                            [
+                                'type' => 'inline_keyboard',
+                                'payload' => [
+                                    'buttons' => [
+                                        [
+                                            [
+                                                'text' => 'Поделиться номером телефона',
+                                                'type' => 'request_contact',
+                                            ],
+                                        ],
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+            'received_at' => now(),
+        ]);
+
+        $feed = app(BuildConversationFeedViewDataAction::class)->handle(
+            Message::query()
+                ->whereKey($message->id)
+                ->with(['channel', 'dialog.channel', 'sentByUser'])
+                ->get(),
+        );
+
+        $this->assertSame([
+            'label' => 'Отправленные кнопки',
+            'rows' => [
+                [
+                    [
+                        'text' => 'Поделиться номером телефона',
+                        'type' => 'request_contact',
+                        'type_label' => 'Запрос телефона',
+                        'url' => null,
+                    ],
+                ],
+            ],
+        ], $feed[0]['button_context']);
+    }
+
     public function test_telegram_forwarded_message_exposes_safe_forwarded_label_and_sender_id(): void
     {
         $contact = Contact::factory()->create();

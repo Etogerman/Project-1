@@ -217,11 +217,24 @@ class DownloadBotMessageAttachmentsAction
     {
         $body = $response->toPsrResponse()->getBody();
         $maxBytes = $this->maxBytes();
+        $expectedLength = $this->normalizeNonNegativeInteger($response->header('Content-Length'));
         $contents = '';
 
         while (! $body->eof()) {
             $remainingBytes = $maxBytes - strlen($contents) + 1;
-            $chunk = $body->read(min(8192, $remainingBytes));
+
+            try {
+                $chunk = $body->read(min(8192, $remainingBytes));
+            } catch (\RuntimeException $exception) {
+                // CDN MAX (okcdn) закрывает соединение без EOF-сигнала: psr7 кидает
+                // «Unable to read from stream» УЖЕ ПОСЛЕ полного тела. Если получено
+                // ровно столько, сколько обещал Content-Length — тело полное.
+                if ($expectedLength !== null && strlen($contents) >= $expectedLength) {
+                    break;
+                }
+
+                throw $exception;
+            }
 
             if ($chunk === '') {
                 break;
@@ -253,7 +266,15 @@ class DownloadBotMessageAttachmentsAction
         $mimeType = $headerMimeType
             ?? ($isTelegramStickerThumbnail ? $this->mimeTypeFromExtension($extension) : null)
             ?? $attachment->mime_type
-            ?? $this->mimeTypeFromExtension($extension);
+            ?? $this->mimeTypeFromExtension($extension)
+            // CDN MAX может не прислать Content-Type, а payload — mime/extension:
+            // последний рубеж — определить тип по первым байтам самого файла
+            // (без типа previewKind пуст, и вместо плеера оператор видит карточку).
+            ?? $this->mimeTypeFromContents($downloaded->contents);
+
+        if ($extension === null && $mimeType !== null) {
+            $extension = $this->extensionFromMimeType($mimeType);
+        }
 
         $values = [
             'mime_type' => $mimeType,
@@ -427,12 +448,23 @@ class DownloadBotMessageAttachmentsAction
                 continue;
             }
 
-            if (in_array($attachment->media_kind, [MessageAttachment::MEDIA_KIND_VIDEO, MessageAttachment::MEDIA_KIND_VIDEO_NOTE], true)) {
-                $videoToken = $this->resolveMaxAttachmentToken($candidate);
+            // payload.url у MAX одноразовый/короткоживущий (живой QA 04.07: 400 при
+            // повторном GET) — для видео, кружков, аудио и голосовых берём свежий URL
+            // через videos-API (он универсален для всей медиа-фермы okcdn, включая audio).
+            if (in_array($attachment->media_kind, [
+                MessageAttachment::MEDIA_KIND_VIDEO,
+                MessageAttachment::MEDIA_KIND_VIDEO_NOTE,
+                MessageAttachment::MEDIA_KIND_AUDIO,
+                MessageAttachment::MEDIA_KIND_VOICE,
+            ], true)) {
+                $mediaToken = $this->resolveMaxAttachmentToken($candidate);
 
-                return $videoToken !== null
-                    ? $this->maxBotApiService->fetchVideoAttachmentDownloadData($channel, $videoToken)
-                    : null;
+                if ($mediaToken !== null) {
+                    return $this->maxBotApiService->fetchVideoAttachmentDownloadData($channel, $mediaToken);
+                }
+
+                // Токена нет — падаем обратно на прямой URL из payload (лучше попытка,
+                // чем гарантированный отказ).
             }
 
             if ($attachment->media_kind === MessageAttachment::MEDIA_KIND_STICKER) {
@@ -801,6 +833,27 @@ class DownloadBotMessageAttachmentsAction
         $extension = MessageAttachment::sanitizeExtension(pathinfo((string) $filename, PATHINFO_EXTENSION));
 
         return $extension !== '' ? $extension : null;
+    }
+
+    private function mimeTypeFromContents(string $contents): ?string
+    {
+        if ($contents === '') {
+            return null;
+        }
+
+        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+
+        if ($finfo === false) {
+            return null;
+        }
+
+        try {
+            $detected = finfo_buffer($finfo, $contents);
+        } finally {
+            finfo_close($finfo);
+        }
+
+        return $this->normalizeMimeType(is_string($detected) ? $detected : null);
     }
 
     private function extensionFromMimeType(?string $mimeType): ?string

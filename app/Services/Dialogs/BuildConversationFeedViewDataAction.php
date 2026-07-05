@@ -34,11 +34,12 @@ class BuildConversationFeedViewDataAction
         $messages = $this->loadConversationGroupSiblingMessages($messages);
         $forwardedIdentityIndex = $this->resolveConversationForwardedIdentityIndex($messages);
         $contactShareIdentityIndex = $this->resolveConversationContactShareIdentityIndex($messages);
+        $replyMessageIndex = $this->resolveConversationReplyMessageIndex($messages);
 
         return $messages
             ->sort(fn (Message $left, Message $right): int => $this->compareConversationMessages($left, $right))
             ->groupBy(fn (Message $message): string => $this->resolveConversationItemKey($message))
-            ->map(function (Collection $groupMessages, string $itemKey) use ($forwardedIdentityIndex, $contactShareIdentityIndex): array {
+            ->map(function (Collection $groupMessages, string $itemKey) use ($forwardedIdentityIndex, $contactShareIdentityIndex, $replyMessageIndex): array {
                 /** @var Collection<int, Message> $groupMessages */
                 $groupMessages = $groupMessages
                     ->sort(fn (Message $left, Message $right): int => $this->compareConversationMessages($left, $right))
@@ -55,7 +56,9 @@ class BuildConversationFeedViewDataAction
                 $mediaOnlyDisplayText = $this->resolveMediaOnlyConversationDisplayText($message, $mediaItems);
                 $isSystemMessage = $this->isConversationSystemMessage($message);
                 $forwardedContext = $this->resolveConversationForwardedContext($message, $forwardedIdentityIndex);
+                $replyContext = $this->resolveConversationReplyContext($message, $replyMessageIndex);
                 $contactShareContext = $this->resolveConversationContactShareContext($message, $contactShareIdentityIndex);
+                $buttonContext = $this->resolveConversationButtonContext($message);
                 $editContext = $this->resolveConversationEditContext($groupMessages);
                 $removalContext = $this->resolveConversationRemovalContext($groupMessages);
 
@@ -82,7 +85,9 @@ class BuildConversationFeedViewDataAction
                     'sender_type' => $message->sent_by_type,
                     'forwarded_label' => data_get($forwardedContext, 'label'),
                     'forwarded_context' => $forwardedContext,
+                    'reply_context' => $replyContext,
                     'contact_share_context' => $contactShareContext,
+                    'button_context' => $buttonContext,
                     'is_edited' => $editContext['is_edited'],
                     'edited_label' => $editContext['label'],
                     'edit_history' => $editContext['history'],
@@ -457,6 +462,61 @@ class BuildConversationFeedViewDataAction
     }
 
     /**
+     * @param  Collection<int, Message>  $messages
+     * @return Collection<string, Message>
+     */
+    protected function resolveConversationReplyMessageIndex(Collection $messages): Collection
+    {
+        if ($messages->isEmpty()) {
+            return collect();
+        }
+
+        $lookupRows = $messages
+            ->map(function (Message $message): ?array {
+                $originalMessageId = $this->resolveConversationReplyOriginalMessageId($message);
+                $externalChatId = $this->normalizeMediaBadgeText($message->external_chat_id);
+
+                if ($message->channel_id === null || $externalChatId === null || $originalMessageId === null) {
+                    return null;
+                }
+
+                return [
+                    'channel_id' => (int) $message->channel_id,
+                    'external_chat_id' => $externalChatId,
+                    'external_message_id' => $originalMessageId,
+                ];
+            })
+            ->filter()
+            ->unique(fn (array $row): string => $this->replyMessageIndexKey(
+                $row['channel_id'],
+                $row['external_chat_id'],
+                $row['external_message_id'],
+            ))
+            ->values();
+
+        if ($lookupRows->isEmpty()) {
+            return collect();
+        }
+
+        $localMessages = Message::query()
+            ->whereIn('channel_id', $lookupRows->pluck('channel_id')->unique()->values()->all())
+            ->whereIn('external_chat_id', $lookupRows->pluck('external_chat_id')->unique()->values()->all())
+            ->whereIn('external_message_id', $lookupRows->pluck('external_message_id')->unique()->values()->all())
+            ->get(['id', 'channel_id', 'external_chat_id', 'external_message_id', 'text']);
+
+        return $localMessages
+            ->groupBy(fn (Message $message): string => $this->replyMessageIndexKey(
+                (int) $message->channel_id,
+                (string) $message->external_chat_id,
+                (string) $message->external_message_id,
+            ))
+            ->map(fn (Collection $messages): ?Message => $messages
+                ->sortByDesc(fn (Message $message): int => (int) $message->id)
+                ->first())
+            ->filter();
+    }
+
+    /**
      * @param  Collection<string, Collection<int, ContactIdentity>>  $forwardedIdentityIndex
      * @return array<string, mixed>|null
      */
@@ -513,6 +573,50 @@ class BuildConversationFeedViewDataAction
             'contact_url' => $this->resolveForwardedContactUrl($contactIdentity),
             'original_message_id' => $originalMessageId,
             'details' => $details,
+        ];
+    }
+
+    /**
+     * @param  Collection<string, Message>  $replyMessageIndex
+     * @return array<string, mixed>|null
+     */
+    protected function resolveConversationReplyContext(Message $message, Collection $replyMessageIndex): ?array
+    {
+        $source = $this->resolveMaxConversationReplySource($message);
+
+        if ($source === null) {
+            return null;
+        }
+
+        $originalMessageId = $this->normalizeMediaBadgeText(data_get($source, 'original_message_id'));
+        $externalChatId = $this->normalizeMediaBadgeText($message->external_chat_id);
+        $linkedMessage = data_get($source, 'message');
+        $previewText = is_array($linkedMessage)
+            ? $this->resolveConversationReplyPreviewText($linkedMessage)
+            : null;
+
+        $localMessage = null;
+
+        if ($message->channel_id !== null && $externalChatId !== null && $originalMessageId !== null) {
+            $candidate = $replyMessageIndex->get($this->replyMessageIndexKey(
+                (int) $message->channel_id,
+                $externalChatId,
+                $originalMessageId,
+            ));
+
+            $localMessage = $candidate instanceof Message ? $candidate : null;
+        }
+
+        if ($previewText === null && $localMessage instanceof Message) {
+            $previewText = $this->normalizeMediaBadgeText($localMessage->text);
+        }
+
+        return [
+            'label' => 'Ответ на сообщение',
+            'original_message_id' => $originalMessageId,
+            'local_message_id' => $localMessage?->id,
+            'has_local_message' => $localMessage instanceof Message,
+            'preview_text' => $previewText ?? 'Сообщение без доступного текста',
         ];
     }
 
@@ -574,6 +678,148 @@ class BuildConversationFeedViewDataAction
             'contact_id' => $contactIdentity?->contact_id,
             'details' => $details,
         ];
+    }
+
+    /**
+     * @return array{label:string,rows:list<list<array<string, mixed>>>}|null
+     */
+    protected function resolveConversationButtonContext(Message $message): ?array
+    {
+        if ($message->direction !== Message::DIRECTION_OUTBOUND) {
+            return null;
+        }
+
+        $payload = is_array($message->raw_payload) ? $message->raw_payload : [];
+
+        $rows = $this->resolveProviderConversationButtonRows($payload);
+
+        if ($rows === []) {
+            $rows = $this->normalizeConversationButtonRows(data_get($payload, 'v3.buttons.rows'));
+        }
+
+        if ($rows === []) {
+            return null;
+        }
+
+        return [
+            'label' => 'Отправленные кнопки',
+            'rows' => $rows,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return list<list<array<string, mixed>>>
+     */
+    protected function resolveProviderConversationButtonRows(array $payload): array
+    {
+        $attachmentSets = [
+            data_get($payload, 'message.body.attachments'),
+            data_get($payload, 'message.attachments'),
+            data_get($payload, 'attachments'),
+            data_get($payload, 'result.attachments'),
+            data_get($payload, 'request.attachments'),
+        ];
+
+        foreach ($attachmentSets as $attachments) {
+            if (! is_array($attachments)) {
+                continue;
+            }
+
+            foreach ($attachments as $attachment) {
+                if (! is_array($attachment)) {
+                    continue;
+                }
+
+                $type = Str::lower((string) $this->normalizeMediaBadgeText($attachment['type'] ?? null));
+
+                if (! in_array($type, ['inline_keyboard', 'keyboard'], true)) {
+                    continue;
+                }
+
+                $rows = $this->normalizeConversationButtonRows(
+                    data_get($attachment, 'payload.buttons')
+                        ?? data_get($attachment, 'payload.keyboard')
+                        ?? data_get($attachment, 'buttons')
+                );
+
+                if ($rows !== []) {
+                    return $rows;
+                }
+            }
+        }
+
+        return [];
+    }
+
+    /**
+     * @return list<list<array<string, mixed>>>
+     */
+    protected function normalizeConversationButtonRows(mixed $rows): array
+    {
+        if (! is_array($rows)) {
+            return [];
+        }
+
+        return collect($rows)
+            ->map(function (mixed $row): array {
+                $buttons = $this->isConversationButtonPayload($row)
+                    ? [$row]
+                    : (is_array($row) ? $row : []);
+
+                return collect($buttons)
+                    ->map(fn (mixed $button): ?array => is_array($button)
+                        ? $this->normalizeConversationButton($button)
+                        : null)
+                    ->filter()
+                    ->values()
+                    ->all();
+            })
+            ->filter(fn (array $row): bool => $row !== [])
+            ->values()
+            ->all();
+    }
+
+    protected function isConversationButtonPayload(mixed $value): bool
+    {
+        return is_array($value) && array_key_exists('text', $value);
+    }
+
+    /**
+     * @param  array<string, mixed>  $button
+     * @return array<string, mixed>|null
+     */
+    protected function normalizeConversationButton(array $button): ?array
+    {
+        $text = $this->normalizeMediaBadgeText($button['text'] ?? null);
+
+        if ($text === null) {
+            return null;
+        }
+
+        $type = Str::lower((string) ($this->normalizeMediaBadgeText($button['type'] ?? null) ?? 'button'));
+        $url = $this->normalizeMediaBadgeText($button['url'] ?? null);
+
+        return [
+            'text' => $text,
+            'type' => $type,
+            'type_label' => $this->formatConversationButtonTypeLabel($type, $url),
+            'url' => $url,
+        ];
+    }
+
+    protected function formatConversationButtonTypeLabel(string $type, ?string $url): string
+    {
+        if ($url !== null || $type === 'link') {
+            return 'Ссылка';
+        }
+
+        return match ($type) {
+            'request_contact',
+            'request_phone' => 'Запрос телефона',
+            'text' => 'Ответ',
+            default => 'Кнопка',
+        };
     }
 
     /**
@@ -814,6 +1060,69 @@ class BuildConversationFeedViewDataAction
     protected function forwardedIdentityIndexKey(string $platform, string $externalUserId): string
     {
         return Str::lower($platform).'|'.$externalUserId;
+    }
+
+    protected function replyMessageIndexKey(int $channelId, string $externalChatId, string $externalMessageId): string
+    {
+        return $channelId.'|'.$externalChatId.'|'.$externalMessageId;
+    }
+
+    protected function resolveConversationReplyOriginalMessageId(Message $message): ?string
+    {
+        $source = $this->resolveMaxConversationReplySource($message);
+
+        return $source === null
+            ? null
+            : $this->normalizeMediaBadgeText(data_get($source, 'original_message_id'));
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    protected function resolveMaxConversationReplySource(Message $message): ?array
+    {
+        $platform = $this->normalizeMediaBadgeText($message->channel?->platform);
+
+        if (Str::lower((string) $platform) !== Channel::PLATFORM_MAX) {
+            return null;
+        }
+
+        $payload = is_array($message->raw_payload) ? $message->raw_payload : [];
+        $link = data_get($payload, 'message.link');
+
+        if (! is_array($link)) {
+            return null;
+        }
+
+        $linkType = $this->normalizeMediaBadgeText(data_get($link, 'type'));
+
+        if (Str::lower((string) $linkType) !== 'reply') {
+            return null;
+        }
+
+        $linkedMessage = data_get($link, 'message');
+        $originalMessageId = data_get($linkedMessage, 'mid')
+            ?? data_get($link, 'mid')
+            ?? data_get($link, 'message_id');
+
+        return [
+            'provider' => Channel::PLATFORM_MAX,
+            'message' => is_array($linkedMessage) ? $linkedMessage : null,
+            'original_message_id' => $originalMessageId,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $linkedMessage
+     */
+    protected function resolveConversationReplyPreviewText(array $linkedMessage): ?string
+    {
+        return $this->normalizeMediaBadgeText(
+            data_get($linkedMessage, 'text')
+                ?? data_get($linkedMessage, 'body.text')
+                ?? data_get($linkedMessage, 'caption')
+                ?? data_get($linkedMessage, 'body.caption')
+        );
     }
 
     /**
