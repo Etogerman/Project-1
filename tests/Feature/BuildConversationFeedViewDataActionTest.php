@@ -1183,6 +1183,75 @@ class BuildConversationFeedViewDataActionTest extends TestCase
         $this->assertSame('RIGHT chat source', $feed[0]['reply_context']['preview_text']);
     }
 
+    public function test_telegram_account_reply_context_matches_local_outbound_message(): void
+    {
+        $contact = Contact::factory()->create();
+        $channel = Channel::factory()->account()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'telegram-account-reply-user',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'telegram-account-reply-chat',
+        ]);
+        $sourceMessage = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_EXTERNAL_ACCOUNT_MESSAGE,
+            'external_chat_id' => 'telegram-account-reply-chat',
+            'external_message_id' => '81001',
+            'provider_event_key' => 'telegram_account:'.$channel->id.':telegram-account-reply-chat:81001',
+            'text' => 'Маркетолог получили',
+            'received_at' => now()->subMinute(),
+        ]);
+        $replyMessage = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'telegram-account-reply-chat',
+            'external_message_id' => '81002',
+            'provider_event_key' => 'telegram_account:'.$channel->id.':telegram-account-reply-chat:81002',
+            'text' => 'Ответ на твое сообщение.',
+            'raw_payload' => [
+                'tdlib_message_type' => 'messageText',
+                'reply_to' => [
+                    '_' => 'messageReplyToMessage',
+                    'message_id' => 81001,
+                ],
+            ],
+            'received_at' => now(),
+        ]);
+
+        $feed = app(BuildConversationFeedViewDataAction::class)->handle(
+            Message::query()
+                ->whereKey($replyMessage->id)
+                ->with(['channel', 'dialog.channel', 'sentByUser'])
+                ->get(),
+        );
+
+        $this->assertSame('Ответ на твое сообщение.', $feed[0]['display_text']);
+        $this->assertSame([
+            'label' => 'Ответ на сообщение',
+            'original_message_id' => '81001',
+            'local_message_id' => $sourceMessage->id,
+            'has_local_message' => true,
+            'preview_text' => 'Маркетолог получили',
+        ], $feed[0]['reply_context']);
+    }
+
     public function test_outbound_max_button_context_uses_sent_keyboard_payload(): void
     {
         $contact = Contact::factory()->create();
