@@ -10,10 +10,36 @@ permissions:
   contents: read
 
 jobs:
-  php-artisan-test:
-    name: php-artisan-test
+  frontend-build:
+    name: frontend-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build frontend assets
+        run: npm run build
+
+  phpunit-shards:
+    name: phpunit-shard-${{ matrix.shard }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+        total: [4]
 
     services:
       postgres:
@@ -61,20 +87,33 @@ jobs:
           tools: composer:v2
           extensions: mbstring, dom, fileinfo, pgsql, pdo_pgsql
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: '22'
-          cache: npm
-
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist --optimize-autoloader
 
-      - name: Install npm dependencies
-        run: npm ci
-
-      - name: Build frontend assets
-        run: npm run build
-
       - name: Run CI test suite
-        run: composer test:ci
+        env:
+          CI_TEST_SHARD_INDEX: ${{ matrix.shard }}
+          CI_TEST_SHARD_TOTAL: ${{ matrix.total }}
+        run: bash scripts/ci-run-phpunit-shard.sh
+
+  php-artisan-test:
+    name: php-artisan-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs:
+      - frontend-build
+      - phpunit-shards
+    if: ${{ always() }}
+
+    steps:
+      - name: Check required CI jobs
+        run: |
+          if [ "${{ needs.frontend-build.result }}" != "success" ]; then
+            echo "frontend-build failed or did not complete successfully" >&2
+            exit 1
+          fi
+
+          if [ "${{ needs.phpunit-shards.result }}" != "success" ]; then
+            echo "phpunit-shards failed or did not complete successfully" >&2
+            exit 1
+          fi
