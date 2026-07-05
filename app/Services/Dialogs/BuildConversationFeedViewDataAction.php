@@ -474,19 +474,22 @@ class BuildConversationFeedViewDataAction
         $lookupRows = $messages
             ->map(function (Message $message): ?array {
                 $originalMessageId = $this->resolveConversationReplyOriginalMessageId($message);
+                $externalChatId = $this->normalizeMediaBadgeText($message->external_chat_id);
 
-                if ($message->channel_id === null || $originalMessageId === null) {
+                if ($message->channel_id === null || $externalChatId === null || $originalMessageId === null) {
                     return null;
                 }
 
                 return [
                     'channel_id' => (int) $message->channel_id,
+                    'external_chat_id' => $externalChatId,
                     'external_message_id' => $originalMessageId,
                 ];
             })
             ->filter()
             ->unique(fn (array $row): string => $this->replyMessageIndexKey(
                 $row['channel_id'],
+                $row['external_chat_id'],
                 $row['external_message_id'],
             ))
             ->values();
@@ -497,12 +500,14 @@ class BuildConversationFeedViewDataAction
 
         $localMessages = Message::query()
             ->whereIn('channel_id', $lookupRows->pluck('channel_id')->unique()->values()->all())
+            ->whereIn('external_chat_id', $lookupRows->pluck('external_chat_id')->unique()->values()->all())
             ->whereIn('external_message_id', $lookupRows->pluck('external_message_id')->unique()->values()->all())
-            ->get(['id', 'channel_id', 'external_message_id', 'text']);
+            ->get(['id', 'channel_id', 'external_chat_id', 'external_message_id', 'text']);
 
         return $localMessages
             ->groupBy(fn (Message $message): string => $this->replyMessageIndexKey(
                 (int) $message->channel_id,
+                (string) $message->external_chat_id,
                 (string) $message->external_message_id,
             ))
             ->map(fn (Collection $messages): ?Message => $messages
@@ -584,6 +589,7 @@ class BuildConversationFeedViewDataAction
         }
 
         $originalMessageId = $this->normalizeMediaBadgeText(data_get($source, 'original_message_id'));
+        $externalChatId = $this->normalizeMediaBadgeText($message->external_chat_id);
         $linkedMessage = data_get($source, 'message');
         $previewText = is_array($linkedMessage)
             ? $this->resolveConversationReplyPreviewText($linkedMessage)
@@ -591,9 +597,10 @@ class BuildConversationFeedViewDataAction
 
         $localMessage = null;
 
-        if ($message->channel_id !== null && $originalMessageId !== null) {
+        if ($message->channel_id !== null && $externalChatId !== null && $originalMessageId !== null) {
             $candidate = $replyMessageIndex->get($this->replyMessageIndexKey(
                 (int) $message->channel_id,
+                $externalChatId,
                 $originalMessageId,
             ));
 
@@ -1055,9 +1062,9 @@ class BuildConversationFeedViewDataAction
         return Str::lower($platform).'|'.$externalUserId;
     }
 
-    protected function replyMessageIndexKey(int $channelId, string $externalMessageId): string
+    protected function replyMessageIndexKey(int $channelId, string $externalChatId, string $externalMessageId): string
     {
-        return $channelId.'|'.$externalMessageId;
+        return $channelId.'|'.$externalChatId.'|'.$externalMessageId;
     }
 
     protected function resolveConversationReplyOriginalMessageId(Message $message): ?string
