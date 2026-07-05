@@ -14,6 +14,7 @@ use App\Services\Bots\DispatchStoredInboundBotMessageAction;
 use App\Services\Bots\DownloadBotMessageAttachmentsAction;
 use App\Services\Bots\StoreInboundMessageAction;
 use App\Services\Bots\StoreInboundMessageEditAction;
+use App\Services\Bots\StoreInboundMessageRemovalAction;
 use App\Services\Bots\TelegramBotApiService;
 use App\Services\Scenarios\ScenarioRegistry;
 use Illuminate\Http\JsonResponse;
@@ -31,6 +32,7 @@ class BotWebhookController extends Controller
         DispatchStoredInboundBotMessageAction $dispatchStoredInboundBotMessageAction,
         DownloadBotMessageAttachmentsAction $downloadBotMessageAttachmentsAction,
         StoreInboundMessageEditAction $storeInboundMessageEditAction,
+        StoreInboundMessageRemovalAction $storeInboundMessageRemovalAction,
         ChannelActivityLogger $channelActivityLogger,
         BotWebhookRateLimiter $botWebhookRateLimiter,
         ChannelWebhookUrlGenerator $channelWebhookUrlGenerator,
@@ -45,6 +47,7 @@ class BotWebhookController extends Controller
             dispatchStoredInboundBotMessageAction: $dispatchStoredInboundBotMessageAction,
             downloadBotMessageAttachmentsAction: $downloadBotMessageAttachmentsAction,
             storeInboundMessageEditAction: $storeInboundMessageEditAction,
+            storeInboundMessageRemovalAction: $storeInboundMessageRemovalAction,
             channelActivityLogger: $channelActivityLogger,
             botWebhookRateLimiter: $botWebhookRateLimiter,
             channelWebhookUrlGenerator: $channelWebhookUrlGenerator,
@@ -60,6 +63,7 @@ class BotWebhookController extends Controller
         DispatchStoredInboundBotMessageAction $dispatchStoredInboundBotMessageAction,
         DownloadBotMessageAttachmentsAction $downloadBotMessageAttachmentsAction,
         StoreInboundMessageEditAction $storeInboundMessageEditAction,
+        StoreInboundMessageRemovalAction $storeInboundMessageRemovalAction,
         ChannelActivityLogger $channelActivityLogger,
         BotWebhookRateLimiter $botWebhookRateLimiter,
         ChannelWebhookUrlGenerator $channelWebhookUrlGenerator,
@@ -73,6 +77,7 @@ class BotWebhookController extends Controller
             dispatchStoredInboundBotMessageAction: $dispatchStoredInboundBotMessageAction,
             downloadBotMessageAttachmentsAction: $downloadBotMessageAttachmentsAction,
             storeInboundMessageEditAction: $storeInboundMessageEditAction,
+            storeInboundMessageRemovalAction: $storeInboundMessageRemovalAction,
             channelActivityLogger: $channelActivityLogger,
             botWebhookRateLimiter: $botWebhookRateLimiter,
             channelWebhookUrlGenerator: $channelWebhookUrlGenerator,
@@ -88,6 +93,7 @@ class BotWebhookController extends Controller
         DispatchStoredInboundBotMessageAction $dispatchStoredInboundBotMessageAction,
         DownloadBotMessageAttachmentsAction $downloadBotMessageAttachmentsAction,
         StoreInboundMessageEditAction $storeInboundMessageEditAction,
+        StoreInboundMessageRemovalAction $storeInboundMessageRemovalAction,
         ChannelActivityLogger $channelActivityLogger,
         BotWebhookRateLimiter $botWebhookRateLimiter,
         ChannelWebhookUrlGenerator $channelWebhookUrlGenerator,
@@ -174,6 +180,16 @@ class BotWebhookController extends Controller
             ]);
         }
 
+        $messageRemoval = $botIncomingMessageNormalizer->normalizeRemoval($channel, $payload);
+
+        if ($messageRemoval !== null) {
+            $storeInboundMessageRemovalAction->handle($channel, $messageRemoval);
+
+            return response()->json([
+                'ok' => true,
+            ]);
+        }
+
         $message = $botIncomingMessageNormalizer->normalize($channel, $payload);
 
         if ($message === null && $expectedPlatform === Channel::PLATFORM_MAX) {
@@ -254,6 +270,9 @@ class BotWebhookController extends Controller
 
         $excerpt = [
             'update_type' => data_get($payload, 'update_type'),
+            'message_id' => data_get($payload, 'message_id'),
+            'chat_id' => data_get($payload, 'chat_id'),
+            'user_id' => data_get($payload, 'user_id'),
             'message_keys' => array_keys($message),
             'body_keys' => array_keys($body),
             'body_contact_keys' => is_array(data_get($body, 'contact')) ? array_keys((array) data_get($body, 'contact')) : [],
@@ -266,7 +285,9 @@ class BotWebhookController extends Controller
             'platform' => Channel::PLATFORM_MAX,
             'reason' => $this->resolveMaxUnhandledPayloadReason($payload),
             'update_type' => data_get($payload, 'update_type'),
-            'message_mid' => data_get($body, 'mid'),
+            'message_mid' => data_get($payload, 'message_id') ?? data_get($body, 'mid'),
+            'chat_id' => data_get($payload, 'chat_id'),
+            'user_id' => data_get($payload, 'user_id'),
             'message_body_type' => data_get($body, 'type'),
             'has_sender' => is_array(data_get($message, 'sender')),
             'has_sender_user_id' => filled(data_get($message, 'sender.user_id')),
@@ -307,6 +328,18 @@ class BotWebhookController extends Controller
             }
 
             return 'unknown';
+        }
+
+        if ($updateType === 'message_removed') {
+            if (! filled(data_get($payload, 'message_id'))
+                && ! filled(data_get($payload, 'mid'))
+                && ! filled(data_get($payload, 'message.message_id'))
+                && ! filled(data_get($payload, 'message.body.mid'))
+            ) {
+                return 'missing_message_id';
+            }
+
+            return 'unmatched_removed_message';
         }
 
         if ($updateType !== 'message_created') {

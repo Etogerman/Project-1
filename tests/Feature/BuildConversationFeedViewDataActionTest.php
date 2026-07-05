@@ -198,6 +198,53 @@ class BuildConversationFeedViewDataActionTest extends TestCase
         ], $feed[0]['edit_history']);
     }
 
+    public function test_removed_message_exposes_removal_label_for_conversation_feed(): void
+    {
+        $contact = Contact::factory()->create();
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'removed-user',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'removed-chat',
+        ]);
+        $message = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'removed-chat',
+            'external_message_id' => 'removed-message',
+            'text' => 'Удалённый текст',
+            'received_at' => Carbon::parse('2026-07-05 15:12:00'),
+            'removed_at' => Carbon::parse('2026-07-05 15:13:19'),
+            'remove_count' => 1,
+        ]);
+
+        $feed = app(BuildConversationFeedViewDataAction::class)->handle(
+            Message::query()
+                ->whereKey($message->id)
+                ->with(['channel', 'dialog.channel', 'sentByUser'])
+                ->get(),
+        );
+
+        $this->assertCount(1, $feed);
+        $this->assertTrue($feed[0]['is_removed']);
+        $this->assertSame('удалено 15:13', $feed[0]['removed_label']);
+        $this->assertNotNull($feed[0]['removed_at_iso']);
+        $this->assertSame('Удалённый текст', $feed[0]['display_text']);
+    }
+
     public function test_invalid_rich_text_falls_back_to_existing_html_path(): void
     {
         $contact = Contact::factory()->create();

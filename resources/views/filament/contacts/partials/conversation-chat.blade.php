@@ -43,6 +43,7 @@
                 @php($hideGeneratedMediaSummary = $hasOnlyPreviewableMedia && ! empty($message['is_media_only_display_text'] ?? false))
                 @php($contactShareContext = $message['contact_share_context'] ?? null)
                 @php($hideGeneratedContactShareSummary = is_array($contactShareContext) && ($message['kind'] ?? null) === \App\Models\Message::KIND_INBOUND_CONTACT_SHARE)
+                @php($isRemoved = ! empty($message['is_removed'] ?? false))
                 <div
                     wire:key="conversation-message-{{ $message['item_key'] ?? $message['id'] }}"
                     data-role="conversation-message"
@@ -58,6 +59,7 @@
                     <article @class([
                         'ac-message__bubble',
                         'ac-message__bubble--has-gallery' => $hasPreviewableImages,
+                        'ac-message__bubble--removed' => $isRemoved,
                     ])>
                         <div data-role="conversation-meta" class="ac-message__meta">
                             <div class="ac-message__meta-main">
@@ -218,6 +220,12 @@
                             <div class="ac-message__text">{{ $message['html_source_text'] }}</div>
                         @elseif (! $hideGeneratedContactShareSummary && ! $hideGeneratedMediaSummary)
                             <div class="ac-message__text">{{ $message['display_text'] }}</div>
+                        @endif
+
+                        @if (! $isSystemMessage && filled($message['removed_label'] ?? null))
+                            <div data-role="conversation-message-removed" class="ac-message__removed-label">
+                                {{ $message['removed_label'] }}
+                            </div>
                         @endif
 
                         @if (! $isSystemMessage && filled($message['edited_label'] ?? null))
