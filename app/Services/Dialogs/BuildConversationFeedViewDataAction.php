@@ -533,10 +533,14 @@ class BuildConversationFeedViewDataAction
         $sender = data_get($source, 'sender');
         $senderName = is_array($sender) ? $this->resolveProviderSenderName($sender) : null;
         $senderUserId = is_array($sender) ? $this->resolveProviderSenderUserId($sender) : null;
+        $provider = Str::lower((string) $this->normalizeMediaBadgeText(data_get($source, 'provider') ?? $message->channel?->platform));
+        $senderUsername = $provider === Channel::PLATFORM_TELEGRAM && is_array($sender)
+            ? $this->resolveProviderSenderUsername($sender)
+            : null;
         $originalMessageId = $this->normalizeMediaBadgeText(data_get($source, 'original_message_id'));
         $contactIdentity = $this->resolveForwardedContactIdentity($message, $senderUserId, $forwardedIdentityIndex);
         $contactLabel = $this->formatForwardedContactLabel($contactIdentity);
-        $providerUserIdLabel = match (Str::lower((string) $this->normalizeMediaBadgeText(data_get($source, 'provider') ?? $message->channel?->platform))) {
+        $providerUserIdLabel = match ($provider) {
             Channel::PLATFORM_MAX => 'MAX user_id',
             Channel::PLATFORM_TELEGRAM => 'Telegram user_id',
             default => 'ID отправителя',
@@ -546,6 +550,10 @@ class BuildConversationFeedViewDataAction
             [
                 'label' => $providerUserIdLabel,
                 'value' => $senderUserId,
+            ],
+            [
+                'label' => 'Telegram username',
+                'value' => $senderUsername,
             ],
             [
                 'label' => 'AB контакт',
@@ -567,6 +575,7 @@ class BuildConversationFeedViewDataAction
                 : ($senderUserId !== null ? 'Переслано от '.$providerUserIdLabel.' '.$senderUserId : 'Пересланное сообщение'),
             'sender_name' => $senderName,
             'sender_user_id' => $senderUserId,
+            'sender_username' => $senderUsername,
             'contact_found' => $contactIdentity !== null,
             'contact_label' => $contactLabel,
             'contact_id' => $contactIdentity?->contact_id,
@@ -943,6 +952,12 @@ class BuildConversationFeedViewDataAction
             $sender = match ($originType) {
                 'messageoriginuser' => [
                     'id' => data_get($origin, 'sender_user_id'),
+                    'username' => data_get($origin, 'sender_username')
+                        ?? data_get($origin, 'sender_user.username')
+                        ?? data_get($forwardInfo, 'sender_username')
+                        ?? data_get($forwardInfo, 'sender_user.username')
+                        ?? data_get($forwardInfo, 'from_message_sender.username')
+                        ?? $this->resolveTelegramPayloadUserUsername($payload, data_get($origin, 'sender_user_id')),
                 ],
                 'messageoriginhiddenuser' => [
                     'name' => data_get($origin, 'sender_name'),
@@ -950,10 +965,17 @@ class BuildConversationFeedViewDataAction
                 'messageoriginchat' => [
                     'id' => data_get($origin, 'sender_chat_id'),
                     'name' => data_get($origin, 'author_signature'),
+                    'username' => data_get($origin, 'sender_username')
+                        ?? data_get($origin, 'sender_chat.username')
+                        ?? data_get($forwardInfo, 'sender_chat.username')
+                        ?? data_get($forwardInfo, 'from_message_sender.username'),
                 ],
                 'messageoriginchannel' => [
                     'id' => data_get($origin, 'chat_id'),
                     'name' => data_get($origin, 'author_signature'),
+                    'username' => data_get($origin, 'chat.username')
+                        ?? data_get($forwardInfo, 'chat.username')
+                        ?? data_get($forwardInfo, 'from_message_sender.username'),
                 ],
                 default => null,
             };
@@ -970,6 +992,9 @@ class BuildConversationFeedViewDataAction
                 $sender = [
                     'id' => $senderUserId,
                     'name' => $senderName,
+                    'username' => data_get($forwardInfo, 'sender_username')
+                        ?? data_get($forwardInfo, 'from_message_sender.username')
+                        ?? $this->resolveTelegramPayloadUserUsername($payload, $senderUserId),
                 ];
             }
         }
@@ -1165,6 +1190,61 @@ class BuildConversationFeedViewDataAction
     {
         return $this->normalizeMediaBadgeText(data_get($sender, 'user_id'))
             ?? $this->normalizeMediaBadgeText(data_get($sender, 'id'));
+    }
+
+    /**
+     * @param  array<string, mixed>  $sender
+     */
+    protected function resolveProviderSenderUsername(array $sender): ?string
+    {
+        foreach ([
+            data_get($sender, 'username'),
+            data_get($sender, 'user_name'),
+            data_get($sender, 'sender_username'),
+            data_get($sender, 'public_username'),
+            data_get($sender, 'usernames.active_usernames.0'),
+            data_get($sender, 'usernames.editable_username'),
+            data_get($sender, 'usernames.0'),
+        ] as $username) {
+            $normalized = $this->normalizeMediaBadgeText($username);
+
+            if ($normalized !== null) {
+                return Str::limit('@'.ltrim(Str::squish($normalized), '@'), 80);
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected function resolveTelegramPayloadUserUsername(array $payload, mixed $userId): ?string
+    {
+        $normalizedUserId = $this->normalizeMediaBadgeText($userId);
+        $users = data_get($payload, 'users');
+
+        if ($normalizedUserId === null || ! is_array($users)) {
+            return null;
+        }
+
+        foreach ($users as $key => $user) {
+            if (! is_array($user)) {
+                continue;
+            }
+
+            $candidateUserId = $this->normalizeMediaBadgeText(data_get($user, 'id'))
+                ?? $this->normalizeMediaBadgeText(data_get($user, 'user_id'))
+                ?? (is_string($key) || is_int($key) ? $this->normalizeMediaBadgeText($key) : null);
+
+            if ($candidateUserId !== $normalizedUserId) {
+                continue;
+            }
+
+            return $this->resolveProviderSenderUsername($user);
+        }
+
+        return null;
     }
 
     protected function formatForwardedContactLabel(?ContactIdentity $identity): string
