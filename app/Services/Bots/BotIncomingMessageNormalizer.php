@@ -1322,11 +1322,6 @@ class BotIncomingMessageNormalizer
     }
 
     /**
-     * MAX markup offsets are character offsets. AB rich text normalizer expects UTF-16 units.
-     *
-     * @return array{offset: int, length: int}|null
-     */
-    /**
      * Вырезка по UTF-16 code units (единицы MAX/Telegram offsets).
      * Используется только для эвристик над фрагментом; разрез суррогатной
      * пары на границе безопасен для поиска подстрок.
