@@ -7751,8 +7751,8 @@
     .ac-media-viewer__figure img,
     .ac-media-viewer__figure video {
         display: block;
-        width: 100%;
-        height: 100%;
+        min-width: 0;
+        min-height: 0;
         max-width: 100%;
         max-height: 100%;
         object-fit: contain;
@@ -7760,7 +7760,14 @@
         user-select: auto;
     }
 
+    .ac-media-viewer__figure img {
+        width: auto;
+        height: auto;
+    }
+
     .ac-media-viewer__figure video {
+        width: 100%;
+        height: 100%;
         background: #020617;
     }
 
