@@ -7590,6 +7590,13 @@
         color: #f8fafc;
     }
 
+    @supports not (height: 100dvh) {
+        .ac-media-viewer {
+            --ac-media-viewer-frame-height: min(46rem, calc(100vh - clamp(1.5rem, 4vw, 3rem)));
+            min-height: 100vh;
+        }
+    }
+
     .ac-media-viewer__toolbar {
         display: flex;
         align-items: center;
@@ -7742,9 +7749,10 @@
     }
 
     .ac-media-viewer__figure img,
-    .ac-media-viewer__figure video,
-    .ac-media-viewer__figure audio {
+    .ac-media-viewer__figure video {
         display: block;
+        width: 100%;
+        height: 100%;
         max-width: 100%;
         max-height: 100%;
         object-fit: contain;
@@ -7752,29 +7760,18 @@
         user-select: auto;
     }
 
-    .ac-media-viewer__figure img {
-        width: auto;
-        height: auto;
-        max-height: max(
-            8rem,
-            calc(
-                var(--ac-media-viewer-frame-height)
-                - var(--ac-media-viewer-toolbar-space)
-                - var(--ac-media-viewer-figure-padding)
-                - var(--ac-media-viewer-figure-padding)
-            )
-        );
-    }
-
     .ac-media-viewer__figure video {
-        width: 100%;
-        height: 100%;
         background: #020617;
     }
 
     .ac-media-viewer__figure audio {
+        display: block;
         width: min(100%, 34rem);
+        height: auto;
+        max-width: 100%;
         max-height: 4rem;
+        border-radius: 10px;
+        user-select: auto;
     }
 
     .ac-media-viewer__audio-panel {
