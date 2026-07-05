@@ -1007,6 +1007,85 @@ class BuildConversationFeedViewDataActionTest extends TestCase
         ], $feed[0]['forwarded_context']['details']);
     }
 
+    public function test_max_reply_context_uses_link_message_without_replacing_own_text(): void
+    {
+        $contact = Contact::factory()->create();
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'max-reply-user',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'max-reply-chat',
+        ]);
+        $sourceMessage = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'max-reply-chat',
+            'external_message_id' => 'mid.reply.source',
+            'provider_event_key' => 'mid.reply.source',
+            'text' => 'TQ-01 обычный текст без форматирования',
+            'received_at' => now()->subMinute(),
+        ]);
+        $replyMessage = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => 'max-reply-chat',
+            'external_message_id' => 'mid.reply.current',
+            'provider_event_key' => 'mid.reply.current',
+            'text' => 'TQ-03 это reply на TQ-01',
+            'raw_payload' => [
+                'message' => [
+                    'body' => [
+                        'mid' => 'mid.reply.current',
+                        'text' => 'TQ-03 это reply на TQ-01',
+                    ],
+                    'link' => [
+                        'type' => 'reply',
+                        'message' => [
+                            'mid' => 'mid.reply.source',
+                            'text' => 'TQ-01 обычный текст без форматирования',
+                        ],
+                    ],
+                ],
+            ],
+            'received_at' => now(),
+        ]);
+
+        $feed = app(BuildConversationFeedViewDataAction::class)->handle(
+            Message::query()
+                ->whereKey($replyMessage->id)
+                ->with(['channel', 'dialog.channel', 'sentByUser'])
+                ->get(),
+        );
+
+        $this->assertSame('TQ-03 это reply на TQ-01', $feed[0]['display_text']);
+        $this->assertNull($feed[0]['forwarded_label']);
+        $this->assertNull($feed[0]['forwarded_context']);
+        $this->assertSame([
+            'label' => 'Ответ на сообщение',
+            'original_message_id' => 'mid.reply.source',
+            'local_message_id' => $sourceMessage->id,
+            'has_local_message' => true,
+            'preview_text' => 'TQ-01 обычный текст без форматирования',
+        ], $feed[0]['reply_context']);
+    }
+
     public function test_outbound_max_button_context_uses_sent_keyboard_payload(): void
     {
         $contact = Contact::factory()->create();

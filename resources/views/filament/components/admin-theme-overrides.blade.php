@@ -7081,6 +7081,37 @@
         color: var(--ac-primary);
     }
 
+    .ac-message__reply-context {
+        display: grid;
+        gap: 0.16rem;
+        max-width: 100%;
+        margin: -0.08rem 0 0.45rem;
+        padding: 0.42rem 0.58rem;
+        border-left: 3px solid color-mix(in srgb, var(--ac-primary) 64%, transparent);
+        border-radius: 8px;
+        background: color-mix(in srgb, var(--ac-primary-soft) 52%, transparent);
+        overflow: hidden;
+    }
+
+    .ac-message__reply-label {
+        color: var(--ac-primary);
+        font-size: 0.68rem;
+        font-weight: 800;
+        line-height: 1.2;
+    }
+
+    .ac-message__reply-text {
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+        overflow: hidden;
+        color: var(--ac-text);
+        font-size: 0.78rem;
+        font-weight: 650;
+        line-height: 1.32;
+        overflow-wrap: anywhere;
+    }
+
     .ac-message__edit-history,
     .ac-message__edited-label,
     .ac-message__removed-label {

@@ -147,6 +147,18 @@
                             </div>
                         @endif
 
+                        @php($replyContext = $message['reply_context'] ?? null)
+                        @if (! $isSystemMessage && is_array($replyContext))
+                            <div data-role="conversation-reply-context" class="ac-message__reply-context">
+                                <div class="ac-message__reply-label">
+                                    {{ $replyContext['label'] ?? 'Ответ на сообщение' }}
+                                </div>
+                                <div class="ac-message__reply-text">
+                                    {{ $replyContext['preview_text'] ?? 'Сообщение без доступного текста' }}
+                                </div>
+                            </div>
+                        @endif
+
                         @if (! $isSystemMessage && is_array($contactShareContext))
                             @php($contactShareDetails = $contactShareContext['details'] ?? [])
                             <div data-role="conversation-contact-share" class="ac-message__contact-share">
@@ -344,6 +356,10 @@
                                     @php($audioSizeLabel = collect($mediaItem['meta'] ?? [])->first(fn ($part) => is_string($part) && preg_match('/\b(?:байт|Б|КБ|МБ|ГБ|B|KB|MB|GB)\b/u', $part) === 1))
                                     @php($videoNoteMeta = collect([$mediaItem['duration_label'] ?? null, $mediaItem['file_size_label'] ?? null])->filter()->implode(' · '))
                                     @php($videoMeta = collect([$mediaItem['duration_label'] ?? null, $mediaItem['file_size_label'] ?? null])->filter()->implode(' · '))
+                                    @php($attachmentKindLabel = $mediaItem['media_kind_label'] ?? 'Медиа')
+                                    @php($attachmentTitle = $mediaItem['title'] ?? null)
+                                    @php($shouldShowAttachmentTitle = filled($attachmentTitle) && $attachmentTitle !== $attachmentKindLabel)
+                                    @php($attachmentAccessibleTitle = $shouldShowAttachmentTitle ? $attachmentKindLabel.' '.$attachmentTitle : $attachmentKindLabel)
                                     <div
                                         wire:key="conversation-attachment-{{ $message['item_key'] ?? $message['id'] }}-{{ $mediaItem['attachment_id'] ?? $loop->index }}"
                                         data-role="conversation-attachment"
@@ -383,10 +399,6 @@
                                                         </span>
                                                         <span data-role="conversation-voice-pause-icon" class="ac-voice-player__icon" hidden>
                                                             <x-filament::icon icon="heroicon-m-pause" />
-                                    @php($attachmentKindLabel = $mediaItem['media_kind_label'] ?? 'Медиа')
-                                    @php($attachmentTitle = $mediaItem['title'] ?? null)
-                                    @php($shouldShowAttachmentTitle = filled($attachmentTitle) && $attachmentTitle !== $attachmentKindLabel)
-                                    @php($attachmentAccessibleTitle = $shouldShowAttachmentTitle ? $attachmentKindLabel.' '.$attachmentTitle : $attachmentKindLabel)
                                                         </span>
                                                     </button>
                                                     <div class="ac-voice-player__body">
