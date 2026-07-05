@@ -67,13 +67,15 @@ class StoreInboundMessageRemovalAction
 
     private function findRemovableMessage(Channel $channel, IncomingBotMessageRemoval $removal): ?Message
     {
+        if (! filled($removal->externalChatId)) {
+            return null;
+        }
+
         return Message::query()
             ->where('channel_id', $channel->id)
             ->where('direction', Message::DIRECTION_INBOUND)
+            ->where('external_chat_id', $removal->externalChatId)
             ->where('external_message_id', $removal->externalMessageId)
-            ->when(filled($removal->externalChatId), function ($query) use ($removal): void {
-                $query->where('external_chat_id', $removal->externalChatId);
-            })
             ->lockForUpdate()
             ->first();
     }
