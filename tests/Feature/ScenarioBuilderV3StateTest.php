@@ -3819,6 +3819,51 @@ class ScenarioBuilderV3StateTest extends TestCase
         $this->assertSame('1', data_get($runtime, "blocks.$startBlockId.display_number"));
     }
 
+    public function test_publish_v3_graph_does_not_require_extra_confirmation_for_imported_auto_reply_blocks(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['is_active' => true]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_publish_imported_auto_reply',
+            'name' => 'V3 Publish Imported Auto Reply',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $settings = $this->startMessageButtonsSettings(
+            '/start',
+            [(int) $channel->id],
+            'Маркетолог получили',
+            'КНОПКА-111',
+        );
+        $settings['ui']['import_source'] = [
+            'type' => 'auto_reply_rule_xlsx',
+            'source_workbook_key' => 'auto_reply_rules',
+            'source_rule_id' => 124,
+            'source_rule_name' => 'Импорт автоответов',
+        ];
+
+        $savedState = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, [
+                [
+                    'id' => null,
+                    'client_key' => 'tmp_start',
+                    'type' => 'state',
+                    'title' => 'Старт',
+                    'position' => ['x' => 64, 'y' => 64],
+                    'settings_payload' => $settings,
+                ],
+            ]))
+            ->assertOk()
+            ->json();
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $savedState['scenario']['draft_version_id'],
+                'base_revision' => $savedState['builder']['revision'],
+            ])
+            ->assertOk()
+            ->assertJsonPath('published.version_number', 1);
+    }
+
     public function test_publish_v3_graph_rolls_back_when_selected_channel_becomes_unavailable(): void
     {
         $admin = $this->adminUser();

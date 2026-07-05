@@ -51,7 +51,6 @@ class ScenarioBuilderV3StateController extends Controller
         $draftVersionId = (int) ($request->integer('draft_version_id') ?: $request->integer('editable_version_id'));
         $baseRevision = trim((string) $request->input('base_revision', ''));
         $scheduledTransitionPolicy = trim((string) $request->input('scheduled_transition_policy', ''));
-        $confirmAutoReplyImportRisk = $request->boolean('confirm_auto_reply_import_double_response_risk');
 
         if (
             $scheduledTransitionPolicy !== ''
@@ -63,18 +62,6 @@ class ScenarioBuilderV3StateController extends Controller
             throw ValidationException::withMessages([
                 'scheduled_transition_policy' => 'Неизвестное действие для запланированных переходов.',
             ]);
-        }
-
-        $autoReplyImportSummary = $publishScenarioBuilderV3Action->autoReplyImportSummary($scenario, $draftVersionId);
-
-        if ($autoReplyImportSummary['count'] > 0 && ! $confirmAutoReplyImportRisk) {
-            return response()->json([
-                'message' => 'В сценарии есть импортированные автоответы. Подтвердите риск двойных ответов перед публикацией.',
-                'code' => 'auto_reply_import_double_response_risk',
-                'warning' => [
-                    'auto_reply_import' => $autoReplyImportSummary,
-                ],
-            ], 409);
         }
 
         $scheduledTransitions = $publishScenarioBuilderV3Action->pendingScheduledTransitionsSummary($scenario);
