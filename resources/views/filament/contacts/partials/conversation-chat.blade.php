@@ -43,6 +43,7 @@
                 @php($hasOnlyPreviewableMedia = $messageMediaItems !== [] && $nonPreviewableMediaItems->isEmpty())
                 @php($hideGeneratedMediaSummary = $messageMediaItems !== [] && ! empty($message['is_media_only_display_text'] ?? false))
                 @php($contactShareContext = $message['contact_share_context'] ?? null)
+                @php($buttonContext = $message['button_context'] ?? null)
                 @php($hideGeneratedContactShareSummary = is_array($contactShareContext) && ($message['kind'] ?? null) === \App\Models\Message::KIND_INBOUND_CONTACT_SHARE)
                 @php($isRemoved = ! empty($message['is_removed'] ?? false))
                 <div
@@ -221,6 +222,32 @@
                             <div class="ac-message__text">{{ $message['html_source_text'] }}</div>
                         @elseif (! $hideGeneratedContactShareSummary && ! $hideGeneratedMediaSummary)
                             <div class="ac-message__text">{{ $message['display_text'] }}</div>
+                        @endif
+
+                        @if (! $isSystemMessage && is_array($buttonContext) && ! empty($buttonContext['rows'] ?? []))
+                            <div data-role="conversation-button-preview" class="ac-message__button-preview" aria-label="{{ $buttonContext['label'] ?? 'Отправленные кнопки' }}">
+                                <div class="ac-message__button-preview-label">
+                                    {{ $buttonContext['label'] ?? 'Отправленные кнопки' }}
+                                </div>
+                                @foreach ($buttonContext['rows'] as $buttonRow)
+                                    <div data-role="conversation-button-row" class="ac-message__button-preview-row">
+                                        @foreach ($buttonRow as $button)
+                                            <button
+                                                type="button"
+                                                data-role="conversation-button-chip"
+                                                class="ac-message__button-preview-button"
+                                                data-button-type="{{ $button['type'] ?? 'button' }}"
+                                                disabled
+                                            >
+                                                <span class="ac-message__button-preview-text">{{ $button['text'] ?? 'Кнопка' }}</span>
+                                                @if (filled($button['type_label'] ?? null))
+                                                    <span class="ac-message__button-preview-kind">{{ $button['type_label'] }}</span>
+                                                @endif
+                                            </button>
+                                        @endforeach
+                                    </div>
+                                @endforeach
+                            </div>
                         @endif
 
                         @if (! $isSystemMessage && filled($message['removed_label'] ?? null))

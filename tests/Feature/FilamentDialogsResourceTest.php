@@ -1435,6 +1435,82 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertDontSee('<div class="ac-message__text">Документ</div>', false)
             ->assertDontSee('Документ: Comprovante de pagamento.pdf');
     }
+
+    public function test_dialog_view_renders_outbound_max_buttons_as_disabled_preview(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(0);
+        $identity = $dialog->currentContactIdentity;
+        $message = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $identity?->id,
+            'channel_id' => $dialog->channel_id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_SCENARIO_MESSAGE,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_system_code' => 'scenario___scenario_constructor_workspace',
+            'external_chat_id' => $dialog->external_chat_id,
+            'external_message_id' => 'max-button-preview-message-1',
+            'provider_event_key' => null,
+            'text' => 'QA MAX BTN-01: нажми кнопку ниже',
+            'raw_payload' => [
+                'v3' => [
+                    'buttons' => [
+                        'rows' => [
+                            [
+                                [
+                                    'text' => 'Поделиться номером телефона',
+                                    'type' => 'request_phone',
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+                'message' => [
+                    'body' => [
+                        'attachments' => [
+                            [
+                                'type' => 'inline_keyboard',
+                                'payload' => [
+                                    'buttons' => [
+                                        [
+                                            [
+                                                'text' => 'Поделиться номером телефона',
+                                                'type' => 'request_contact',
+                                            ],
+                                        ],
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee('QA MAX BTN-01: нажми кнопку ниже')
+            ->assertSee('data-role="conversation-button-preview"', false)
+            ->assertSee('Отправленные кнопки')
+            ->assertSee('data-role="conversation-button-chip"', false)
+            ->assertSee('data-button-type="request_contact"', false)
+            ->assertSee('Поделиться номером телефона')
+            ->assertSee('Запрос телефона')
+            ->assertSee('disabled', false)
+            ->assertDontSee('href="Поделиться номером телефона"', false);
+
+        $this->assertDatabaseHas('messages', [
+            'id' => $message->id,
+            'message_kind' => Message::KIND_OUTBOUND_SCENARIO_MESSAGE,
+        ]);
+    }
+
     public function test_dialog_view_live_refresh_defers_during_media_playback_and_text_selection(): void
     {
         $admin = User::factory()->create([

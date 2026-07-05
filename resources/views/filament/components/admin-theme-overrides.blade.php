@@ -7347,6 +7347,72 @@
         filter: none;
     }
 
+    .ac-message__button-preview {
+        display: grid;
+        width: 100%;
+        min-width: min(16rem, 100%);
+        gap: 0.34rem;
+        margin-top: 0.55rem;
+        border-top: 1px solid color-mix(in srgb, var(--ac-border) 66%, transparent);
+        padding-top: 0.5rem;
+    }
+
+    .ac-message__button-preview-label {
+        color: var(--ac-text-soft);
+        font-size: 0.68rem;
+        font-weight: 800;
+        line-height: 1.2;
+    }
+
+    .ac-message__button-preview-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.36rem;
+        min-width: 0;
+    }
+
+    .ac-message__button-preview-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        max-width: 100%;
+        min-height: 2rem;
+        gap: 0.36rem;
+        border: 1px solid color-mix(in srgb, var(--ac-primary) 34%, var(--ac-border));
+        border-radius: 10px;
+        background: color-mix(in srgb, var(--ac-primary-soft) 44%, var(--ac-surface-strong));
+        padding: 0.38rem 0.56rem;
+        color: var(--ac-text);
+        font-size: 0.78rem;
+        font-weight: 760;
+        line-height: 1.18;
+        text-align: center;
+        cursor: default;
+        opacity: 1;
+    }
+
+    .ac-message__button-preview-button:disabled {
+        cursor: default;
+        opacity: 1;
+    }
+
+    .ac-message__button-preview-text {
+        min-width: 0;
+        overflow-wrap: anywhere;
+    }
+
+    .ac-message__button-preview-kind {
+        flex: 0 0 auto;
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--ac-surface-strong) 78%, transparent);
+        padding: 0.12rem 0.34rem;
+        color: var(--ac-text-soft);
+        font-size: 0.62rem;
+        font-weight: 800;
+        line-height: 1.1;
+        white-space: nowrap;
+    }
+
     .ac-message__timestamp {
         flex: 0 0 auto;
         font-size: 0.72rem;

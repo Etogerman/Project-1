@@ -1007,6 +1007,94 @@ class BuildConversationFeedViewDataActionTest extends TestCase
         ], $feed[0]['forwarded_context']['details']);
     }
 
+    public function test_outbound_max_button_context_uses_sent_keyboard_payload(): void
+    {
+        $contact = Contact::factory()->create();
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'max-button-user',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'max-button-chat',
+        ]);
+        $message = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_SCENARIO_MESSAGE,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_system_code' => 'scenario___scenario_constructor_workspace',
+            'external_chat_id' => 'max-button-chat',
+            'external_message_id' => 'mid.max.button.current',
+            'text' => 'QA MAX BTN-01: нажми кнопку ниже',
+            'raw_payload' => [
+                'v3' => [
+                    'buttons' => [
+                        'rows' => [
+                            [
+                                [
+                                    'text' => 'Fallback button',
+                                    'type' => 'text',
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+                'message' => [
+                    'body' => [
+                        'attachments' => [
+                            [
+                                'type' => 'inline_keyboard',
+                                'payload' => [
+                                    'buttons' => [
+                                        [
+                                            [
+                                                'text' => 'Поделиться номером телефона',
+                                                'type' => 'request_contact',
+                                            ],
+                                        ],
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+            'received_at' => now(),
+        ]);
+
+        $feed = app(BuildConversationFeedViewDataAction::class)->handle(
+            Message::query()
+                ->whereKey($message->id)
+                ->with(['channel', 'dialog.channel', 'sentByUser'])
+                ->get(),
+        );
+
+        $this->assertSame([
+            'label' => 'Отправленные кнопки',
+            'rows' => [
+                [
+                    [
+                        'text' => 'Поделиться номером телефона',
+                        'type' => 'request_contact',
+                        'type_label' => 'Запрос телефона',
+                        'url' => null,
+                    ],
+                ],
+            ],
+        ], $feed[0]['button_context']);
+    }
+
     public function test_telegram_forwarded_message_exposes_safe_forwarded_label_and_sender_id(): void
     {
         $contact = Contact::factory()->create();

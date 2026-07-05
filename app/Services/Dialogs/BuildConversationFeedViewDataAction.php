@@ -56,6 +56,7 @@ class BuildConversationFeedViewDataAction
                 $isSystemMessage = $this->isConversationSystemMessage($message);
                 $forwardedContext = $this->resolveConversationForwardedContext($message, $forwardedIdentityIndex);
                 $contactShareContext = $this->resolveConversationContactShareContext($message, $contactShareIdentityIndex);
+                $buttonContext = $this->resolveConversationButtonContext($message);
                 $editContext = $this->resolveConversationEditContext($groupMessages);
                 $removalContext = $this->resolveConversationRemovalContext($groupMessages);
 
@@ -83,6 +84,7 @@ class BuildConversationFeedViewDataAction
                     'forwarded_label' => data_get($forwardedContext, 'label'),
                     'forwarded_context' => $forwardedContext,
                     'contact_share_context' => $contactShareContext,
+                    'button_context' => $buttonContext,
                     'is_edited' => $editContext['is_edited'],
                     'edited_label' => $editContext['label'],
                     'edit_history' => $editContext['history'],
@@ -574,6 +576,148 @@ class BuildConversationFeedViewDataAction
             'contact_id' => $contactIdentity?->contact_id,
             'details' => $details,
         ];
+    }
+
+    /**
+     * @return array{label:string,rows:list<list<array<string, mixed>>>}|null
+     */
+    protected function resolveConversationButtonContext(Message $message): ?array
+    {
+        if ($message->direction !== Message::DIRECTION_OUTBOUND) {
+            return null;
+        }
+
+        $payload = is_array($message->raw_payload) ? $message->raw_payload : [];
+
+        $rows = $this->resolveProviderConversationButtonRows($payload);
+
+        if ($rows === []) {
+            $rows = $this->normalizeConversationButtonRows(data_get($payload, 'v3.buttons.rows'));
+        }
+
+        if ($rows === []) {
+            return null;
+        }
+
+        return [
+            'label' => 'Отправленные кнопки',
+            'rows' => $rows,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return list<list<array<string, mixed>>>
+     */
+    protected function resolveProviderConversationButtonRows(array $payload): array
+    {
+        $attachmentSets = [
+            data_get($payload, 'message.body.attachments'),
+            data_get($payload, 'message.attachments'),
+            data_get($payload, 'attachments'),
+            data_get($payload, 'result.attachments'),
+            data_get($payload, 'request.attachments'),
+        ];
+
+        foreach ($attachmentSets as $attachments) {
+            if (! is_array($attachments)) {
+                continue;
+            }
+
+            foreach ($attachments as $attachment) {
+                if (! is_array($attachment)) {
+                    continue;
+                }
+
+                $type = Str::lower((string) $this->normalizeMediaBadgeText($attachment['type'] ?? null));
+
+                if (! in_array($type, ['inline_keyboard', 'keyboard'], true)) {
+                    continue;
+                }
+
+                $rows = $this->normalizeConversationButtonRows(
+                    data_get($attachment, 'payload.buttons')
+                        ?? data_get($attachment, 'payload.keyboard')
+                        ?? data_get($attachment, 'buttons')
+                );
+
+                if ($rows !== []) {
+                    return $rows;
+                }
+            }
+        }
+
+        return [];
+    }
+
+    /**
+     * @return list<list<array<string, mixed>>>
+     */
+    protected function normalizeConversationButtonRows(mixed $rows): array
+    {
+        if (! is_array($rows)) {
+            return [];
+        }
+
+        return collect($rows)
+            ->map(function (mixed $row): array {
+                $buttons = $this->isConversationButtonPayload($row)
+                    ? [$row]
+                    : (is_array($row) ? $row : []);
+
+                return collect($buttons)
+                    ->map(fn (mixed $button): ?array => is_array($button)
+                        ? $this->normalizeConversationButton($button)
+                        : null)
+                    ->filter()
+                    ->values()
+                    ->all();
+            })
+            ->filter(fn (array $row): bool => $row !== [])
+            ->values()
+            ->all();
+    }
+
+    protected function isConversationButtonPayload(mixed $value): bool
+    {
+        return is_array($value) && array_key_exists('text', $value);
+    }
+
+    /**
+     * @param  array<string, mixed>  $button
+     * @return array<string, mixed>|null
+     */
+    protected function normalizeConversationButton(array $button): ?array
+    {
+        $text = $this->normalizeMediaBadgeText($button['text'] ?? null);
+
+        if ($text === null) {
+            return null;
+        }
+
+        $type = Str::lower((string) ($this->normalizeMediaBadgeText($button['type'] ?? null) ?? 'button'));
+        $url = $this->normalizeMediaBadgeText($button['url'] ?? null);
+
+        return [
+            'text' => $text,
+            'type' => $type,
+            'type_label' => $this->formatConversationButtonTypeLabel($type, $url),
+            'url' => $url,
+        ];
+    }
+
+    protected function formatConversationButtonTypeLabel(string $type, ?string $url): string
+    {
+        if ($url !== null || $type === 'link') {
+            return 'Ссылка';
+        }
+
+        return match ($type) {
+            'request_contact',
+            'request_phone' => 'Запрос телефона',
+            'text' => 'Ответ',
+            default => 'Кнопка',
+        };
     }
 
     /**
