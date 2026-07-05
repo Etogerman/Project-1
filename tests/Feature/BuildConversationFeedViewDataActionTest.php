@@ -1328,10 +1328,15 @@ class BuildConversationFeedViewDataActionTest extends TestCase
         $this->assertSame('Groups are currently disabled for bot', $feed[0]['display_text']);
         $this->assertSame('Переслано от BotFather', $feed[0]['forwarded_label']);
         $this->assertSame('93372553', $feed[0]['forwarded_context']['sender_user_id']);
+        $this->assertSame('@BotFather', $feed[0]['forwarded_context']['sender_username']);
         $this->assertSame([
             [
                 'label' => 'Telegram user_id',
                 'value' => '93372553',
+            ],
+            [
+                'label' => 'Telegram username',
+                'value' => '@BotFather',
             ],
             [
                 'label' => 'AB контакт',
@@ -1388,6 +1393,12 @@ class BuildConversationFeedViewDataActionTest extends TestCase
                     ],
                     'from_message_id' => 77,
                 ],
+                'users' => [
+                    '93372553' => [
+                        'id' => 93372553,
+                        'username' => 'BotFather',
+                    ],
+                ],
             ],
             'received_at' => now(),
         ]);
@@ -1400,8 +1411,9 @@ class BuildConversationFeedViewDataActionTest extends TestCase
         );
 
         $this->assertSame('Groups are currently disabled for bot', $feed[0]['display_text']);
-        $this->assertSame('Переслано от Telegram user_id 93372553', $feed[0]['forwarded_label']);
+        $this->assertSame('Переслано от @BotFather', $feed[0]['forwarded_label']);
         $this->assertSame('93372553', $feed[0]['forwarded_context']['sender_user_id']);
+        $this->assertSame('@BotFather', $feed[0]['forwarded_context']['sender_username']);
         $this->assertTrue($feed[0]['forwarded_context']['contact_found']);
         $this->assertSame($forwardedContact->id, $feed[0]['forwarded_context']['contact_id']);
         $this->assertSame(
@@ -1413,6 +1425,10 @@ class BuildConversationFeedViewDataActionTest extends TestCase
             [
                 'label' => 'Telegram user_id',
                 'value' => '93372553',
+            ],
+            [
+                'label' => 'Telegram username',
+                'value' => '@BotFather',
             ],
             [
                 'label' => 'AB контакт',

@@ -3798,6 +3798,58 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertDontSee('Поделился контактом');
     }
 
+    public function test_dialog_view_shows_telegram_forwarded_username_when_available(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(0);
+        $contact = $dialog->contact;
+        $identity = $dialog->currentContactIdentity;
+        $channel = $dialog->channel;
+        $channel?->forceFill([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ])->save();
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity?->id,
+            'channel_id' => $channel?->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => $dialog->external_chat_id,
+            'external_message_id' => 'telegram-forwarded-username-message',
+            'provider_event_key' => 'telegram-forwarded-username-event',
+            'text' => 'Пересланный текст',
+            'raw_payload' => [
+                'message' => [
+                    'message_id' => 52,
+                    'text' => 'Пересланный текст',
+                    'forward_origin' => [
+                        'type' => 'user',
+                        'sender_user' => [
+                            'id' => 5359196982,
+                            'first_name' => 'Служба поддержки lava.top',
+                            'username' => 'lava_support',
+                        ],
+                    ],
+                ],
+            ],
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee('data-role="conversation-forwarded"', false)
+            ->assertSee('Переслано от Служба поддержки lava.top')
+            ->assertSee('Telegram user_id')
+            ->assertSee('5359196982')
+            ->assertSee('Telegram username')
+            ->assertSee('@lava_support');
+    }
+
     public function test_dialog_view_renders_max_contact_share_card_without_phone(): void
     {
         $admin = User::factory()->create([
