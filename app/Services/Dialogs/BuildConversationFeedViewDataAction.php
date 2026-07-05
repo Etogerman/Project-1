@@ -591,7 +591,7 @@ class BuildConversationFeedViewDataAction
      */
     protected function resolveConversationReplyContext(Message $message, Collection $replyMessageIndex): ?array
     {
-        $source = $this->resolveMaxConversationReplySource($message);
+        $source = $this->resolveConversationReplySource($message);
 
         if ($source === null) {
             return null;
@@ -1094,11 +1094,20 @@ class BuildConversationFeedViewDataAction
 
     protected function resolveConversationReplyOriginalMessageId(Message $message): ?string
     {
-        $source = $this->resolveMaxConversationReplySource($message);
+        $source = $this->resolveConversationReplySource($message);
 
         return $source === null
             ? null
             : $this->normalizeMediaBadgeText(data_get($source, 'original_message_id'));
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    protected function resolveConversationReplySource(Message $message): ?array
+    {
+        return $this->resolveMaxConversationReplySource($message)
+            ?? $this->resolveTelegramConversationReplySource($message);
     }
 
     /**
@@ -1138,6 +1147,55 @@ class BuildConversationFeedViewDataAction
     }
 
     /**
+     * @return array<string, mixed>|null
+     */
+    protected function resolveTelegramConversationReplySource(Message $message): ?array
+    {
+        $platform = $this->normalizeMediaBadgeText($message->channel?->platform);
+
+        if (Str::lower((string) $platform) !== Channel::PLATFORM_TELEGRAM) {
+            return null;
+        }
+
+        $payload = is_array($message->raw_payload) ? $message->raw_payload : [];
+        $telegramMessage = data_get($payload, 'message');
+        $linkedMessage = is_array(data_get($telegramMessage, 'reply_to_message'))
+            ? data_get($telegramMessage, 'reply_to_message')
+            : null;
+        $tdlibReplyTo = is_array(data_get($payload, 'reply_to'))
+            ? data_get($payload, 'reply_to')
+            : (is_array(data_get($telegramMessage, 'reply_to')) ? data_get($telegramMessage, 'reply_to') : null);
+
+        if ($linkedMessage === null && is_array($tdlibReplyTo)) {
+            $linkedMessage = $tdlibReplyTo;
+        }
+
+        $originalMessageId = $this->normalizeMediaBadgeText(
+            data_get($telegramMessage, 'reply_to_message.message_id')
+                ?? data_get($payload, '_gateway_event.reply_to_message_id')
+                ?? data_get($payload, 'reply_to_message_id')
+                ?? data_get($payload, 'reply_to.message_id')
+                ?? data_get($payload, 'reply_to.external_message_id')
+                ?? data_get($payload, 'reply_to.message.message_id')
+                ?? data_get($payload, 'reply_to.message.external_message_id')
+                ?? data_get($telegramMessage, 'reply_to.message_id')
+                ?? data_get($telegramMessage, 'reply_to.external_message_id')
+                ?? data_get($telegramMessage, 'reply_to.message.message_id')
+                ?? data_get($telegramMessage, 'reply_to.message.external_message_id')
+        );
+
+        if ($originalMessageId === null) {
+            return null;
+        }
+
+        return [
+            'provider' => Channel::PLATFORM_TELEGRAM,
+            'message' => is_array($linkedMessage) ? $linkedMessage : null,
+            'original_message_id' => $originalMessageId,
+        ];
+    }
+
+    /**
      * @param  array<string, mixed>  $linkedMessage
      */
     protected function resolveConversationReplyPreviewText(array $linkedMessage): ?string
@@ -1147,6 +1205,11 @@ class BuildConversationFeedViewDataAction
                 ?? data_get($linkedMessage, 'body.text')
                 ?? data_get($linkedMessage, 'caption')
                 ?? data_get($linkedMessage, 'body.caption')
+                ?? data_get($linkedMessage, 'content.text.text')
+                ?? data_get($linkedMessage, 'content.caption.text')
+                ?? data_get($linkedMessage, 'formatted_text.text')
+                ?? data_get($linkedMessage, 'quote.text.text')
+                ?? data_get($linkedMessage, 'quote.text')
         );
     }
 
