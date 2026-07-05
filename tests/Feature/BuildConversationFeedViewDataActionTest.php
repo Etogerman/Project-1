@@ -166,14 +166,14 @@ class BuildConversationFeedViewDataActionTest extends TestCase
             'external_message_id' => 'edited-message',
             'text' => 'Новый текст',
             'received_at' => Carbon::parse('2026-06-30 12:00:00'),
-            'edited_at' => Carbon::parse('2026-06-30 12:34:00'),
+            'edited_at' => Carbon::parse('2026-06-30 12:34:56'),
             'edit_count' => 1,
         ]);
         MessageRevision::query()->create([
             'message_id' => $message->id,
             'revision_type' => MessageRevision::TYPE_EDIT,
             'provider_event_key' => 'edit-1',
-            'provider_edited_at' => Carbon::parse('2026-06-30 12:34:00'),
+            'provider_edited_at' => Carbon::parse('2026-06-30 12:34:56'),
             'previous_text' => 'Старый текст',
             'new_text' => 'Новый текст',
         ]);
@@ -187,11 +187,11 @@ class BuildConversationFeedViewDataActionTest extends TestCase
 
         $this->assertCount(1, $feed);
         $this->assertTrue($feed[0]['is_edited']);
-        $this->assertSame('изменено 12:34', $feed[0]['edited_label']);
+        $this->assertSame('изменено 12:34:56', $feed[0]['edited_label']);
         $this->assertSame([
             [
                 'id' => MessageRevision::query()->firstOrFail()->id,
-                'label' => '12:34 30.06.2026',
+                'label' => '12:34:56 30.06.2026',
                 'previous_text' => 'Старый текст',
                 'new_text' => 'Новый текст',
             ],
