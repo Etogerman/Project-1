@@ -7531,14 +7531,21 @@
         aspect-ratio: 1 / 1;
     }
 
-    .ac-message-gallery__item img {
+    .ac-message-gallery__item img,
+    .ac-message-gallery__video-preview {
         display: block;
         width: 100%;
         height: 100%;
         object-fit: cover;
     }
 
-    .ac-message-gallery[data-count="1"] .ac-message-gallery__item img {
+    .ac-message-gallery__video-preview {
+        background: color-mix(in srgb, var(--ac-surface-muted) 82%, #000 18%);
+        pointer-events: none;
+    }
+
+    .ac-message-gallery[data-count="1"] .ac-message-gallery__item img,
+    .ac-message-gallery[data-count="1"] .ac-message-gallery__video-preview {
         height: auto;
         max-height: 24rem;
         object-fit: contain;

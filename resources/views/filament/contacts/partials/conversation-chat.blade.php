@@ -235,9 +235,16 @@
                                                     loading="lazy"
                                                 >
                                             @else
-                                                <span data-role="conversation-gallery-video-placeholder" class="ac-message-gallery__video-placeholder" aria-hidden="true">
-                                                    <x-filament::icon icon="heroicon-m-video-camera" />
-                                                </span>
+                                                <video
+                                                    data-role="conversation-gallery-video-preview"
+                                                    class="ac-message-gallery__video-preview"
+                                                    src="{{ $mediaItem['preview_url'] }}#t=0.001"
+                                                    preload="metadata"
+                                                    muted
+                                                    playsinline
+                                                    aria-hidden="true"
+                                                    tabindex="-1"
+                                                ></video>
                                             @endif
                                             <span class="ac-message-gallery__play-indicator" aria-hidden="true">
                                                 <x-filament::icon icon="heroicon-m-play" />
