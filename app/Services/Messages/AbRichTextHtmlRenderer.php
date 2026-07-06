@@ -38,9 +38,18 @@ class AbRichTextHtmlRenderer
 
         $html .= $this->flushQuoteHtml($quoteHtml);
 
+        $html = $this->compactBlockBoundaryNewlines($html);
+
         return $html !== ''
             ? $html
             : null;
+    }
+
+    private function compactBlockBoundaryNewlines(string $html): string
+    {
+        $html = preg_replace('/\n(<(?:blockquote|pre)\b)/u', '$1', $html) ?? $html;
+
+        return preg_replace('/(<\/(?:blockquote|pre)>)\n/u', '$1', $html) ?? $html;
     }
 
     /**
