@@ -104,14 +104,20 @@ composer test:ci          # CI-агрегированный прогон
 ## Карта документации
 
 - [AGENTS.md](AGENTS.md) — верхнеуровневые рамки, инварианты и правила работы агента
+- [docs/architecture.md](docs/architecture.md) — одностраничная архитектурная карта проекта
 - [docs/reference/project-scope.md](docs/reference/project-scope.md) — проектовый контур и текущие жёсткие границы
 - [docs/reference/local-bootstrap.md](docs/reference/local-bootstrap.md) — локальный bootstrap и ежедневный dev-runtime
 - [docs/task-delivery-workflow.md](docs/task-delivery-workflow.md) — canonical delivery-playbook; согласованный локальный MVP ведёт к операторской приёмке, а выход в `staging` начинается после явного решения о выкладке
+- [docs/action-ownership.md](docs/action-ownership.md) — кто выполняет GitHub, PR, release и dangerous-op действия
+- [docs/agent-routing.md](docs/agent-routing.md) — маршрутизация агента к нужным process docs и skills
+- [docs/agent-docs-lifecycle.md](docs/agent-docs-lifecycle.md) — lifecycle документов, влияющих на действия агента
 - [docs/clean-stream-release-flow.md](docs/clean-stream-release-flow.md) — дополнительный appendix по clean-stream extraction и mixed-state cleanup
 - [docs/staging-laravel-cloud.md](docs/staging-laravel-cloud.md) — staging, deploy baseline и real Bitrix integration flow
 - [docs/post-deploy-smoke.md](docs/post-deploy-smoke.md) — post-deploy smoke и rev-check контур
 - [docs/playwright.md](docs/playwright.md) — Playwright smoke, локальный и remote запуск
 - [docs/backup.md](docs/backup.md) — backup и verify runbook
+- [docs/runbooks/release-rollback.md](docs/runbooks/release-rollback.md) — rollback/forward-fix decision runbook для release-инцидентов
+- [docs/runbooks/test-env.md](docs/runbooks/test-env.md) — безопасный PHPUnit/test database контур
 - [docs/bitrix24/setup-sheet.md](docs/bitrix24/setup-sheet.md) — frozen Bitrix24 ops/setup sheet с подтверждёнными integration values
 - [docs/bitrix24/dev-local-setup.md](docs/bitrix24/dev-local-setup.md) — как разработчику подключить свою локалку к общему Bitrix24 staging через `dev-*` profile
 - [docs/dialog-workspace.md](docs/dialog-workspace.md) — текущая модель `Contact overview / Dialog workspace`
@@ -123,6 +129,9 @@ composer test:ci          # CI-агрегированный прогон
 `Project-1-specs` считается внешним контуром, а не локальным местом для ранних черновиков. До операторского решения о выкладке существенный stream может идти по ТЗ из чата или явно указанного локального черновика вне `Project-1` и вне `Project-1-specs`.
 
 Основной проект не хранит живые указатели на версии ТЗ и не хранит реестр активных работ. Для конкретной работы актуальные `Spec repo`, `Spec doc` и `Spec revision` фиксируются во внешнем репозитории документации, в описании задачи или в PR перед первым внешним code/runtime действием.
+
+`docs/reference/active-specs.md` оставлен только как legacy snapshot старого
+локального реестра и не является source of truth.
 
 ## Тесты и smoke
 

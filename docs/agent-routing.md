@@ -73,7 +73,7 @@ Skill задаёт рабочую процедуру. Если skill маршр�
 
 | Тип вопроса | Маршрут | Статус | Запасной источник |
 | --- | --- | --- | --- |
-| ТЗ, Spec repo, Spec doc, Spec revision | `ab-spec-workflow` | Активный | `docs/reference/active-specs.md`, внешний репозиторий документации |
+| ТЗ, Spec repo, Spec doc, Spec revision | `ab-spec-workflow` | Активный | внешний spec repo `Etogerman/Project-1-specs`, PR audit trail |
 | Текущий stream, хвосты, следующий шаг | `ab-stream-state-resolver` | Активный | `AGENTS.md`, `docs/task-delivery-workflow.md` |
 | PR, CI, review, draft, ready | `ab-pr-ci-review` | Активный | `AGENTS.md`, `docs/task-delivery-workflow.md`, `.github/PULL_REQUEST_TEMPLATE.md` |
 | staging, main, production, deploy, smoke | `ab-release-gates` | Запланирован | `docs/task-delivery-workflow.md`, `docs/post-deploy-smoke.md`, `docs/staging-laravel-cloud.md` |

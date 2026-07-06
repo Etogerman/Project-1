@@ -42,8 +42,8 @@ Skill не меняет код, конфиги, тесты, runtime-окруже
 
 Skill не сохраняет полное ТЗ в основном репозитории.
 
-Skill не обновляет `docs/reference/active-specs.md` автоматически после изменения
-внешнего Spec.
+Skill не обновляет `docs/reference/active-specs.md`: файл является legacy
+snapshot, а не текущим реестром stream-ов.
 
 Skill не выбирает “правильную” версию молча, если код, чат, локальные документы и
 внешний Spec расходятся.
@@ -71,7 +71,7 @@ Skill не делает commit, push или PR без отдельной явн�
 - substantial stream;
 - `Spec pending`;
 - `spec/admin tail`;
-- `docs/reference/active-specs.md`;
+- `docs/reference/active-specs.md` как legacy snapshot;
 - расхождением между кодом, локальными документами и внешним ТЗ;
 - подготовкой stream к publish/release boundary.
 
@@ -81,8 +81,10 @@ Skill не делает commit, push или PR без отдельной явн�
 
 1. `AGENTS.md`
 2. `docs/task-delivery-workflow.md`
-3. `docs/reference/active-specs.md`
-4. внешний репозиторий документации
+3. внешний репозиторий документации
+4. PR audit trail с блоком `Spec repo / Spec doc / Spec revision`
+5. `docs/reference/active-specs.md` только как legacy snapshot, если нужно
+   объяснить старое расхождение
 
 Если `docs/agent-routing.md` или `docs/agent-docs-lifecycle.md` существуют только
 как локальные черновики, скажи об этом и не используй их как активные правила.
@@ -195,14 +197,15 @@ Local path: /Users/abrikosov/Documents/Project-1-specs
 
 ## Active specs в основном repo
 
-`docs/reference/active-specs.md` хранит только stream-level ссылку на уже открытый
-substantial stream.
+`docs/reference/active-specs.md` является legacy snapshot старого локального
+реестра.
 
-Он не заменяет внешний Spec repo и не хранит полное ТЗ.
+Он не заменяет внешний Spec repo, не хранит полное ТЗ и не используется как
+source of truth для текущего статуса stream-ов.
 
-Обновление `docs/reference/active-specs.md` в основном repo — отдельное docs-only
-изменение. Оно не происходит автоматически после изменения внешнего Spec и требует
-отдельного разрешения пользователя.
+Новые записи туда не добавляются. Если snapshot расходится со внешним Spec repo,
+`active-streams.md`, `streams/README.md`, `Spec doc` или PR audit trail, приоритет
+у внешнего Spec repo и зафиксированной `Spec revision`.
 
 ## Publish/release boundary
 
