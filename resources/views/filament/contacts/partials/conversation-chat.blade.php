@@ -34,7 +34,7 @@
                 @php($previewableImageMediaItems = $previewableMediaItems->filter(fn ($mediaItem): bool => ($mediaItem['preview_kind'] ?? null) === \App\Models\MessageAttachment::PREVIEW_KIND_IMAGE)->values())
                 @php($previewableRegularVideoMediaItems = $previewableMediaItems->filter(fn ($mediaItem): bool => empty($mediaItem['is_video_note']) && ($mediaItem['preview_kind'] ?? null) === \App\Models\MessageAttachment::PREVIEW_KIND_VIDEO)->values())
                 @php($shouldMergeVideosIntoGallery = $previewableImageMediaItems->isNotEmpty() && $previewableRegularVideoMediaItems->isNotEmpty())
-                @php($galleryMediaItems = $shouldMergeVideosIntoGallery ? $previewableImageMediaItems->merge($previewableRegularVideoMediaItems)->values() : $previewableImageMediaItems)
+                @php($galleryMediaItems = $shouldMergeVideosIntoGallery ? $previewableMediaItems->filter(fn ($mediaItem): bool => ($mediaItem['preview_kind'] ?? null) === \App\Models\MessageAttachment::PREVIEW_KIND_IMAGE || (empty($mediaItem['is_video_note']) && ($mediaItem['preview_kind'] ?? null) === \App\Models\MessageAttachment::PREVIEW_KIND_VIDEO))->values() : $previewableImageMediaItems)
                 @php($previewableFileMediaItems = $previewableMediaItems->reject(fn ($mediaItem): bool => ($mediaItem['preview_kind'] ?? null) === \App\Models\MessageAttachment::PREVIEW_KIND_IMAGE || ($shouldMergeVideosIntoGallery && empty($mediaItem['is_video_note']) && ($mediaItem['preview_kind'] ?? null) === \App\Models\MessageAttachment::PREVIEW_KIND_VIDEO))->values())
                 @php($nonPreviewableMediaItems = $messageMediaCollection->reject(fn ($mediaItem): bool => ! empty($mediaItem['is_previewable']) && filled($mediaItem['preview_url'] ?? null))->values())
                 @php($attachmentMediaItems = $previewableFileMediaItems->merge($nonPreviewableMediaItems)->values())
@@ -227,16 +227,18 @@
                                         title="{{ $isGalleryVideo ? 'Открыть видео' : 'Открыть изображение' }}"
                                     >
                                         @if ($isGalleryVideo)
-                                            <video
-                                                src="{{ $mediaItem['preview_url'] }}"
-                                                @if (filled($mediaItem['poster_url'] ?? null))
-                                                    poster="{{ $mediaItem['poster_url'] }}"
-                                                @endif
-                                                preload="metadata"
-                                                muted
-                                                playsinline
-                                                aria-hidden="true"
-                                            ></video>
+                                            @if (filled($mediaItem['poster_url'] ?? null))
+                                                <img
+                                                    data-role="conversation-gallery-video-poster"
+                                                    src="{{ $mediaItem['poster_url'] }}"
+                                                    alt="{{ $galleryTitle }}"
+                                                    loading="lazy"
+                                                >
+                                            @else
+                                                <span data-role="conversation-gallery-video-placeholder" class="ac-message-gallery__video-placeholder" aria-hidden="true">
+                                                    <x-filament::icon icon="heroicon-m-video-camera" />
+                                                </span>
+                                            @endif
                                             <span class="ac-message-gallery__play-indicator" aria-hidden="true">
                                                 <x-filament::icon icon="heroicon-m-play" />
                                             </span>

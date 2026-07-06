@@ -1653,7 +1653,7 @@ class FilamentDialogsResourceTest extends TestCase
             'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
             'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
             'local_path' => MessageAttachment::LOCAL_PATH_PREFIX.'/'.$message->id.'/mixed-photo.jpg',
-            'sort_order' => 0,
+            'sort_order' => 1,
         ]);
         $videoAttachment = MessageAttachment::factory()->create([
             'message_id' => $message->id,
@@ -1672,8 +1672,10 @@ class FilamentDialogsResourceTest extends TestCase
             'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
             'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
             'local_path' => MessageAttachment::LOCAL_PATH_PREFIX.'/'.$message->id.'/mixed-video.mp4',
-            'sort_order' => 1,
+            'sort_order' => 0,
         ]);
+        $imagePreviewUrl = route('admin.message-attachments.preview', ['attachment' => $imageAttachment->id]);
+        $videoPreviewUrl = route('admin.message-attachments.preview', ['attachment' => $videoAttachment->id]);
 
         $component = Livewire::actingAs($admin)
             ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
@@ -1682,8 +1684,9 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('data-media-viewer-type="image"', false)
             ->assertSee('data-media-viewer-type="video"', false)
             ->assertSee('ac-message-gallery__item--video', false)
-            ->assertSee(route('admin.message-attachments.preview', ['attachment' => $imageAttachment->id]), false)
-            ->assertSee(route('admin.message-attachments.preview', ['attachment' => $videoAttachment->id]), false)
+            ->assertSee('data-role="conversation-gallery-video-placeholder"', false)
+            ->assertSee($imagePreviewUrl, false)
+            ->assertSee($videoPreviewUrl, false)
             ->assertSee('🎉 Фото + видео + текст.')
             ->assertSee('жирный')
             ->assertDontSee('data-role="conversation-video-player"', false)
@@ -1694,10 +1697,20 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertDontSee('mixed-video.mp4');
 
         $html = $component->html();
+        $videoPreviewPosition = strpos($html, $videoPreviewUrl);
+        $imagePreviewPosition = strpos($html, $imagePreviewUrl);
+
+        $this->assertNotFalse($videoPreviewPosition);
+        $this->assertNotFalse($imagePreviewPosition);
 
         $this->assertLessThan(
             strpos($html, '🎉 Фото + видео + текст.'),
             strpos($html, 'data-role="conversation-media-gallery"'),
+        );
+        $this->assertLessThan($imagePreviewPosition, $videoPreviewPosition);
+        $this->assertDoesNotMatchRegularExpression(
+            '/<video\b(?=[^>]*src="'.preg_quote($videoPreviewUrl, '/').'")[^>]*>/s',
+            $html,
         );
     }
 
