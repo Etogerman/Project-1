@@ -6,6 +6,7 @@ use App\Data\Bots\IncomingBotMessage;
 use App\Models\Channel;
 use App\Services\Bots\BotIncomingMessageNormalizer;
 use App\Services\Messages\AbRichTextHtmlRenderer;
+use App\Services\Messages\AbRichTextNormalizer;
 use App\Services\TelegramAccount\NormalizeTelegramAccountRichTextAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -198,7 +199,7 @@ class RichTextConformanceTest extends TestCase
 
     public function test_invalid_mention_mark_is_dropped_pointwise_not_whole_rich_text(): void
     {
-        $normalized = app(\App\Services\Messages\AbRichTextNormalizer::class)->normalize([
+        $normalized = app(AbRichTextNormalizer::class)->normalize([
             'version' => 1,
             'plain_text' => 'ab',
             'runs' => [
@@ -382,13 +383,34 @@ class RichTextConformanceTest extends TestCase
         $this->assertStringContainsString($expectedFragment, $html);
     }
 
+    public function test_renderer_compacts_separator_newlines_around_block_marks(): void
+    {
+        $html = app(AbRichTextHtmlRenderer::class)->render([
+            'version' => 1,
+            'plain_text' => "5 текст\n6 текст\n7 текст\n8 текст\n\n⭐",
+            'runs' => [
+                ['text' => '5 текст', 'marks' => [['type' => 'strikethrough']]],
+                ['text' => "\n", 'marks' => []],
+                ['text' => '6 текст', 'marks' => [['type' => 'quote']]],
+                ['text' => "\n", 'marks' => []],
+                ['text' => '7 текст', 'marks' => [['type' => 'pre']]],
+                ['text' => "\n8 текст\n\n⭐", 'marks' => []],
+            ],
+        ]);
+
+        $this->assertSame(
+            '<s>5 текст</s><blockquote>6 текст</blockquote><pre><code>7 текст</code></pre>8 текст'."\n\n".'⭐',
+            $html,
+        );
+    }
+
     public function test_every_mark_priority_type_has_renderer_branch(): void
     {
         // Инвариант: нормализатор (MARK_PRIORITY) и рендерер (wrapHtml) ведут
         // параллельные списки типов. Новый тип, добавленный в MARK_PRIORITY без
         // рендер-ветки, молча срендерился бы default-веткой без обёртки.
         $reflection = new \ReflectionClassConstant(
-            \App\Services\Messages\AbRichTextNormalizer::class,
+            AbRichTextNormalizer::class,
             'MARK_PRIORITY'
         );
         $requiredData = [

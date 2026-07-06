@@ -7323,20 +7323,20 @@
     }
 
     .ac-message__text--html pre {
-        margin: 0.55rem 0 0;
+        margin: 0.18rem 0;
         overflow-x: auto;
-        border-radius: 12px;
+        border-radius: 8px;
         background: color-mix(in srgb, var(--ac-surface-strong) 78%, #0f172a 22%);
-        padding: 0.75rem 0.85rem;
+        padding: 0.38rem 0.55rem;
         white-space: pre-wrap;
     }
 
     .ac-message__text--html blockquote {
-        margin: 0.55rem 0;
+        margin: 0.18rem 0;
         border-left: 3px solid color-mix(in srgb, var(--ac-primary) 72%, transparent);
-        border-radius: 10px;
+        border-radius: 8px;
         background: color-mix(in srgb, var(--ac-primary) 11%, transparent);
-        padding: 0.38rem 0.62rem;
+        padding: 0.28rem 0.5rem;
     }
 
     .ac-message__text--html .ac-rich-text-heading {
