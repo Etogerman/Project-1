@@ -7550,6 +7550,43 @@
         background: transparent;
     }
 
+    .ac-message-gallery__video-placeholder {
+        display: inline-grid;
+        width: 100%;
+        height: 100%;
+        place-items: center;
+        background: color-mix(in srgb, var(--ac-surface-muted) 82%, #000 18%);
+        color: color-mix(in srgb, var(--ac-text-muted) 70%, #fff 30%);
+    }
+
+    .ac-message-gallery__video-placeholder svg {
+        width: 2.35rem;
+        height: 2.35rem;
+        opacity: 0.86;
+    }
+
+    .ac-message-gallery__play-indicator {
+        position: absolute;
+        inset: 50% auto auto 50%;
+        display: inline-grid;
+        width: 2.55rem;
+        height: 2.55rem;
+        transform: translate(-50%, -50%);
+        place-items: center;
+        border: 1px solid rgba(255, 255, 255, 0.44);
+        border-radius: 999px;
+        background: rgba(15, 23, 42, 0.64);
+        color: #fff;
+        pointer-events: none;
+        box-shadow: 0 14px 28px -18px rgba(15, 23, 42, 0.9);
+    }
+
+    .ac-message-gallery__play-indicator svg {
+        width: 1.24rem;
+        height: 1.24rem;
+        margin-left: 0.12rem;
+    }
+
     body.ac-media-viewer-open {
         overflow: hidden;
     }
