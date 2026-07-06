@@ -1602,6 +1602,118 @@ class FilamentDialogsResourceTest extends TestCase
         );
     }
 
+    public function test_dialog_view_renders_mixed_image_and_video_as_single_gallery(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->account()->create([
+            'name' => 'Telegram Account Mixed Gallery',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Mixed gallery contact',
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'tg-account-mixed-gallery-1',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'tg-account-mixed-gallery-chat-1',
+        ]);
+        $message = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => $dialog->external_chat_id,
+            'external_message_id' => 'tg-account-mixed-gallery-message-1',
+            'provider_event_key' => 'telegram_account:'.$channel->id.':'.$dialog->external_chat_id.':tg-account-mixed-gallery-message-1',
+            'text' => "🎉 Фото + видео + текст.\n\nжирный",
+            'received_at' => now(),
+        ]);
+        $imageAttachment = MessageAttachment::factory()->create([
+            'message_id' => $message->id,
+            'channel_id' => $channel->id,
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT,
+            'provider_event_key' => $message->provider_event_key,
+            'provider_attachment_key' => '0:image:file-1',
+            'media_kind' => MessageAttachment::MEDIA_KIND_IMAGE,
+            'original_filename' => 'mixed-photo.jpg',
+            'mime_type' => 'image/jpeg',
+            'extension' => 'jpg',
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+            'local_path' => MessageAttachment::LOCAL_PATH_PREFIX.'/'.$message->id.'/mixed-photo.jpg',
+            'sort_order' => 1,
+        ]);
+        $videoAttachment = MessageAttachment::factory()->create([
+            'message_id' => $message->id,
+            'channel_id' => $channel->id,
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT,
+            'provider_event_key' => $message->provider_event_key,
+            'provider_attachment_key' => '1:video:file-2',
+            'media_kind' => MessageAttachment::MEDIA_KIND_VIDEO,
+            'original_filename' => 'mixed-video.mp4',
+            'mime_type' => 'video/mp4',
+            'extension' => 'mp4',
+            'file_size_bytes' => 32768,
+            'provider_metadata' => [
+                'duration' => 2,
+            ],
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+            'local_path' => MessageAttachment::LOCAL_PATH_PREFIX.'/'.$message->id.'/mixed-video.mp4',
+            'sort_order' => 0,
+        ]);
+        $imagePreviewUrl = route('admin.message-attachments.preview', ['attachment' => $imageAttachment->id]);
+        $videoPreviewUrl = route('admin.message-attachments.preview', ['attachment' => $videoAttachment->id]);
+
+        $component = Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee('data-role="conversation-media-gallery"', false)
+            ->assertSee('data-count="2"', false)
+            ->assertSee('data-media-viewer-type="image"', false)
+            ->assertSee('data-media-viewer-type="video"', false)
+            ->assertSee('ac-message-gallery__item--video', false)
+            ->assertSee('data-role="conversation-gallery-video-placeholder"', false)
+            ->assertSee($imagePreviewUrl, false)
+            ->assertSee($videoPreviewUrl, false)
+            ->assertSee('🎉 Фото + видео + текст.')
+            ->assertSee('жирный')
+            ->assertDontSee('data-role="conversation-video-player"', false)
+            ->assertDontSee('data-role="conversation-attachment-video"', false)
+            ->assertDontSee('ac-message__attachments--inline-video', false)
+            ->assertDontSee('data-role="conversation-attachments"', false)
+            ->assertDontSee('mixed-photo.jpg')
+            ->assertDontSee('mixed-video.mp4');
+
+        $html = $component->html();
+        $videoPreviewPosition = strpos($html, $videoPreviewUrl);
+        $imagePreviewPosition = strpos($html, $imagePreviewUrl);
+
+        $this->assertNotFalse($videoPreviewPosition);
+        $this->assertNotFalse($imagePreviewPosition);
+
+        $this->assertLessThan(
+            strpos($html, '🎉 Фото + видео + текст.'),
+            strpos($html, 'data-role="conversation-media-gallery"'),
+        );
+        $this->assertLessThan($imagePreviewPosition, $videoPreviewPosition);
+        $this->assertDoesNotMatchRegularExpression(
+            '/<video\b(?=[^>]*src="'.preg_quote($videoPreviewUrl, '/').'")[^>]*>/s',
+            $html,
+        );
+    }
+
     public function test_dialog_view_renders_grouped_images_as_single_gallery_grid(): void
     {
         $admin = User::factory()->create([
