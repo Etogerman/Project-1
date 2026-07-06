@@ -235,9 +235,16 @@
                                                     loading="lazy"
                                                 >
                                             @else
-                                                <span data-role="conversation-gallery-video-placeholder" class="ac-message-gallery__video-placeholder" aria-hidden="true">
-                                                    <x-filament::icon icon="heroicon-m-video-camera" />
-                                                </span>
+                                                <video
+                                                    data-role="conversation-gallery-video-preview"
+                                                    class="ac-message-gallery__video-preview"
+                                                    data-src="{{ $mediaItem['preview_url'] }}#t=0.001"
+                                                    preload="none"
+                                                    muted
+                                                    playsinline
+                                                    aria-hidden="true"
+                                                    tabindex="-1"
+                                                ></video>
                                             @endif
                                             <span class="ac-message-gallery__play-indicator" aria-hidden="true">
                                                 <x-filament::icon icon="heroicon-m-play" />
@@ -652,6 +659,62 @@
             index: 0,
             previousActiveElement: null,
         };
+        const galleryVideoPreviewSelector = 'video[data-role="conversation-gallery-video-preview"][data-src]';
+
+        const loadGalleryVideoPreview = (video) => {
+            if (! (video instanceof HTMLVideoElement) || ! video.dataset.src) {
+                return;
+            }
+
+            video.src = video.dataset.src;
+            video.preload = 'metadata';
+            delete video.dataset.src;
+            video.load();
+        };
+
+        const galleryVideoPreviewObserver = 'IntersectionObserver' in window
+            ? new IntersectionObserver((entries, observer) => {
+                entries.forEach((entry) => {
+                    if (! entry.isIntersecting) {
+                        return;
+                    }
+
+                    observer.unobserve(entry.target);
+                    loadGalleryVideoPreview(entry.target);
+                });
+            }, { rootMargin: '160px' })
+            : null;
+
+        const observeGalleryVideoPreviews = (root = document) => {
+            root.querySelectorAll?.(galleryVideoPreviewSelector).forEach((video) => {
+                if (galleryVideoPreviewObserver) {
+                    galleryVideoPreviewObserver.observe(video);
+                } else {
+                    loadGalleryVideoPreview(video);
+                }
+            });
+        };
+
+        observeGalleryVideoPreviews();
+
+        if ('MutationObserver' in window) {
+            new MutationObserver((mutations) => {
+                mutations.forEach((mutation) => {
+                    mutation.addedNodes.forEach((node) => {
+                        if (! (node instanceof Element)) {
+                            return;
+                        }
+
+                        if (node.matches(galleryVideoPreviewSelector)) {
+                            observeGalleryVideoPreviews(node.parentElement ?? document);
+                            return;
+                        }
+
+                        observeGalleryVideoPreviews(node);
+                    });
+                });
+            }).observe(document.body, { childList: true, subtree: true });
+        }
 
         const createViewer = () => {
             let viewer = document.querySelector('[data-role="media-viewer"]');
