@@ -1685,12 +1685,12 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('data-media-viewer-type="video"', false)
             ->assertSee('ac-message-gallery__item--video', false)
             ->assertSee('data-role="conversation-gallery-video-preview"', false)
-            ->assertSee('preload="metadata"', false)
+            ->assertSee('data-src="'.$videoPreviewUrl.'#t=0.001"', false)
+            ->assertSee('preload="none"', false)
             ->assertSee('muted', false)
             ->assertSee('playsinline', false)
             ->assertSee($imagePreviewUrl, false)
             ->assertSee($videoPreviewUrl, false)
-            ->assertSee($videoPreviewUrl.'#t=0.001', false)
             ->assertSee('🎉 Фото + видео + текст.')
             ->assertSee('жирный')
             ->assertDontSee('data-role="conversation-video-player"', false)
@@ -1702,6 +1702,11 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertDontSee('mixed-video.mp4');
 
         $html = $component->html();
+        $this->assertDoesNotMatchRegularExpression(
+            '/<video(?=[^>]*data-role="conversation-gallery-video-preview")[^>]*\ssrc="/',
+            $html,
+        );
+
         $videoPreviewPosition = strpos($html, $videoPreviewUrl);
         $imagePreviewPosition = strpos($html, $imagePreviewUrl);
 
