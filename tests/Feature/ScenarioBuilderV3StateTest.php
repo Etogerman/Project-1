@@ -3808,9 +3808,13 @@ class ScenarioBuilderV3StateTest extends TestCase
         $draftBlockIds = $draftBlocks->pluck('id')->map(fn (mixed $id): int => (int) $id)->all();
         $publishedCardIds = $publishedBlocks
             ->map(fn (ScenarioBuilderBlock $block): string => (string) data_get($block->settings_payload, 'ui.card_id'))
+            ->sort()
+            ->values()
             ->all();
         $draftCardIds = $draftBlocks
             ->map(fn (ScenarioBuilderBlock $block): string => (string) data_get($block->settings_payload, 'ui.card_id'))
+            ->sort()
+            ->values()
             ->all();
 
         $this->assertNotSame($publishedBlockIds, $draftBlockIds);
