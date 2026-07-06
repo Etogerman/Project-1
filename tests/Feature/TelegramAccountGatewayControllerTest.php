@@ -2070,6 +2070,75 @@ class TelegramAccountGatewayControllerTest extends TestCase
         $this->assertSame('TDLib download timed out.', $attachment->safe_error_message);
     }
 
+    public function test_gateway_claim_prioritizes_clean_pending_media_before_retry_tail(): void
+    {
+        Queue::fake();
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel();
+        $retryTail = $this->createPendingTelegramAccountMediaAttachment(
+            $channel,
+            externalChatId: '700054',
+            externalMessageId: '900054',
+            media: [
+                [
+                    'type' => 'photo',
+                    'telegram_file_id' => 'tdlib-photo-retry-tail',
+                    'mime_type' => 'image/jpeg',
+                    'file_size_bytes' => 2048,
+                ],
+            ],
+        );
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(route('internal.telegram-account.media-downloads.claim', ['channel' => $channel]))
+            ->assertOk()
+            ->assertJsonPath('has_download', true)
+            ->assertJsonPath('media_download.attachment_id', $retryTail->id);
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(route('internal.telegram-account.media-downloads.result', [
+            'channel' => $channel,
+            'attachment' => $retryTail,
+        ]), [
+            'status' => 'failed',
+            'error_code' => 'tdlib_timeout',
+            'error_message' => 'TDLib download timed out.',
+            'retryable' => true,
+        ])->assertOk()
+            ->assertJsonPath('download_status', MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD);
+
+        $cleanPending = $this->createPendingTelegramAccountMediaAttachment(
+            $channel,
+            externalChatId: '700055',
+            externalMessageId: '900055',
+            media: [
+                [
+                    'type' => 'photo',
+                    'telegram_file_id' => 'tdlib-photo-clean',
+                    'mime_type' => 'image/jpeg',
+                    'file_size_bytes' => 2048,
+                ],
+            ],
+        );
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(route('internal.telegram-account.media-downloads.claim', ['channel' => $channel]))
+            ->assertOk()
+            ->assertJsonPath('has_download', true)
+            ->assertJsonPath('media_download.attachment_id', $cleanPending->id);
+
+        $retryTail->refresh();
+        $cleanPending->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD, $retryTail->download_status);
+        $this->assertSame('tdlib_timeout', $retryTail->safe_error_code);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING, $cleanPending->download_status);
+    }
+
     public function test_gateway_stores_non_recoverable_media_download_failure(): void
     {
         Queue::fake();
