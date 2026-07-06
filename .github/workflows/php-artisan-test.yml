@@ -39,12 +39,115 @@ jobs:
 
           node .github/scripts/ci-change-scope.mjs /tmp/changed-files.txt
 
-  laravel-suite:
-    name: Laravel suite
-    needs: determine-ci-scope
+  frontend-build:
+    name: frontend-build
+    needs:
+      - determine-ci-scope
+    if: needs.determine-ci-scope.outputs.run_php_tests == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build frontend assets
+        run: npm run build
+
+      - name: Upload frontend build
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build
+          path: public/build
+          if-no-files-found: error
+
+  phpunit-shard-coverage:
+    name: phpunit-shard-coverage
+    needs:
+      - determine-ci-scope
+    if: needs.determine-ci-scope.outputs.run_php_tests == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          coverage: none
+          tools: composer:v2
+          extensions: mbstring, dom, fileinfo, pgsql, pdo_pgsql
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --prefer-dist --optimize-autoloader
+
+      - name: Verify PHPUnit shard coverage
+        env:
+          CI_TEST_SHARD_TOTAL: 4
+        run: |
+          set -euo pipefail
+
+          tmpdir="$(mktemp -d)"
+          trap 'rm -rf "$tmpdir"' EXIT
+
+          CI_TEST_SHARD_INDEX=0 \
+          CI_TEST_SHARD_TOTAL=1 \
+          CI_TEST_SHARD_DRY_RUN=1 \
+            bash scripts/ci-run-phpunit-shard.sh > "$tmpdir/all.raw"
+          sed '/^Running PHPUnit shard /d' "$tmpdir/all.raw" > "$tmpdir/all.unsorted"
+          sort "$tmpdir/all.unsorted" > "$tmpdir/all"
+
+          for shard in 0 1 2 3; do
+            CI_TEST_SHARD_INDEX="$shard" \
+            CI_TEST_SHARD_TOTAL="$CI_TEST_SHARD_TOTAL" \
+            CI_TEST_SHARD_DRY_RUN=1 \
+              bash scripts/ci-run-phpunit-shard.sh > "$tmpdir/shard-$shard.raw"
+            sed '/^Running PHPUnit shard /d' "$tmpdir/shard-$shard.raw" >> "$tmpdir/combined"
+          done
+
+          sort "$tmpdir/combined" > "$tmpdir/combined.sorted"
+          sort "$tmpdir/combined" | uniq -d > "$tmpdir/duplicates"
+          comm -23 "$tmpdir/all" "$tmpdir/combined.sorted" > "$tmpdir/missing"
+          comm -13 "$tmpdir/all" "$tmpdir/combined.sorted" > "$tmpdir/extra"
+
+          if [ -s "$tmpdir/missing" ] || [ -s "$tmpdir/extra" ] || [ -s "$tmpdir/duplicates" ]; then
+            echo "PHPUnit shard coverage mismatch" >&2
+            echo "Missing files:" >&2
+            cat "$tmpdir/missing" >&2
+            echo "Extra files:" >&2
+            cat "$tmpdir/extra" >&2
+            echo "Duplicate files:" >&2
+            cat "$tmpdir/duplicates" >&2
+            exit 1
+          fi
+
+          echo "PHPUnit shard coverage ok: $(wc -l < "$tmpdir/all") files"
+
+  phpunit-shards:
+    name: phpunit-shard-${{ matrix.shard }}
+    needs:
+      - determine-ci-scope
+      - frontend-build
     if: needs.determine-ci-scope.outputs.run_php_tests == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+        total: [4]
 
     services:
       postgres:
@@ -92,29 +195,28 @@ jobs:
           tools: composer:v2
           extensions: mbstring, dom, fileinfo, pgsql, pdo_pgsql
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: '22'
-          cache: npm
-
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist --optimize-autoloader
 
-      - name: Install npm dependencies
-        run: npm ci
-
-      - name: Build frontend assets
-        run: npm run build
+      - name: Download frontend build
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-build
+          path: public/build
 
       - name: Run CI test suite
-        run: composer test:ci
+        env:
+          CI_TEST_SHARD_INDEX: ${{ matrix.shard }}
+          CI_TEST_SHARD_TOTAL: ${{ matrix.total }}
+        run: bash scripts/ci-run-phpunit-shard.sh
 
   php-artisan-test:
     name: php-artisan-test
     needs:
       - determine-ci-scope
-      - laravel-suite
+      - frontend-build
+      - phpunit-shard-coverage
+      - phpunit-shards
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -123,7 +225,9 @@ jobs:
       - name: Complete required check
         env:
           SCOPE_RESULT: ${{ needs.determine-ci-scope.result }}
-          LARAVEL_RESULT: ${{ needs.laravel-suite.result }}
+          FRONTEND_RESULT: ${{ needs.frontend-build.result }}
+          COVERAGE_RESULT: ${{ needs.phpunit-shard-coverage.result }}
+          SHARDS_RESULT: ${{ needs.phpunit-shards.result }}
           RUN_PHP_TESTS: ${{ needs.determine-ci-scope.outputs.run_php_tests }}
           SCOPE: ${{ needs.determine-ci-scope.outputs.scope }}
           REASON: ${{ needs.determine-ci-scope.outputs.reason }}
@@ -134,12 +238,22 @@ jobs:
           fi
 
           if [ "$RUN_PHP_TESTS" = "true" ]; then
-            if [ "$LARAVEL_RESULT" != "success" ]; then
-              echo "Laravel suite result: $LARAVEL_RESULT"
+            if [ "$FRONTEND_RESULT" != "success" ]; then
+              echo "frontend-build result: $FRONTEND_RESULT"
               exit 1
             fi
 
-            echo "Laravel suite passed."
+            if [ "$COVERAGE_RESULT" != "success" ]; then
+              echo "phpunit-shard-coverage result: $COVERAGE_RESULT"
+              exit 1
+            fi
+
+            if [ "$SHARDS_RESULT" != "success" ]; then
+              echo "phpunit-shards result: $SHARDS_RESULT"
+              exit 1
+            fi
+
+            echo "Laravel shard suite passed."
             exit 0
           fi
 

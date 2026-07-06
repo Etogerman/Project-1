@@ -3,13 +3,21 @@
 namespace App\Services\Bots;
 
 use App\Data\Bots\IncomingBotMessage;
+use App\Data\Bots\IncomingBotMessageEdit;
+use App\Data\Bots\IncomingBotMessageRemoval;
 use App\Models\Channel;
+use App\Models\MessageAttachment;
+use App\Services\TelegramAccount\NormalizeTelegramAccountRichTextAction;
 use Illuminate\Support\Carbon;
 use InvalidArgumentException;
 use Throwable;
 
 class BotIncomingMessageNormalizer
 {
+    public function __construct(
+        private readonly NormalizeTelegramAccountRichTextAction $normalizeTelegramRichTextAction,
+    ) {}
+
     /**
      * @param  array<string, mixed>  $payload
      */
@@ -19,6 +27,29 @@ class BotIncomingMessageNormalizer
             Channel::PLATFORM_TELEGRAM => $this->normalizeTelegram($channel, $payload),
             Channel::PLATFORM_MAX => $this->normalizeMax($channel, $payload),
             default => throw new InvalidArgumentException("Unsupported bot platform [{$channel->platform}]."),
+        };
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    public function normalizeEdit(Channel $channel, array $payload): ?IncomingBotMessageEdit
+    {
+        return match ($channel->platform) {
+            Channel::PLATFORM_TELEGRAM => $this->normalizeTelegramEdit($channel, $payload),
+            Channel::PLATFORM_MAX => $this->normalizeMaxEdit($channel, $payload),
+            default => null,
+        };
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    public function normalizeRemoval(Channel $channel, array $payload): ?IncomingBotMessageRemoval
+    {
+        return match ($channel->platform) {
+            Channel::PLATFORM_MAX => $this->normalizeMaxRemoval($channel, $payload),
+            default => null,
         };
     }
 
@@ -56,7 +87,8 @@ class BotIncomingMessageNormalizer
             return null;
         }
 
-        $normalizedText = $this->normalizeText(data_get($message, 'text'));
+        [$normalizedText, $richText] = $this->resolveTelegramTextAndRichText($message);
+        $providerGroupKey = $this->normalizeProviderGroupKey(data_get($message, 'media_group_id'));
 
         return new IncomingBotMessage(
             platform: $channel->platform,
@@ -78,7 +110,798 @@ class BotIncomingMessageNormalizer
                 data_get($message, 'date'),
             ]),
             messageParameter: $this->resolveTelegramStartMessageParameter($normalizedText),
+            media: $this->normalizeTelegramMedia($message),
+            providerGroupKey: $providerGroupKey,
+            richText: $richText,
         );
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected function normalizeTelegramEdit(Channel $channel, array $payload): ?IncomingBotMessageEdit
+    {
+        $message = $payload['edited_message'] ?? null;
+
+        if (! is_array($message) || data_get($message, 'from.is_bot') === true) {
+            return null;
+        }
+
+        if (data_get($message, 'chat.type') !== 'private') {
+            return null;
+        }
+
+        $chatId = $this->normalizeExternalId(data_get($message, 'chat.id'));
+        $userId = $this->normalizeExternalId(data_get($message, 'from.id'));
+        $externalMessageId = $this->normalizeExternalId(data_get($message, 'message_id'));
+
+        if (! filled($chatId) || ! filled($userId) || ! filled($externalMessageId)) {
+            return null;
+        }
+
+        $hasTextContent = array_key_exists('text', $message) || array_key_exists('caption', $message);
+        [$normalizedText, $richText] = $this->resolveTelegramTextAndRichText($message);
+
+        return new IncomingBotMessageEdit(
+            platform: $channel->platform,
+            channelId: $channel->id,
+            externalChatId: $chatId,
+            externalUserId: $userId,
+            providerEventKey: $this->normalizeExternalId($payload['update_id'] ?? null),
+            externalMessageId: $externalMessageId,
+            externalUsername: $this->normalizeUsername(data_get($message, 'from.username')),
+            contactName: $this->resolvePersonName(data_get($message, 'from')),
+            text: $normalizedText,
+            richText: $richText,
+            hasTextContent: $hasTextContent,
+            rawPayload: $payload,
+            editedAt: $this->resolveReceivedAt([
+                data_get($message, 'edit_date'),
+                data_get($message, 'date'),
+            ]),
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $message
+     * @return array{0: ?string, 1: array<string, mixed>|null}
+     */
+    protected function resolveTelegramTextAndRichText(array $message): array
+    {
+        if (array_key_exists('text', $message)) {
+            $plainText = $this->normalizeText(data_get($message, 'text'));
+
+            return [
+                $plainText,
+                $this->normalizeTelegramRichText($plainText, data_get($message, 'entities')),
+            ];
+        }
+
+        if (array_key_exists('caption', $message)) {
+            $plainText = $this->normalizeText(data_get($message, 'caption'));
+
+            return [
+                $plainText,
+                $this->normalizeTelegramRichText($plainText, data_get($message, 'caption_entities')),
+            ];
+        }
+
+        return [
+            $this->resolveTelegramLocationDisplayText($message)
+                ?? $this->resolveTelegramSpecialDisplayText($message),
+            null,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    protected function normalizeTelegramRichText(?string $plainText, mixed $entities): ?array
+    {
+        if (! is_string($plainText) || ! is_array($entities)) {
+            return null;
+        }
+
+        return $this->normalizeTelegramRichTextAction->handle($plainText, [
+            'text' => $plainText,
+            'entities' => $entities,
+        ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $message
+     * @return list<array<string, mixed>>
+     */
+    protected function normalizeTelegramMedia(array $message): array
+    {
+        return [
+            ...$this->normalizeTelegramPhotoMedia($message),
+            ...$this->normalizeTelegramAnimationMedia($message),
+            ...$this->normalizeTelegramStickerMedia($message),
+            ...$this->normalizeTelegramDocumentMedia($message),
+            ...$this->normalizeTelegramVideoNoteMedia($message),
+            ...$this->normalizeTelegramVideoMedia($message),
+            ...$this->normalizeTelegramAudioMedia($message),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $message
+     * @return list<array<string, mixed>>
+     */
+    protected function normalizeTelegramPhotoMedia(array $message): array
+    {
+        $photos = data_get($message, 'photo');
+
+        if (! is_array($photos) || $photos === []) {
+            return [];
+        }
+
+        $bestPhoto = null;
+        $bestScore = -1;
+
+        foreach ($photos as $photo) {
+            if (! is_array($photo)) {
+                continue;
+            }
+
+            $fileId = $this->normalizeExternalId(data_get($photo, 'file_id'));
+            $fileUniqueId = $this->normalizeExternalId(data_get($photo, 'file_unique_id'));
+
+            if (! filled($fileId) || ! filled($fileUniqueId)) {
+                continue;
+            }
+
+            $fileSize = $this->normalizeNonNegativeInteger(data_get($photo, 'file_size'));
+            $width = $this->normalizeNonNegativeInteger(data_get($photo, 'width'));
+            $height = $this->normalizeNonNegativeInteger(data_get($photo, 'height'));
+            $score = $fileSize ?? (($width ?? 0) * ($height ?? 0));
+
+            if ($score > $bestScore) {
+                $bestScore = $score;
+                $bestPhoto = [
+                    'file_id' => $fileId,
+                    'file_unique_id' => $fileUniqueId,
+                    'file_size_bytes' => $fileSize,
+                    'width' => $width,
+                    'height' => $height,
+                ];
+            }
+        }
+
+        if ($bestPhoto === null) {
+            return [];
+        }
+
+        $providerGroupKey = $this->normalizeProviderGroupKey(data_get($message, 'media_group_id'));
+
+        return [array_filter([
+            'media_kind' => 'image',
+            'type' => 'photo',
+            'provider_attachment_key' => $bestPhoto['file_unique_id'],
+            'provider_file_id' => $bestPhoto['file_id'],
+            'provider_file_unique_id' => $bestPhoto['file_unique_id'],
+            'file_size_bytes' => $bestPhoto['file_size_bytes'],
+            'width' => $bestPhoto['width'],
+            'height' => $bestPhoto['height'],
+            'media_group_id' => $providerGroupKey,
+            'raw_payload_excerpt' => array_filter([
+                'type' => 'photo',
+                'file_unique_id' => $bestPhoto['file_unique_id'],
+                'file_size_bytes' => $bestPhoto['file_size_bytes'],
+                'width' => $bestPhoto['width'],
+                'height' => $bestPhoto['height'],
+            ], static fn (mixed $value): bool => $value !== null),
+        ], static fn (mixed $value): bool => $value !== null)];
+    }
+
+    /**
+     * @param  array<string, mixed>  $message
+     * @return list<array<string, mixed>>
+     */
+    protected function normalizeTelegramAnimationMedia(array $message): array
+    {
+        $payload = data_get($message, 'animation');
+
+        if (! is_array($payload)) {
+            return [];
+        }
+
+        $fileId = $this->normalizeExternalId(data_get($payload, 'file_id'));
+        $fileUniqueId = $this->normalizeExternalId(data_get($payload, 'file_unique_id'));
+
+        if (! filled($fileId) || ! filled($fileUniqueId)) {
+            return [];
+        }
+
+        $mimeType = $this->normalizeMimeType(data_get($payload, 'mime_type'));
+        $fileName = $this->normalizeText(data_get($payload, 'file_name'));
+        $duration = $this->normalizeNonNegativeInteger(data_get($payload, 'duration'));
+        $fileSize = $this->normalizeNonNegativeInteger(data_get($payload, 'file_size'));
+        $width = $this->normalizeNonNegativeInteger(data_get($payload, 'width'));
+        $height = $this->normalizeNonNegativeInteger(data_get($payload, 'height'));
+        $providerGroupKey = $this->normalizeProviderGroupKey(data_get($message, 'media_group_id'));
+
+        return [array_filter([
+            'media_kind' => MessageAttachment::MEDIA_KIND_ANIMATION,
+            'type' => 'animation',
+            'provider_attachment_key' => $fileUniqueId,
+            'provider_file_id' => $fileId,
+            'provider_file_unique_id' => $fileUniqueId,
+            'file_name' => $fileName,
+            'mime_type' => $mimeType,
+            'extension' => $this->extensionFromTelegramMimeType($mimeType)
+                ?? MessageAttachment::sanitizeExtension(pathinfo((string) $fileName, PATHINFO_EXTENSION)),
+            'file_size_bytes' => $fileSize,
+            'duration' => $duration,
+            'width' => $width,
+            'height' => $height,
+            'media_group_id' => $providerGroupKey,
+            'raw_payload_excerpt' => array_filter([
+                'type' => 'animation',
+                'media_kind' => MessageAttachment::MEDIA_KIND_ANIMATION,
+                'file_unique_id' => $fileUniqueId,
+                'file_size_bytes' => $fileSize,
+                'duration' => $duration,
+                'mime_type' => $mimeType,
+                'width' => $width,
+                'height' => $height,
+            ], static fn (mixed $value): bool => $value !== null && $value !== ''),
+        ], static fn (mixed $value): bool => $value !== null && $value !== '')];
+    }
+
+    /**
+     * @param  array<string, mixed>  $message
+     * @return list<array<string, mixed>>
+     */
+    protected function normalizeTelegramStickerMedia(array $message): array
+    {
+        $payload = data_get($message, 'sticker');
+
+        if (! is_array($payload)) {
+            return [];
+        }
+
+        $fileId = $this->normalizeExternalId(data_get($payload, 'file_id'));
+        $fileUniqueId = $this->normalizeExternalId(data_get($payload, 'file_unique_id'));
+
+        if (! filled($fileId) || ! filled($fileUniqueId)) {
+            return [];
+        }
+
+        $mimeType = $this->normalizeMimeType(data_get($payload, 'mime_type'));
+        $fileSize = $this->normalizeNonNegativeInteger(data_get($payload, 'file_size'));
+        $width = $this->normalizeNonNegativeInteger(data_get($payload, 'width'));
+        $height = $this->normalizeNonNegativeInteger(data_get($payload, 'height'));
+        $isAnimated = data_get($payload, 'is_animated') === true;
+        $isVideo = data_get($payload, 'is_video') === true;
+        $extension = $this->extensionFromTelegramMimeType($mimeType)
+            ?? ($isVideo ? 'webm' : null)
+            ?? ($isAnimated ? 'tgs' : null)
+            ?? 'webp';
+
+        return [array_filter([
+            'media_kind' => MessageAttachment::MEDIA_KIND_STICKER,
+            'type' => 'sticker',
+            'provider_attachment_key' => $fileUniqueId,
+            'provider_file_id' => $fileId,
+            'provider_file_unique_id' => $fileUniqueId,
+            'mime_type' => $mimeType,
+            'extension' => $extension,
+            'file_size_bytes' => $fileSize,
+            'width' => $width,
+            'height' => $height,
+            'raw_payload_excerpt' => array_filter([
+                'type' => 'sticker',
+                'media_kind' => MessageAttachment::MEDIA_KIND_STICKER,
+                'emoji' => $this->normalizeText(data_get($payload, 'emoji')),
+                'file_unique_id' => $fileUniqueId,
+                'file_size_bytes' => $fileSize,
+                'mime_type' => $mimeType,
+                'width' => $width,
+                'height' => $height,
+                'is_animated' => $isAnimated,
+                'is_video' => $isVideo,
+                'thumbnail_file_id' => $this->normalizeExternalId(
+                    data_get($payload, 'thumbnail.file_id')
+                        ?? data_get($payload, 'thumb.file_id')
+                ),
+                'thumbnail_file_unique_id' => $this->normalizeExternalId(
+                    data_get($payload, 'thumbnail.file_unique_id')
+                        ?? data_get($payload, 'thumb.file_unique_id')
+                ),
+                'thumbnail_width' => $this->normalizeNonNegativeInteger(
+                    data_get($payload, 'thumbnail.width')
+                        ?? data_get($payload, 'thumb.width')
+                ),
+                'thumbnail_height' => $this->normalizeNonNegativeInteger(
+                    data_get($payload, 'thumbnail.height')
+                        ?? data_get($payload, 'thumb.height')
+                ),
+            ], static fn (mixed $value): bool => $value !== null && $value !== ''),
+        ], static fn (mixed $value): bool => $value !== null && $value !== '')];
+    }
+
+    /**
+     * @param  array<string, mixed>  $message
+     * @return list<array<string, mixed>>
+     */
+    protected function normalizeTelegramDocumentMedia(array $message): array
+    {
+        if (is_array(data_get($message, 'animation'))) {
+            return [];
+        }
+
+        $payload = data_get($message, 'document');
+
+        if (! is_array($payload)) {
+            return [];
+        }
+
+        $fileId = $this->normalizeExternalId(data_get($payload, 'file_id'));
+        $fileUniqueId = $this->normalizeExternalId(data_get($payload, 'file_unique_id'));
+
+        if (! filled($fileId) || ! filled($fileUniqueId)) {
+            return [];
+        }
+
+        $mimeType = $this->normalizeMimeType(data_get($payload, 'mime_type'));
+        $fileName = $this->normalizeText(data_get($payload, 'file_name'));
+        $fileSize = $this->normalizeNonNegativeInteger(data_get($payload, 'file_size'));
+        $providerGroupKey = $this->normalizeProviderGroupKey(data_get($message, 'media_group_id'));
+
+        return [array_filter([
+            'media_kind' => 'document',
+            'type' => 'document',
+            'provider_attachment_key' => $fileUniqueId,
+            'provider_file_id' => $fileId,
+            'provider_file_unique_id' => $fileUniqueId,
+            'file_name' => $fileName,
+            'mime_type' => $mimeType,
+            'extension' => $this->extensionFromTelegramMimeType($mimeType)
+                ?? MessageAttachment::sanitizeExtension(pathinfo((string) $fileName, PATHINFO_EXTENSION)),
+            'file_size_bytes' => $fileSize,
+            'media_group_id' => $providerGroupKey,
+            'raw_payload_excerpt' => array_filter([
+                'type' => 'document',
+                'media_kind' => 'document',
+                'file_unique_id' => $fileUniqueId,
+                'file_size_bytes' => $fileSize,
+                'mime_type' => $mimeType,
+            ], static fn (mixed $value): bool => $value !== null && $value !== ''),
+        ], static fn (mixed $value): bool => $value !== null && $value !== '')];
+    }
+
+    /**
+     * @param  array<string, mixed>  $message
+     * @return list<array<string, mixed>>
+     */
+    protected function normalizeTelegramVideoMedia(array $message): array
+    {
+        $payload = data_get($message, 'video');
+
+        if (! is_array($payload)) {
+            return [];
+        }
+
+        $fileId = $this->normalizeExternalId(data_get($payload, 'file_id'));
+        $fileUniqueId = $this->normalizeExternalId(data_get($payload, 'file_unique_id'));
+
+        if (! filled($fileId) || ! filled($fileUniqueId)) {
+            return [];
+        }
+
+        $mimeType = $this->normalizeMimeType(data_get($payload, 'mime_type'));
+        $fileName = $this->normalizeText(data_get($payload, 'file_name'));
+        $duration = $this->normalizeNonNegativeInteger(data_get($payload, 'duration'));
+        $fileSize = $this->normalizeNonNegativeInteger(data_get($payload, 'file_size'));
+        $width = $this->normalizeNonNegativeInteger(data_get($payload, 'width'));
+        $height = $this->normalizeNonNegativeInteger(data_get($payload, 'height'));
+        $providerGroupKey = $this->normalizeProviderGroupKey(data_get($message, 'media_group_id'));
+
+        return [array_filter([
+            'media_kind' => 'video',
+            'type' => 'video',
+            'provider_attachment_key' => $fileUniqueId,
+            'provider_file_id' => $fileId,
+            'provider_file_unique_id' => $fileUniqueId,
+            'file_name' => $fileName,
+            'mime_type' => $mimeType,
+            'extension' => $this->extensionFromTelegramMimeType($mimeType)
+                ?? MessageAttachment::sanitizeExtension(pathinfo((string) $fileName, PATHINFO_EXTENSION)),
+            'file_size_bytes' => $fileSize,
+            'duration' => $duration,
+            'width' => $width,
+            'height' => $height,
+            'media_group_id' => $providerGroupKey,
+            'raw_payload_excerpt' => array_filter([
+                'type' => 'video',
+                'media_kind' => 'video',
+                'file_unique_id' => $fileUniqueId,
+                'file_size_bytes' => $fileSize,
+                'duration' => $duration,
+                'mime_type' => $mimeType,
+                'width' => $width,
+                'height' => $height,
+            ], static fn (mixed $value): bool => $value !== null && $value !== ''),
+        ], static fn (mixed $value): bool => $value !== null && $value !== '')];
+    }
+
+    /**
+     * @param  array<string, mixed>  $message
+     * @return list<array<string, mixed>>
+     */
+    protected function normalizeTelegramVideoNoteMedia(array $message): array
+    {
+        $payload = data_get($message, 'video_note');
+
+        if (! is_array($payload)) {
+            return [];
+        }
+
+        $fileId = $this->normalizeExternalId(data_get($payload, 'file_id'));
+        $fileUniqueId = $this->normalizeExternalId(data_get($payload, 'file_unique_id'));
+
+        if (! filled($fileId) || ! filled($fileUniqueId)) {
+            return [];
+        }
+
+        $duration = $this->normalizeNonNegativeInteger(data_get($payload, 'duration'));
+        $length = $this->normalizeNonNegativeInteger(data_get($payload, 'length'));
+        $fileSize = $this->normalizeNonNegativeInteger(data_get($payload, 'file_size'));
+
+        return [array_filter([
+            'media_kind' => MessageAttachment::MEDIA_KIND_VIDEO_NOTE,
+            'type' => 'video_note',
+            'provider_attachment_key' => $fileUniqueId,
+            'provider_file_id' => $fileId,
+            'provider_file_unique_id' => $fileUniqueId,
+            'extension' => 'mp4',
+            'file_size_bytes' => $fileSize,
+            'duration' => $duration,
+            'width' => $length,
+            'height' => $length,
+            'is_video_note' => true,
+            'raw_payload_excerpt' => array_filter([
+                'type' => 'video_note',
+                'media_kind' => MessageAttachment::MEDIA_KIND_VIDEO_NOTE,
+                'file_unique_id' => $fileUniqueId,
+                'file_size_bytes' => $fileSize,
+                'duration' => $duration,
+                'width' => $length,
+                'height' => $length,
+                'is_video_note' => true,
+            ], static fn (mixed $value): bool => $value !== null && $value !== ''),
+        ], static fn (mixed $value): bool => $value !== null && $value !== '')];
+    }
+
+    /**
+     * @param  array<string, mixed>  $message
+     * @return list<array<string, mixed>>
+     */
+    protected function normalizeTelegramAudioMedia(array $message): array
+    {
+        foreach ([
+            'voice' => 'voice',
+            'audio' => 'audio',
+        ] as $payloadKey => $mediaKind) {
+            $payload = data_get($message, $payloadKey);
+
+            if (! is_array($payload)) {
+                continue;
+            }
+
+            $fileId = $this->normalizeExternalId(data_get($payload, 'file_id'));
+            $fileUniqueId = $this->normalizeExternalId(data_get($payload, 'file_unique_id'));
+
+            if (! filled($fileId) || ! filled($fileUniqueId)) {
+                continue;
+            }
+
+            $mimeType = $this->normalizeMimeType(data_get($payload, 'mime_type'));
+            $fileName = $this->normalizeText(data_get($payload, 'file_name'));
+            $duration = $this->normalizeNonNegativeInteger(data_get($payload, 'duration'));
+            $fileSize = $this->normalizeNonNegativeInteger(data_get($payload, 'file_size'));
+
+            return [array_filter([
+                'media_kind' => $mediaKind,
+                'type' => $payloadKey,
+                'provider_attachment_key' => $fileUniqueId,
+                'provider_file_id' => $fileId,
+                'provider_file_unique_id' => $fileUniqueId,
+                'file_name' => $fileName,
+                'mime_type' => $mimeType,
+                'extension' => $this->extensionFromTelegramMimeType($mimeType)
+                    ?? MessageAttachment::sanitizeExtension(pathinfo((string) $fileName, PATHINFO_EXTENSION)),
+                'file_size_bytes' => $fileSize,
+                'duration' => $duration,
+                'raw_payload_excerpt' => array_filter([
+                    'type' => $payloadKey,
+                    'media_kind' => $mediaKind,
+                    'file_unique_id' => $fileUniqueId,
+                    'file_size_bytes' => $fileSize,
+                    'duration' => $duration,
+                    'mime_type' => $mimeType,
+                ], static fn (mixed $value): bool => $value !== null && $value !== ''),
+            ], static fn (mixed $value): bool => $value !== null && $value !== '')];
+        }
+
+        return [];
+    }
+
+    protected function normalizeProviderGroupKey(mixed $value): ?string
+    {
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $normalized = trim((string) $value);
+
+        return $normalized !== '' && $normalized !== '0' ? $normalized : null;
+    }
+
+    protected function extensionFromTelegramMimeType(?string $mimeType): ?string
+    {
+        return match ($mimeType) {
+            'application/json' => 'json',
+            'application/msword' => 'doc',
+            'application/pdf' => 'pdf',
+            'application/vnd.ms-excel' => 'xls',
+            'application/vnd.ms-powerpoint' => 'ppt',
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation' => 'pptx',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' => 'xlsx',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document' => 'docx',
+            'application/zip' => 'zip',
+            'application/x-tgsticker' => 'tgs',
+            'audio/ogg' => 'ogg',
+            'audio/mpeg' => 'mp3',
+            'audio/mp4' => 'm4a',
+            'audio/aac' => 'aac',
+            'audio/wav', 'audio/x-wav' => 'wav',
+            'audio/webm' => 'webm',
+            'text/csv' => 'csv',
+            'text/plain' => 'txt',
+            'video/mp4' => 'mp4',
+            'video/ogg' => 'ogv',
+            'video/quicktime' => 'mov',
+            'video/webm' => 'webm',
+            default => null,
+        };
+    }
+
+    /**
+     * @param  array<string, mixed>  $message
+     */
+    protected function resolveTelegramLocationDisplayText(array $message): ?string
+    {
+        $venue = data_get($message, 'venue');
+
+        if (is_array($venue)) {
+            $title = $this->normalizeText(data_get($venue, 'title'));
+            $address = $this->normalizeText(data_get($venue, 'address'));
+            $location = $this->formatTelegramLocationCoordinates(data_get($venue, 'location'));
+            $parts = array_values(array_filter([
+                $title !== null ? 'Локация: '.$title : 'Локация',
+                $address,
+                $location,
+            ], static fn (?string $value): bool => $value !== null));
+
+            return implode("\n", $parts);
+        }
+
+        $location = $this->formatTelegramLocationCoordinates(data_get($message, 'location'));
+
+        return $location !== null ? 'Геопозиция: '.$location : null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $message
+     */
+    protected function resolveTelegramSpecialDisplayText(array $message): ?string
+    {
+        $poll = data_get($message, 'poll');
+
+        if (is_array($poll)) {
+            return $this->formatPollDisplayText($poll);
+        }
+
+        $dice = data_get($message, 'dice');
+
+        if (! is_array($dice)) {
+            return null;
+        }
+
+        $emoji = $this->normalizeText(data_get($dice, 'emoji'));
+        $value = $this->normalizeNonNegativeInteger(data_get($dice, 'value'));
+
+        if ($emoji === null && $value === null) {
+            return 'Бросок';
+        }
+
+        return trim('Бросок '.implode(': ', array_values(array_filter([
+            $emoji,
+            $value === null ? null : (string) $value,
+        ], static fn (?string $value): bool => $value !== null))));
+    }
+
+    /**
+     * @param  array<string, mixed>  $message
+     */
+    protected function resolveMaxSpecialDisplayText(array $message): ?string
+    {
+        foreach ($this->maxPollCandidates($message) as $poll) {
+            $text = $this->formatPollDisplayText($poll);
+
+            if ($text !== null) {
+                return $text;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $message
+     * @return list<array<string, mixed>>
+     */
+    protected function maxPollCandidates(array $message): array
+    {
+        $candidates = [];
+
+        foreach ([
+            data_get($message, 'poll'),
+            data_get($message, 'body.poll'),
+            data_get($message, 'payload.poll'),
+            data_get($message, 'body.payload.poll'),
+        ] as $poll) {
+            if (is_array($poll)) {
+                $candidates[] = $poll;
+            }
+        }
+
+        $body = data_get($message, 'body');
+
+        if (is_array($body) && $this->isPollLikeType(data_get($body, 'type'))) {
+            $candidates[] = $body;
+        }
+
+        $attachmentSources = [
+            data_get($message, 'attachments'),
+            data_get($message, 'body.attachments'),
+        ];
+
+        // Опросы из link.message берём только для пересылок (link.type=forward):
+        // у reply в link.message лежит цитируемый опрос — он не должен подменять
+        // собственный текст пользователя через specialText.
+        $forwardedLink = $this->resolveMaxForwardedLink($message);
+
+        if ($forwardedLink !== null) {
+            $attachmentSources[] = data_get($forwardedLink, 'message.body.attachments');
+            $attachmentSources[] = data_get($forwardedLink, 'message.attachments');
+        }
+
+        foreach ($attachmentSources as $attachments) {
+            if (! is_array($attachments)) {
+                continue;
+            }
+
+            foreach ($attachments as $attachment) {
+                if (! is_array($attachment) || ! $this->isPollLikeType(data_get($attachment, 'type'))) {
+                    continue;
+                }
+
+                $payload = data_get($attachment, 'payload');
+                $poll = data_get($attachment, 'poll');
+
+                $candidates[] = is_array($payload) ? $payload : $attachment;
+
+                if (is_array($poll)) {
+                    $candidates[] = $poll;
+                }
+            }
+        }
+
+        return $candidates;
+    }
+
+    protected function isPollLikeType(mixed $type): bool
+    {
+        if (! is_scalar($type)) {
+            return false;
+        }
+
+        return in_array(mb_strtolower(trim((string) $type)), ['poll', 'vote', 'quiz'], true);
+    }
+
+    /**
+     * @param  array<string, mixed>  $poll
+     */
+    protected function formatPollDisplayText(array $poll): ?string
+    {
+        $question = $this->normalizeText(
+            data_get($poll, 'question')
+                ?? data_get($poll, 'title')
+                ?? data_get($poll, 'text')
+                ?? data_get($poll, 'payload.question')
+                ?? data_get($poll, 'payload.title')
+                ?? data_get($poll, 'payload.text')
+        );
+        $options = $this->extractPollOptionTexts(
+            data_get($poll, 'options')
+                ?? data_get($poll, 'answers')
+                ?? data_get($poll, 'choices')
+                ?? data_get($poll, 'payload.options')
+                ?? data_get($poll, 'payload.answers')
+                ?? data_get($poll, 'payload.choices')
+        );
+
+        if ($question === null && $options === []) {
+            return null;
+        }
+
+        $lines = [$question === null ? 'Опрос' : 'Опрос: '.$question];
+
+        foreach ($options as $option) {
+            $lines[] = '• '.$option;
+        }
+
+        return implode("\n", $lines);
+    }
+
+    /**
+     * @return list<string>
+     */
+    protected function extractPollOptionTexts(mixed $options): array
+    {
+        if (! is_array($options)) {
+            return [];
+        }
+
+        $result = [];
+
+        foreach ($options as $option) {
+            $text = is_array($option)
+                ? $this->normalizeText(
+                    data_get($option, 'text')
+                        ?? data_get($option, 'title')
+                        ?? data_get($option, 'label')
+                        ?? data_get($option, 'answer')
+                )
+                : $this->normalizeText($option);
+
+            if ($text !== null) {
+                $result[] = $text;
+            }
+        }
+
+        return $result;
+    }
+
+    protected function formatTelegramLocationCoordinates(mixed $location): ?string
+    {
+        if (! is_array($location)) {
+            return null;
+        }
+
+        $latitude = $this->normalizeCoordinate(data_get($location, 'latitude'));
+        $longitude = $this->normalizeCoordinate(data_get($location, 'longitude'));
+
+        if ($latitude === null || $longitude === null) {
+            return null;
+        }
+
+        return $latitude.', '.$longitude;
+    }
+
+    protected function normalizeCoordinate(mixed $value): ?string
+    {
+        if (! is_int($value) && ! is_float($value) && ! is_string($value)) {
+            return null;
+        }
+
+        $normalized = trim((string) $value);
+
+        return $normalized !== '' ? $normalized : null;
     }
 
     /**
@@ -270,6 +1093,8 @@ class BotIncomingMessageNormalizer
 
         $externalMessageId = $this->resolveMaxMessageId($message);
         $sharedContact = $this->extractMaxSharedContact($message);
+        $specialText = $this->resolveMaxSpecialDisplayText($message);
+        [$text, $richText] = $this->resolveMaxTextAndRichText($message);
 
         return new IncomingBotMessage(
             platform: $channel->platform,
@@ -282,7 +1107,7 @@ class BotIncomingMessageNormalizer
             contactName: $this->resolvePersonName(data_get($message, 'sender')),
             text: $sharedContact['is_contact_share']
                 ? null
-                : $this->normalizeText(data_get($message, 'body.text')),
+                : ($specialText ?? $text),
             inboundKind: $sharedContact['is_contact_share']
                 ? IncomingBotMessage::KIND_INBOUND_CONTACT_SHARE
                 : IncomingBotMessage::KIND_INBOUND_USER,
@@ -296,6 +1121,546 @@ class BotIncomingMessageNormalizer
                 data_get($payload, 'created_at'),
             ]),
             avatarUrl: $this->resolveMaxAvatarUrl(data_get($message, 'sender')),
+            media: $this->normalizeMaxMedia($message),
+            richText: $sharedContact['is_contact_share'] || $specialText !== null
+                ? null
+                : $richText,
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected function normalizeMaxEdit(Channel $channel, array $payload): ?IncomingBotMessageEdit
+    {
+        if ((string) ($payload['update_type'] ?? '') !== 'message_edited') {
+            return null;
+        }
+
+        $message = $payload['message'] ?? null;
+
+        if (! is_array($message) || data_get($message, 'sender.is_bot') === true) {
+            return null;
+        }
+
+        $isDialog = filled($payload['user_locale'] ?? null)
+            || filled(data_get($message, 'recipient.user_id'))
+            || ! filled(data_get($message, 'recipient.chat_id'));
+
+        if (! $isDialog) {
+            return null;
+        }
+
+        $userId = $this->normalizeExternalId(data_get($message, 'sender.user_id'))
+            ?? $this->resolveMaxRemovalUserId($payload);
+        $chatId = $this->normalizeExternalId(data_get($message, 'recipient.chat_id'))
+            ?? $this->resolveMaxRemovalChatId($payload);
+        $externalMessageId = $this->resolveMaxMessageId($message)
+            ?? $this->resolveMaxRemovedMessageId($payload);
+
+        if (! filled($userId) || ! filled($chatId) || ! filled($externalMessageId)) {
+            return null;
+        }
+
+        $specialText = $this->resolveMaxSpecialDisplayText($message);
+        [$text, $richText] = $this->resolveMaxTextAndRichText($message);
+        $hasTextContent = $this->maxMessageHasTextContent($message) || $specialText !== null;
+
+        return new IncomingBotMessageEdit(
+            platform: $channel->platform,
+            channelId: $channel->id,
+            externalChatId: $chatId,
+            externalUserId: $userId,
+            providerEventKey: $this->resolveMaxEditEventKey($payload, $chatId, $userId, $externalMessageId, $specialText ?? $text),
+            externalMessageId: $externalMessageId,
+            externalUsername: $this->normalizeUsername(data_get($message, 'sender.username')),
+            contactName: $this->resolvePersonName(data_get($message, 'sender')),
+            text: $specialText ?? $text,
+            richText: $specialText !== null ? null : $richText,
+            hasTextContent: $hasTextContent,
+            rawPayload: $payload,
+            editedAt: $this->resolveReceivedAt([
+                data_get($payload, 'timestamp'),
+                data_get($payload, 'created_at'),
+                data_get($message, 'edited_at'),
+                data_get($message, 'updated_at'),
+                data_get($message, 'timestamp'),
+            ]),
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected function normalizeMaxRemoval(Channel $channel, array $payload): ?IncomingBotMessageRemoval
+    {
+        if ((string) ($payload['update_type'] ?? '') !== 'message_removed') {
+            return null;
+        }
+
+        $externalMessageId = $this->resolveMaxRemovedMessageId($payload);
+
+        if (! filled($externalMessageId)) {
+            return null;
+        }
+
+        $chatId = $this->resolveMaxRemovalChatId($payload);
+        $userId = $this->resolveMaxRemovalUserId($payload);
+        $removedAt = $this->resolveReceivedAt([
+            data_get($payload, 'timestamp'),
+            data_get($payload, 'created_at'),
+            data_get($payload, 'message.timestamp'),
+            data_get($payload, 'message.created_at'),
+        ]);
+
+        return new IncomingBotMessageRemoval(
+            platform: $channel->platform,
+            channelId: $channel->id,
+            externalChatId: $chatId,
+            externalUserId: $userId,
+            externalMessageId: $externalMessageId,
+            providerEventKey: $this->resolveMaxRemovalEventKey($payload, $chatId, $userId, $externalMessageId),
+            rawPayload: $payload,
+            removedAt: $removedAt,
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $message
+     * @return array{0: ?string, 1: array{version: 1, plain_text: string, runs: list<array{text: string, marks: list<array<string, mixed>>}>}|null}
+     */
+    protected function resolveMaxTextAndRichText(array $message): array
+    {
+        $candidates = [
+            [
+                'text' => data_get($message, 'body.text'),
+                'markup' => data_get($message, 'body.markup'),
+            ],
+            [
+                'text' => data_get($message, 'text'),
+                'markup' => data_get($message, 'markup'),
+            ],
+        ];
+
+        // Текст пересланного сообщения используем только для link.type=forward:
+        // у reply в link.message лежит ЦИТИРУЕМОЕ сообщение, его текст не наш.
+        $forwardedLink = $this->resolveMaxForwardedLink($message);
+
+        if ($forwardedLink !== null) {
+            $candidates[] = [
+                'text' => data_get($forwardedLink, 'message.body.text'),
+                'markup' => data_get($forwardedLink, 'message.body.markup'),
+            ];
+            $candidates[] = [
+                'text' => data_get($forwardedLink, 'message.text'),
+                'markup' => data_get($forwardedLink, 'message.markup'),
+            ];
+            $candidates[] = [
+                'text' => data_get($forwardedLink, 'message.caption'),
+                'markup' => null,
+            ];
+        }
+
+        foreach ($candidates as $candidate) {
+            $text = $this->normalizeText($candidate['text'] ?? null);
+
+            if ($text === null) {
+                continue;
+            }
+
+            return [
+                $text,
+                $this->normalizeMaxRichText($text, $candidate['markup'] ?? null),
+            ];
+        }
+
+        return [null, null];
+    }
+
+    /**
+     * @param  array<string, mixed>  $message
+     * @return array<string, mixed>|null
+     */
+    protected function resolveMaxForwardedLink(array $message): ?array
+    {
+        $link = data_get($message, 'link');
+
+        if (! is_array($link)) {
+            return null;
+        }
+
+        $type = $this->normalizeText(data_get($link, 'type'));
+
+        return strtolower((string) $type) === 'forward'
+            ? $link
+            : null;
+    }
+
+    /**
+     * @return array{version: 1, plain_text: string, runs: list<array{text: string, marks: list<array<string, mixed>>}>}|null
+     */
+    protected function normalizeMaxRichText(string $plainText, mixed $markup): ?array
+    {
+        if (! is_array($markup) || ! array_is_list($markup) || $markup === []) {
+            return null;
+        }
+
+        $entities = [];
+
+        foreach ($markup as $element) {
+            if (! is_array($element)) {
+                continue;
+            }
+
+            $type = $this->mapMaxMarkupType(data_get($element, 'type'));
+            $from = $this->normalizeNonNegativeInteger(data_get($element, 'from') ?? data_get($element, 'offset'));
+            $length = $this->normalizeNonNegativeInteger(data_get($element, 'length'));
+
+            if ($type === null || $from === null || $length === null || $length <= 0) {
+                continue;
+            }
+
+            // MAX шлёт from/length в UTF-16 code units (живой payload id71,
+            // 04.07.2026: «😄😄 жирный» -> from=5 = 2+2+1 юнитов), как и Telegram.
+            // Конверсия из кодпойнтов была ошибкой и ломала разметку после эмодзи;
+            // границы валидирует общий нормализатор (NormalizeTelegramAccountRichText).
+
+            // MAX не различает инлайновый `code` и блок ```: многострочный
+            // monospaced-фрагмент считаем код-блоком (pre), однострочный — code.
+            if ($type === 'code' && str_contains($this->utf16Substring($plainText, $from, $length), "\n")) {
+                $type = 'pre';
+            }
+
+            $entity = [
+                'type' => $type,
+                'offset' => $from,
+                'length' => $length,
+            ];
+
+            if ($type === 'text_link') {
+                $href = $this->resolveMaxMarkupHref($element);
+
+                if ($href === null) {
+                    continue;
+                }
+
+                $entity['url'] = $href;
+            }
+
+            $entities[] = $entity;
+        }
+
+        if ($entities === []) {
+            return null;
+        }
+
+        return $this->normalizeTelegramRichTextAction->handle($plainText, [
+            'text' => $plainText,
+            'entities' => $entities,
+        ]);
+    }
+
+    protected function mapMaxMarkupType(mixed $type): ?string
+    {
+        if (! is_string($type)) {
+            return null;
+        }
+
+        return match (mb_strtolower(trim($type))) {
+            'strong', 'bold', 'b' => 'bold',
+            'emphasized', 'emphasis', 'italic', 'em', 'i' => 'italic',
+            'monospaced', 'monospace', 'mono', 'code', 'inline_code', 'code_inline' => 'code',
+            'link', 'text_link' => 'text_link',
+            'url' => 'url',
+            'strikethrough', 'strike', 'strikethru', 's', 'del' => 'strikethrough',
+            'underline', 'underlined', 'u' => 'underline',
+            'spoiler', 'hidden' => 'spoiler',
+            'quote', 'blockquote', 'block_quote', 'quoted' => 'blockquote',
+            'highlighted', 'highlight', 'mark', 'marked' => 'highlight',
+            'heading', 'header', 'title', 'h1', 'h2', 'h3' => 'heading',
+            'list' => 'list',
+            default => null,
+        };
+    }
+
+    /**
+     * Вырезка по UTF-16 code units (единицы MAX/Telegram offsets).
+     * Используется только для эвристик над фрагментом; разрез суррогатной
+     * пары на границе безопасен для поиска подстрок.
+     */
+    protected function utf16Substring(string $plainText, int $from, int $length): string
+    {
+        $utf16 = mb_convert_encoding($plainText, 'UTF-16BE', 'UTF-8');
+        $slice = substr($utf16, $from * 2, $length * 2);
+
+        return $slice === false || $slice === ''
+            ? ''
+            : (string) @mb_convert_encoding($slice, 'UTF-8', 'UTF-16BE');
+    }
+
+    /**
+     * @param  array<string, mixed>  $element
+     */
+    protected function resolveMaxMarkupHref(array $element): ?string
+    {
+        foreach (['url', 'href', 'link', 'payload.url'] as $key) {
+            $href = $this->normalizeText(data_get($element, $key));
+
+            if ($href !== null) {
+                return $href;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $message
+     * @return list<array<string, mixed>>
+     */
+    protected function normalizeMaxMedia(array $message): array
+    {
+        $attachments = [];
+
+        $candidates = [
+            data_get($message, 'attachments'),
+            data_get($message, 'body.attachments'),
+        ];
+
+        // Вложения из link.message берём только для пересылок (link.type=forward):
+        // у reply в link.message лежит цитируемое сообщение — его медиа не наше.
+        $forwardedLink = $this->resolveMaxForwardedLink($message);
+
+        if ($forwardedLink !== null) {
+            $candidates[] = data_get($forwardedLink, 'message.body.attachments');
+            $candidates[] = data_get($forwardedLink, 'message.attachments');
+        }
+
+        foreach ($candidates as $candidate) {
+            if (! is_array($candidate)) {
+                continue;
+            }
+
+            foreach ($candidate as $attachment) {
+                if (is_array($attachment)) {
+                    $attachments[] = $attachment;
+                }
+            }
+        }
+
+        $media = [];
+
+        foreach ($attachments as $index => $attachment) {
+            $type = $this->normalizeText(data_get($attachment, 'type'));
+            $mediaKind = $this->mediaKindFromMaxAttachment($attachment, $type);
+
+            if ($type === null || $mediaKind === null) {
+                continue;
+            }
+
+            $providerReference = $this->resolveMaxAttachmentReference($attachment, $type, $index);
+
+            if ($providerReference === null) {
+                continue;
+            }
+
+            $fileName = $this->resolveMaxAttachmentFilename($attachment);
+            $mimeType = $this->normalizeMimeType(
+                data_get($attachment, 'payload.mime_type')
+                    ?? data_get($attachment, 'mime_type')
+            );
+            $width = $this->normalizeNonNegativeInteger(
+                data_get($attachment, 'payload.width')
+                    ?? data_get($attachment, 'width')
+            );
+            $height = $this->normalizeNonNegativeInteger(
+                data_get($attachment, 'payload.height')
+                    ?? data_get($attachment, 'height')
+            );
+            $duration = $this->normalizeNonNegativeInteger(
+                data_get($attachment, 'payload.duration')
+                    ?? data_get($attachment, 'duration')
+            );
+            $fileSize = $this->normalizeNonNegativeInteger(
+                data_get($attachment, 'payload.file_size')
+                    ?? data_get($attachment, 'payload.size')
+                    ?? data_get($attachment, 'file_size')
+                    ?? data_get($attachment, 'size')
+            );
+
+            $media[] = array_filter([
+                'media_kind' => $mediaKind,
+                'type' => $type,
+                'provider_attachment_key' => $providerReference,
+                'provider_file_reference' => $providerReference,
+                'file_name' => $fileName,
+                'mime_type' => $mimeType,
+                'extension' => $this->extensionFromTelegramMimeType($mimeType)
+                    ?? MessageAttachment::sanitizeExtension(pathinfo((string) $fileName, PATHINFO_EXTENSION)),
+                'file_size_bytes' => $fileSize,
+                'width' => $width,
+                'height' => $height,
+                'duration' => $duration,
+                'is_video_note' => $mediaKind === MessageAttachment::MEDIA_KIND_VIDEO_NOTE ? true : null,
+                'sort_order' => $index,
+                'raw_payload_excerpt' => array_filter([
+                    'type' => $type,
+                    'media_kind' => $mediaKind,
+                    'photo_id' => $type === 'image' ? $this->normalizeExternalId(data_get($attachment, 'payload.photo_id') ?? data_get($attachment, 'photo_id')) : null,
+                    'sticker_code' => $type === 'sticker' ? $this->normalizeExternalId(data_get($attachment, 'payload.code') ?? data_get($attachment, 'code')) : null,
+                    'file_size_bytes' => $fileSize,
+                    'duration' => $duration,
+                    'mime_type' => $mimeType,
+                    'width' => $width,
+                    'height' => $height,
+                    'is_video_note' => $mediaKind === MessageAttachment::MEDIA_KIND_VIDEO_NOTE ? true : null,
+                ], static fn (mixed $value): bool => $value !== null),
+            ], static fn (mixed $value): bool => $value !== null && $value !== '');
+        }
+
+        return $media;
+    }
+
+    /**
+     * @param  array<string, mixed>  $attachment
+     */
+    protected function mediaKindFromMaxAttachment(array $attachment, ?string $type): ?string
+    {
+        if ($type === 'video' && $this->isMaxRoundVideoAttachment($attachment)) {
+            return MessageAttachment::MEDIA_KIND_VIDEO_NOTE;
+        }
+
+        return $this->mediaKindFromMaxAttachmentType($type);
+    }
+
+    /**
+     * @param  array<string, mixed>  $attachment
+     */
+    protected function isMaxRoundVideoAttachment(array $attachment): bool
+    {
+        foreach ([
+            data_get($attachment, 'payload.video_note'),
+            data_get($attachment, 'video_note'),
+            data_get($attachment, 'payload.is_video_note'),
+            data_get($attachment, 'is_video_note'),
+            data_get($attachment, 'payload.is_round'),
+            data_get($attachment, 'is_round'),
+            data_get($attachment, 'payload.round_video'),
+            data_get($attachment, 'round_video'),
+            data_get($attachment, 'payload.is_circle'),
+            data_get($attachment, 'is_circle'),
+        ] as $flag) {
+            if ($flag === true || $flag === 1 || $flag === '1' || $flag === 'true') {
+                return true;
+            }
+        }
+
+        foreach ([
+            data_get($attachment, 'payload.media_kind'),
+            data_get($attachment, 'media_kind'),
+            data_get($attachment, 'payload.subtype'),
+            data_get($attachment, 'subtype'),
+            data_get($attachment, 'payload.kind'),
+            data_get($attachment, 'kind'),
+        ] as $value) {
+            $normalized = is_scalar($value) ? mb_strtolower(trim((string) $value)) : '';
+
+            if (in_array($normalized, ['video_note', 'round_video', 'circle_video', 'video_message'], true)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    protected function mediaKindFromMaxAttachmentType(?string $type): ?string
+    {
+        return match ($type) {
+            'image' => MessageAttachment::MEDIA_KIND_IMAGE,
+            'video' => MessageAttachment::MEDIA_KIND_VIDEO,
+            'audio' => MessageAttachment::MEDIA_KIND_AUDIO,
+            'file' => MessageAttachment::MEDIA_KIND_DOCUMENT,
+            'sticker' => MessageAttachment::MEDIA_KIND_STICKER,
+            default => null,
+        };
+    }
+
+    /**
+     * @param  array<string, mixed>  $attachment
+     */
+    protected function resolveMaxAttachmentReference(array $attachment, string $type, int $index): ?string
+    {
+        if ($type === 'image') {
+            return $this->normalizeExternalId(
+                data_get($attachment, 'payload.photo_id')
+                    ?? data_get($attachment, 'photo_id')
+            ) ?? $this->hashSensitiveReference(data_get($attachment, 'payload.token') ?? data_get($attachment, 'token'), 'token');
+        }
+
+        if ($type === 'sticker') {
+            $stickerCode = $this->normalizeExternalId(
+                data_get($attachment, 'payload.code')
+                    ?? data_get($attachment, 'code')
+            );
+
+            if ($stickerCode !== null) {
+                return $stickerCode;
+            }
+        }
+
+        $tokenReference = $this->hashSensitiveReference(
+            data_get($attachment, 'payload.token')
+                ?? data_get($attachment, 'token'),
+            'token',
+        );
+
+        if ($tokenReference !== null) {
+            return $tokenReference;
+        }
+
+        $fileId = $this->normalizeExternalId(
+            data_get($attachment, 'payload.file_id')
+                ?? data_get($attachment, 'file_id')
+                ?? data_get($attachment, 'payload.id')
+                ?? data_get($attachment, 'id')
+        );
+
+        if ($fileId !== null) {
+            return $fileId;
+        }
+
+        $urlReference = $this->hashSensitiveReference(
+            data_get($attachment, 'payload.url')
+                ?? data_get($attachment, 'url'),
+            'url',
+        );
+
+        return $urlReference ?? "{$index}:{$type}";
+    }
+
+    protected function hashSensitiveReference(mixed $value, string $prefix): ?string
+    {
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $normalized = trim((string) $value);
+
+        return $normalized !== '' ? $prefix.':'.sha1($normalized) : null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $attachment
+     */
+    protected function resolveMaxAttachmentFilename(array $attachment): ?string
+    {
+        return $this->normalizeText(
+            data_get($attachment, 'filename')
+                ?? data_get($attachment, 'file_name')
+                ?? data_get($attachment, 'name')
+                ?? data_get($attachment, 'payload.filename')
+                ?? data_get($attachment, 'payload.file_name')
+                ?? data_get($attachment, 'payload.name')
         );
     }
 
@@ -366,6 +1731,36 @@ class BotIncomingMessageNormalizer
         return $text !== '' ? $text : null;
     }
 
+    protected function normalizeNonNegativeInteger(mixed $value): ?int
+    {
+        if (is_int($value)) {
+            return $value >= 0 ? $value : null;
+        }
+
+        if (is_float($value)) {
+            return $value >= 0 && floor($value) === $value ? (int) $value : null;
+        }
+
+        if (! is_string($value) || ! ctype_digit($value)) {
+            return null;
+        }
+
+        return (int) $value;
+    }
+
+    protected function normalizeMimeType(mixed $value): ?string
+    {
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $mimeType = mb_strtolower(trim(explode(';', (string) $value)[0] ?? ''));
+
+        return preg_match('/\A[a-z0-9][a-z0-9!#$&^_.+-]{0,126}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}\z/', $mimeType) === 1
+            ? $mimeType
+            : null;
+    }
+
     protected function resolveTelegramStartMessageParameter(?string $text): ?string
     {
         if (! filled($text)) {
@@ -407,6 +1802,7 @@ class BotIncomingMessageNormalizer
     {
         return $this->normalizeExternalId(
             data_get($message, 'body.mid')
+                ?? data_get($message, 'body.seq')
                 ?? data_get($message, 'message_id')
                 ?? data_get($message, 'id')
         );
@@ -426,6 +1822,158 @@ class BotIncomingMessageNormalizer
         ];
 
         return 'max-bot-started:'.sha1((string) json_encode($fingerprint, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected function resolveMaxRemovedMessageId(array $payload): ?string
+    {
+        foreach ([
+            data_get($payload, 'message_id'),
+            data_get($payload, 'mid'),
+            data_get($payload, 'id'),
+            data_get($payload, 'message.message_id'),
+            data_get($payload, 'message.body.mid'),
+            data_get($payload, 'message.body.seq'),
+            data_get($payload, 'message.id'),
+            data_get($payload, 'body.mid'),
+            data_get($payload, 'body.seq'),
+        ] as $candidate) {
+            $messageId = $this->normalizeExternalId($candidate);
+
+            if ($messageId !== null) {
+                return $messageId;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $message
+     */
+    protected function maxMessageHasTextContent(array $message): bool
+    {
+        $body = data_get($message, 'body');
+
+        return (is_array($body) && array_key_exists('text', $body))
+            || array_key_exists('text', $message);
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected function resolveMaxEditEventKey(
+        array $payload,
+        string $chatId,
+        string $userId,
+        string $externalMessageId,
+        ?string $text,
+    ): string {
+        $explicitEventKey = $this->normalizeExternalId(
+            data_get($payload, 'update_id')
+                ?? data_get($payload, 'event_id')
+        );
+
+        if ($explicitEventKey !== null) {
+            return $explicitEventKey;
+        }
+
+        $fingerprint = [
+            'update_type' => 'message_edited',
+            'chat_id' => $chatId,
+            'user_id' => $userId,
+            'message_id' => $externalMessageId,
+            'timestamp' => $this->normalizeExternalId(
+                data_get($payload, 'timestamp')
+                    ?? data_get($payload, 'created_at')
+                    ?? data_get($payload, 'message.timestamp')
+                    ?? data_get($payload, 'message.updated_at')
+                    ?? data_get($payload, 'message.edited_at')
+            ),
+            'text' => $text,
+        ];
+
+        return 'max-message-edited:'.sha1((string) json_encode($fingerprint, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected function resolveMaxRemovalChatId(array $payload): ?string
+    {
+        foreach ([
+            data_get($payload, 'chat_id'),
+            data_get($payload, 'recipient.chat_id'),
+            data_get($payload, 'chat.id'),
+            data_get($payload, 'message.recipient.chat_id'),
+            data_get($payload, 'message.chat_id'),
+            data_get($payload, 'message.chat.id'),
+        ] as $candidate) {
+            $chatId = $this->normalizeExternalId($candidate);
+
+            if ($chatId !== null) {
+                return $chatId;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected function resolveMaxRemovalUserId(array $payload): ?string
+    {
+        foreach ([
+            data_get($payload, 'user_id'),
+            data_get($payload, 'user.user_id'),
+            data_get($payload, 'sender.user_id'),
+            data_get($payload, 'message.sender.user_id'),
+        ] as $candidate) {
+            $userId = $this->normalizeExternalId($candidate);
+
+            if ($userId !== null) {
+                return $userId;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected function resolveMaxRemovalEventKey(
+        array $payload,
+        ?string $chatId,
+        ?string $userId,
+        string $externalMessageId,
+    ): string {
+        $explicitEventKey = $this->normalizeExternalId(
+            data_get($payload, 'update_id')
+                ?? data_get($payload, 'event_id')
+        );
+
+        if ($explicitEventKey !== null) {
+            return $explicitEventKey;
+        }
+
+        $fingerprint = [
+            'update_type' => 'message_removed',
+            'chat_id' => $chatId,
+            'user_id' => $userId,
+            'message_id' => $externalMessageId,
+            'timestamp' => $this->normalizeExternalId(
+                data_get($payload, 'timestamp')
+                    ?? data_get($payload, 'created_at')
+                    ?? data_get($payload, 'message.timestamp')
+                    ?? data_get($payload, 'message.created_at')
+            ),
+        ];
+
+        return 'max-message-removed:'.sha1((string) json_encode($fingerprint, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
     }
 
     /**
@@ -603,10 +2151,12 @@ class BotIncomingMessageNormalizer
         $timestamp = ltrim(trim($timestamp), '+');
         $absoluteTimestamp = ltrim($timestamp, '-');
 
-        return match (strlen($absoluteTimestamp)) {
+        $dateTime = match (strlen($absoluteTimestamp)) {
             16 => Carbon::createFromTimestampUTC((float) $timestamp / 1_000_000),
             13 => Carbon::createFromTimestampMsUTC((int) $timestamp),
             default => Carbon::createFromTimestampUTC((int) $timestamp),
         };
+
+        return $dateTime->timezone(config('app.timezone', 'UTC'));
     }
 }

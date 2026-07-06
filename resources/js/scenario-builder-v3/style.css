@@ -47,7 +47,7 @@
 }
 
 .ac-v3-builder.is-auto-reply-mode {
-    grid-template-rows: auto 32px auto;
+    grid-template-rows: max-content 32px minmax(0, 1fr);
 }
 
 :where(.dark, [data-theme="dark"]) .ac-v3-builder {
@@ -4173,7 +4173,7 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 3px;
     align-items: center;
-    min-height: 34px;
+    min-height: 40px;
     padding: 3px;
     width: 100%;
     border-radius: 9px;
@@ -4182,19 +4182,20 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
 
 .ac-v3-builder__buttons-placement button {
     min-width: 0;
-    height: 28px;
+    min-height: 34px;
     border: 0;
     border-radius: 7px;
     background: transparent;
     color: var(--text-3);
     cursor: pointer;
-    font-size: 12px;
+    font-size: 11px;
+    line-height: 1.15;
     font-weight: 650;
     overflow: hidden;
-    padding: 0 8px;
+    padding: 3px 5px;
     text-align: center;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    white-space: normal;
+    overflow-wrap: anywhere;
 }
 
 .ac-v3-builder__buttons-placement button:hover {
@@ -4431,8 +4432,11 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
 
 .ac-v3-builder__sheet-import-dialog {
     display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
     width: min(760px, calc(100vw - 32px));
+    height: min(760px, calc(100vh - 48px));
     max-height: min(760px, calc(100vh - 48px));
+    min-height: 0;
     overflow: hidden;
     border: 1px solid var(--border-strong);
     border-radius: 14px;
@@ -4817,6 +4821,7 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
 
 .ac-v3-builder__sheet-import-body {
     display: grid;
+    min-height: 0;
     overflow: auto;
     gap: 16px;
     padding: 20px 26px;
@@ -4824,7 +4829,7 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
 
 .ac-v3-builder__sheet-import-summary {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
     gap: 10px;
 }
 
@@ -4994,6 +4999,18 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
     gap: 8px;
+}
+
+.ac-v3-builder__sheet-import-tag-name {
+    grid-column: 1 / -1;
+    width: 100%;
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--text);
+    min-height: 38px;
+    outline: 0;
+    padding: 0 10px;
 }
 
 .ac-v3-builder__auto-reply-import-create {

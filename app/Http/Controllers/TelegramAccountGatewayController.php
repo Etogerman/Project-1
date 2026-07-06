@@ -4,7 +4,9 @@ namespace App\Http\Controllers;
 
 use App\Data\TelegramAccount\NormalizedExternalOutgoingMessageEvent;
 use App\Models\Channel;
+use App\Models\MessageAttachment;
 use App\Models\TelegramAccountOutgoingMessage;
+use App\Services\TelegramAccount\ClaimTelegramAccountMediaDownloadAction;
 use App\Services\TelegramAccount\ClaimTelegramAccountOutgoingMessageAction;
 use App\Services\TelegramAccount\NormalizeTelegramAccountExternalOutgoingMessageEventAction;
 use App\Services\TelegramAccount\NormalizeTelegramAccountInboundMessageEventAction;
@@ -12,14 +14,17 @@ use App\Services\TelegramAccount\NormalizeTelegramAccountPeerSyncStateEventActio
 use App\Services\TelegramAccount\NormalizeTelegramAccountRuntimeStateEventAction;
 use App\Services\TelegramAccount\StoreTelegramAccountExternalOutgoingMessageEventAction;
 use App\Services\TelegramAccount\StoreTelegramAccountInboundEventAction;
+use App\Services\TelegramAccount\StoreTelegramAccountMediaDownloadResultAction;
 use App\Services\TelegramAccount\StoreTelegramAccountOutgoingMessageResultAction;
 use App\Services\TelegramAccount\StoreTelegramAccountPeerSyncStateEventAction;
 use App\Services\TelegramAccount\StoreTelegramAccountRuntimeStateEventAction;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
+use InvalidArgumentException;
 
 class TelegramAccountGatewayController extends Controller
 {
@@ -221,6 +226,128 @@ class TelegramAccountGatewayController extends Controller
             'outgoing_message_id' => $stored->id,
             'status' => $stored->status,
             'message_id' => $stored->message_id,
+        ]);
+    }
+
+    public function claimMediaDownload(
+        Request $request,
+        Channel $channel,
+        ClaimTelegramAccountMediaDownloadAction $claimTelegramAccountMediaDownloadAction,
+    ): JsonResponse {
+        $this->authorizeGatewayRequest($request, $channel);
+
+        $attachment = $claimTelegramAccountMediaDownloadAction->handle($channel);
+
+        if (! $attachment instanceof MessageAttachment) {
+            return response()->json([
+                'ok' => true,
+                'has_download' => false,
+            ]);
+        }
+
+        return response()->json([
+            'ok' => true,
+            'has_download' => true,
+            'media_download' => [
+                'attachment_id' => $attachment->id,
+                'channel_id' => $attachment->channel_id,
+                'message_id' => $attachment->message_id,
+                'provider' => $attachment->provider,
+                'provider_event_key' => $attachment->provider_event_key,
+                'provider_attachment_key' => $attachment->provider_attachment_key,
+                'provider_file_id' => $attachment->provider_file_id,
+                'provider_file_reference' => $attachment->provider_file_reference,
+                'media_kind' => $attachment->media_kind,
+                'mime_type' => $attachment->mime_type,
+                'original_filename' => $attachment->original_filename,
+                'file_size_bytes' => $attachment->file_size_bytes,
+                'attempt' => 1,
+                'max_bytes' => ClaimTelegramAccountMediaDownloadAction::maxBytes(),
+            ],
+        ]);
+    }
+
+    public function mediaDownloadResult(
+        Request $request,
+        Channel $channel,
+        MessageAttachment $attachment,
+        StoreTelegramAccountMediaDownloadResultAction $storeTelegramAccountMediaDownloadResultAction,
+    ): JsonResponse {
+        $this->authorizeGatewayRequest($request, $channel);
+
+        abort_unless(
+            (int) $attachment->channel_id === (int) $channel->id
+                && $attachment->provider === MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT,
+            404,
+        );
+
+        $validated = $request->validate([
+            'status' => ['required', 'string', Rule::in([
+                MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+                'failed',
+                MessageAttachment::DOWNLOAD_STATUS_DOWNLOAD_FAILED,
+            ])],
+            'file' => ['required_if:status,'.MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, 'file'],
+            'mime_type' => ['nullable', 'string'],
+            'original_filename' => ['nullable', 'string'],
+            'file_size_bytes' => ['nullable', 'integer', 'min:0'],
+            'provider_file_id' => ['nullable', 'string'],
+            'error_code' => ['required_unless:status,'.MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, 'nullable', 'string'],
+            'error_message' => ['nullable', 'string'],
+            'retryable' => ['nullable', 'boolean'],
+            'raw_payload' => ['nullable', 'array'],
+        ]);
+
+        $status = (string) $validated['status'];
+
+        try {
+            if ($status === MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED) {
+                $file = $request->file('file');
+
+                abort_unless($file instanceof UploadedFile, 422);
+
+                if (($file->getSize() ?? 0) > ClaimTelegramAccountMediaDownloadAction::maxBytes()) {
+                    $stored = $storeTelegramAccountMediaDownloadResultAction->markFailed($channel, $attachment, [
+                        'error_code' => ClaimTelegramAccountMediaDownloadAction::ERROR_FILE_TOO_LARGE,
+                        'error_message' => 'Telegram Account media file is larger than the local download limit.',
+                        'retryable' => false,
+                    ]);
+
+                    return response()->json([
+                        'ok' => true,
+                        'stored' => true,
+                        'attachment_id' => $stored->id,
+                        'download_status' => $stored->download_status,
+                    ]);
+                }
+
+                $contents = $file->get();
+
+                abort_if($contents === false, 422);
+
+                $stored = $storeTelegramAccountMediaDownloadResultAction->markDownloaded(
+                    $channel,
+                    $attachment,
+                    $contents,
+                    [
+                        'mime_type' => $validated['mime_type'] ?? $file->getClientMimeType(),
+                        'original_filename' => $validated['original_filename'] ?? $file->getClientOriginalName(),
+                        'file_size_bytes' => $validated['file_size_bytes'] ?? $file->getSize(),
+                        'provider_file_id' => $validated['provider_file_id'] ?? null,
+                    ],
+                );
+            } else {
+                $stored = $storeTelegramAccountMediaDownloadResultAction->markFailed($channel, $attachment, $validated);
+            }
+        } catch (InvalidArgumentException $exception) {
+            abort(409, $exception->getMessage());
+        }
+
+        return response()->json([
+            'ok' => true,
+            'stored' => true,
+            'attachment_id' => $stored->id,
+            'download_status' => $stored->download_status,
         ]);
     }
 

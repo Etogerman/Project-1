@@ -79,7 +79,7 @@ class ChannelWebhookRegistrationTest extends TestCase
             return $request->url() === 'https://api.telegram.org/bottelegram-token/setWebhook'
                 && $request['url'] === "https://connector.example/webhooks/telegram/{$channel->id}"
                 && $request['secret_token'] === $channel->getWebhookSecret()
-                && $request['allowed_updates'] === ['message', 'callback_query', 'my_chat_member'];
+                && $request['allowed_updates'] === ['message', 'edited_message', 'callback_query', 'my_chat_member'];
         });
 
         Http::assertSent(fn ($request): bool => $request->url() === 'https://api.telegram.org/bottelegram-token/getMe');
@@ -210,7 +210,7 @@ class ChannelWebhookRegistrationTest extends TestCase
             return $request->hasHeader('Authorization', 'max-token')
                 && $request['url'] === "https://connector.example/webhooks/max/{$channel->id}"
                 && $request['secret'] === $channel->getWebhookSecret()
-                && $request['update_types'] === ['message_created', 'bot_started'];
+                && $request['update_types'] === ['message_created', 'bot_started', 'message_edited', 'message_removed'];
         });
 
         Http::assertSent(fn ($request): bool => $request->url() === 'https://platform-api.max.ru/me');

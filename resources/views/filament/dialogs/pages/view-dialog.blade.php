@@ -198,6 +198,25 @@
                                 || textarea.value.trim() !== ''
                                 || textarea.dataset.manualResized === '1';
                         },
+                        hasActiveMediaPlayback() {
+                            return Array.from(this.$root.querySelectorAll('audio, video'))
+                                .some((media) => ! media.paused && ! media.ended);
+                        },
+                        hasActiveConversationSelection() {
+                            const selection = window.getSelection?.();
+
+                            if (! selection || selection.isCollapsed) {
+                                return false;
+                            }
+
+                            return this.$root.contains(selection.anchorNode)
+                                || this.$root.contains(selection.focusNode);
+                        },
+                        shouldDeferLiveRefresh() {
+                            return this.hasActiveReplyComposer()
+                                || this.hasActiveMediaPlayback()
+                                || this.hasActiveConversationSelection();
+                        },
                         rememberPositionBeforePrepend() {
                             this.captureThread();
 
@@ -225,7 +244,7 @@
                             }
 
                             this.refreshIntervalId = window.setInterval(() => {
-                                if (document.visibilityState !== 'visible' || this.isRefreshing || this.hasActiveReplyComposer()) {
+                                if (document.visibilityState !== 'visible' || this.isRefreshing || this.shouldDeferLiveRefresh()) {
                                     return;
                                 }
 

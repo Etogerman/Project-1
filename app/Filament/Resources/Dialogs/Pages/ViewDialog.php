@@ -1987,6 +1987,8 @@ class ViewDialog extends ViewRecord
             return count($this->conversationMessages);
         }
 
+        $this->refreshVisibleConversationMessages();
+
         $messages = app(LoadDialogMessagesPageAction::class)->loadMessagesAddedAfterId(
             $this->getRecord(),
             $this->latestKnownMessageId,
@@ -1994,6 +1996,50 @@ class ViewDialog extends ViewRecord
         );
 
         return $this->appendConversationMessages($messages);
+    }
+
+    protected function refreshVisibleConversationMessages(): void
+    {
+        $messageIds = collect($this->conversationMessages)
+            ->flatMap(fn (array $message): array => $this->conversationItemMessageIds($message))
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($messageIds->isEmpty()) {
+            return;
+        }
+
+        $messageIds = $messageIds
+            ->reverse()
+            ->take(self::LIVE_REFRESH_MESSAGE_LIMIT)
+            ->reverse()
+            ->values();
+
+        $messages = Message::query()
+            ->where('dialog_id', $this->getRecord()->id)
+            ->whereIn('id', $messageIds->all())
+            ->with(['channel', 'dialog.channel', 'sentByUser'])
+            ->get();
+
+        if ($messages->isEmpty()) {
+            return;
+        }
+
+        $refreshedViewData = app(BuildConversationFeedViewDataAction::class)->handle($messages);
+
+        if ($refreshedViewData === []) {
+            return;
+        }
+
+        $nextConversationMessages = $this->replaceConversationItemsByKey($this->conversationMessages, $refreshedViewData);
+        $nextConversationMessages = $this->sortConversationMessages($nextConversationMessages);
+
+        if ($nextConversationMessages === $this->conversationMessages) {
+            return;
+        }
+
+        $this->conversationMessages = $nextConversationMessages;
     }
 
     /**
@@ -2005,11 +2051,7 @@ class ViewDialog extends ViewRecord
             return 0;
         }
 
-        $existingMessageIds = collect($this->conversationMessages)
-            ->pluck('id')
-            ->filter()
-            ->map(static fn (mixed $id): int => (int) $id)
-            ->flip();
+        $existingMessageIds = $this->existingConversationMessageIds();
 
         $newMessages = $messages
             ->filter(fn (Message $message): bool => ! $existingMessageIds->has($message->id))
@@ -2031,6 +2073,7 @@ class ViewDialog extends ViewRecord
             ...$this->conversationMessages,
             ...$newMessageViewData,
         ];
+        $this->conversationMessages = $this->replaceConversationItemsByKey($this->conversationMessages, $newMessageViewData);
         $this->conversationMessages = $this->sortConversationMessages($this->conversationMessages);
         $this->latestKnownMessageId = max($this->latestKnownMessageId ?? 0, $this->resolveLatestKnownMessageId($newMessages) ?? 0) ?: null;
 
@@ -2046,15 +2089,19 @@ class ViewDialog extends ViewRecord
             return;
         }
 
-        $existingMessageIds = collect($this->conversationMessages)
-            ->pluck('id')
-            ->filter()
-            ->map(static fn (mixed $id): int => (int) $id)
+        $existingMessageIds = $this->existingConversationMessageIds();
+        $existingItemKeys = collect($this->conversationMessages)
+            ->map(fn (array $message): string => $this->conversationItemKey($message))
             ->flip();
 
         $olderMessageViewData = collect($messages)
-            ->filter(function (array $message) use ($existingMessageIds): bool {
-                return ! $existingMessageIds->has((int) ($message['id'] ?? 0));
+            ->filter(function (array $message) use ($existingMessageIds, $existingItemKeys): bool {
+                if ($existingItemKeys->has($this->conversationItemKey($message))) {
+                    return true;
+                }
+
+                return collect($this->conversationItemMessageIds($message))
+                    ->doesntContain(fn (int $id): bool => $existingMessageIds->has($id));
             })
             ->values()
             ->all();
@@ -2067,7 +2114,64 @@ class ViewDialog extends ViewRecord
             ...$olderMessageViewData,
             ...$this->conversationMessages,
         ];
+        $this->conversationMessages = $this->replaceConversationItemsByKey($this->conversationMessages, $olderMessageViewData);
         $this->conversationMessages = $this->sortConversationMessages($this->conversationMessages);
+    }
+
+    protected function existingConversationMessageIds(): Collection
+    {
+        return collect($this->conversationMessages)
+            ->flatMap(fn (array $message): array => $this->conversationItemMessageIds($message))
+            ->filter()
+            ->flip();
+    }
+
+    /**
+     * @param  array<string, mixed>  $message
+     * @return list<int>
+     */
+    protected function conversationItemMessageIds(array $message): array
+    {
+        $ids = $message['message_ids'] ?? [$message['id'] ?? null];
+
+        return collect(is_array($ids) ? $ids : [$ids])
+            ->filter(fn (mixed $id): bool => is_numeric($id) && (int) $id > 0)
+            ->map(static fn (mixed $id): int => (int) $id)
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  array<string, mixed>  $message
+     */
+    protected function conversationItemKey(array $message): string
+    {
+        return (string) ($message['item_key'] ?? 'message:'.($message['id'] ?? 'unknown'));
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $messages
+     * @param  list<array<string, mixed>>  $replacementMessages
+     * @return list<array<string, mixed>>
+     */
+    protected function replaceConversationItemsByKey(array $messages, array $replacementMessages): array
+    {
+        if ($replacementMessages === []) {
+            return $messages;
+        }
+
+        $replacementByKey = collect($replacementMessages)
+            ->keyBy(fn (array $message): string => $this->conversationItemKey($message));
+
+        return collect($messages)
+            ->reverse()
+            ->unique(fn (array $message): string => $this->conversationItemKey($message))
+            ->reverse()
+            ->map(function (array $message) use ($replacementByKey): array {
+                return $replacementByKey->get($this->conversationItemKey($message), $message);
+            })
+            ->values()
+            ->all();
     }
 
     /**

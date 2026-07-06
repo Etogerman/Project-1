@@ -530,6 +530,99 @@ class ScenarioBuilderV3StateTest extends TestCase
             ->assertJsonPath('blocks.0.export_key', 'block_000001');
     }
 
+    public function test_sheet_export_includes_used_tag_hints(): void
+    {
+        $admin = $this->adminUser();
+        $tag = Tag::factory()->create([
+            'name' => 'VIP лист',
+            'color' => Tag::COLOR_SUCCESS,
+        ]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_sheet_export_tags',
+            'name' => 'V3 Sheet Export Tags',
+        ]);
+        $draft = $scenario->draftVersion()->firstOrFail();
+        $settings = $this->messageSettings('Блок с тегом');
+        $settings['modules'][] = [
+            'id' => 'mod_tag_effects',
+            'type' => 'action',
+            'enabled' => true,
+            'payload' => [
+                'actions' => [[
+                    'type' => 'tag_effects',
+                    'assign_tag_ids' => [$tag->id],
+                    'remove_tag_ids' => [],
+                ]],
+            ],
+        ];
+
+        ScenarioBuilderBlock::query()->create([
+            'scenario_version_id' => $draft->id,
+            'type' => 'state',
+            'title' => 'Блок с тегом',
+            'position_x' => 120,
+            'position_y' => 160,
+            'settings_payload' => $settings,
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson($this->sheetExportUrl($scenario))
+            ->assertOk()
+            ->assertJsonPath('export_format_version', 2)
+            ->assertJsonPath('tag_hints.0.source_tag_id', $tag->id)
+            ->assertJsonPath('tag_hints.0.name', 'VIP лист')
+            ->assertJsonPath('tag_hints.0.color', Tag::COLOR_SUCCESS);
+    }
+
+    public function test_sheet_export_can_target_requested_sheet(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_sheet_export_target',
+            'name' => 'V3 Sheet Export Target',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $secondarySettings = $this->messageSettings('Нужный лист');
+        $secondarySettings['ui']['sheet_id'] = 'secondary';
+        $payload = $this->payloadFromState($state, [
+            [
+                'id' => null,
+                'client_key' => 'tmp_main',
+                'type' => 'state',
+                'title' => 'Сохранённый активный',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Сохранённый активный'),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_secondary',
+                'type' => 'state',
+                'title' => 'Нужный лист',
+                'position' => ['x' => 480, 'y' => 160],
+                'settings_payload' => $secondarySettings,
+            ],
+        ]);
+        $payload['builder']['active_sheet_id'] = 'main';
+        $payload['builder']['sheets'][] = [
+            'id' => 'secondary',
+            'name' => 'Нужный',
+            'color' => 'none',
+            'view' => ['tx' => 0, 'ty' => 0, 'zoom' => 1],
+        ];
+
+        $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $payload)
+            ->assertOk();
+
+        $this->actingAs($admin)
+            ->getJson($this->sheetExportUrl($scenario).'?sheet_id=secondary')
+            ->assertOk()
+            ->assertJsonPath('sheet.source_sheet_id', 'secondary')
+            ->assertJsonPath('sheet.name', 'Нужный')
+            ->assertJsonPath('blocks.0.title', 'Нужный лист')
+            ->assertJsonCount(1, 'blocks');
+    }
+
     public function test_sheet_import_preview_does_not_write_database(): void
     {
         $admin = $this->adminUser();
@@ -667,6 +760,168 @@ class ScenarioBuilderV3StateTest extends TestCase
             ])
             ->assertUnprocessable()
             ->assertJsonValidationErrors(['selected_channels']);
+    }
+
+    public function test_sheet_import_apply_rejects_unknown_tag_references_with_readable_message(): void
+    {
+        $admin = $this->adminUser();
+        $inactiveTag = Tag::factory()->create([
+            'name' => 'Неактивная метка импорта',
+            'is_active' => false,
+        ]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_sheet_unknown_tag',
+            'name' => 'V3 Sheet Unknown Tag',
+        ]);
+        $settings = $this->messageSettings('Импорт с тегом');
+        $settings['modules'][] = [
+            'id' => 'mod_tag_effects',
+            'type' => 'action',
+            'enabled' => true,
+            'payload' => [
+                'actions' => [[
+                    'type' => 'tag_effects',
+                    'assign_tag_ids' => [$inactiveTag->id],
+                    'remove_tag_ids' => [],
+                ]],
+            ],
+        ];
+        $document = $this->sheetImportDocument([
+            $this->sheetImportBlock('block_000001', 'Импорт с тегом', $settings),
+        ]);
+        $preview = $this->actingAs($admin)
+            ->postJson($this->sheetImportPreviewUrl($scenario), [
+                'json' => json_encode($document, JSON_UNESCAPED_UNICODE),
+            ])
+            ->assertOk()
+            ->json();
+
+        $response = $this->actingAs($admin)
+            ->postJson($this->sheetImportApplyUrl($scenario), [
+                'json' => json_encode($document, JSON_UNESCAPED_UNICODE),
+                'draft_version_id' => $preview['draft_version_id'],
+                'base_builder_revision' => $preview['base_builder_revision'],
+                'selected_channels' => [],
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['tag_mappings']);
+        $message = (string) data_get($response->json(), 'errors.tag_mappings.0');
+
+        $this->assertStringContainsString('Файл импорта ссылается на теги без данных для автосоздания', $message);
+        $this->assertStringContainsString('#'.$inactiveTag->id, $message);
+        $this->assertStringContainsString('Импорт с тегом', $message);
+        $this->assertStringNotContainsString('Unknown tag id', $message);
+    }
+
+    public function test_sheet_import_apply_remaps_tag_references(): void
+    {
+        $admin = $this->adminUser();
+        $targetTag = Tag::factory()->create([
+            'name' => 'VIP импорт',
+            'color' => Tag::COLOR_PRIMARY,
+        ]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_sheet_tag_remap',
+            'name' => 'V3 Sheet Tag Remap',
+        ]);
+        $settings = $this->messageSettings('Импорт с тегом');
+        $settings['modules'][] = [
+            'id' => 'mod_tag_effects',
+            'type' => 'action',
+            'enabled' => true,
+            'payload' => [
+                'actions' => [[
+                    'type' => 'tag_effects',
+                    'assign_tag_ids' => [9001],
+                    'remove_tag_ids' => [],
+                ]],
+            ],
+        ];
+        $document = $this->sheetImportDocument([
+            $this->sheetImportBlock('block_000001', 'Импорт с тегом', $settings),
+        ]);
+        $document['export_format_version'] = 2;
+        $document['tag_hints'] = [[
+            'source_tag_id' => 9001,
+            'name' => 'VIP импорт',
+            'slug' => 'vip-import',
+            'color' => Tag::COLOR_PRIMARY,
+            'is_active' => true,
+        ]];
+
+        $preview = $this->actingAs($admin)
+            ->postJson($this->sheetImportPreviewUrl($scenario), [
+                'json' => json_encode($document, JSON_UNESCAPED_UNICODE),
+            ])
+            ->assertOk()
+            ->assertJsonPath('counts.tag_hints', 1)
+            ->assertJsonPath('default_tag_mappings.9001', $targetTag->id)
+            ->assertJsonPath('unresolved_tags', [])
+            ->json();
+
+        $response = $this->actingAs($admin)
+            ->postJson($this->sheetImportApplyUrl($scenario), [
+                'json' => json_encode($document, JSON_UNESCAPED_UNICODE),
+                'draft_version_id' => $preview['draft_version_id'],
+                'base_builder_revision' => $preview['base_builder_revision'],
+                'selected_channels' => [],
+            ])
+            ->assertOk()
+            ->json();
+
+        $this->assertSame(
+            [$targetTag->id],
+            data_get($response, 'builder.blocks.0.settings_payload.modules.1.payload.actions.0.assign_tag_ids'),
+        );
+    }
+
+    public function test_sheet_import_preview_reports_inactive_tag_match(): void
+    {
+        $admin = $this->adminUser();
+        $inactiveTag = Tag::factory()->create([
+            'name' => 'VIP выключен',
+            'color' => Tag::COLOR_DANGER,
+            'is_active' => false,
+        ]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_sheet_inactive_tag_preview',
+            'name' => 'V3 Sheet Inactive Tag Preview',
+        ]);
+        $settings = $this->messageSettings('Импорт с выключенным тегом');
+        $settings['modules'][] = [
+            'id' => 'mod_tag_effects',
+            'type' => 'action',
+            'enabled' => true,
+            'payload' => [
+                'actions' => [[
+                    'type' => 'tag_effects',
+                    'assign_tag_ids' => [9002],
+                    'remove_tag_ids' => [],
+                ]],
+            ],
+        ];
+        $document = $this->sheetImportDocument([
+            $this->sheetImportBlock('block_000001', 'Импорт с выключенным тегом', $settings),
+        ]);
+        $document['export_format_version'] = 2;
+        $document['tag_hints'] = [[
+            'source_tag_id' => 9002,
+            'name' => 'VIP выключен',
+            'slug' => 'vip-vykliuchen',
+            'color' => Tag::COLOR_SUCCESS,
+            'is_active' => true,
+        ]];
+
+        $this->actingAs($admin)
+            ->postJson($this->sheetImportPreviewUrl($scenario), [
+                'json' => json_encode($document, JSON_UNESCAPED_UNICODE),
+            ])
+            ->assertOk()
+            ->assertJsonPath('unresolved_tags.0.reason', 'inactive_match')
+            ->assertJsonPath('unresolved_tags.0.can_create', false)
+            ->assertJsonPath('unresolved_tags.0.can_reactivate', true)
+            ->assertJsonPath('unresolved_tags.0.inactive_tag.id', $inactiveTag->id)
+            ->assertJsonPath('unresolved_tags.0.inactive_tag.color', Tag::COLOR_DANGER);
     }
 
     public function test_put_state_preserves_v3_block_kind_in_settings_payload(): void
@@ -3553,15 +3808,64 @@ class ScenarioBuilderV3StateTest extends TestCase
         $draftBlockIds = $draftBlocks->pluck('id')->map(fn (mixed $id): int => (int) $id)->all();
         $publishedCardIds = $publishedBlocks
             ->map(fn (ScenarioBuilderBlock $block): string => (string) data_get($block->settings_payload, 'ui.card_id'))
+            ->sort()
+            ->values()
             ->all();
         $draftCardIds = $draftBlocks
             ->map(fn (ScenarioBuilderBlock $block): string => (string) data_get($block->settings_payload, 'ui.card_id'))
+            ->sort()
+            ->values()
             ->all();
 
         $this->assertNotSame($publishedBlockIds, $draftBlockIds);
         $this->assertSame($publishedCardIds, $draftCardIds);
         $this->assertSame('1', $publishedResponse['builder']['blocks'][0]['display_id'] ?? null);
         $this->assertSame('1', data_get($runtime, "blocks.$startBlockId.display_number"));
+    }
+
+    public function test_publish_v3_graph_does_not_require_extra_confirmation_for_imported_auto_reply_blocks(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['is_active' => true]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_publish_imported_auto_reply',
+            'name' => 'V3 Publish Imported Auto Reply',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $settings = $this->startMessageButtonsSettings(
+            '/start',
+            [(int) $channel->id],
+            'Маркетолог получили',
+            'КНОПКА-111',
+        );
+        $settings['ui']['import_source'] = [
+            'type' => 'auto_reply_rule_xlsx',
+            'source_workbook_key' => 'auto_reply_rules',
+            'source_rule_id' => 124,
+            'source_rule_name' => 'Импорт автоответов',
+        ];
+
+        $savedState = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, [
+                [
+                    'id' => null,
+                    'client_key' => 'tmp_start',
+                    'type' => 'state',
+                    'title' => 'Старт',
+                    'position' => ['x' => 64, 'y' => 64],
+                    'settings_payload' => $settings,
+                ],
+            ]))
+            ->assertOk()
+            ->json();
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $savedState['scenario']['draft_version_id'],
+                'base_revision' => $savedState['builder']['revision'],
+            ])
+            ->assertOk()
+            ->assertJsonPath('published.version_number', 1);
     }
 
     public function test_publish_v3_graph_rolls_back_when_selected_channel_becomes_unavailable(): void
@@ -4061,6 +4365,51 @@ class ScenarioBuilderV3StateTest extends TestCase
 
         $this->assertTrue($state['permissions']['can_create_tags']);
         $this->assertContains($tagId, collect($state['catalogs']['tags'])->pluck('id')->all());
+    }
+
+    public function test_auto_reply_import_tag_store_requires_explicit_reactivation_for_inactive_tag(): void
+    {
+        $admin = $this->adminUser();
+        $tag = Tag::factory()->create([
+            'name' => 'спящий тег',
+            'color' => Tag::COLOR_PRIMARY,
+            'is_active' => false,
+        ]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_auto_reply_enable_tag',
+            'name' => 'V3 Auto Reply Enable Tag',
+        ]);
+
+        $this->actingAs($admin)
+            ->postJson($this->autoReplyImportTagStoreUrl($scenario), [
+                'name' => 'спящий тег',
+                'color' => Tag::COLOR_WARNING,
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['name']);
+
+        $this->assertDatabaseHas('tags', [
+            'id' => $tag->id,
+            'is_active' => false,
+            'color' => Tag::COLOR_PRIMARY,
+        ]);
+
+        $this->actingAs($admin)
+            ->postJson($this->autoReplyImportTagStoreUrl($scenario), [
+                'name' => 'спящий тег',
+                'color' => Tag::COLOR_WARNING,
+                'reactivate_existing' => true,
+            ])
+            ->assertOk()
+            ->assertJsonPath('tag.id', $tag->id)
+            ->assertJsonPath('tag.is_active', true)
+            ->assertJsonPath('tag.color', Tag::COLOR_PRIMARY);
+
+        $this->assertDatabaseHas('tags', [
+            'id' => $tag->id,
+            'is_active' => true,
+            'color' => Tag::COLOR_PRIMARY,
+        ]);
     }
 
     public function test_auto_reply_export_downloads_v3_blocks_as_xlsx_workbook(): void

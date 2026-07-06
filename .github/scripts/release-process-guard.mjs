@@ -19,6 +19,10 @@ const PROCESS_ONLY_FILE_PATTERNS = [
   /^\.github\/workflows\/copilot-feasibility-spike\.ya?ml$/,
   /^\.github\/scripts\/copilot-merge-readiness\.mjs$/,
   /^\.github\/workflows\/copilot-merge-readiness\.ya?ml$/,
+  /^phpunit\.xml$/,
+  /^scripts\/ci-run-phpunit-shard\.sh$/,
+  /^scripts\/local-test\.sh$/,
+  /^tests\//,
   /^\.agents\/skills\//,
   /(^|\/)[^/]+\.md$/,
 ];
@@ -273,6 +277,52 @@ function compareValidatedFiles(currentFiles, stagingFiles) {
   return failures;
 }
 
+function fileContentsEqual(left, right) {
+  return left.exists === right.exists
+    && Buffer.compare(left.content || Buffer.alloc(0), right.content || Buffer.alloc(0)) === 0;
+}
+
+function compareValidatedFileContents(currentFiles, stagingFiles, fileContentSnapshots) {
+  const current = groupFilesByName(currentFiles);
+  const staging = groupFilesByName(stagingFiles);
+  const failures = [];
+
+  for (const filename of current.keys()) {
+    if (!staging.has(filename)) {
+      failures.push(`unexpected file in main PR: ${filename}`);
+    }
+  }
+
+  for (const filename of staging.keys()) {
+    const snapshot = fileContentSnapshots.get(filename);
+
+    if (!snapshot) {
+      failures.push(`missing content snapshot for ${filename}`);
+      continue;
+    }
+
+    if (snapshot.error) {
+      failures.push(`content snapshot failed for ${filename}: ${snapshot.error}`);
+      continue;
+    }
+
+    const currentGroup = current.get(filename);
+    const baseMatchesStaging = fileContentsEqual(snapshot.base, snapshot.staging);
+    const headMatchesStaging = fileContentsEqual(snapshot.head, snapshot.staging);
+
+    if (!currentGroup && !baseMatchesStaging) {
+      failures.push(`missing file from staging PR: ${filename}`);
+      continue;
+    }
+
+    if (currentGroup && !headMatchesStaging) {
+      failures.push(`content mismatch for ${filename}: current PR head must match the staging smoke commit`);
+    }
+  }
+
+  return failures;
+}
+
 function stripTechnicalMarkdown(text) {
   return text
     .replace(/```[\s\S]*?```/g, " ")
@@ -317,6 +367,13 @@ function git(args) {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
+}
+
+function gitRaw(args) {
+  return execFileSync("git", args, {
+    encoding: "buffer",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
 }
 
 function fileStatusFromNameStatus(statusCode) {
@@ -407,6 +464,7 @@ function evaluatePullRequest({
   stagingPrFiles = [],
   stagingPrFilesFetchError = null,
   stagingPrFilesFetchErrors = [],
+  fileContentSnapshots = null,
   currentPrCommitShas = [],
   stagingSmokeRun = null,
   stagingSmokeRunFetchError = null,
@@ -488,7 +546,9 @@ function evaluatePullRequest({
     } else if (stagingRuntimeFiles.length === 0) {
       failures.push(`Referenced staging PRs #${stagingPrNumbers.join(", #")} must expose runtime changed files.`);
     } else {
-      const fileFailures = compareValidatedFiles(runtimeFiles, stagingRuntimeFiles);
+      const fileFailures = fileContentSnapshots
+        ? compareValidatedFileContents(runtimeFiles, stagingRuntimeFiles, fileContentSnapshots)
+        : compareValidatedFiles(runtimeFiles, stagingRuntimeFiles);
 
       if (fileFailures.length > 0) {
         failures.push(
@@ -586,6 +646,54 @@ async function listPullRequestCommitShas({ owner, repo, pullNumber, token }) {
   }
 }
 
+function ensureGitCommit(sha) {
+  if (!sha) {
+    return;
+  }
+
+  try {
+    gitRaw(["cat-file", "-e", `${sha}^{commit}`]);
+    return;
+  } catch {
+    // The workflow checkout is shallow. Fetch the exact validated commits only
+    // when local object storage does not already contain them.
+  }
+
+  git(["fetch", "--no-tags", "--depth=1", "origin", sha]);
+}
+
+function gitFileSnapshot(sha, filename) {
+  try {
+    return {
+      exists: true,
+      content: gitRaw(["show", `${sha}:${filename}`]),
+    };
+  } catch {
+    return {
+      exists: false,
+      content: Buffer.alloc(0),
+    };
+  }
+}
+
+function buildFileContentSnapshots({ filenames, baseSha, headSha, stagingSha }) {
+  ensureGitCommit(baseSha);
+  ensureGitCommit(headSha);
+  ensureGitCommit(stagingSha);
+
+  const snapshots = new Map();
+
+  for (const filename of filenames) {
+    snapshots.set(filename, {
+      base: gitFileSnapshot(baseSha, filename),
+      head: gitFileSnapshot(headSha, filename),
+      staging: gitFileSnapshot(stagingSha, filename),
+    });
+  }
+
+  return snapshots;
+}
+
 function parseRepository(repository) {
   const [owner, repo] = repository.split("/");
 
@@ -651,6 +759,10 @@ function runSelfTest() {
   assert.equal(isProcessOnlyFile(".github/workflows/copilot-feasibility-spike.yml"), true);
   assert.equal(isProcessOnlyFile(".github/scripts/copilot-merge-readiness.mjs"), true);
   assert.equal(isProcessOnlyFile(".github/workflows/copilot-merge-readiness.yml"), true);
+  assert.equal(isProcessOnlyFile("phpunit.xml"), true);
+  assert.equal(isProcessOnlyFile("scripts/ci-run-phpunit-shard.sh"), true);
+  assert.equal(isProcessOnlyFile("scripts/local-test.sh"), true);
+  assert.equal(isProcessOnlyFile("tests/Feature/ScenarioBuilderV3StateTest.php"), true);
   assert.equal(isProcessOnlyFile(".agents/skills/ab-connector-skill-authoring/agents/openai.yaml"), true);
   assert.equal(isProcessOnlyFile("app/Services/Bitrix24ContactSyncService.php"), false);
   assert.deepEqual(parseGitHubActionsRunUrl("https://github.com/Etogerman/Project-1/actions/runs/123"), {
@@ -812,6 +924,73 @@ function runSelfTest() {
     [],
   );
 
+  assert.deepEqual(
+    evaluatePullRequest({
+      baseRef: "main",
+      title: "[codex] Исправить синхронизацию Bitrix24",
+      body: "Описание PR на русском языке.\n\nStaging PRs: #614, #615\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
+      files: runtimeFiles,
+      repository: { owner: "Etogerman", repo: "Project-1" },
+      stagingPrs: [stagingPr, nextStagingPr],
+      stagingPrFiles: [
+        matchingStagingFiles[0],
+        {
+          filename: "app/Services/AlreadyReleasedService.php",
+          patch: "index aaa..bbb 100644\n@@ -1,3 +1,3 @@\n-old\n+already released",
+          status: "modified",
+        },
+      ],
+      fileContentSnapshots: new Map([
+        [
+          "app/Services/Bitrix24ContactSyncService.php",
+          {
+            base: { exists: true, content: Buffer.from("old") },
+            head: { exists: true, content: Buffer.from("new") },
+            staging: { exists: true, content: Buffer.from("new") },
+          },
+        ],
+        [
+          "app/Services/AlreadyReleasedService.php",
+          {
+            base: { exists: true, content: Buffer.from("already released") },
+            head: { exists: true, content: Buffer.from("already released") },
+            staging: { exists: true, content: Buffer.from("already released") },
+          },
+        ],
+      ]),
+      currentPrCommitShas: ["1111111111111111111111111111111111111111"],
+      stagingSmokeRun: {
+        ...successfulSmokeRun,
+        head_sha: nextStagingPr.merge_commit_sha,
+      },
+    }).failures,
+    [],
+  );
+
+  assert.match(
+    evaluatePullRequest({
+      baseRef: "main",
+      title: "[codex] Исправить синхронизацию Bitrix24",
+      body: "Описание PR на русском языке.\n\nStaging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
+      files: runtimeFiles,
+      stagingPr,
+      stagingPrFiles: matchingStagingFiles,
+      fileContentSnapshots: new Map([
+        [
+          "app/Services/Bitrix24ContactSyncService.php",
+          {
+            base: { exists: true, content: Buffer.from("old") },
+            head: { exists: true, content: Buffer.from("wrong") },
+            staging: { exists: true, content: Buffer.from("new") },
+          },
+        ],
+      ]),
+      currentPrCommitShas: ["1111111111111111111111111111111111111111"],
+      stagingSmokeRun: successfulSmokeRun,
+    }).failures.join("\n"),
+    /content mismatch/,
+  );
+
   assert.match(
     evaluatePullRequest({
       baseRef: "main",
@@ -948,6 +1127,7 @@ async function run() {
   const stagingPrFetchErrors = [];
   let stagingPrFiles = [];
   const stagingPrFilesFetchErrors = [];
+  let fileContentSnapshots = null;
   let currentPrCommitShas = [];
   let stagingSmokeRun = null;
   let stagingSmokeRunFetchError = null;
@@ -992,6 +1172,28 @@ async function run() {
     }
   }
 
+  if (
+    pullRequest.base.ref === "main"
+    && initialResult.runtimeFiles.length > 0
+    && stagingSmokeRun?.head_sha
+    && stagingPrFiles.length > 0
+  ) {
+    const snapshotFilenames = [
+      ...new Set(
+        [...initialResult.runtimeFiles, ...stagingPrFiles]
+          .filter((file) => !isProcessOnlyFile(file.filename))
+          .map((file) => file.filename),
+      ),
+    ].sort();
+
+    fileContentSnapshots = buildFileContentSnapshots({
+      filenames: snapshotFilenames,
+      baseSha: pullRequest.base.sha,
+      headSha: pullRequest.head.sha,
+      stagingSha: stagingSmokeRun.head_sha,
+    });
+  }
+
   const result = evaluatePullRequest({
     baseRef: pullRequest.base.ref,
     title: pullRequest.title || "",
@@ -1002,6 +1204,7 @@ async function run() {
     stagingPrFetchErrors,
     stagingPrFiles,
     stagingPrFilesFetchErrors,
+    fileContentSnapshots,
     currentPrCommitShas,
     stagingSmokeRun,
     stagingSmokeRunFetchError,

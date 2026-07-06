@@ -37,5 +37,8 @@ final readonly class IncomingBotMessage
         public ?string $messageParameter = null,
         public ?string $systemEventCode = null,
         public ?string $avatarUrl = null,
+        public array $media = [],
+        public ?string $providerGroupKey = null,
+        public ?array $richText = null,
     ) {}
 }

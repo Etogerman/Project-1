@@ -51,7 +51,6 @@ class ScenarioBuilderV3StateController extends Controller
         $draftVersionId = (int) ($request->integer('draft_version_id') ?: $request->integer('editable_version_id'));
         $baseRevision = trim((string) $request->input('base_revision', ''));
         $scheduledTransitionPolicy = trim((string) $request->input('scheduled_transition_policy', ''));
-        $confirmAutoReplyImportRisk = $request->boolean('confirm_auto_reply_import_double_response_risk');
 
         if (
             $scheduledTransitionPolicy !== ''
@@ -63,18 +62,6 @@ class ScenarioBuilderV3StateController extends Controller
             throw ValidationException::withMessages([
                 'scheduled_transition_policy' => 'Неизвестное действие для запланированных переходов.',
             ]);
-        }
-
-        $autoReplyImportSummary = $publishScenarioBuilderV3Action->autoReplyImportSummary($scenario, $draftVersionId);
-
-        if ($autoReplyImportSummary['count'] > 0 && ! $confirmAutoReplyImportRisk) {
-            return response()->json([
-                'message' => 'В сценарии есть импортированные автоответы. Подтвердите риск двойных ответов перед публикацией.',
-                'code' => 'auto_reply_import_double_response_risk',
-                'warning' => [
-                    'auto_reply_import' => $autoReplyImportSummary,
-                ],
-            ], 409);
         }
 
         $scheduledTransitions = $publishScenarioBuilderV3Action->pendingScheduledTransitionsSummary($scenario);
@@ -117,7 +104,11 @@ class ScenarioBuilderV3StateController extends Controller
         ScenarioBuilderV3SheetTransferService $sheetTransferService,
     ): JsonResponse {
         $user = $this->authorizeScenarioBuilderAccess($request, $scenario);
-        $document = $sheetTransferService->export($scenario, $user);
+        $document = $sheetTransferService->export(
+            $scenario,
+            $user,
+            $request->query('sheet_id'),
+        );
         $sheetId = preg_replace('/[^A-Za-z0-9_-]+/', '-', (string) data_get($document, 'sheet.source_sheet_id', 'main'));
 
         return response()
@@ -203,18 +194,27 @@ class ScenarioBuilderV3StateController extends Controller
         $validated = $request->validate([
             'name' => ['required', 'string', 'max:255'],
             'color' => ['nullable', 'string', 'in:'.implode(',', array_keys(Tag::colorOptions()))],
+            'reactivate_existing' => ['sometimes', 'boolean'],
         ]);
 
         $name = trim((string) $validated['name']);
+        $reactivateExisting = (bool) ($validated['reactivate_existing'] ?? false);
         $existingTag = Tag::query()
             ->where('name', $name)
             ->first();
 
         if ($existingTag instanceof Tag) {
             if (! $existingTag->isActive()) {
-                throw ValidationException::withMessages([
-                    'name' => 'Тег с таким названием уже есть, но он выключен. Включите его в справочнике тегов.',
-                ]);
+                if (! $reactivateExisting) {
+                    throw ValidationException::withMessages([
+                        'name' => 'Тег с таким названием уже есть, но он выключен. Подтвердите включение существующего тега.',
+                    ]);
+                }
+
+                $existingTag->forceFill([
+                    'is_active' => true,
+                ])->save();
+                $existingTag->refresh();
             }
 
             return response()->json([
@@ -276,7 +276,7 @@ class ScenarioBuilderV3StateController extends Controller
     }
 
     /**
-     * @return array{id: int, name: string, slug: string, color: string}
+     * @return array{id: int, name: string, slug: string, color: string, is_active: bool}
      */
     private function tagPayload(Tag $tag): array
     {
@@ -285,6 +285,7 @@ class ScenarioBuilderV3StateController extends Controller
             'name' => (string) $tag->name,
             'slug' => (string) $tag->slug,
             'color' => (string) $tag->color,
+            'is_active' => (bool) $tag->is_active,
         ];
     }
 }

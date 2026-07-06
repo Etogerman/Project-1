@@ -4,6 +4,7 @@ namespace App\Services\Scenarios;
 
 use App\Models\Channel;
 use App\Models\Scenario;
+use App\Models\Tag;
 use App\Models\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Str;
@@ -13,7 +14,9 @@ class ScenarioBuilderV3SheetTransferService
 {
     public const FORMAT = 'abrikosoff.constructor.v3.sheet_export';
 
-    public const EXPORT_FORMAT_VERSION = 1;
+    public const EXPORT_FORMAT_VERSION = 2;
+
+    private const LEGACY_EXPORT_FORMAT_VERSION = 1;
 
     public const MAX_JSON_BYTES = 1048576;
 
@@ -27,11 +30,11 @@ class ScenarioBuilderV3SheetTransferService
     /**
      * @return array<string, mixed>
      */
-    public function export(Scenario $scenario, User $user): array
+    public function export(Scenario $scenario, User $user, mixed $requestedSheetId = null): array
     {
         $state = $this->currentState($scenario, $user);
         $builder = $state['builder'];
-        $sheetId = $this->activeSheetId($builder);
+        $sheetId = $this->exportSheetId($builder, $requestedSheetId);
         $sheet = $this->sheetById($builder, $sheetId);
         $blocks = $this->blocksForSheet($builder, $sheetId);
         $blockKeys = collect($blocks)->pluck('client_key')->mapWithKeys(fn (mixed $key): array => [(string) $key => true])->all();
@@ -118,6 +121,8 @@ class ScenarioBuilderV3SheetTransferService
             ];
         }
 
+        $tagHints = $this->tagHintsForReferences($this->tagReferenceContexts($exportBlocks, $exportEdges));
+
         return [
             'format' => self::FORMAT,
             'export_format_version' => self::EXPORT_FORMAT_VERSION,
@@ -141,6 +146,7 @@ class ScenarioBuilderV3SheetTransferService
             'edges' => $exportEdges,
             'start_blocks' => $startBlocks,
             'channel_hints' => $channelHints,
+            'tag_hints' => $tagHints,
         ];
     }
 
@@ -169,6 +175,7 @@ class ScenarioBuilderV3SheetTransferService
     {
         $document = $this->decodeDocument($input['json'] ?? null);
         $this->validateDocument($document);
+        $tagMappings = $this->resolveImportedTagMappings($document, $input['tag_mappings'] ?? []);
 
         $selectedChannels = $this->selectedChannels($input['selected_channels'] ?? []);
         $startExportKeys = collect($document['start_blocks'])->pluck('block_export_key')->mapWithKeys(fn (mixed $key): array => [(string) $key => true])->all();
@@ -203,7 +210,7 @@ class ScenarioBuilderV3SheetTransferService
             ]);
         }
 
-        $newBuilder = $this->buildImportedBuilder($builder, $document, $sheetId, $selectedChannels);
+        $newBuilder = $this->buildImportedBuilder($builder, $document, $sheetId, $selectedChannels, $tagMappings);
         $savedState = $this->saveScenarioBuilderV3StateAction->handle($scenario, [
             'draft_version_id' => $draftVersionId,
             'base_revision' => $baseRevision,
@@ -267,7 +274,9 @@ class ScenarioBuilderV3SheetTransferService
             $this->fail('format', 'Формат файла не поддерживается.');
         }
 
-        if ((int) ($document['export_format_version'] ?? 0) !== self::EXPORT_FORMAT_VERSION) {
+        $exportFormatVersion = (int) ($document['export_format_version'] ?? 0);
+
+        if (! in_array($exportFormatVersion, [self::LEGACY_EXPORT_FORMAT_VERSION, self::EXPORT_FORMAT_VERSION], true)) {
             $this->fail('export_format_version', 'Версия export-формата не поддерживается.');
         }
 
@@ -286,6 +295,9 @@ class ScenarioBuilderV3SheetTransferService
         $edges = $this->listValue($document['edges'], 'edges');
         $startBlocks = $this->listValue($document['start_blocks'], 'start_blocks');
         $channelHints = $this->listValue($document['channel_hints'], 'channel_hints');
+        $tagHints = array_key_exists('tag_hints', $document)
+            ? $this->listValue($document['tag_hints'], 'tag_hints')
+            : [];
 
         $this->stringValue($sheet['export_key'] ?? null, 'sheet.export_key');
         $this->stringValue($sheet['source_sheet_id'] ?? null, 'sheet.source_sheet_id');
@@ -326,6 +338,18 @@ class ScenarioBuilderV3SheetTransferService
             $this->guardUniqueKey($hintKeys, $exportKey, "channel_hints.$index.export_key");
         }
 
+        $tagHintKeys = [];
+        foreach ($tagHints as $index => $hint) {
+            $hint = $this->arrayValue($hint, "tag_hints.$index");
+            $sourceTagId = $this->positiveIntValue($hint['source_tag_id'] ?? null, "tag_hints.$index.source_tag_id");
+            $this->guardUniqueKey($tagHintKeys, (string) $sourceTagId, "tag_hints.$index.source_tag_id");
+            $this->stringValue($hint['name'] ?? null, "tag_hints.$index.name");
+
+            if (isset($hint['color']) && ! in_array((string) $hint['color'], array_keys(Tag::colorOptions()), true)) {
+                $this->fail("tag_hints.$index.color", 'Некорректный цвет тега.');
+            }
+        }
+
         foreach ($startBlocks as $index => $startBlock) {
             $startBlock = $this->arrayValue($startBlock, "start_blocks.$index");
             $blockExportKey = $this->stringValue($startBlock['block_export_key'] ?? null, "start_blocks.$index.block_export_key");
@@ -351,6 +375,7 @@ class ScenarioBuilderV3SheetTransferService
      */
     private function previewPayload(array $state, array $document, string $sheetId, User $user): array
     {
+        $tagResolution = $this->tagResolutionPreview($document);
         $startBlocks = collect($document['start_blocks'])
             ->map(fn (array $startBlock): array => [
                 'block_export_key' => (string) $startBlock['block_export_key'],
@@ -374,13 +399,22 @@ class ScenarioBuilderV3SheetTransferService
                 'edges' => count($document['edges']),
                 'start_blocks' => count($document['start_blocks']),
                 'channel_hints' => count($document['channel_hints']),
+                'tag_hints' => count($this->tagReferenceContexts($document['blocks'], $document['edges'])),
             ],
             'start_blocks' => $startBlocks,
             'channel_hints' => $document['channel_hints'],
             'available_channels' => $this->availableChannels($user),
+            'available_tags' => $this->availableTags(),
+            'tag_hints' => array_values($this->documentTagHints($document)),
+            'default_tag_mappings' => $tagResolution['mappings'],
+            'unresolved_tags' => $tagResolution['unresolved'],
+            'can_create_tags' => $user->hasRolePermission('tags.edit'),
             'warnings' => array_values(array_filter([
                 'Импорт полностью заменит активный лист. Остальные листы останутся без изменений.',
                 count($document['blocks']) === 0 ? 'Файл содержит пустой лист.' : null,
+                $this->hasLegacyTagReferencesWithoutHints($document)
+                    ? 'Файл содержит production-ссылки на теги без названий. Сопоставьте их с текущими тегами или создайте локальные технические теги прямо в импорте.'
+                    : null,
             ])),
         ];
     }
@@ -389,9 +423,10 @@ class ScenarioBuilderV3SheetTransferService
      * @param  array<string, mixed>  $builder
      * @param  array<string, mixed>  $document
      * @param  array<string, list<int>>  $selectedChannels
+     * @param  array<int, int>  $tagMappings
      * @return array<string, mixed>
      */
-    private function buildImportedBuilder(array $builder, array $document, string $sheetId, array $selectedChannels): array
+    private function buildImportedBuilder(array $builder, array $document, string $sheetId, array $selectedChannels, array $tagMappings): array
     {
         $currentBlocks = is_array($builder['blocks'] ?? null) ? $builder['blocks'] : [];
         $currentEdges = is_array($builder['edges'] ?? null) ? $builder['edges'] : [];
@@ -413,7 +448,7 @@ class ScenarioBuilderV3SheetTransferService
 
         $blockClientKeysByExportKey = [];
         $importedBlocks = collect($document['blocks'])
-            ->map(function (array $block) use ($sheetId, $selectedChannels, &$blockClientKeysByExportKey): array {
+            ->map(function (array $block) use ($sheetId, $selectedChannels, $tagMappings, &$blockClientKeysByExportKey): array {
                 $exportKey = (string) $block['export_key'];
                 $clientKey = 'import_'.$exportKey;
                 $blockClientKeysByExportKey[$exportKey] = $clientKey;
@@ -431,6 +466,7 @@ class ScenarioBuilderV3SheetTransferService
                         $block['settings_payload'] ?? [],
                         $sheetId,
                         $selectedChannels[$exportKey] ?? null,
+                        $tagMappings,
                     ),
                 ];
             })
@@ -453,6 +489,7 @@ class ScenarioBuilderV3SheetTransferService
                 'condition_payload' => $this->sanitizeConditionPayloadForImport(
                     $edge['condition_payload'] ?? [],
                     data_get($edge, 'source.output_id'),
+                    $tagMappings,
                 ),
             ])
             ->values()
@@ -475,6 +512,384 @@ class ScenarioBuilderV3SheetTransferService
                 ? $builder['visible_scope']
                 : ['block_ids' => [], 'edge_ids' => []],
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $document
+     * @return array<int, int>
+     */
+    private function resolveImportedTagMappings(array $document, mixed $rawMappings): array
+    {
+        $references = $this->tagReferenceContexts($document['blocks'], $document['edges']);
+
+        if ($references === []) {
+            return [];
+        }
+
+        $mappings = array_replace(
+            $this->defaultTagMappings($references, $this->documentTagHints($document)),
+            $this->userTagMappings($rawMappings),
+        );
+        $mappings = array_intersect_key($mappings, $references);
+        $targetIds = array_values(array_unique(array_filter(
+            array_values($mappings),
+            fn (int $id): bool => $id > 0,
+        )));
+
+        if ($targetIds !== [] && Tag::query()->active()->whereKey($targetIds)->count() !== count($targetIds)) {
+            throw ValidationException::withMessages([
+                'tag_mappings' => 'Один из выбранных тегов недоступен или выключен.',
+            ]);
+        }
+
+        $missingSourceIds = array_values(array_diff(array_keys($references), array_keys($mappings)));
+
+        if ($missingSourceIds !== []) {
+            sort($missingSourceIds);
+
+            throw ValidationException::withMessages([
+                'tag_mappings' => $this->formatUnresolvedTagMappingMessage($missingSourceIds, $references, $this->documentTagHints($document)),
+            ]);
+        }
+
+        return $mappings;
+    }
+
+    /**
+     * @param  array<string, mixed>  $document
+     * @return array{mappings: array<int, int>, unresolved: list<array<string, mixed>>}
+     */
+    private function tagResolutionPreview(array $document): array
+    {
+        $references = $this->tagReferenceContexts($document['blocks'], $document['edges']);
+        $hints = $this->documentTagHints($document);
+        $mappings = $this->defaultTagMappings($references, $hints);
+        $inactiveTagsByName = $this->inactiveTagsByNormalizedName();
+        $unresolved = [];
+
+        foreach ($references as $sourceTagId => $contexts) {
+            if (isset($mappings[$sourceTagId])) {
+                continue;
+            }
+
+            $hint = $hints[$sourceTagId] ?? [];
+            $name = trim((string) ($hint['name'] ?? ''));
+            $inactiveTag = $name !== ''
+                ? ($inactiveTagsByName[$this->normalizeTagName($name)] ?? null)
+                : null;
+
+            $unresolved[] = [
+                'source_tag_id' => $sourceTagId,
+                'name' => $name,
+                'label' => $name !== '' ? $name : 'Тег #'.$sourceTagId,
+                'color' => (string) ($hint['color'] ?? Tag::COLOR_GRAY),
+                'can_create' => $name !== '' && ! ($inactiveTag instanceof Tag),
+                'can_reactivate' => $inactiveTag instanceof Tag,
+                'inactive_tag' => $inactiveTag instanceof Tag ? $this->tagPreviewPayload($inactiveTag) : null,
+                'reason' => $inactiveTag instanceof Tag
+                    ? 'inactive_match'
+                    : ($name !== '' ? 'not_found' : 'legacy_missing_metadata'),
+                'contexts' => array_slice(array_values(array_unique($contexts)), 0, 3),
+            ];
+        }
+
+        return [
+            'mappings' => $mappings,
+            'unresolved' => $unresolved,
+        ];
+    }
+
+    /**
+     * @param  array<int, list<string>>  $references
+     * @param  array<int, array<string, mixed>>  $hints
+     * @return array<int, int>
+     */
+    private function defaultTagMappings(array $references, array $hints): array
+    {
+        $sourceIds = array_keys($references);
+
+        if ($sourceIds === []) {
+            return [];
+        }
+
+        $mappings = Tag::query()
+            ->active()
+            ->whereKey($sourceIds)
+            ->pluck('id')
+            ->mapWithKeys(fn (mixed $id): array => [(int) $id => (int) $id])
+            ->all();
+        $unmappedNames = [];
+
+        foreach ($sourceIds as $sourceId) {
+            if (isset($mappings[$sourceId])) {
+                continue;
+            }
+
+            $name = $this->normalizeTagName((string) ($hints[$sourceId]['name'] ?? ''));
+
+            if ($name !== '') {
+                $unmappedNames[$sourceId] = $name;
+            }
+        }
+
+        if ($unmappedNames === []) {
+            return $mappings;
+        }
+
+        $tagsByName = Tag::query()
+            ->active()
+            ->get(['id', 'name'])
+            ->mapWithKeys(fn (Tag $tag): array => [$this->normalizeTagName($tag->name) => (int) $tag->id])
+            ->all();
+
+        foreach ($unmappedNames as $sourceId => $name) {
+            if (isset($tagsByName[$name])) {
+                $mappings[$sourceId] = $tagsByName[$name];
+            }
+        }
+
+        return $mappings;
+    }
+
+    /**
+     * @return array<string, Tag>
+     */
+    private function inactiveTagsByNormalizedName(): array
+    {
+        return Tag::query()
+            ->where('is_active', false)
+            ->get(['id', 'name', 'slug', 'color', 'is_active'])
+            ->mapWithKeys(fn (Tag $tag): array => [$this->normalizeTagName($tag->name) => $tag])
+            ->all();
+    }
+
+    /**
+     * @return array{id: int, name: string, slug: string, color: string, is_active: bool}
+     */
+    private function tagPreviewPayload(Tag $tag): array
+    {
+        return [
+            'id' => (int) $tag->id,
+            'name' => (string) $tag->name,
+            'slug' => (string) $tag->slug,
+            'color' => (string) $tag->color,
+            'is_active' => (bool) $tag->is_active,
+        ];
+    }
+
+    /**
+     * @return array<int, int>
+     */
+    private function userTagMappings(mixed $value): array
+    {
+        if (! is_array($value)) {
+            return [];
+        }
+
+        $mappings = [];
+
+        foreach ($value as $key => $mapping) {
+            if (is_array($mapping)) {
+                $sourceTagId = (int) ($mapping['source_tag_id'] ?? 0);
+                $tagId = (int) ($mapping['tag_id'] ?? 0);
+            } else {
+                $sourceTagId = is_numeric($key) ? (int) $key : 0;
+                $tagId = (int) $mapping;
+            }
+
+            if ($sourceTagId > 0 && $tagId > 0) {
+                $mappings[$sourceTagId] = $tagId;
+            }
+        }
+
+        return $mappings;
+    }
+
+    /**
+     * @param  array<string, mixed>  $document
+     * @return array<int, array{source_tag_id: int, name: string, slug: string, color: string, is_active: bool}>
+     */
+    private function documentTagHints(array $document): array
+    {
+        $rawHints = $document['tag_hints'] ?? [];
+
+        if (! is_array($rawHints) || ! array_is_list($rawHints)) {
+            return [];
+        }
+
+        $hints = [];
+
+        foreach ($rawHints as $hint) {
+            if (! is_array($hint)) {
+                continue;
+            }
+
+            $sourceTagId = (int) ($hint['source_tag_id'] ?? 0);
+
+            if ($sourceTagId <= 0) {
+                continue;
+            }
+
+            $color = (string) ($hint['color'] ?? Tag::COLOR_GRAY);
+            $hints[$sourceTagId] = [
+                'source_tag_id' => $sourceTagId,
+                'name' => trim((string) ($hint['name'] ?? '')),
+                'slug' => trim((string) ($hint['slug'] ?? '')),
+                'color' => in_array($color, array_keys(Tag::colorOptions()), true) ? $color : Tag::COLOR_GRAY,
+                'is_active' => (bool) ($hint['is_active'] ?? true),
+            ];
+        }
+
+        return $hints;
+    }
+
+    /**
+     * @param  array<int, list<string>>  $references
+     * @return list<array<string, mixed>>
+     */
+    private function tagHintsForReferences(array $references): array
+    {
+        $ids = array_keys($references);
+
+        if ($ids === []) {
+            return [];
+        }
+
+        return Tag::query()
+            ->whereKey($ids)
+            ->orderBy('id')
+            ->get(['id', 'name', 'slug', 'color', 'is_active'])
+            ->map(fn (Tag $tag): array => [
+                'source_tag_id' => (int) $tag->id,
+                'name' => (string) $tag->name,
+                'slug' => (string) $tag->slug,
+                'color' => (string) $tag->color,
+                'is_active' => (bool) $tag->is_active,
+            ])
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $blocks
+     * @param  list<array<string, mixed>>  $edges
+     * @return array<int, list<string>>
+     */
+    private function tagReferenceContexts(array $blocks, array $edges): array
+    {
+        $references = [];
+
+        foreach ($blocks as $blockIndex => $block) {
+            $blockTitle = trim((string) ($block['title'] ?? ''));
+            $blockLabel = $blockTitle !== '' ? $blockTitle : 'блок #'.($blockIndex + 1);
+            $modules = data_get($block, 'settings_payload.modules', []);
+
+            if (! is_array($modules)) {
+                continue;
+            }
+
+            foreach ($modules as $module) {
+                if (! is_array($module)) {
+                    continue;
+                }
+
+                $this->rememberTagReferences(
+                    $references,
+                    data_get($module, 'payload.tag_condition.tag_ids', []),
+                    "блок {$blockLabel}, условие по тегам",
+                );
+
+                $actions = data_get($module, 'payload.actions', []);
+
+                if (! is_array($actions)) {
+                    continue;
+                }
+
+                foreach ($actions as $action) {
+                    if (! is_array($action) || ($action['type'] ?? null) !== 'tag_effects') {
+                        continue;
+                    }
+
+                    $this->rememberTagReferences(
+                        $references,
+                        $action['assign_tag_ids'] ?? [],
+                        "блок {$blockLabel}, назначение тегов",
+                    );
+                    $this->rememberTagReferences(
+                        $references,
+                        $action['remove_tag_ids'] ?? [],
+                        "блок {$blockLabel}, снятие тегов",
+                    );
+                }
+            }
+        }
+
+        foreach ($edges as $edgeIndex => $edge) {
+            $edgeLabel = trim((string) ($edge['export_key'] ?? ''));
+            $edgeLabel = $edgeLabel !== '' ? $edgeLabel : 'связь #'.($edgeIndex + 1);
+
+            $this->rememberTagReferences(
+                $references,
+                data_get($edge, 'condition_payload.tag_condition.tag_ids', []),
+                "{$edgeLabel}, условие по тегам",
+            );
+        }
+
+        return $references;
+    }
+
+    /**
+     * @param  array<int, list<string>>  $references
+     */
+    private function rememberTagReferences(array &$references, mixed $ids, string $context): void
+    {
+        foreach ($this->normalizeIdList($ids) as $id) {
+            $references[$id] ??= [];
+            $references[$id][] = $context;
+        }
+    }
+
+    /**
+     * @param  list<int>  $missingSourceIds
+     * @param  array<int, list<string>>  $references
+     * @param  array<int, array<string, mixed>>  $hints
+     */
+    private function formatUnresolvedTagMappingMessage(array $missingSourceIds, array $references, array $hints): string
+    {
+        $visibleIds = array_slice($missingSourceIds, 0, 10);
+        $idsText = implode(', ', array_map(fn (int $id): string => '#'.$id, $visibleIds));
+        $hiddenCount = count($missingSourceIds) - count($visibleIds);
+
+        if ($hiddenCount > 0) {
+            $idsText .= ' и ещё '.$hiddenCount;
+        }
+
+        $firstId = $missingSourceIds[0];
+        $firstContext = $references[$firstId][0] ?? null;
+        $contextText = $firstContext !== null ? ' Первый проблемный участок: '.$firstContext.'.' : '';
+        $hasMissingHints = collect($missingSourceIds)->contains(
+            fn (int $id): bool => trim((string) ($hints[$id]['name'] ?? '')) === '',
+        );
+
+        if ($hasMissingHints) {
+            return 'Файл импорта ссылается на теги без данных для автосоздания: '.$idsText.'.'
+                .$contextText
+                .' Сопоставьте их с существующими тегами или создайте локальные технические теги прямо в импорте.';
+        }
+
+        return 'Сопоставьте или создайте теги из файла перед импортом: '.$idsText.'.'.$contextText;
+    }
+
+    /**
+     * @param  array<string, mixed>  $document
+     */
+    private function hasLegacyTagReferencesWithoutHints(array $document): bool
+    {
+        if (array_key_exists('tag_hints', $document)) {
+            return false;
+        }
+
+        return $this->tagReferenceContexts($document['blocks'], $document['edges']) !== [];
     }
 
     /**
@@ -531,6 +946,34 @@ class ScenarioBuilderV3SheetTransferService
 
     /**
      * @param  array<string, mixed>  $builder
+     */
+    private function exportSheetId(array $builder, mixed $requestedSheetId): string
+    {
+        $sheetId = trim((string) $requestedSheetId);
+
+        if ($sheetId === '') {
+            return $this->activeSheetId($builder);
+        }
+
+        if ($sheetId === self::DEFAULT_SHEET_ID) {
+            return $sheetId;
+        }
+
+        $exists = collect($builder['sheets'] ?? [])->contains(
+            fn (mixed $sheet): bool => is_array($sheet) && (string) ($sheet['id'] ?? '') === $sheetId,
+        );
+
+        if (! $exists) {
+            throw ValidationException::withMessages([
+                'sheet_id' => 'Лист для экспорта не найден.',
+            ]);
+        }
+
+        return $sheetId;
+    }
+
+    /**
+     * @param  array<string, mixed>  $builder
      * @return array<string, mixed>
      */
     private function sheetById(array $builder, string $sheetId): array
@@ -578,9 +1021,10 @@ class ScenarioBuilderV3SheetTransferService
     /**
      * @param  array<string, mixed>  $settingsPayload
      * @param  list<int>|null  $selectedChannelIds
+     * @param  array<int, int>  $tagMappings
      * @return array<string, mixed>
      */
-    private function sanitizeSettingsPayloadForImport(array $settingsPayload, string $sheetId, ?array $selectedChannelIds): array
+    private function sanitizeSettingsPayloadForImport(array $settingsPayload, string $sheetId, ?array $selectedChannelIds, array $tagMappings): array
     {
         $settingsPayload = $this->sanitizeSettingsPayloadForExport($settingsPayload);
         $settingsPayload['schema_version'] = BuildScenarioBuilderV3StateAction::SCHEMA_VERSION;
@@ -611,6 +1055,8 @@ class ScenarioBuilderV3SheetTransferService
             }
         }
 
+        $settingsPayload = $this->remapSettingsTagReferences($settingsPayload, $tagMappings);
+
         return $settingsPayload;
     }
 
@@ -627,9 +1073,10 @@ class ScenarioBuilderV3SheetTransferService
 
     /**
      * @param  array<string, mixed>  $conditionPayload
+     * @param  array<int, int>  $tagMappings
      * @return array<string, mixed>
      */
-    private function sanitizeConditionPayloadForImport(array $conditionPayload, mixed $sourceOutputId): array
+    private function sanitizeConditionPayloadForImport(array $conditionPayload, mixed $sourceOutputId, array $tagMappings): array
     {
         $conditionPayload = $this->sanitizeConditionPayloadForExport($conditionPayload);
         $conditionPayload['schema_version'] = BuildScenarioBuilderV3StateAction::SCHEMA_VERSION;
@@ -637,7 +1084,73 @@ class ScenarioBuilderV3SheetTransferService
         $conditionPayload['edge_key'] = null;
         $conditionPayload['from_output_id'] = $sourceOutputId;
 
+        if (data_get($conditionPayload, 'tag_condition.tag_ids') !== null) {
+            data_set(
+                $conditionPayload,
+                'tag_condition.tag_ids',
+                $this->remapTagIdList(data_get($conditionPayload, 'tag_condition.tag_ids', []), $tagMappings),
+            );
+        }
+
         return $conditionPayload;
+    }
+
+    /**
+     * @param  array<string, mixed>  $settingsPayload
+     * @param  array<int, int>  $tagMappings
+     * @return array<string, mixed>
+     */
+    private function remapSettingsTagReferences(array $settingsPayload, array $tagMappings): array
+    {
+        if ($tagMappings === [] || ! is_array($settingsPayload['modules'] ?? null)) {
+            return $settingsPayload;
+        }
+
+        foreach ($settingsPayload['modules'] as $moduleIndex => $module) {
+            if (! is_array($module)) {
+                continue;
+            }
+
+            if (data_get($module, 'payload.tag_condition.tag_ids') !== null) {
+                data_set(
+                    $module,
+                    'payload.tag_condition.tag_ids',
+                    $this->remapTagIdList(data_get($module, 'payload.tag_condition.tag_ids', []), $tagMappings),
+                );
+            }
+
+            $actions = data_get($module, 'payload.actions', []);
+
+            if (is_array($actions)) {
+                foreach ($actions as $actionIndex => $action) {
+                    if (! is_array($action) || ($action['type'] ?? null) !== 'tag_effects') {
+                        continue;
+                    }
+
+                    $actions[$actionIndex]['assign_tag_ids'] = $this->remapTagIdList($action['assign_tag_ids'] ?? [], $tagMappings);
+                    $actions[$actionIndex]['remove_tag_ids'] = $this->remapTagIdList($action['remove_tag_ids'] ?? [], $tagMappings);
+                }
+
+                data_set($module, 'payload.actions', $actions);
+            }
+
+            $settingsPayload['modules'][$moduleIndex] = $module;
+        }
+
+        return $settingsPayload;
+    }
+
+    /**
+     * @param  array<int, int>  $tagMappings
+     * @return list<int>
+     */
+    private function remapTagIdList(mixed $ids, array $tagMappings): array
+    {
+        return collect($this->normalizeIdList($ids))
+            ->map(fn (int $id): int => $tagMappings[$id] ?? $id)
+            ->unique()
+            ->values()
+            ->all();
     }
 
     /**
@@ -681,6 +1194,25 @@ class ScenarioBuilderV3SheetTransferService
                 'name' => (string) $channel->name,
                 'platform' => (string) $channel->platform,
                 'connection_type' => (string) $channel->connection_type,
+            ])
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function availableTags(): array
+    {
+        return Tag::query()
+            ->active()
+            ->orderBy('name')
+            ->get(['id', 'name', 'color', 'is_active'])
+            ->map(fn (Tag $tag): array => [
+                'id' => (int) $tag->id,
+                'name' => (string) $tag->name,
+                'color' => (string) $tag->color,
+                'is_active' => (bool) $tag->is_active,
             ])
             ->values()
             ->all();
@@ -742,6 +1274,11 @@ class ScenarioBuilderV3SheetTransferService
             ->unique()
             ->values()
             ->all();
+    }
+
+    private function normalizeTagName(string $name): string
+    {
+        return Str::lower(trim($name));
     }
 
     /**
@@ -813,6 +1350,17 @@ class ScenarioBuilderV3SheetTransferService
         }
 
         return $value;
+    }
+
+    private function positiveIntValue(mixed $value, string $field): int
+    {
+        $number = (int) $value;
+
+        if ($number <= 0 || (string) $number !== (string) $value) {
+            $this->fail($field, 'Поле должно быть положительным числом.');
+        }
+
+        return $number;
     }
 
     private function fail(string $field, string $message): never

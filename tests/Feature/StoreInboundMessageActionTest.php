@@ -13,6 +13,7 @@ use App\Models\ContactPhoneNumber;
 use App\Models\ContactStartTag;
 use App\Models\Dialog;
 use App\Models\Message;
+use App\Models\MessageAttachment;
 use App\Services\Bots\QueueContactIdentityAvatarSyncAction;
 use App\Services\Bots\StoreInboundMessageAction;
 use App\Services\Contacts\ContactMergeException;
@@ -63,6 +64,405 @@ class StoreInboundMessageActionTest extends TestCase
             'id' => $storedResult->message->id,
             'received_at' => '2026-04-17 12:00:00',
         ]);
+    }
+
+    public function test_store_inbound_message_creates_telegram_bot_image_attachment_metadata(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            $this->makeInboundUserMessage(
+                channel: $channel,
+                providerEventKey: 'telegram-photo-update-1',
+                externalMessageId: 'telegram-photo-message-1',
+                text: null,
+                messageParameter: null,
+                receivedAt: Carbon::parse('2026-04-17 09:10:00'),
+                media: [[
+                    'media_kind' => 'image',
+                    'type' => 'photo',
+                    'provider_attachment_key' => 'telegram-photo-unique-1',
+                    'provider_file_id' => 'telegram-photo-file-1',
+                    'provider_file_unique_id' => 'telegram-photo-unique-1',
+                    'file_size_bytes' => 4096,
+                    'width' => 1280,
+                    'height' => 720,
+                ]],
+            ),
+        );
+
+        $this->assertDatabaseHas('message_attachments', [
+            'message_id' => $storedResult->message->id,
+            'channel_id' => $channel->id,
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_BOT,
+            'provider_event_key' => 'telegram-photo-update-1',
+            'provider_attachment_key' => 'telegram-photo-unique-1',
+            'media_kind' => MessageAttachment::MEDIA_KIND_IMAGE,
+            'provider_file_id' => 'telegram-photo-file-1',
+            'provider_file_unique_id' => 'telegram-photo-unique-1',
+            'file_size_bytes' => 4096,
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
+            'send_status' => MessageAttachment::SEND_STATUS_NOT_APPLICABLE,
+            'local_disk' => null,
+            'local_path' => null,
+        ]);
+
+        $attachment = MessageAttachment::query()->where('message_id', $storedResult->message->id)->firstOrFail();
+
+        $this->assertSame(['width' => 1280, 'height' => 720], $attachment->provider_metadata);
+    }
+
+    public function test_store_inbound_message_creates_telegram_bot_voice_attachment_metadata(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            $this->makeInboundUserMessage(
+                channel: $channel,
+                providerEventKey: 'telegram-voice-update-1',
+                externalMessageId: 'telegram-voice-message-1',
+                text: null,
+                messageParameter: null,
+                receivedAt: Carbon::parse('2026-04-17 09:12:00'),
+                media: [[
+                    'media_kind' => 'voice',
+                    'type' => 'voice',
+                    'provider_attachment_key' => 'telegram-voice-unique-1',
+                    'provider_file_id' => 'telegram-voice-file-1',
+                    'provider_file_unique_id' => 'telegram-voice-unique-1',
+                    'mime_type' => 'audio/ogg',
+                    'extension' => 'ogg',
+                    'file_size_bytes' => 151_664,
+                    'duration' => 7,
+                    'raw_payload_excerpt' => [
+                        'type' => 'voice',
+                        'media_kind' => 'voice',
+                        'file_unique_id' => 'telegram-voice-unique-1',
+                        'file_size_bytes' => 151_664,
+                        'duration' => 7,
+                        'mime_type' => 'audio/ogg',
+                    ],
+                ]],
+            ),
+        );
+
+        $this->assertDatabaseHas('message_attachments', [
+            'message_id' => $storedResult->message->id,
+            'channel_id' => $channel->id,
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_BOT,
+            'provider_event_key' => 'telegram-voice-update-1',
+            'provider_attachment_key' => 'telegram-voice-unique-1',
+            'media_kind' => MessageAttachment::MEDIA_KIND_VOICE,
+            'provider_file_id' => 'telegram-voice-file-1',
+            'provider_file_unique_id' => 'telegram-voice-unique-1',
+            'mime_type' => 'audio/ogg',
+            'extension' => 'ogg',
+            'file_size_bytes' => 151_664,
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
+            'send_status' => MessageAttachment::SEND_STATUS_NOT_APPLICABLE,
+            'local_disk' => null,
+            'local_path' => null,
+        ]);
+
+        $attachment = MessageAttachment::query()->where('message_id', $storedResult->message->id)->firstOrFail();
+
+        $this->assertSame(['duration' => 7], $attachment->provider_metadata);
+        $this->assertSame('voice', $attachment->raw_payload_excerpt['type'] ?? null);
+        $this->assertSame('voice', $attachment->raw_payload_excerpt['media_kind'] ?? null);
+        $this->assertSame('telegram-voice-unique-1', $attachment->raw_payload_excerpt['file_unique_id'] ?? null);
+        $this->assertSame(151_664, $attachment->raw_payload_excerpt['file_size_bytes'] ?? null);
+        $this->assertSame(7, $attachment->raw_payload_excerpt['duration'] ?? null);
+        $this->assertSame('audio/ogg', $attachment->raw_payload_excerpt['mime_type'] ?? null);
+    }
+
+    public function test_store_inbound_message_persists_provider_group_key(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            $this->makeInboundUserMessage(
+                channel: $channel,
+                providerEventKey: 'telegram-photo-update-group-1',
+                externalMessageId: 'telegram-photo-message-group-1',
+                text: 'Подпись альбома',
+                messageParameter: null,
+                receivedAt: Carbon::parse('2026-04-17 09:15:00'),
+                providerGroupKey: 'telegram-media-group-1',
+            ),
+        );
+
+        $storedResult->message->refresh();
+
+        $this->assertSame('telegram-media-group-1', $storedResult->message->provider_group_key);
+        $this->assertDatabaseHas('messages', [
+            'id' => $storedResult->message->id,
+            'provider_group_key' => 'telegram-media-group-1',
+        ]);
+    }
+
+    public function test_store_inbound_message_updates_existing_telegram_bot_image_attachment_without_duplicate(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $message = $this->makeInboundUserMessage(
+            channel: $channel,
+            providerEventKey: 'telegram-photo-update-2',
+            externalMessageId: 'telegram-photo-message-2',
+            text: null,
+            messageParameter: null,
+            receivedAt: Carbon::parse('2026-04-17 09:20:00'),
+            media: [[
+                'media_kind' => 'image',
+                'type' => 'photo',
+                'provider_attachment_key' => 'telegram-photo-unique-2',
+                'provider_file_id' => 'telegram-photo-file-2',
+                'provider_file_unique_id' => 'telegram-photo-unique-2',
+                'file_size_bytes' => 4096,
+            ]],
+        );
+
+        app(StoreInboundMessageAction::class)->handle($channel, $message);
+
+        $updatedMessage = $this->makeInboundUserMessage(
+            channel: $channel,
+            providerEventKey: 'telegram-photo-update-2',
+            externalMessageId: 'telegram-photo-message-2',
+            text: null,
+            messageParameter: null,
+            receivedAt: Carbon::parse('2026-04-17 09:20:00'),
+            media: [[
+                'media_kind' => 'image',
+                'type' => 'photo',
+                'provider_attachment_key' => 'telegram-photo-unique-2',
+                'provider_file_id' => 'telegram-photo-file-2b',
+                'provider_file_unique_id' => 'telegram-photo-unique-2',
+                'file_size_bytes' => 8192,
+            ]],
+        );
+
+        app(StoreInboundMessageAction::class)->handle($channel, $updatedMessage);
+
+        $this->assertSame(1, MessageAttachment::query()->where('provider_event_key', 'telegram-photo-update-2')->count());
+        $this->assertDatabaseHas('message_attachments', [
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_BOT,
+            'provider_event_key' => 'telegram-photo-update-2',
+            'provider_attachment_key' => 'telegram-photo-unique-2',
+            'provider_file_id' => 'telegram-photo-file-2b',
+            'file_size_bytes' => 8192,
+        ]);
+    }
+
+    public function test_store_inbound_message_replay_preserves_downloaded_telegram_bot_attachment_file_state(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $message = $this->makeInboundUserMessage(
+            channel: $channel,
+            providerEventKey: 'telegram-photo-update-downloaded',
+            externalMessageId: 'telegram-photo-message-downloaded',
+            text: null,
+            messageParameter: null,
+            receivedAt: Carbon::parse('2026-04-17 09:25:00'),
+            media: [[
+                'media_kind' => 'image',
+                'type' => 'photo',
+                'provider_attachment_key' => 'telegram-photo-downloaded-unique',
+                'provider_file_id' => 'telegram-photo-file-original',
+                'provider_file_unique_id' => 'telegram-photo-downloaded-unique',
+                'file_size_bytes' => 4096,
+            ]],
+        );
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle($channel, $message);
+        $localPath = MessageAttachment::LOCAL_PATH_PREFIX.'/'.$storedResult->message->id.'/photo.jpg';
+        $attachment = MessageAttachment::query()
+            ->where('provider_event_key', 'telegram-photo-update-downloaded')
+            ->firstOrFail();
+
+        $attachment->forceFill([
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+            'local_path' => $localPath,
+            'safe_error_code' => null,
+            'safe_error_message' => null,
+        ])->save();
+
+        $replayedMessage = $this->makeInboundUserMessage(
+            channel: $channel,
+            providerEventKey: 'telegram-photo-update-downloaded',
+            externalMessageId: 'telegram-photo-message-downloaded',
+            text: null,
+            messageParameter: null,
+            receivedAt: Carbon::parse('2026-04-17 09:25:00'),
+            media: [[
+                'media_kind' => 'image',
+                'type' => 'photo',
+                'provider_attachment_key' => 'telegram-photo-downloaded-unique',
+                'provider_file_id' => 'telegram-photo-file-replayed',
+                'provider_file_unique_id' => 'telegram-photo-downloaded-unique',
+                'file_size_bytes' => 8192,
+            ]],
+        );
+
+        app(StoreInboundMessageAction::class)->handle($channel, $replayedMessage);
+
+        $this->assertSame(1, MessageAttachment::query()->where('provider_event_key', 'telegram-photo-update-downloaded')->count());
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $attachment->download_status);
+        $this->assertSame(MessageAttachment::LOCAL_DISK_PRIVATE, $attachment->local_disk);
+        $this->assertSame($localPath, $attachment->local_path);
+        $this->assertSame('telegram-photo-file-replayed', $attachment->provider_file_id);
+        $this->assertSame(8192, $attachment->file_size_bytes);
+    }
+
+    public function test_store_inbound_message_creates_max_image_attachment_without_secret_metadata(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            $this->makeInboundUserMessage(
+                channel: $channel,
+                providerEventKey: 'max-media-message-1',
+                externalMessageId: 'max-media-message-1',
+                text: null,
+                messageParameter: null,
+                receivedAt: Carbon::parse('2026-04-17 09:30:00'),
+                externalUserId: 'max-user-1',
+                externalChatId: 'max-chat-1',
+                media: [[
+                    'media_kind' => 'image',
+                    'type' => 'image',
+                    'provider_attachment_key' => '25852958504',
+                    'provider_file_reference' => '25852958504',
+                    'width' => 538,
+                    'height' => 1280,
+                    'provider_metadata' => [
+                        'url' => 'https://max.example/private/photo.jpg?access_token=secret-token',
+                        'token' => 'secret-token',
+                    ],
+                    'raw_payload_excerpt' => [
+                        'type' => 'image',
+                        'photo_id' => '25852958504',
+                        'url' => 'https://max.example/private/photo.jpg?access_token=secret-token',
+                        'token' => 'secret-token',
+                    ],
+                ]],
+            ),
+        );
+
+        $attachment = MessageAttachment::query()->where('message_id', $storedResult->message->id)->firstOrFail();
+
+        $this->assertSame(MessageAttachment::PROVIDER_MAX_BOT, $attachment->provider);
+        $this->assertSame('max-media-message-1', $attachment->provider_event_key);
+        $this->assertSame('25852958504', $attachment->provider_attachment_key);
+        $this->assertSame('25852958504', $attachment->provider_file_reference);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY, $attachment->download_status);
+        $this->assertSame(['width' => 538, 'height' => 1280], $attachment->provider_metadata);
+        $this->assertSame(['type' => 'image', 'photo_id' => '25852958504'], $attachment->raw_payload_excerpt);
+        $this->assertStringNotContainsString('url', json_encode($attachment->provider_metadata, JSON_THROW_ON_ERROR));
+        $this->assertStringNotContainsString('token', json_encode($attachment->provider_metadata, JSON_THROW_ON_ERROR));
+        $this->assertStringNotContainsString('url', json_encode($attachment->raw_payload_excerpt, JSON_THROW_ON_ERROR));
+        $this->assertStringNotContainsString('token', json_encode($attachment->raw_payload_excerpt, JSON_THROW_ON_ERROR));
+    }
+
+    public function test_store_inbound_message_creates_max_sticker_attachment_without_url_metadata(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            $this->makeInboundUserMessage(
+                channel: $channel,
+                providerEventKey: 'max-sticker-message-1',
+                externalMessageId: 'max-sticker-message-1',
+                text: null,
+                messageParameter: null,
+                receivedAt: Carbon::parse('2026-04-17 09:35:00'),
+                externalUserId: 'max-user-1',
+                externalChatId: 'max-chat-1',
+                media: [[
+                    'media_kind' => MessageAttachment::MEDIA_KIND_STICKER,
+                    'type' => 'sticker',
+                    'provider_attachment_key' => '429b5',
+                    'provider_file_reference' => '429b5',
+                    'width' => 144,
+                    'height' => 144,
+                    'raw_payload_excerpt' => [
+                        'type' => 'sticker',
+                        'media_kind' => MessageAttachment::MEDIA_KIND_STICKER,
+                        'sticker_code' => '429b5',
+                        'width' => 144,
+                        'height' => 144,
+                        'url' => 'https://st.mycdn.me/static/messages/res/images/stub/sticker_31856a27@2x.png',
+                    ],
+                ]],
+            ),
+        );
+
+        $attachment = MessageAttachment::query()->where('message_id', $storedResult->message->id)->firstOrFail();
+
+        $this->assertSame(MessageAttachment::PROVIDER_MAX_BOT, $attachment->provider);
+        $this->assertSame('max-sticker-message-1', $attachment->provider_event_key);
+        $this->assertSame('429b5', $attachment->provider_attachment_key);
+        $this->assertSame('429b5', $attachment->provider_file_reference);
+        $this->assertSame(MessageAttachment::MEDIA_KIND_STICKER, $attachment->media_kind);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY, $attachment->download_status);
+        $this->assertSame(['width' => 144, 'height' => 144], $attachment->provider_metadata);
+        $this->assertSame([
+            'type' => 'sticker',
+            'width' => 144,
+            'height' => 144,
+            'media_kind' => MessageAttachment::MEDIA_KIND_STICKER,
+            'sticker_code' => '429b5',
+        ], $attachment->raw_payload_excerpt);
+        $this->assertStringNotContainsString('st.mycdn.me', json_encode($attachment->provider_metadata, JSON_THROW_ON_ERROR));
+        $this->assertStringNotContainsString('st.mycdn.me', json_encode($attachment->raw_payload_excerpt, JSON_THROW_ON_ERROR));
+    }
+
+    public function test_store_inbound_message_skips_bot_media_without_provider_event_key(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+
+        app(StoreInboundMessageAction::class)->handle(
+            $channel,
+            $this->makeInboundUserMessage(
+                channel: $channel,
+                providerEventKey: '',
+                externalMessageId: '',
+                text: null,
+                messageParameter: null,
+                receivedAt: Carbon::parse('2026-04-17 09:40:00'),
+                externalUserId: 'max-user-no-event-key',
+                externalChatId: 'max-chat-no-event-key',
+                media: [[
+                    'media_kind' => 'image',
+                    'provider_attachment_key' => '25852958505',
+                ]],
+            ),
+        );
+
+        $this->assertDatabaseCount('messages', 1);
+        $this->assertDatabaseCount('message_attachments', 0);
     }
 
     public function test_store_inbound_message_assigns_start_tag_for_telegram_start_payload(): void
@@ -2538,6 +2938,139 @@ class StoreInboundMessageActionTest extends TestCase
         $this->assertDatabaseCount('messages', 2);
     }
 
+    public function test_redelivery_fills_null_text_and_rich_text_consistently(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $richText = [
+            'version' => 1,
+            'plain_text' => 'Жирный текст',
+            'runs' => [
+                ['text' => 'Жирный', 'marks' => [['type' => 'bold']]],
+                ['text' => ' текст', 'marks' => []],
+            ],
+        ];
+
+        // Первая доставка: text ещё не распарсен (null).
+        app(StoreInboundMessageAction::class)->handle($channel, $this->makeInboundUserMessage(
+            channel: $channel,
+            providerEventKey: 'rich-sync-update-1',
+            externalMessageId: 'rich-sync-message-1',
+            text: null,
+            messageParameter: null,
+            receivedAt: Carbon::parse('2026-07-03 10:00:00'),
+        ));
+
+        // Повторная доставка с текстом и разметкой: оба поля дозаполняются консистентно.
+        app(StoreInboundMessageAction::class)->handle($channel, $this->makeInboundUserMessage(
+            channel: $channel,
+            providerEventKey: 'rich-sync-update-1',
+            externalMessageId: 'rich-sync-message-1',
+            text: 'Жирный текст',
+            messageParameter: null,
+            receivedAt: Carbon::parse('2026-07-03 10:00:00'),
+            richText: $richText,
+        ));
+
+        $stored = Message::query()->where('provider_event_key', 'rich-sync-update-1')->firstOrFail();
+        $this->assertSame('Жирный текст', $stored->text);
+        $this->assertEquals($richText, $stored->rich_text);
+        $this->assertSame($stored->text, data_get($stored->rich_text, 'plain_text'));
+    }
+
+    public function test_redelivery_does_not_desync_rich_text_from_diverged_text(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        app(StoreInboundMessageAction::class)->handle($channel, $this->makeInboundUserMessage(
+            channel: $channel,
+            providerEventKey: 'rich-sync-update-2',
+            externalMessageId: 'rich-sync-message-2',
+            text: 'Исходный текст',
+            messageParameter: null,
+            receivedAt: Carbon::parse('2026-07-03 10:05:00'),
+        ));
+
+        // Текст сообщения изменился (например, правкой из edit-контура).
+        $stored = Message::query()->where('provider_event_key', 'rich-sync-update-2')->firstOrFail();
+        $stored->forceFill(['text' => 'Правленый текст'])->save();
+
+        // Повторная доставка исходного вебхука с разметкой исходного текста:
+        // rich_text НЕ должен обновиться — иначе text (поиск/списки) и bubble разъедутся.
+        app(StoreInboundMessageAction::class)->handle($channel, $this->makeInboundUserMessage(
+            channel: $channel,
+            providerEventKey: 'rich-sync-update-2',
+            externalMessageId: 'rich-sync-message-2',
+            text: 'Исходный текст',
+            messageParameter: null,
+            receivedAt: Carbon::parse('2026-07-03 10:05:00'),
+            richText: [
+                'version' => 1,
+                'plain_text' => 'Исходный текст',
+                'runs' => [
+                    ['text' => 'Исходный текст', 'marks' => [['type' => 'bold']]],
+                ],
+            ],
+        ));
+
+        $stored->refresh();
+        $this->assertSame('Правленый текст', $stored->text);
+        $this->assertNull($stored->rich_text);
+        // Инвариант: rich_text либо null, либо согласован с text.
+    }
+
+    public function test_redelivery_does_not_rollback_formatting_only_edit(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $originalRich = [
+            'version' => 1,
+            'plain_text' => 'Тот же текст',
+            'runs' => [['text' => 'Тот же текст', 'marks' => [['type' => 'bold']]]],
+        ];
+        $editedRich = [
+            'version' => 1,
+            'plain_text' => 'Тот же текст',
+            'runs' => [['text' => 'Тот же текст', 'marks' => [['type' => 'italic']]]],
+        ];
+
+        app(StoreInboundMessageAction::class)->handle($channel, $this->makeInboundUserMessage(
+            channel: $channel,
+            providerEventKey: 'rich-sync-update-3',
+            externalMessageId: 'rich-sync-message-3',
+            text: 'Тот же текст',
+            messageParameter: null,
+            receivedAt: Carbon::parse('2026-07-03 10:10:00'),
+            richText: $originalRich,
+        ));
+
+        // Правка МЕНЯЕТ ТОЛЬКО форматирование: text тот же, разметка другая.
+        $stored = Message::query()->where('provider_event_key', 'rich-sync-update-3')->firstOrFail();
+        $stored->forceFill([
+            'rich_text' => $editedRich,
+            'edited_at' => Carbon::parse('2026-07-03 10:11:00'),
+        ])->save();
+
+        // Redelivery ОРИГИНАЛА: text совпадает с plain_text — без edited_at-гейта
+        // guard пропустил бы обновление и откатил разметку правки.
+        app(StoreInboundMessageAction::class)->handle($channel, $this->makeInboundUserMessage(
+            channel: $channel,
+            providerEventKey: 'rich-sync-update-3',
+            externalMessageId: 'rich-sync-message-3',
+            text: 'Тот же текст',
+            messageParameter: null,
+            receivedAt: Carbon::parse('2026-07-03 10:10:00'),
+            richText: $originalRich,
+        ));
+
+        $stored->refresh();
+        $this->assertEquals($editedRich, $stored->rich_text);
+    }
+
     private function makeInboundUserMessage(
         Channel $channel,
         string $providerEventKey,
@@ -2547,6 +3080,9 @@ class StoreInboundMessageActionTest extends TestCase
         Carbon $receivedAt,
         string $externalUserId = '200',
         string $externalChatId = '300',
+        array $media = [],
+        ?string $providerGroupKey = null,
+        ?array $richText = null,
     ): IncomingBotMessage {
         return new IncomingBotMessage(
             platform: $channel->platform,
@@ -2564,6 +3100,9 @@ class StoreInboundMessageActionTest extends TestCase
             sharedContactUserId: null,
             rawPayload: ['message' => ['text' => $text]],
             receivedAt: $receivedAt,
+            media: $media,
+            providerGroupKey: $providerGroupKey,
+            richText: $richText,
         );
     }
 

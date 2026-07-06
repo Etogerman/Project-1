@@ -707,6 +707,8 @@ export default function App({
     const [sheetImportJson, setSheetImportJson] = useState('');
     const [sheetImportPreview, setSheetImportPreview] = useState(null);
     const [sheetImportSelection, setSheetImportSelection] = useState({});
+    const [sheetImportTagMappings, setSheetImportTagMappings] = useState({});
+    const [sheetImportTagDrafts, setSheetImportTagDrafts] = useState({});
     const [sheetImportError, setSheetImportError] = useState(null);
     const [autoReplyImportFile, setAutoReplyImportFile] = useState(null);
     const [autoReplyImportPreview, setAutoReplyImportPreview] = useState(null);
@@ -721,6 +723,7 @@ export default function App({
     const [autoReplyImportError, setAutoReplyImportError] = useState(null);
     const [isImportingAutoReplies, setIsImportingAutoReplies] = useState(false);
     const [isApplyingAutoReplyImport, setIsApplyingAutoReplyImport] = useState(false);
+    const [creatingSheetImportTagKey, setCreatingSheetImportTagKey] = useState('');
     const [creatingAutoReplyTagName, setCreatingAutoReplyTagName] = useState('');
     const [sheetDialog, setSheetDialog] = useState(null);
     const [isSheetListOpen, setIsSheetListOpen] = useState(false);
@@ -738,6 +741,7 @@ export default function App({
     const [pendingButtonFocus, setPendingButtonFocus] = useState(null);
     const [pendingConnection, setPendingConnection] = useState(null);
     const [pendingPublishWarning, setPendingPublishWarning] = useState(null);
+    const [publishIssue, setPublishIssue] = useState(null);
     const [rewireTargetKey, setRewireTargetKey] = useState(null);
     const [anchors, setAnchors] = useState({ ports: {} });
     const [panelWidth, setPanelWidth] = useState(() => storedPanelWidth());
@@ -970,6 +974,8 @@ export default function App({
         && ! isApplyingAutoReplyImport
         && Boolean(autoReplyExportUrl);
     const canCreateAutoReplyTags = state?.permissions?.can_create_tags === true
+        && Boolean(autoReplyImportTagStoreUrl);
+    const canCreateSheetImportTags = state?.permissions?.can_create_tags === true
         && Boolean(autoReplyImportTagStoreUrl);
     const canvasBounds = useMemo(() => graphBounds(blocks, edges), [blocks, edges]);
     const inspectorBlock = mode === 'auto_reply' ? selectedAutoReplyBlock : selectedBlock;
@@ -2936,6 +2942,7 @@ export default function App({
         setIsPublishing(true);
         setError(null);
         setNotice(null);
+        setPublishIssue(null);
 
         try {
             const savedState = await persistCurrentState(null);
@@ -2946,10 +2953,7 @@ export default function App({
 
             await publishSavedState(savedState, blockBeforePublish, edgeBeforePublish);
         } catch (requestError) {
-            if (
-                requestError?.data?.code === 'scheduled_transitions_pending'
-                || requestError?.data?.code === 'auto_reply_import_double_response_risk'
-            ) {
+            if (requestError?.data?.code === 'scheduled_transitions_pending') {
                 return;
             }
 
@@ -2964,7 +2968,6 @@ export default function App({
         blockBeforePublish,
         edgeBeforePublish,
         scheduledTransitionPolicy = null,
-        confirmAutoReplyImportRisk = false,
     ) {
         const payload = {
             draft_version_id: savedState.scenario.draft_version_id,
@@ -2973,10 +2976,6 @@ export default function App({
 
         if (scheduledTransitionPolicy) {
             payload.scheduled_transition_policy = scheduledTransitionPolicy;
-        }
-
-        if (confirmAutoReplyImportRisk) {
-            payload.confirm_auto_reply_import_double_response_risk = true;
         }
 
         try {
@@ -2989,6 +2988,7 @@ export default function App({
             setSelectedEdgeKey(selection.edgeKey);
             setSelectedWaypoint(null);
             setPendingPublishWarning(null);
+            setPublishIssue(null);
             cancelConnection();
             setStatus('ready');
             setNotice([
@@ -3016,21 +3016,22 @@ export default function App({
             return;
         }
 
-        if (requestError.status === 409 && requestError.data?.code === 'auto_reply_import_double_response_risk' && savedState) {
+        const issue = publishIssueFromError(
+            requestError,
+            savedState?.builder?.blocks ?? allBlocks,
+            savedState?.builder?.sheets ?? sheets,
+        );
+
+        if (issue) {
             setError(null);
-            setPendingPublishWarning({
-                type: 'auto_reply_import',
-                savedState,
-                blockBeforePublish,
-                edgeBeforePublish,
-                warning: requestError.data.warning ?? {},
-            });
+            setPublishIssue(issue);
             setStatus('ready');
 
             return;
         }
 
         setError(errorText(requestError));
+        setPublishIssue(null);
 
         if (requestError.status === 409) {
             setStatus('conflict');
@@ -3047,7 +3048,7 @@ export default function App({
         setNotice(null);
 
         try {
-            const document = await exportScenarioBuilderSheet(sheetExportUrl);
+            const document = await exportScenarioBuilderSheet(sheetExportUrl, activeSheet.id);
             downloadJsonDocument(sheetExportFilename(document), document);
             setNotice('Активный лист экспортирован из сохранённого черновика.');
         } catch (requestError) {
@@ -3107,6 +3108,8 @@ export default function App({
             setSheetImportJson(json);
             setSheetImportPreview(preview);
             setSheetImportSelection(defaultSheetImportSelection(preview));
+            setSheetImportTagMappings(defaultSheetImportTagMappings(preview));
+            setSheetImportTagDrafts(defaultSheetImportTagDrafts(preview));
         } catch (requestError) {
             setError(errorText(requestError));
         } finally {
@@ -3122,7 +3125,10 @@ export default function App({
         setSheetImportJson('');
         setSheetImportPreview(null);
         setSheetImportSelection({});
+        setSheetImportTagMappings({});
+        setSheetImportTagDrafts({});
         setSheetImportError(null);
+        setCreatingSheetImportTagKey('');
     }
 
     function updateSheetImportChannels(blockExportKey, channelIds) {
@@ -3132,13 +3138,81 @@ export default function App({
         }));
     }
 
+    function updateSheetImportTagMapping(sourceTagId, tagId) {
+        const key = String(sourceTagId);
+        const nextId = Number(tagId);
+
+        setSheetImportTagMappings((current) => {
+            const nextMappings = { ...current };
+
+            if (nextId > 0) {
+                nextMappings[key] = nextId;
+            } else {
+                delete nextMappings[key];
+            }
+
+            return nextMappings;
+        });
+    }
+
+    function updateSheetImportTagDraft(sourceTagId, name) {
+        const key = String(sourceTagId);
+
+        setSheetImportTagDrafts((current) => ({
+            ...current,
+            [key]: String(name ?? ''),
+        }));
+    }
+
+    async function createSheetImportTag(sourceTagId, name, color = 'gray', reactivateExisting = false) {
+        const key = String(sourceTagId);
+        const tagName = String(name ?? '').trim();
+
+        if (! key || ! tagName || ! autoReplyImportTagStoreUrl || creatingSheetImportTagKey) {
+            return;
+        }
+
+        setCreatingSheetImportTagKey(key);
+        setError(null);
+        setNotice(null);
+        setSheetImportError(null);
+
+        try {
+            const response = await createScenarioBuilderAutoReplyImportTag(autoReplyImportTagStoreUrl, csrfToken, {
+                name: tagName,
+                color: color || 'gray',
+                reactivate_existing: reactivateExisting === true,
+            });
+            const tag = response?.tag;
+            const tagId = Number(tag?.id);
+
+            if (! tag || tagId <= 0) {
+                throw new Error('Тег создан, но сервер не вернул его ID.');
+            }
+
+            setState((current) => stateWithCatalogTag(current, tag));
+            setSheetImportPreview((current) => current ? previewWithAvailableTag(current, tag, sourceTagId) : current);
+            setSheetImportTagMappings((current) => ({
+                ...current,
+                [key]: tagId,
+            }));
+        } catch (requestError) {
+            const message = errorText(requestError);
+
+            setSheetImportError(message);
+            setError(message);
+        } finally {
+            setCreatingSheetImportTagKey('');
+        }
+    }
+
     async function downloadSheetBackup() {
         if (! sheetExportUrl) {
             return;
         }
 
         try {
-            const document = await exportScenarioBuilderSheet(sheetExportUrl);
+            const document = await exportScenarioBuilderSheet(sheetExportUrl, activeSheet.id);
             downloadJsonDocument(`backup-${sheetExportFilename(document)}`, document);
             setSheetImportError(null);
         } catch (requestError) {
@@ -3162,6 +3236,7 @@ export default function App({
                 draft_version_id: sheetImportPreview.draft_version_id,
                 base_builder_revision: sheetImportPreview.base_builder_revision,
                 selected_channels: sheetImportSelection,
+                tag_mappings: sheetImportTagPayload(sheetImportTagMappings),
             });
             const focusKey = resolveReturnedKey(response.import?.focus_block_client_key, response.id_map?.blocks, 'block');
             const focusedState = stateWithSheetImportFocus(response, focusKey);
@@ -3176,7 +3251,10 @@ export default function App({
             setSheetImportJson('');
             setSheetImportPreview(null);
             setSheetImportSelection({});
+            setSheetImportTagMappings({});
+            setSheetImportTagDrafts({});
             setSheetImportError(null);
+            setCreatingSheetImportTagKey('');
         } catch (requestError) {
             if (requestError.status === 409) {
                 setStatus('conflict');
@@ -3470,22 +3548,12 @@ export default function App({
         setNotice(null);
 
         try {
-            if (warning.type === 'auto_reply_import') {
-                await publishSavedState(
-                    warning.savedState,
-                    warning.blockBeforePublish,
-                    warning.edgeBeforePublish,
-                    null,
-                    true,
-                );
-            } else {
-                await publishSavedState(
-                    warning.savedState,
-                    warning.blockBeforePublish,
-                    warning.edgeBeforePublish,
-                    policy,
-                );
-            }
+            await publishSavedState(
+                warning.savedState,
+                warning.blockBeforePublish,
+                warning.edgeBeforePublish,
+                policy,
+            );
         } catch {
             // Error state is already rendered by publishSavedState.
         } finally {
@@ -3520,6 +3588,21 @@ export default function App({
         setIsPanelCollapsed(false);
         setTool('select');
         setPendingButtonFocus({ blockKey: issue.blockKey, buttonId: issue.buttonId });
+    }
+
+    function openPublishIssueBlock(issue) {
+        const block = allBlocks.find((item) => item.client_key === issue.blockKey)
+            ?? allBlocks.find((item) => Number(item.id) === Number(issue.blockId))
+            ?? issue.block;
+
+        if (! block) {
+            setNotice('Блок из ошибки не найден в текущем черновике.');
+
+            return;
+        }
+
+        openAutoReplyBlockInConstructor(block);
+        setPublishIssue(null);
     }
 
     function clearPendingButtonFocus() {
@@ -3824,6 +3907,25 @@ export default function App({
                 </Notice>
             ) : null}
 
+            {publishIssue ? (
+                <Notice kind="error" onClose={() => setPublishIssue(null)}>
+                    <span>
+                        {publishIssue.message}
+                        {publishIssue.block ? (
+                            <>
+                                {' '}
+                                Лист: «{publishIssue.sheetName}», блок {publishIssue.blockLabel} · {publishIssue.blockTitle}.
+                            </>
+                        ) : null}
+                    </span>
+                    {publishIssue.block ? (
+                        <button type="button" className="ac-v3-builder__notice-action" onClick={() => openPublishIssueBlock(publishIssue)}>
+                            Открыть блок
+                        </button>
+                    ) : null}
+                </Notice>
+            ) : null}
+
             {notice ? (
                 <Notice kind="info" onClose={() => setNotice(null)}>
                     {notice}
@@ -3846,31 +3948,29 @@ export default function App({
             ) : null}
 
             {pendingPublishWarning ? (
-                pendingPublishWarning.type === 'auto_reply_import' ? (
-                    <AutoReplyImportPublishDialog
-                        warning={pendingPublishWarning.warning}
-                        isPublishing={isPublishing}
-                        onConfirm={() => resolvePendingPublishWarning('confirm')}
-                        onClose={() => setPendingPublishWarning(null)}
-                    />
-                ) : (
-                    <ScheduledPublishDialog
-                        warning={pendingPublishWarning.warning}
-                        isPublishing={isPublishing}
-                        onKeep={() => resolvePendingPublishWarning('keep')}
-                        onCancelScheduled={() => resolvePendingPublishWarning('cancel')}
-                        onClose={() => setPendingPublishWarning(null)}
-                    />
-                )
+                <ScheduledPublishDialog
+                    warning={pendingPublishWarning.warning}
+                    isPublishing={isPublishing}
+                    onKeep={() => resolvePendingPublishWarning('keep')}
+                    onCancelScheduled={() => resolvePendingPublishWarning('cancel')}
+                    onClose={() => setPendingPublishWarning(null)}
+                />
             ) : null}
 
             {sheetImportPreview ? (
                 <SheetImportPreviewDialog
                     preview={sheetImportPreview}
                     selection={sheetImportSelection}
+                    tagMappings={sheetImportTagMappings}
+                    tagDrafts={sheetImportTagDrafts}
                     error={sheetImportError}
                     isApplying={isApplyingSheetImport}
+                    canCreateTag={canCreateSheetImportTags}
+                    creatingTagKey={creatingSheetImportTagKey}
                     onChangeChannels={updateSheetImportChannels}
+                    onTagMapping={updateSheetImportTagMapping}
+                    onTagDraft={updateSheetImportTagDraft}
+                    onCreateTag={createSheetImportTag}
                     onDownloadBackup={downloadSheetBackup}
                     onApply={applySheetImport}
                     onClose={closeSheetImportPreview}
@@ -5175,44 +5275,19 @@ function ScheduledPublishDialog({ warning, isPublishing, onKeep, onCancelSchedul
     );
 }
 
-function AutoReplyImportPublishDialog({ warning, isPublishing, onConfirm, onClose }) {
-    const summary = warning?.auto_reply_import ?? {};
-    const count = Number(summary.count ?? 0);
-
-    return (
-        <div className="ac-v3-builder__dialog-backdrop" role="presentation">
-            <div className="ac-v3-builder__publish-dialog" role="dialog" aria-modal="true" aria-labelledby="auto-reply-import-warning-title">
-                <div className="ac-v3-builder__publish-dialog-head">
-                    <h2 id="auto-reply-import-warning-title">Есть импортированные автоответы</h2>
-                    <button type="button" title="Закрыть" disabled={isPublishing} onClick={onClose}>×</button>
-                </div>
-
-                <div className="ac-v3-builder__publish-dialog-body">
-                    <p>
-                        В сценарии есть импортированные автоответы: <strong>{count}</strong>.
-                        Старый модуль автоответов не отключается автоматически, поэтому перед публикацией проверьте, что не будет двойных ответов клиенту.
-                    </p>
-                </div>
-
-                <div className="ac-v3-builder__publish-dialog-footer">
-                    <button type="button" disabled={isPublishing} onClick={onClose}>
-                        Отмена
-                    </button>
-                    <button type="button" className="is-danger" disabled={isPublishing} onClick={onConfirm}>
-                        Опубликовать с подтверждением
-                    </button>
-                </div>
-            </div>
-        </div>
-    );
-}
-
 function SheetImportPreviewDialog({
     preview,
     selection,
+    tagMappings,
+    tagDrafts,
     error,
     isApplying,
+    canCreateTag,
+    creatingTagKey,
     onChangeChannels,
+    onTagMapping,
+    onTagDraft,
+    onCreateTag,
     onDownloadBackup,
     onApply,
     onClose,
@@ -5220,7 +5295,11 @@ function SheetImportPreviewDialog({
     const counts = preview?.counts ?? {};
     const startBlocks = Array.isArray(preview?.start_blocks) ? preview.start_blocks : [];
     const channels = Array.isArray(preview?.available_channels) ? preview.available_channels : [];
+    const tags = Array.isArray(preview?.available_tags) ? preview.available_tags : [];
+    const unresolvedTags = Array.isArray(preview?.unresolved_tags) ? preview.unresolved_tags : [];
     const channelHints = new Map((preview?.channel_hints ?? []).map((hint) => [hint.export_key, hint]));
+    const missingTagMappings = unresolvedTags.filter((tag) => Number(tagMappings?.[String(tag.source_tag_id)] ?? 0) <= 0);
+    const canApply = missingTagMappings.length === 0 && ! isApplying;
 
     return (
         <div className="ac-v3-builder__dialog-backdrop" role="presentation">
@@ -5236,6 +5315,7 @@ function SheetImportPreviewDialog({
                         <span><strong>{counts.edges ?? 0}</strong> связей</span>
                         <span><strong>{counts.start_blocks ?? 0}</strong> стартовых</span>
                         <span><strong>{counts.channel_hints ?? 0}</strong> подсказок каналов</span>
+                        <span><strong>{counts.tag_hints ?? 0}</strong> тегов</span>
                     </div>
 
                     <div className="ac-v3-builder__sheet-import-warnings">
@@ -5283,6 +5363,85 @@ function SheetImportPreviewDialog({
                         </div>
                     ) : null}
 
+                    {unresolvedTags.length > 0 ? (
+                        <div className="ac-v3-builder__auto-reply-import-section">
+                            <h3>Теги из файла</h3>
+                            {unresolvedTags.map((tag) => {
+                                const sourceTagId = Number(tag.source_tag_id);
+                                const key = String(sourceTagId);
+                                const selectedTagId = tagMappings?.[key] ?? '';
+                                const isLegacyTag = tag.reason === 'legacy_missing_metadata';
+                                const inactiveTag = tag.inactive_tag && Number(tag.inactive_tag.id) > 0 ? tag.inactive_tag : null;
+                                const draftName = tagDrafts?.[key] ?? defaultSheetImportTagDraft(tag);
+                                const createName = String(draftName ?? '').trim();
+                                const canReactivateThisTag = canCreateTag && tag.can_reactivate === true && inactiveTag;
+                                const canCreateThisTag = canCreateTag && ! inactiveTag && createName !== '';
+                                const isCreating = creatingTagKey === key;
+                                const contexts = Array.isArray(tag.contexts) ? tag.contexts : [];
+
+                                return (
+                                    <label key={key} className="ac-v3-builder__auto-reply-import-mapping">
+                                        <span>
+                                            <strong>{tag.label || `Тег #${sourceTagId}`}</strong>
+                                            <small>Источник #{sourceTagId}</small>
+                                            {contexts.length > 0 ? <small>{contexts.join(', ')}</small> : null}
+                                            {isLegacyTag ? (
+                                                <small>Можно создать локальный технический тег без изменений на продакшене.</small>
+                                            ) : null}
+                                            {inactiveTag ? (
+                                                <small>Локальный тег «{inactiveTag.name}» найден, но выключен. Включение требует отдельного действия.</small>
+                                            ) : null}
+                                        </span>
+                                        <div className="ac-v3-builder__auto-reply-import-map-control">
+                                            {! inactiveTag ? (
+                                                <input
+                                                    type="text"
+                                                    className="ac-v3-builder__sheet-import-tag-name"
+                                                    value={draftName}
+                                                    disabled={isApplying}
+                                                    onChange={(event) => onTagDraft(sourceTagId, event.target.value)}
+                                                    placeholder="Название нового тега"
+                                                />
+                                            ) : null}
+                                            <select
+                                                value={selectedTagId}
+                                                disabled={isApplying}
+                                                onChange={(event) => onTagMapping(sourceTagId, event.target.value)}
+                                            >
+                                                <option value="">Выбрать тег</option>
+                                                {tags.map((item) => (
+                                                    <option key={item.id} value={item.id}>
+                                                        {item.name}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            {canCreateThisTag ? (
+                                                <button
+                                                    type="button"
+                                                    className="ac-v3-builder__auto-reply-import-create"
+                                                    disabled={isApplying || isCreating}
+                                                    onClick={() => onCreateTag(sourceTagId, createName, tag.color)}
+                                                >
+                                                    {isCreating ? 'Создаю...' : (isLegacyTag ? 'Создать локально' : 'Создать')}
+                                                </button>
+                                            ) : null}
+                                            {canReactivateThisTag ? (
+                                                <button
+                                                    type="button"
+                                                    className="ac-v3-builder__auto-reply-import-create"
+                                                    disabled={isApplying || isCreating}
+                                                    onClick={() => onCreateTag(sourceTagId, inactiveTag.name, inactiveTag.color, true)}
+                                                >
+                                                    {isCreating ? 'Включаю...' : 'Включить'}
+                                                </button>
+                                            ) : null}
+                                        </div>
+                                    </label>
+                                );
+                            })}
+                        </div>
+                    ) : null}
+
                     {error ? <p className="ac-v3-builder__sheet-import-error">{error}</p> : null}
                 </div>
 
@@ -5293,7 +5452,7 @@ function SheetImportPreviewDialog({
                     <button type="button" disabled={isApplying} onClick={onClose}>
                         Отмена
                     </button>
-                    <button type="button" className="is-danger" disabled={isApplying} onClick={onApply}>
+                    <button type="button" className="is-danger" disabled={! canApply} onClick={onApply}>
                         {isApplying ? 'Импортирую...' : 'Импортировать'}
                     </button>
                 </div>
@@ -12118,6 +12277,90 @@ function defaultSheetImportSelection(preview) {
     return selection;
 }
 
+function defaultSheetImportTagMappings(preview) {
+    const mappings = {};
+
+    Object.entries(preview?.default_tag_mappings ?? {}).forEach(([sourceTagId, tagId]) => {
+        const sourceId = Number(sourceTagId);
+        const targetId = Number(tagId);
+
+        if (sourceId > 0 && targetId > 0) {
+            mappings[String(sourceId)] = targetId;
+        }
+    });
+
+    return mappings;
+}
+
+function defaultSheetImportTagDrafts(preview) {
+    const drafts = {};
+
+    (preview?.unresolved_tags ?? []).forEach((tag) => {
+        const sourceTagId = Number(tag?.source_tag_id);
+
+        if (sourceTagId > 0) {
+            drafts[String(sourceTagId)] = defaultSheetImportTagDraft(tag);
+        }
+    });
+
+    return drafts;
+}
+
+function defaultSheetImportTagDraft(tag) {
+    const name = String(tag?.name ?? '').trim();
+
+    return name !== ''
+        ? name
+        : defaultLegacySheetImportTagName(tag?.source_tag_id);
+}
+
+function sheetImportTagPayload(mappings) {
+    return Object.entries(mappings ?? {})
+        .map(([sourceTagId, tagId]) => ({
+            source_tag_id: Number(sourceTagId),
+            tag_id: Number(tagId),
+        }))
+        .filter((mapping) => mapping.source_tag_id > 0 && mapping.tag_id > 0);
+}
+
+function defaultLegacySheetImportTagName(sourceTagId) {
+    return `Prod tag #${Number(sourceTagId) || 0}`;
+}
+
+function previewWithAvailableTag(preview, tag, sourceTagId = null) {
+    if (! preview || ! tag) {
+        return preview;
+    }
+
+    const tagId = Number(tag.id);
+
+    if (tagId <= 0) {
+        return preview;
+    }
+
+    const nextTag = {
+        id: tagId,
+        name: String(tag.name ?? ''),
+        color: String(tag.color ?? 'gray'),
+        is_active: tag.is_active !== false,
+    };
+    const tags = [
+        ...(preview.available_tags ?? []).filter((item) => Number(item.id) !== tagId),
+        nextTag,
+    ].sort((left, right) => String(left.name).localeCompare(String(right.name), 'ru'));
+
+    const resolvedSourceTagId = Number(sourceTagId);
+    const unresolvedTags = Array.isArray(preview.unresolved_tags) && resolvedSourceTagId > 0
+        ? preview.unresolved_tags.filter((item) => Number(item?.source_tag_id) !== resolvedSourceTagId)
+        : preview.unresolved_tags;
+
+    return {
+        ...preview,
+        available_tags: tags,
+        unresolved_tags: unresolvedTags,
+    };
+}
+
 function autoReplyImportStatusLabel(status) {
     return {
         create: 'Будет создано',
@@ -12307,6 +12550,55 @@ function errorText(error) {
     }
 
     return error.message || 'Не удалось выполнить запрос.';
+}
+
+export function publishIssueFromError(error, blocks = [], sheets = []) {
+    if (error?.status !== 422 || ! error?.data?.errors) {
+        return null;
+    }
+
+    const message = validationErrorText(error, 'builder.telegram_account_gateway');
+
+    if (message === '') {
+        return null;
+    }
+
+    const blockDisplayMatch = message.match(/блок\s+#([A-Za-zА-Яа-я0-9_-]+)/iu);
+    const blockDisplayId = blockDisplayMatch?.[1] ?? '';
+    const block = blockDisplayId !== ''
+        ? findBlockByDisplayId(blocks, blockDisplayId)
+        : null;
+    const sheetId = block ? blockSheetId(block) : MAIN_SHEET.id;
+    const sheet = sheetsFrom({ sheets }).find((item) => String(item.id) === sheetId) ?? MAIN_SHEET;
+
+    return {
+        message,
+        block,
+        blockId: block?.id ?? null,
+        blockKey: block?.client_key ?? null,
+        blockLabel: block ? shortBlockId(block) : (blockDisplayId ? `#${blockDisplayId}` : ''),
+        blockTitle: block?.title || 'Без названия',
+        sheetId,
+        sheetName: sheet.name || sheet.id || 'Главный',
+    };
+}
+
+function validationErrorText(error, key) {
+    const messages = error?.data?.errors?.[key] ?? [];
+
+    return Array.isArray(messages)
+        ? messages.filter(Boolean).join(' ')
+        : String(messages ?? '');
+}
+
+function findBlockByDisplayId(blocks, displayId) {
+    const normalizedDisplayId = normalizeSearchValue(displayId);
+
+    return (Array.isArray(blocks) ? blocks : []).find((block) => (
+        normalizeSearchValue(blockDisplayId(block)) === normalizedDisplayId
+        || normalizeSearchValue(copyableBlockId(block)) === normalizedDisplayId
+        || normalizeSearchValue(shortBlockId(block)) === normalizedDisplayId
+    )) ?? null;
 }
 
 function blockPosition(block) {

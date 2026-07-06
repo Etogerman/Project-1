@@ -63,7 +63,14 @@ class LoadContactDialogsOverviewAction
             ->values();
         $previewFeedByMessageId = collect(
             $this->buildConversationFeedViewDataAction->handle($previewMessages->values())
-        )->keyBy('id');
+        )->mapWithKeys(function (array $feed): array {
+            $messageIds = $feed['message_ids'] ?? [$feed['id'] ?? null];
+
+            return collect(is_array($messageIds) ? $messageIds : [$messageIds])
+                ->filter(fn (mixed $id): bool => is_numeric($id) && (int) $id > 0)
+                ->mapWithKeys(fn (mixed $id): array => [(int) $id => $feed])
+                ->all();
+        });
 
         return $dialogs
             ->map(function (Dialog $dialog) use ($contact, $previewFeedByMessageId, $stageOptionLabels): array {

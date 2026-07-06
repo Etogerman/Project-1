@@ -15,6 +15,7 @@ use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
 use App\Models\FieldDictionaryField;
 use App\Models\Message;
+use App\Models\MessageAttachment;
 use App\Models\Scenario;
 use App\Models\ScenarioRun;
 use App\Models\ScenarioVersion;
@@ -1081,6 +1082,709 @@ class FilamentDialogsResourceTest extends TestCase
         $this->assertSame([
             ['label' => 'Ожидает загрузки x2', 'tone' => 'gray'],
         ], $messages[0]['media_state_badges']);
+    }
+
+    public function test_dialog_view_renders_operator_attachment_list_with_download_action_only_for_downloaded_file(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->account()->create([
+            'name' => 'Telegram Account Attachment List',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Account attachment contact',
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'tg-account-attachment-list-1',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'tg-account-attachment-list-chat-1',
+            'last_message_at' => now(),
+            'last_inbound_at' => now(),
+        ]);
+        $message = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => $dialog->external_chat_id,
+            'external_message_id' => 'tg-account-attachment-list-message-1',
+            'provider_event_key' => 'telegram_account:'.$channel->id.':'.$dialog->external_chat_id.':tg-account-attachment-list-message-1',
+            'text' => 'Документы клиента',
+            'received_at' => now(),
+        ]);
+        $downloadedAttachment = MessageAttachment::factory()->create([
+            'message_id' => $message->id,
+            'channel_id' => $channel->id,
+            'provider_event_key' => $message->provider_event_key,
+            'provider_attachment_key' => '0:document:file-1',
+            'media_kind' => MessageAttachment::MEDIA_KIND_DOCUMENT,
+            'original_filename' => 'offer.pdf',
+            'mime_type' => 'application/pdf',
+            'file_size_bytes' => 2048,
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+            'local_path' => MessageAttachment::LOCAL_PATH_PREFIX.'/'.$message->id.'/offer.pdf',
+            'sort_order' => 0,
+        ]);
+        $pendingAttachment = MessageAttachment::factory()->create([
+            'message_id' => $message->id,
+            'channel_id' => $channel->id,
+            'provider_event_key' => $message->provider_event_key,
+            'provider_attachment_key' => '1:image:file-2',
+            'media_kind' => MessageAttachment::MEDIA_KIND_IMAGE,
+            'original_filename' => 'photo.jpg',
+            'mime_type' => 'image/jpeg',
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD,
+            'sort_order' => 1,
+        ]);
+
+        $component = Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee('data-role="conversation-attachments"', false)
+            ->assertDontSee('data-role="conversation-attachment-preview"', false)
+            ->assertDontSee('data-media-viewer-type="pdf"', false)
+            ->assertSee('data-role="conversation-attachment-download"', false)
+            ->assertSee('offer.pdf')
+            ->assertSee('application/pdf · 2 КБ')
+            ->assertSee('photo.jpg')
+            ->assertSee('Ожидает загрузки')
+            ->assertSee(route('admin.message-attachments.download', ['attachment' => $downloadedAttachment->id]), false)
+            ->assertDontSee(route('admin.message-attachments.preview', ['attachment' => $downloadedAttachment->id]), false)
+            ->assertDontSee(route('admin.message-attachments.download', ['attachment' => $pendingAttachment->id]), false);
+
+        $messages = $component->get('conversationMessages');
+
+        $this->assertTrue($messages[0]['media_items'][0]['is_downloadable']);
+        $this->assertFalse($messages[0]['media_items'][0]['is_previewable']);
+        $this->assertNull($messages[0]['media_items'][0]['preview_kind']);
+        $this->assertFalse($messages[0]['media_items'][1]['is_downloadable']);
+    }
+
+    public function test_dialog_view_renders_previewable_video_as_inline_video_player(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'MAX Video Preview',
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Video preview contact',
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'max-video-preview-1',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'max-video-preview-chat-1',
+        ]);
+        $message = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => $dialog->external_chat_id,
+            'external_message_id' => 'max-video-preview-message-1',
+            'provider_event_key' => 'max_bot:'.$channel->id.':'.$dialog->external_chat_id.':max-video-preview-message-1',
+            'text' => 'Видео от клиента',
+            'raw_payload' => [
+                'message' => [
+                    'body' => [
+                        'attachments' => [
+                            [
+                                'type' => 'video',
+                                'payload' => [
+                                    'token' => 'max-video-preview-token',
+                                ],
+                                'thumbnail' => [
+                                    'url' => 'https://pimg.mycdn.me/getImage?signatureToken=secret-poster-token',
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+            'received_at' => now(),
+        ]);
+        $attachment = MessageAttachment::factory()->create([
+            'message_id' => $message->id,
+            'channel_id' => $channel->id,
+            'provider' => MessageAttachment::PROVIDER_MAX_BOT,
+            'provider_event_key' => $message->provider_event_key,
+            'provider_attachment_key' => 'max-video-attachment-1',
+            'provider_file_reference' => 'token:'.sha1('max-video-preview-token'),
+            'media_kind' => MessageAttachment::MEDIA_KIND_VIDEO,
+            'original_filename' => null,
+            'mime_type' => null,
+            'extension' => null,
+            'file_size_bytes' => null,
+            'provider_metadata' => [
+                'duration' => 20,
+            ],
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+            'local_path' => MessageAttachment::LOCAL_PATH_PREFIX.'/'.$message->id.'/clip.mp4',
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee('data-role="conversation-attachments"', false)
+            ->assertSee('ac-message__attachments--inline-video', false)
+            ->assertSee('data-role="conversation-video-player"', false)
+            ->assertSee('data-role="conversation-attachment-video"', false)
+            ->assertSee('data-role="conversation-attachment-preview"', false)
+            ->assertSee('data-media-viewer-type="video"', false)
+            ->assertSee('poster="'.route('admin.message-attachments.poster', ['attachment' => $attachment->id]).'"', false)
+            ->assertDontSee('secret-poster-token', false)
+            ->assertSee('controls', false)
+            ->assertSee('playsinline', false)
+            ->assertDontSee('data-role="conversation-media-gallery"', false)
+            ->assertDontSee('data-role="conversation-attachment-status"', false)
+            ->assertSee('data-video-title="Видео"', false)
+            ->assertSee('aria-label="Видео"', false)
+            ->assertSee('0:20')
+            ->assertDontSee('Видео Видео')
+            ->assertDontSee('0:20 · 4 КБ')
+            ->assertDontSee('video/mp4 · 0:20 · 4 КБ')
+            ->assertSee(route('admin.message-attachments.preview', ['attachment' => $attachment->id]), false)
+            ->assertSee(route('admin.message-attachments.download', ['attachment' => $attachment->id]), false);
+    }
+
+    public function test_dialog_view_renders_previewable_voice_as_inline_audio_player(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->account()->create([
+            'name' => 'Telegram Account Voice Preview',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Voice preview contact',
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'tg-account-voice-preview-1',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'tg-account-voice-preview-chat-1',
+        ]);
+        $message = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => $dialog->external_chat_id,
+            'external_message_id' => 'tg-account-voice-preview-message-1',
+            'provider_event_key' => 'telegram_account:'.$channel->id.':'.$dialog->external_chat_id.':tg-account-voice-preview-message-1',
+            'text' => 'Голосовое от клиента',
+            'received_at' => now(),
+        ]);
+        $attachment = MessageAttachment::factory()->create([
+            'message_id' => $message->id,
+            'channel_id' => $channel->id,
+            'provider_event_key' => $message->provider_event_key,
+            'provider_attachment_key' => '0:voice:file-1',
+            'media_kind' => MessageAttachment::MEDIA_KIND_VOICE,
+            'original_filename' => 'voice.mp3',
+            'mime_type' => 'audio/mpeg',
+            'extension' => 'mp3',
+            'file_size_bytes' => 2048,
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+            'local_path' => MessageAttachment::LOCAL_PATH_PREFIX.'/'.$message->id.'/voice.mp3',
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee('data-role="conversation-attachments"', false)
+            ->assertSee('wire:key="conversation-attachment-message:'.$message->id.'-'.$attachment->id.'"', false)
+            ->assertSee('data-role="conversation-voice-player"', false)
+            ->assertSee('wire:ignore', false)
+            ->assertSee('wire:key="conversation-voice-player-message:'.$message->id.'-'.$attachment->id.'"', false)
+            ->assertSee('data-role="conversation-attachment-audio"', false)
+            ->assertSee('data-role="conversation-voice-toggle"', false)
+            ->assertSee('data-role="conversation-voice-waveform"', false)
+            ->assertSee('data-role="conversation-voice-time"', false)
+            ->assertSee('preload="metadata"', false)
+            ->assertDontSee('style="--ac-voice-bar:', false)
+            ->assertDontSee('data-role="conversation-media-gallery"', false)
+            ->assertDontSee('data-role="conversation-attachment-preview"', false)
+            ->assertDontSee('data-media-viewer-type="audio"', false)
+            ->assertDontSee('audio/mpeg · 2 КБ')
+            ->assertSee('2 КБ')
+            ->assertSee(route('admin.message-attachments.preview', ['attachment' => $attachment->id]), false)
+            ->assertSee(route('admin.message-attachments.download', ['attachment' => $attachment->id]), false);
+    }
+
+    public function test_dialog_view_renders_downloaded_max_audio_without_metadata_as_inline_audio_player(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(1);
+        $message = Message::query()
+            ->where('dialog_id', $dialog->id)
+            ->firstOrFail();
+        $message->update([
+            'text' => null,
+            'external_message_id' => 'max-audio-preview-message-1',
+            'provider_event_key' => 'max-audio-preview-event-1',
+        ]);
+        $attachment = MessageAttachment::factory()->create([
+            'message_id' => $message->id,
+            'channel_id' => $dialog->channel_id,
+            'provider' => MessageAttachment::PROVIDER_MAX_BOT,
+            'provider_event_key' => 'max-audio-preview-event-1',
+            'provider_attachment_key' => 'max-audio-attachment-1',
+            'media_kind' => MessageAttachment::MEDIA_KIND_AUDIO,
+            'original_filename' => null,
+            'mime_type' => null,
+            'extension' => null,
+            'file_size_bytes' => null,
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+            'local_path' => MessageAttachment::LOCAL_PATH_PREFIX.'/'.$message->id.'/94.mp3',
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee('data-role="conversation-attachments"', false)
+            ->assertSee('data-role="conversation-voice-player"', false)
+            ->assertSee('data-role="conversation-attachment-audio"', false)
+            ->assertSee('data-voice-title="Аудио"', false)
+            ->assertSee('aria-label="Аудио"', false)
+            ->assertDontSee('data-role="conversation-media-badge"', false)
+            ->assertDontSee('data-role="conversation-attachment-status"', false)
+            ->assertDontSee('<div class="ac-message__text">Аудио</div>', false)
+            ->assertDontSee('Аудио Аудио')
+            ->assertSee(route('admin.message-attachments.preview', ['attachment' => $attachment->id]), false)
+            ->assertSee(route('admin.message-attachments.download', ['attachment' => $attachment->id]), false);
+    }
+
+    public function test_dialog_view_hides_generated_media_summary_for_downloaded_document_card(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(1);
+        $message = Message::query()
+            ->where('dialog_id', $dialog->id)
+            ->firstOrFail();
+        $message->update([
+            'text' => null,
+            'external_message_id' => 'max-document-card-message-1',
+            'provider_event_key' => 'max-document-card-event-1',
+        ]);
+        $attachment = MessageAttachment::factory()->create([
+            'message_id' => $message->id,
+            'channel_id' => $dialog->channel_id,
+            'provider' => MessageAttachment::PROVIDER_MAX_BOT,
+            'provider_event_key' => 'max-document-card-event-1',
+            'provider_attachment_key' => 'max-document-attachment-1',
+            'media_kind' => MessageAttachment::MEDIA_KIND_DOCUMENT,
+            'original_filename' => 'Comprovante de pagamento.pdf',
+            'mime_type' => 'application/pdf',
+            'extension' => 'pdf',
+            'file_size_bytes' => 1766,
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+            'local_path' => MessageAttachment::LOCAL_PATH_PREFIX.'/'.$message->id.'/95.pdf',
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee('data-role="conversation-attachments"', false)
+            ->assertSee('data-role="conversation-attachment"', false)
+            ->assertSee('Comprovante de pagamento.pdf')
+            ->assertSee('application/pdf · 1,7 КБ')
+            ->assertSee(route('admin.message-attachments.download', ['attachment' => $attachment->id]), false)
+            ->assertDontSee('data-role="conversation-media-badge"', false)
+            ->assertDontSee('data-role="conversation-attachment-status"', false)
+            ->assertDontSee('<div class="ac-message__text">Документ</div>', false)
+            ->assertDontSee('Документ: Comprovante de pagamento.pdf');
+    }
+
+    public function test_dialog_view_renders_outbound_max_buttons_as_disabled_preview(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(0);
+        $identity = $dialog->currentContactIdentity;
+        $message = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $identity?->id,
+            'channel_id' => $dialog->channel_id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_SCENARIO_MESSAGE,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_system_code' => 'scenario___scenario_constructor_workspace',
+            'external_chat_id' => $dialog->external_chat_id,
+            'external_message_id' => 'max-button-preview-message-1',
+            'provider_event_key' => null,
+            'text' => 'QA MAX BTN-01: нажми кнопку ниже',
+            'raw_payload' => [
+                'v3' => [
+                    'buttons' => [
+                        'rows' => [
+                            [
+                                [
+                                    'text' => 'Поделиться номером телефона',
+                                    'type' => 'request_phone',
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+                'message' => [
+                    'body' => [
+                        'attachments' => [
+                            [
+                                'type' => 'inline_keyboard',
+                                'payload' => [
+                                    'buttons' => [
+                                        [
+                                            [
+                                                'text' => 'Поделиться номером телефона',
+                                                'type' => 'request_contact',
+                                            ],
+                                        ],
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee('QA MAX BTN-01: нажми кнопку ниже')
+            ->assertSee('data-role="conversation-button-preview"', false)
+            ->assertSee('Отправленные кнопки')
+            ->assertSee('data-role="conversation-button-chip"', false)
+            ->assertSee('data-button-type="request_contact"', false)
+            ->assertSee('Поделиться номером телефона')
+            ->assertSee('Запрос телефона')
+            ->assertSee('disabled', false)
+            ->assertDontSee('href="Поделиться номером телефона"', false);
+
+        $this->assertDatabaseHas('messages', [
+            'id' => $message->id,
+            'message_kind' => Message::KIND_OUTBOUND_SCENARIO_MESSAGE,
+        ]);
+    }
+
+    public function test_dialog_view_live_refresh_defers_during_media_playback_and_text_selection(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(1);
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee('hasActiveMediaPlayback()', false)
+            ->assertSee('hasActiveConversationSelection()', false)
+            ->assertSee('shouldDeferLiveRefresh()', false)
+            ->assertSee('this.shouldDeferLiveRefresh()', false);
+    }
+
+    public function test_dialog_view_renders_previewable_image_as_gallery_without_technical_labels(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->account()->create([
+            'name' => 'Telegram Account Image Gallery',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Image gallery contact',
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'tg-account-image-gallery-1',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'tg-account-image-gallery-chat-1',
+        ]);
+        $message = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => $dialog->external_chat_id,
+            'external_message_id' => 'tg-account-image-gallery-message-1',
+            'provider_event_key' => 'telegram_account:'.$channel->id.':'.$dialog->external_chat_id.':tg-account-image-gallery-message-1',
+            'text' => 'Подпись под фотографией',
+            'received_at' => now(),
+        ]);
+        $attachment = MessageAttachment::factory()->create([
+            'message_id' => $message->id,
+            'channel_id' => $channel->id,
+            'provider_event_key' => $message->provider_event_key,
+            'provider_attachment_key' => '0:image:file-1',
+            'media_kind' => MessageAttachment::MEDIA_KIND_IMAGE,
+            'original_filename' => 'visible-file-name.jpg',
+            'mime_type' => 'image/jpeg',
+            'extension' => 'jpg',
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+            'local_path' => MessageAttachment::LOCAL_PATH_PREFIX.'/'.$message->id.'/visible-file-name.jpg',
+        ]);
+
+        $component = Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee('data-role="conversation-media-gallery"', false)
+            ->assertSee('data-count="1"', false)
+            ->assertSee('data-role="conversation-attachment-preview"', false)
+            ->assertSee('data-media-viewer-trigger', false)
+            ->assertSee('data-media-viewer-type="image"', false)
+            ->assertSee(route('admin.message-attachments.preview', ['attachment' => $attachment->id]), false)
+            ->assertSee(route('admin.message-attachments.download', ['attachment' => $attachment->id]), false)
+            ->assertSee('Подпись под фотографией')
+            ->assertDontSee('data-role="conversation-media-badge"', false)
+            ->assertDontSee('data-role="conversation-media-status-badge"', false)
+            ->assertDontSee('data-role="conversation-attachment-download"', false)
+            ->assertDontSee('visible-file-name.jpg');
+
+        $html = $component->html();
+
+        $this->assertLessThan(
+            strpos($html, 'Подпись под фотографией'),
+            strpos($html, 'data-role="conversation-media-gallery"'),
+        );
+    }
+
+    public function test_dialog_view_renders_mixed_image_and_video_as_single_gallery(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $channel = Channel::factory()->account()->create([
+            'name' => 'Telegram Account Mixed Gallery',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $contact = Contact::factory()->create([
+            'name' => 'Mixed gallery contact',
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'platform' => $channel->platform,
+            'external_user_id' => 'tg-account-mixed-gallery-1',
+        ]);
+        $dialog = Dialog::factory()->create([
+            'contact_id' => $contact->id,
+            'channel_id' => $channel->id,
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => 'tg-account-mixed-gallery-chat-1',
+        ]);
+        $message = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => $dialog->external_chat_id,
+            'external_message_id' => 'tg-account-mixed-gallery-message-1',
+            'provider_event_key' => 'telegram_account:'.$channel->id.':'.$dialog->external_chat_id.':tg-account-mixed-gallery-message-1',
+            'text' => "🎉 Фото + видео + текст.\n\nжирный",
+            'received_at' => now(),
+        ]);
+        $imageAttachment = MessageAttachment::factory()->create([
+            'message_id' => $message->id,
+            'channel_id' => $channel->id,
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT,
+            'provider_event_key' => $message->provider_event_key,
+            'provider_attachment_key' => '0:image:file-1',
+            'media_kind' => MessageAttachment::MEDIA_KIND_IMAGE,
+            'original_filename' => 'mixed-photo.jpg',
+            'mime_type' => 'image/jpeg',
+            'extension' => 'jpg',
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+            'local_path' => MessageAttachment::LOCAL_PATH_PREFIX.'/'.$message->id.'/mixed-photo.jpg',
+            'sort_order' => 1,
+        ]);
+        $videoAttachment = MessageAttachment::factory()->create([
+            'message_id' => $message->id,
+            'channel_id' => $channel->id,
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT,
+            'provider_event_key' => $message->provider_event_key,
+            'provider_attachment_key' => '1:video:file-2',
+            'media_kind' => MessageAttachment::MEDIA_KIND_VIDEO,
+            'original_filename' => 'mixed-video.mp4',
+            'mime_type' => 'video/mp4',
+            'extension' => 'mp4',
+            'file_size_bytes' => 32768,
+            'provider_metadata' => [
+                'duration' => 2,
+            ],
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+            'local_path' => MessageAttachment::LOCAL_PATH_PREFIX.'/'.$message->id.'/mixed-video.mp4',
+            'sort_order' => 0,
+        ]);
+        $imagePreviewUrl = route('admin.message-attachments.preview', ['attachment' => $imageAttachment->id]);
+        $videoPreviewUrl = route('admin.message-attachments.preview', ['attachment' => $videoAttachment->id]);
+
+        $component = Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee('data-role="conversation-media-gallery"', false)
+            ->assertSee('data-count="2"', false)
+            ->assertSee('data-media-viewer-type="image"', false)
+            ->assertSee('data-media-viewer-type="video"', false)
+            ->assertSee('ac-message-gallery__item--video', false)
+            ->assertSee('data-role="conversation-gallery-video-preview"', false)
+            ->assertSee('data-src="'.$videoPreviewUrl.'#t=0.001"', false)
+            ->assertSee('preload="none"', false)
+            ->assertSee('muted', false)
+            ->assertSee('playsinline', false)
+            ->assertSee($imagePreviewUrl, false)
+            ->assertSee($videoPreviewUrl, false)
+            ->assertSee('🎉 Фото + видео + текст.')
+            ->assertSee('жирный')
+            ->assertDontSee('data-role="conversation-video-player"', false)
+            ->assertDontSee('data-role="conversation-attachment-video"', false)
+            ->assertDontSee('data-role="conversation-gallery-video-placeholder"', false)
+            ->assertDontSee('ac-message__attachments--inline-video', false)
+            ->assertDontSee('data-role="conversation-attachments"', false)
+            ->assertDontSee('mixed-photo.jpg')
+            ->assertDontSee('mixed-video.mp4');
+
+        $html = $component->html();
+        $this->assertDoesNotMatchRegularExpression(
+            '/<video(?=[^>]*data-role="conversation-gallery-video-preview")[^>]*\ssrc="/',
+            $html,
+        );
+
+        $videoPreviewPosition = strpos($html, $videoPreviewUrl);
+        $imagePreviewPosition = strpos($html, $imagePreviewUrl);
+
+        $this->assertNotFalse($videoPreviewPosition);
+        $this->assertNotFalse($imagePreviewPosition);
+
+        $this->assertLessThan(
+            strpos($html, '🎉 Фото + видео + текст.'),
+            strpos($html, 'data-role="conversation-media-gallery"'),
+        );
+        $this->assertLessThan($imagePreviewPosition, $videoPreviewPosition);
+        $this->assertDoesNotMatchRegularExpression(
+            '/<video\b(?=[^>]*src="'.preg_quote($videoPreviewUrl, '/').'")[^>]*>/s',
+            $html,
+        );
+    }
+
+    public function test_dialog_view_renders_grouped_images_as_single_gallery_grid(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(1);
+        $firstMessage = Message::query()
+            ->where('dialog_id', $dialog->id)
+            ->firstOrFail();
+        $firstMessage->update([
+            'text' => null,
+            'provider_group_key' => 'rendered-album-gallery',
+            'provider_event_key' => 'rendered-album-gallery-event-1',
+            'external_message_id' => 'rendered-album-gallery-message-1',
+        ]);
+        $secondMessage = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'text' => null,
+            'received_at' => $firstMessage->received_at?->copy()->addSecond() ?? now()->addSecond(),
+            'external_message_id' => 'rendered-album-gallery-message-2',
+            'provider_event_key' => 'rendered-album-gallery-event-2',
+            'provider_group_key' => 'rendered-album-gallery',
+        ]);
+
+        foreach ([$firstMessage, $secondMessage] as $index => $message) {
+            MessageAttachment::factory()->create([
+                'message_id' => $message->id,
+                'channel_id' => $dialog->channel_id,
+                'provider' => MessageAttachment::PROVIDER_MAX_BOT,
+                'provider_event_key' => $message->provider_event_key,
+                'provider_attachment_key' => $index.':image:file-'.$index,
+                'media_kind' => MessageAttachment::MEDIA_KIND_IMAGE,
+                'original_filename' => 'gallery-file-'.($index + 1).'.jpg',
+                'mime_type' => 'image/jpeg',
+                'extension' => 'jpg',
+                'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+                'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+                'local_path' => MessageAttachment::LOCAL_PATH_PREFIX.'/'.$message->id.'/gallery-file-'.($index + 1).'.jpg',
+            ]);
+        }
+
+        $component = Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee('data-role="conversation-media-gallery"', false)
+            ->assertSee('data-count="2"', false)
+            ->assertDontSee('data-role="conversation-media-badge"', false)
+            ->assertDontSee('data-role="conversation-media-status-badge"', false)
+            ->assertDontSee('data-role="conversation-attachment-download"', false)
+            ->assertDontSee('gallery-file-1.jpg')
+            ->assertDontSee('gallery-file-2.jpg');
+
+        $messages = $component->get('conversationMessages');
+
+        $this->assertCount(1, $messages);
+        $this->assertSame([$firstMessage->id, $secondMessage->id], $messages[0]['message_ids']);
+        $this->assertCount(2, $messages[0]['media_items']);
     }
 
     public function test_dialogs_inbox_preview_meta_shows_media_download_placeholder_for_telegram_account_message(): void
@@ -2827,6 +3531,73 @@ class FilamentDialogsResourceTest extends TestCase
         $this->assertSame($newInboundMessage->id, $component->get('latestKnownMessageId'));
     }
 
+    public function test_dialog_view_live_refresh_updates_existing_visible_media_state(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(1);
+        $message = Message::query()
+            ->where('dialog_id', $dialog->id)
+            ->firstOrFail();
+        $message->forceFill([
+            'text' => null,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'provider_event_key' => 'live-refresh-video-note-event-1',
+            'external_message_id' => 'live-refresh-video-note-message-1',
+        ])->save();
+        $attachment = MessageAttachment::factory()->create([
+            'message_id' => $message->id,
+            'channel_id' => $dialog->channel_id,
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT,
+            'provider_event_key' => $message->provider_event_key,
+            'provider_attachment_key' => 'video-note:file-1',
+            'media_kind' => MessageAttachment::MEDIA_KIND_VIDEO_NOTE,
+            'original_filename' => 'round.mp4',
+            'mime_type' => 'video/mp4',
+            'extension' => 'mp4',
+            'file_size_bytes' => 4096,
+            'provider_metadata' => [
+                'duration' => 6,
+                'is_video_note' => true,
+            ],
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
+        ]);
+
+        $component = Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()]);
+
+        $messages = $component->get('conversationMessages');
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING, $messages[0]['media_items'][0]['status']);
+        $this->assertFalse($messages[0]['media_items'][0]['is_previewable']);
+        $this->assertSame('Загружается', $messages[0]['media_items'][0]['status_label']);
+
+        $attachment->forceFill([
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+            'local_path' => MessageAttachment::LOCAL_PATH_PREFIX.'/'.$message->id.'/round.mp4',
+        ])->save();
+
+        $component
+            ->call('refreshDialogViewData')
+            ->assertDispatched('dialog-history-refreshed');
+
+        $messages = $component->get('conversationMessages');
+
+        $this->assertCount(1, $messages);
+        $this->assertSame('Кружок', $messages[0]['display_text']);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $messages[0]['media_items'][0]['status']);
+        $this->assertTrue($messages[0]['media_items'][0]['is_video_note']);
+        $this->assertTrue($messages[0]['media_items'][0]['is_previewable']);
+        $this->assertSame(MessageAttachment::PREVIEW_KIND_VIDEO, $messages[0]['media_items'][0]['preview_kind']);
+        $this->assertSame(
+            route('admin.message-attachments.preview', ['attachment' => $attachment->id]),
+            $messages[0]['media_items'][0]['preview_url'],
+        );
+    }
+
     public function test_dialog_view_live_refresh_does_not_duplicate_already_loaded_messages(): void
     {
         $admin = User::factory()->create([
@@ -2860,6 +3631,80 @@ class FilamentDialogsResourceTest extends TestCase
             'Сообщение 1',
             'Сообщение только один раз',
         ], array_column($messages, 'display_text'));
+    }
+
+    public function test_dialog_view_live_refresh_merges_new_album_sibling_into_existing_conversation_item(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(1);
+        $firstMessage = Message::query()
+            ->where('dialog_id', $dialog->id)
+            ->firstOrFail();
+        $firstMessage->update([
+            'text' => null,
+            'provider_group_key' => 'live-refresh-album',
+            'provider_event_key' => 'live-refresh-album-event-1',
+            'external_message_id' => 'live-refresh-album-message-1',
+        ]);
+        MessageAttachment::factory()->create([
+            'message_id' => $firstMessage->id,
+            'channel_id' => $dialog->channel_id,
+            'provider' => MessageAttachment::PROVIDER_MAX_BOT,
+            'provider_event_key' => $firstMessage->provider_event_key,
+            'provider_attachment_key' => '0:image:file-1',
+            'media_kind' => MessageAttachment::MEDIA_KIND_IMAGE,
+            'original_filename' => 'album-first.jpg',
+            'mime_type' => 'image/jpeg',
+            'extension' => 'jpg',
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
+        ]);
+
+        $component = Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()]);
+
+        $this->assertCount(1, $component->get('conversationMessages'));
+
+        $secondMessage = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'text' => 'Подпись альбома',
+            'received_at' => $firstMessage->received_at?->copy()->addSecond() ?? now()->addSecond(),
+            'external_message_id' => 'live-refresh-album-message-2',
+            'provider_event_key' => 'live-refresh-album-event-2',
+            'provider_group_key' => 'live-refresh-album',
+        ]);
+        MessageAttachment::factory()->create([
+            'message_id' => $secondMessage->id,
+            'channel_id' => $dialog->channel_id,
+            'provider' => MessageAttachment::PROVIDER_MAX_BOT,
+            'provider_event_key' => $secondMessage->provider_event_key,
+            'provider_attachment_key' => '1:image:file-2',
+            'media_kind' => MessageAttachment::MEDIA_KIND_IMAGE,
+            'original_filename' => 'album-second.jpg',
+            'mime_type' => 'image/jpeg',
+            'extension' => 'jpg',
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
+        ]);
+
+        $component
+            ->call('refreshDialogViewData')
+            ->assertDispatched('dialog-history-refreshed')
+            ->assertSee('Подпись альбома');
+
+        $messages = $component->get('conversationMessages');
+
+        $this->assertCount(1, $messages);
+        $this->assertSame([$firstMessage->id, $secondMessage->id], $messages[0]['message_ids']);
+        $this->assertTrue($messages[0]['is_grouped']);
+        $this->assertSame('Подпись альбома', $messages[0]['display_text']);
+        $this->assertCount(2, $messages[0]['media_items']);
+        $this->assertSame($secondMessage->id, $component->get('latestKnownMessageId'));
     }
 
     public function test_dialog_view_live_refresh_inserts_late_arriving_message_into_chronological_position(): void
@@ -3025,7 +3870,7 @@ class FilamentDialogsResourceTest extends TestCase
             ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
             ->assertSee('Автоответчик')
             ->assertSee('Автоответ')
-            ->assertSee('Поделился номером телефона')
+            ->assertSee('Поделился контактом')
             ->assertDontSee('data-role="conversation-channel"', false);
     }
 
@@ -3069,7 +3914,124 @@ class FilamentDialogsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
-            ->assertSee('Поделился номером: +7 999 123 45 67')
+            ->assertSee('data-role="conversation-contact-share"', false)
+            ->assertSee('Поделился номером')
+            ->assertSee('+7 999 123 45 67')
+            ->assertDontSee('Поделился контактом');
+    }
+
+    public function test_dialog_view_shows_telegram_forwarded_username_when_available(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(0);
+        $contact = $dialog->contact;
+        $identity = $dialog->currentContactIdentity;
+        $channel = $dialog->channel;
+        $channel?->forceFill([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ])->save();
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity?->id,
+            'channel_id' => $channel?->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => $dialog->external_chat_id,
+            'external_message_id' => 'telegram-forwarded-username-message',
+            'provider_event_key' => 'telegram-forwarded-username-event',
+            'text' => 'Пересланный текст',
+            'raw_payload' => [
+                'message' => [
+                    'message_id' => 52,
+                    'text' => 'Пересланный текст',
+                    'forward_origin' => [
+                        'type' => 'user',
+                        'sender_user' => [
+                            'id' => 5359196982,
+                            'first_name' => 'Служба поддержки lava.top',
+                            'username' => 'lava_support',
+                        ],
+                    ],
+                ],
+            ],
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee('data-role="conversation-forwarded"', false)
+            ->assertSee('Переслано от Служба поддержки lava.top')
+            ->assertSee('Telegram user_id')
+            ->assertSee('5359196982')
+            ->assertSee('Telegram username')
+            ->assertSee('@lava_support');
+    }
+
+    public function test_dialog_view_renders_max_contact_share_card_without_phone(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(0);
+        $contact = $dialog->contact;
+        $identity = $dialog->currentContactIdentity;
+        $channel = $dialog->channel;
+        $channel?->forceFill([
+            'platform' => Channel::PLATFORM_MAX,
+        ])->save();
+
+        $message = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity?->id,
+            'channel_id' => $channel?->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_CONTACT_SHARE,
+            'text' => null,
+            'raw_payload' => [
+                'message' => [
+                    'body' => [
+                        'attachments' => [
+                            [
+                                'type' => 'contact',
+                                'payload' => [
+                                    'max_info' => [
+                                        'name' => 'Александр Бабичев',
+                                        'user_id' => 106381897,
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+            'received_at' => now(),
+        ]);
+
+        $dialog->forceFill([
+            'last_message_id' => $message->id,
+            'last_message_at' => $message->received_at,
+            'last_message_preview' => 'Поделился контактом',
+            'last_inbound_message_id' => $message->id,
+            'last_inbound_at' => $message->received_at,
+            'last_inbound_message_preview' => 'Поделился контактом',
+        ])->save();
+
+        Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertSee('data-role="conversation-contact-share"', false)
+            ->assertSee('Поделился контактом')
+            ->assertSee('Александр Бабичев')
+            ->assertSee('MAX user_id')
+            ->assertSee('106381897')
+            ->assertSee('AB контакт')
+            ->assertSee('не найден')
             ->assertDontSee('Поделился номером телефона');
     }
 
