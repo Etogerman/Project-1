@@ -10,8 +10,40 @@ permissions:
   contents: read
 
 jobs:
+  determine-ci-scope:
+    name: determine-ci-scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      scope: ${{ steps.ci-scope.outputs.scope }}
+      run_php_tests: ${{ steps.ci-scope.outputs.run_php_tests }}
+      reason: ${{ steps.ci-scope.outputs.reason }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Determine CI scope
+        id: ci-scope
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            if ! git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}" -- > /tmp/changed-files.txt; then
+              echo "Unable to determine changed files; falling back to the full Laravel suite."
+              : > /tmp/changed-files.txt
+            fi
+          else
+            printf "__runtime_push__\n" > /tmp/changed-files.txt
+          fi
+
+          node .github/scripts/ci-change-scope.mjs /tmp/changed-files.txt
+
   frontend-build:
     name: frontend-build
+    needs:
+      - determine-ci-scope
+    if: needs.determine-ci-scope.outputs.run_php_tests == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -40,6 +72,9 @@ jobs:
 
   phpunit-shard-coverage:
     name: phpunit-shard-coverage
+    needs:
+      - determine-ci-scope
+    if: needs.determine-ci-scope.outputs.run_php_tests == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -102,10 +137,12 @@ jobs:
 
   phpunit-shards:
     name: phpunit-shard-${{ matrix.shard }}
+    needs:
+      - determine-ci-scope
+      - frontend-build
+    if: needs.determine-ci-scope.outputs.run_php_tests == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs:
-      - frontend-build
     strategy:
       fail-fast: false
       matrix:
@@ -175,28 +212,56 @@ jobs:
 
   php-artisan-test:
     name: php-artisan-test
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
     needs:
+      - determine-ci-scope
       - frontend-build
       - phpunit-shard-coverage
       - phpunit-shards
-    if: ${{ always() }}
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
 
     steps:
-      - name: Check required CI jobs
+      - name: Complete required check
+        env:
+          SCOPE_RESULT: ${{ needs.determine-ci-scope.result }}
+          FRONTEND_RESULT: ${{ needs.frontend-build.result }}
+          COVERAGE_RESULT: ${{ needs.phpunit-shard-coverage.result }}
+          SHARDS_RESULT: ${{ needs.phpunit-shards.result }}
+          RUN_PHP_TESTS: ${{ needs.determine-ci-scope.outputs.run_php_tests }}
+          SCOPE: ${{ needs.determine-ci-scope.outputs.scope }}
+          REASON: ${{ needs.determine-ci-scope.outputs.reason }}
         run: |
-          if [ "${{ needs.frontend-build.result }}" != "success" ]; then
-            echo "frontend-build failed or did not complete successfully" >&2
+          if [ "$SCOPE_RESULT" != "success" ]; then
+            echo "CI scope detection failed."
             exit 1
           fi
 
-          if [ "${{ needs.phpunit-shard-coverage.result }}" != "success" ]; then
-            echo "phpunit-shard-coverage failed or did not complete successfully" >&2
+          if [ "$RUN_PHP_TESTS" = "true" ]; then
+            if [ "$FRONTEND_RESULT" != "success" ]; then
+              echo "frontend-build result: $FRONTEND_RESULT"
+              exit 1
+            fi
+
+            if [ "$COVERAGE_RESULT" != "success" ]; then
+              echo "phpunit-shard-coverage result: $COVERAGE_RESULT"
+              exit 1
+            fi
+
+            if [ "$SHARDS_RESULT" != "success" ]; then
+              echo "phpunit-shards result: $SHARDS_RESULT"
+              exit 1
+            fi
+
+            echo "Laravel shard suite passed."
+            exit 0
+          fi
+
+          if [ "$RUN_PHP_TESTS" != "false" ]; then
+            echo "Unexpected run_php_tests value: $RUN_PHP_TESTS"
             exit 1
           fi
 
-          if [ "${{ needs.phpunit-shards.result }}" != "success" ]; then
-            echo "phpunit-shards failed or did not complete successfully" >&2
-            exit 1
-          fi
+          echo "Scope: $SCOPE"
+          echo "Reason: $REASON"
+          echo "Laravel suite skipped for docs/process-only changes."
