@@ -22,6 +22,36 @@ const PROCESS_ONLY_FILE_PATTERNS = [
   /(^|\/)[^/]+\.md$/,
 ];
 
+const STAGING_PROCESS_CI_SYNC_FILE_PATTERNS = [
+  /^AGENTS\.md$/,
+  /^README\.md$/,
+  /^docs\/action-ownership\.md$/,
+  /^docs\/agent-docs-lifecycle\.md$/,
+  /^docs\/agent-routing\.md$/,
+  /^docs\/architecture\.md$/,
+  /^docs\/reference\/active-specs\.md$/,
+  /^docs\/reference\/environments\.md$/,
+  /^docs\/reference\/local-bootstrap\.md$/,
+  /^docs\/runbooks\/release-rollback\.md$/,
+  /^docs\/runbooks\/test-env\.md$/,
+  /^docs\/task-delivery-workflow\.md$/,
+  /^\.agents\/skills\/ab-connector-skill-authoring\/SKILL\.md$/,
+  /^\.agents\/skills\/ab-pr-ci-review\/(SKILL\.md|agents\/openai\.yaml)$/,
+  /^\.agents\/skills\/ab-spec-workflow\/(SKILL\.md|agents\/openai\.yaml)$/,
+  /^\.agents\/skills\/ab-stream-state-resolver\/(SKILL\.md|agents\/openai\.yaml)$/,
+  /^\.github\/PULL_REQUEST_TEMPLATE\.md$/,
+  /^\.github\/copilot-instructions\.md$/,
+  /^\.github\/scripts\/ab-readiness-check\.mjs$/,
+  /^\.github\/scripts\/ci-change-scope\.mjs$/,
+  /^\.github\/scripts\/copilot-feasibility-spike\.mjs$/,
+  /^\.github\/scripts\/copilot-merge-readiness\.mjs$/,
+  /^\.github\/scripts\/release-process-guard\.mjs$/,
+  /^\.github\/workflows\/ab-readiness-check\.ya?ml$/,
+  /^\.github\/workflows\/copilot-feasibility-spike\.ya?ml$/,
+  /^\.github\/workflows\/copilot-merge-readiness\.ya?ml$/,
+  /^\.github\/workflows\/php-artisan-test\.ya?ml$/,
+];
+
 const CYRILLIC_PATTERN = /[А-Яа-яЁё]/;
 const LATIN_PATTERN = /[A-Za-z]/;
 const ENGLISH_PR_HEADING_PATTERN =
@@ -59,6 +89,15 @@ function summarizeFiles(files) {
   };
 }
 
+function isStagingProcessCiSync({ baseRef, runtimeFiles, processOnlyFiles }) {
+  return baseRef === "staging"
+    && runtimeFiles.length === 0
+    && processOnlyFiles.length > 0
+    && processOnlyFiles.every((file) => (
+      STAGING_PROCESS_CI_SYNC_FILE_PATTERNS.some((pattern) => pattern.test(file.filename))
+    ));
+}
+
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -89,10 +128,16 @@ function normalizeValue(value = "") {
 }
 
 function extractField(body, label) {
-  const pattern = new RegExp(`(?:^|\\n)\\s*(?:[-*]\\s*)?${escapeRegExp(label)}\\s*:\\s*(.+?)(?=\\n|$)`, "i");
+  const pattern = new RegExp(`(?:^|\\n)[^\\S\\n]*(?:[-*][^\\S\\n]*)?${escapeRegExp(label)}[^\\S\\n]*:[^\\S\\n]*(.*?)(?=\\n|$)`, "i");
   const match = body.match(pattern);
 
-  return match ? normalizeValue(match[1]) : null;
+  if (!match) {
+    return null;
+  }
+
+  const value = normalizeValue(match[1]);
+
+  return value === "" ? null : value;
 }
 
 function extractFields(body) {
@@ -167,6 +212,7 @@ function evaluateReadiness({ baseRef, title = "", body = "", files = [], isDraft
   const fields = extractFields(body);
   const { runtimeFiles, processOnlyFiles } = summarizeFiles(files);
   const hasRuntimeFiles = runtimeFiles.length > 0;
+  const allowStagingProcessCiSync = isStagingProcessCiSync({ baseRef, runtimeFiles, processOnlyFiles });
 
   failures.push(...validatePublishLanguage({ title, body }));
 
@@ -174,7 +220,7 @@ function evaluateReadiness({ baseRef, title = "", body = "", files = [], isDraft
     failures.push("PR должен быть направлен только в `main` или `staging`.");
   }
 
-  if (!hasRuntimeFiles && baseRef !== "main") {
+  if (!hasRuntimeFiles && baseRef !== "main" && !allowStagingProcessCiSync) {
     failures.push("Документационный или процессный PR должен идти в `main` по docs-only path.");
   }
 
@@ -374,6 +420,47 @@ function runSelfTest() {
       isDraft: false,
     }).failures,
     [],
+  );
+
+  assert.deepEqual(
+    evaluateReadiness({
+      baseRef: "main",
+      title: "[codex] Уточнить процесс ревью",
+      body: `${readyProcessBody}\n\nSpec repo:\nSpec doc:\nSpec revision:\n`,
+      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
+      isDraft: false,
+    }).failures,
+    [],
+  );
+
+  const stagingProcessCiSyncFiles = [
+    { filename: ".github/scripts/ab-readiness-check.mjs" },
+    { filename: ".github/workflows/ab-readiness-check.yml" },
+    { filename: ".github/scripts/ci-change-scope.mjs" },
+    { filename: ".github/workflows/php-artisan-test.yml" },
+    { filename: "docs/task-delivery-workflow.md" },
+  ];
+
+  assert.deepEqual(
+    evaluateReadiness({
+      baseRef: "staging",
+      title: "[codex] Синхронизировать process CI guard-ы в staging",
+      body: readyProcessBody,
+      files: stagingProcessCiSyncFiles,
+      isDraft: false,
+    }).failures,
+    [],
+  );
+
+  assert.match(
+    evaluateReadiness({
+      baseRef: "staging",
+      title: "[codex] Уточнить процесс ревью",
+      body: readyProcessBody,
+      files: [{ filename: "docs/unrelated-process-note.md" }],
+      isDraft: false,
+    }).failures.join("\n"),
+    /docs-only path/,
   );
 
   assert.deepEqual(
