@@ -30,7 +30,7 @@ Ctrl+Shift+P → Dev Containers: Reopen in Container
 4. `php artisan migrate`
 5. `php artisan db:seed --class=AdminUserSeeder` (если задан `ADMIN_USER_SEEDER_PASSWORD` в `.env`)
 
-Після того як контейнер піднявся, запусти dev-runtime:
+После того как контейнер поднялся, запусти dev-runtime:
 
 ```bash
 composer dev
@@ -183,6 +183,62 @@ composer docker:dev
 минуту, и bot-каналы со статусом `connected/installed` переходят в
 `Проверка устарела` после истечения TTL проверки.
 
+## Обязательный runtime identity check
+
+Перед локальным smoke, восстановлением данных, подключением каналов или
+переходом к внешним интеграциям нужно доказать, что проверяется именно тот
+runtime, который ожидается.
+
+Минимальная сверка:
+
+1. пользовательский URL, например `APP_URL` или tunnel URL;
+2. процесс или контейнер, который обслуживает этот URL;
+3. смонтированный каталог проекта или worktree;
+4. активная ветка и commit в этом каталоге;
+5. видимый в админке `rev`;
+6. имя подключенной базы данных;
+7. полный набор runtime-процессов: web-server, scheduler, очереди и сборка.
+
+Команды для быстрой сверки в обычном локальном контуре:
+
+```bash
+php artisan about --only=environment
+php artisan tinker --execute='echo config("app.url").PHP_EOL.config("database.default").PHP_EOL.config("database.connections.pgsql.database");'
+git rev-parse --short HEAD
+```
+
+Если URL обслуживается Docker-контейнером, дополнительно проверь compose-project
+и mount:
+
+```bash
+docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}} {{index .Config.Labels "com.docker.compose.service"}}' <container>
+docker inspect -f '{{range .Mounts}}{{println .Source "->" .Destination}}{{end}}' <container>
+```
+
+Если URL ведёт на другой worktree, другой compose-project, другой commit или
+другую базу, smoke текущей задачи не считается валидным. Сначала переключи URL
+на правильный runtime или явно зафиксируй, что проверяется отдельный recovery /
+demo / legacy-контур.
+
+## Режим данных
+
+Перед настройкой системы зафиксируй режим локальной базы:
+
+1. `clean install` — пустая база после миграций и минимального seed;
+2. `recovery` — контур восстановления или ручной shell-seed;
+3. `existing data` — сохранённые реальные локальные данные;
+4. `demo/test` — демонстрационные или тестовые записи.
+
+Recovery seed не является восстановлением пользовательских данных. Если после
+seed видны локальные каналы, один контакт или тестовый диалог, это только
+минимальный рабочий shell-контур. Нельзя говорить, что восстановлены прежние
+диалоги, контакты, каналы, сценарии или автоответчики, пока counts и ключевые
+экраны не подтверждают это явно.
+
+Для test database действует отдельный runbook:
+[docs/runbooks/test-env.md](../runbooks/test-env.md).
+
 Если нужен ручной запуск по процессам:
 
 ```bash
@@ -202,16 +258,18 @@ npm run build -- --watch
 
 Минимальный локальный verification kit:
 
-1. открой `http://127.0.0.1:8000/admin/login`
-2. войди под `admin@abrikosoff.local`
-3. проверь, что открывается админка и основной UI-сценарий текущей задачи реально воспроизводим
-4. при необходимости отдельно запусти:
+1. выполни `runtime identity check`;
+2. зафиксируй режим данных: clean / recovery / existing data / demo;
+3. открой `APP_URL/admin/login`, например `http://127.0.0.1:8000/admin/login`;
+4. войди под `admin@abrikosoff.local`;
+5. проверь, что открывается админка и основной UI-сценарий текущей задачи реально воспроизводим;
+6. если нужны тесты, сначала подготовь безопасный test-контур, затем запусти:
 
 ```bash
 php artisan test
 ```
 
-5. если задача затрагивает живой UI-flow, при необходимости добавь локальный Playwright smoke
+7. если задача затрагивает живой UI-flow, при необходимости добавь локальный Playwright smoke.
 
 Playwright smoke и remote smoke описаны в
 [docs/playwright.md](/Users/abrikosov/Documents/Проект-1/docs/playwright.md).
