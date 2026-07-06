@@ -9,8 +9,20 @@ const PROCESS_ONLY_FILE_PATTERNS = [
   /^docs\//,
   /^\.github\/copilot-instructions\.md$/,
   /^\.github\/instructions\/.*\.instructions\.md$/,
+  /^\.github\/scripts\/ci-change-scope\.mjs$/,
+  /^\.github\/workflows\/php-artisan-test\.ya?ml$/,
   /^\.github\/scripts\/release-process-guard\.mjs$/,
   /^\.github\/workflows\/release-process-guard\.ya?ml$/,
+  /^\.github\/scripts\/ab-readiness-check\.mjs$/,
+  /^\.github\/workflows\/ab-readiness-check\.ya?ml$/,
+  /^\.github\/scripts\/copilot-feasibility-spike\.mjs$/,
+  /^\.github\/workflows\/copilot-feasibility-spike\.ya?ml$/,
+  /^\.github\/scripts\/copilot-merge-readiness\.mjs$/,
+  /^\.github\/workflows\/copilot-merge-readiness\.ya?ml$/,
+  /^phpunit\.xml$/,
+  /^scripts\/ci-run-phpunit-shard\.sh$/,
+  /^scripts\/local-test\.sh$/,
+  /^tests\//,
   /^\.agents\/skills\//,
   /(^|\/)[^/]+\.md$/,
 ];
@@ -21,27 +33,37 @@ const LATIN_PATTERN = /[A-Za-z]/;
 const ENGLISH_PR_HEADING_PATTERN =
   /^\s{0,3}#{1,6}\s*(Summary|Overview|Description|Why|Validation|Testing|Tests|Checks|Delivery note|Implementation|Changes|Root cause|Impact)\s*$/gim;
 const ALLOWED_TECHNICAL_TERMS_PATTERN =
-  /\b(codex|PR|MCP|CI|UI|URL|API|JSON|YAML|TOML|PHP|SQL|HTTP|HTTPS|Docker|Laravel|Boost|Filament|Livewire|Bitrix24|AB Connector|Staging PR|Staging smoke|Staging Post-Deploy Smoke|rev-check|public smoke|admin smoke|dev-only|validated diff|clean-main-PR|workflow|runtime|main|staging|draft|ready|merge|commit|branch|pull request|release-process-guard|php-artisan-test)\b/gi;
+  /\b(codex|Copilot|Copilot CLI|Copilot Requests|CLI|PAT|token|secret|workflow_dispatch|GITHUB_TOKEN|COPILOT_GITHUB_TOKEN|READY_TO_MERGE|BLOCKED|shadow|verdict|merge-readiness|PR|MCP|CI|UI|URL|API|JSON|YAML|TOML|PHP|SQL|HTTP|HTTPS|Docker|Laravel|Boost|Filament|Livewire|Bitrix24|AB Connector|Spec repo|Spec doc|Spec revision|Staging PR|Staging smoke|Staging Post-Deploy Smoke|rev-check|public smoke|admin smoke|dev-only|validated diff|clean-main-PR|workflow|runtime|main|staging|draft|ready|merge|commit|branch|pull request|release-process-guard|ab-readiness-check|copilot-feasibility-spike|copilot-merge-readiness|php-artisan-test)\b/gi;
 
 function isProcessOnlyFile(filename) {
   return PROCESS_ONLY_FILE_PATTERNS.some((pattern) => pattern.test(filename));
 }
 
-function extractStagingPrNumber(body) {
+function extractStagingPrNumbers(body) {
   const patterns = [
-    /(?:^|\n)\s*Staging\s+PR\s*:\s*(?:https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/)?#?(\d+)\b/i,
-    /(?:^|\n)\s*staging-pr\s*:\s*#?(\d+)\b/i,
+    /(?:^|\n)\s*Staging\s+PRs?\s*:\s*(.+)/i,
+    /(?:^|\n)\s*staging-prs?\s*:\s*(.+)/i,
   ];
 
   for (const pattern of patterns) {
     const match = body.match(pattern);
 
     if (match) {
-      return Number.parseInt(match[1], 10);
+      return [
+        ...new Set(
+          [...match[1].matchAll(/(?:https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/)?#?(\d+)\b/gi)]
+            .map((numberMatch) => Number.parseInt(numberMatch[1], 10))
+            .filter(Number.isInteger),
+        ),
+      ];
     }
   }
 
-  return null;
+  return [];
+}
+
+function extractStagingPrNumber(body) {
+  return extractStagingPrNumbers(body)[0] || null;
 }
 
 function extractStagingSmokeRunUrl(body) {
@@ -91,7 +113,7 @@ function normalizePatch(patch = "") {
     .split("\n")
     .filter((line) => {
       if (line.startsWith("+++ ") || line.startsWith("--- ")) {
-        return true;
+        return false;
       }
 
       if (line.startsWith("+") || line.startsWith("-")) {
@@ -112,9 +134,100 @@ function fileFingerprint(file) {
   };
 }
 
+function groupFilesByName(files) {
+  const grouped = new Map();
+
+  for (const file of files) {
+    const group = grouped.get(file.filename) || [];
+    group.push(file);
+    grouped.set(file.filename, group);
+  }
+
+  return grouped;
+}
+
+function aggregateFileStatus(files) {
+  const statuses = new Set(files.map((file) => file.status || "modified"));
+
+  if (statuses.size === 1) {
+    return [...statuses][0];
+  }
+
+  if (statuses.has("added") && !statuses.has("removed")) {
+    return "added";
+  }
+
+  if (statuses.has("removed") && !statuses.has("added")) {
+    return "removed";
+  }
+
+  return "modified";
+}
+
+function aggregatePreviousFilename(files) {
+  return files.find((file) => file.previous_filename)?.previous_filename || "";
+}
+
+function countPatchLines(files) {
+  const additions = new Map();
+  const removals = new Map();
+
+  for (const file of files) {
+    const patch = normalizePatch(file.patch || "");
+
+    if (patch === "") {
+      continue;
+    }
+
+    for (const line of patch.split("\n")) {
+      const content = line.slice(1);
+      const bucket = line.startsWith("+") ? additions : removals;
+
+      bucket.set(content, (bucket.get(content) || 0) + 1);
+    }
+  }
+
+  const counts = new Map();
+  const contents = new Set([...additions.keys(), ...removals.keys()]);
+
+  for (const content of contents) {
+    const delta = (additions.get(content) || 0) - (removals.get(content) || 0);
+
+    if (delta > 0) {
+      counts.set(`+${content}`, delta);
+    } else if (delta < 0) {
+      counts.set(`-${content}`, Math.abs(delta));
+    }
+  }
+
+  return counts;
+}
+
+function comparePatchLineCounts(currentCounts, stagingCounts) {
+  const failures = [];
+
+  for (const [line, expectedCount] of stagingCounts.entries()) {
+    const currentCount = currentCounts.get(line) || 0;
+
+    if (currentCount < expectedCount) {
+      failures.push(`missing ${expectedCount - currentCount} occurrence(s) of ${JSON.stringify(line)}`);
+    }
+  }
+
+  for (const [line, currentCount] of currentCounts.entries()) {
+    const expectedCount = stagingCounts.get(line) || 0;
+
+    if (currentCount > expectedCount) {
+      failures.push(`unexpected ${currentCount - expectedCount} occurrence(s) of ${JSON.stringify(line)}`);
+    }
+  }
+
+  return failures;
+}
+
 function compareValidatedFiles(currentFiles, stagingFiles) {
-  const current = new Map(currentFiles.map((file) => [file.filename, fileFingerprint(file)]));
-  const staging = new Map(stagingFiles.map((file) => [file.filename, fileFingerprint(file)]));
+  const current = groupFilesByName(currentFiles);
+  const staging = groupFilesByName(stagingFiles);
   const failures = [];
 
   for (const filename of current.keys()) {
@@ -123,13 +236,26 @@ function compareValidatedFiles(currentFiles, stagingFiles) {
     }
   }
 
-  for (const [filename, stagingFingerprint] of staging.entries()) {
-    const currentFingerprint = current.get(filename);
+  for (const [filename, stagingGroup] of staging.entries()) {
+    const currentGroup = current.get(filename);
 
-    if (!currentFingerprint) {
+    if (!currentGroup) {
       failures.push(`missing file from staging PR: ${filename}`);
       continue;
     }
+
+    const currentFingerprint = fileFingerprint({
+      filename,
+      status: aggregateFileStatus(currentGroup),
+      patch: "",
+      previous_filename: aggregatePreviousFilename(currentGroup),
+    });
+    const stagingFingerprint = fileFingerprint({
+      filename,
+      status: aggregateFileStatus(stagingGroup),
+      patch: "",
+      previous_filename: aggregatePreviousFilename(stagingGroup),
+    });
 
     if (currentFingerprint.status !== stagingFingerprint.status) {
       failures.push(
@@ -137,12 +263,60 @@ function compareValidatedFiles(currentFiles, stagingFiles) {
       );
     }
 
-    if (currentFingerprint.patch !== stagingFingerprint.patch) {
-      failures.push(`patch mismatch for ${filename}`);
+    const patchFailures = comparePatchLineCounts(countPatchLines(currentGroup), countPatchLines(stagingGroup));
+
+    if (patchFailures.length > 0) {
+      failures.push(`patch mismatch for ${filename}: ${patchFailures.slice(0, 5).join("; ")}`);
     }
 
     if (currentFingerprint.previousFilename !== stagingFingerprint.previousFilename) {
       failures.push(`rename source mismatch for ${filename}`);
+    }
+  }
+
+  return failures;
+}
+
+function fileContentsEqual(left, right) {
+  return left.exists === right.exists
+    && Buffer.compare(left.content || Buffer.alloc(0), right.content || Buffer.alloc(0)) === 0;
+}
+
+function compareValidatedFileContents(currentFiles, stagingFiles, fileContentSnapshots) {
+  const current = groupFilesByName(currentFiles);
+  const staging = groupFilesByName(stagingFiles);
+  const failures = [];
+
+  for (const filename of current.keys()) {
+    if (!staging.has(filename)) {
+      failures.push(`unexpected file in main PR: ${filename}`);
+    }
+  }
+
+  for (const filename of staging.keys()) {
+    const snapshot = fileContentSnapshots.get(filename);
+
+    if (!snapshot) {
+      failures.push(`missing content snapshot for ${filename}`);
+      continue;
+    }
+
+    if (snapshot.error) {
+      failures.push(`content snapshot failed for ${filename}: ${snapshot.error}`);
+      continue;
+    }
+
+    const currentGroup = current.get(filename);
+    const baseMatchesStaging = fileContentsEqual(snapshot.base, snapshot.staging);
+    const headMatchesStaging = fileContentsEqual(snapshot.head, snapshot.staging);
+
+    if (!currentGroup && !baseMatchesStaging) {
+      failures.push(`missing file from staging PR: ${filename}`);
+      continue;
+    }
+
+    if (currentGroup && !headMatchesStaging) {
+      failures.push(`content mismatch for ${filename}: current PR head must match the staging smoke commit`);
     }
   }
 
@@ -193,6 +367,13 @@ function git(args) {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
+}
+
+function gitRaw(args) {
+  return execFileSync("git", args, {
+    encoding: "buffer",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
 }
 
 function fileStatusFromNameStatus(statusCode) {
@@ -278,35 +459,47 @@ function evaluatePullRequest({
   repository = null,
   stagingPr = null,
   stagingPrFetchError = null,
+  stagingPrs = [],
+  stagingPrFetchErrors = [],
   stagingPrFiles = [],
   stagingPrFilesFetchError = null,
+  stagingPrFilesFetchErrors = [],
+  fileContentSnapshots = null,
   currentPrCommitShas = [],
   stagingSmokeRun = null,
   stagingSmokeRunFetchError = null,
 }) {
   const failures = [];
   const { runtimeFiles } = summarizeFiles(files);
-  const stagingPrNumber = extractStagingPrNumber(body);
+  const stagingPrNumbers = extractStagingPrNumbers(body);
+  const stagingPrNumber = stagingPrNumbers[0] || null;
   const stagingSmokeRunUrl = extractStagingSmokeRunUrl(body);
   const stagingSmokeRunReference = parseGitHubActionsRunUrl(stagingSmokeRunUrl);
+  const resolvedStagingPrs = stagingPrs.length > 0 ? stagingPrs : [stagingPr].filter(Boolean);
+  const resolvedStagingPrFetchErrors = stagingPrFetchErrors.length > 0
+    ? stagingPrFetchErrors
+    : [stagingPrFetchError ? { number: stagingPrNumber, error: stagingPrFetchError } : null].filter(Boolean);
+  const resolvedStagingPrFilesFetchErrors = stagingPrFilesFetchErrors.length > 0
+    ? stagingPrFilesFetchErrors
+    : [stagingPrFilesFetchError ? { number: stagingPrNumber, error: stagingPrFilesFetchError } : null].filter(Boolean);
 
   failures.push(...validatePublishLanguage({ title, body }));
 
   if (baseRef === "staging") {
-    return { failures, runtimeFiles, stagingPrNumber, stagingSmokeRunReference };
+    return { failures, runtimeFiles, stagingPrNumber, stagingPrNumbers, stagingSmokeRunReference };
   }
 
   if (baseRef !== "main") {
     failures.push("Release Process Guard supports PRs to `staging` or `main` only.");
-    return { failures, runtimeFiles, stagingPrNumber, stagingSmokeRunReference };
+    return { failures, runtimeFiles, stagingPrNumber, stagingPrNumbers, stagingSmokeRunReference };
   }
 
   if (runtimeFiles.length === 0) {
-    return { failures, runtimeFiles, stagingPrNumber, stagingSmokeRunReference };
+    return { failures, runtimeFiles, stagingPrNumber, stagingPrNumbers, stagingSmokeRunReference };
   }
 
-  if (!stagingPrNumber) {
-    failures.push("Main PRs with runtime changes must include `Staging PR: #NNN` in the PR body.");
+  if (stagingPrNumbers.length === 0) {
+    failures.push("Main PRs with runtime changes must include `Staging PR: #NNN` or `Staging PRs: #NNN, #MMM` in the PR body.");
   }
 
   if (!stagingSmokeRunUrl) {
@@ -317,39 +510,49 @@ function evaluatePullRequest({
     failures.push("`Staging smoke` must link to a GitHub Actions run in this repository.");
   }
 
-  if (stagingPrFetchError) {
-    failures.push(`Referenced staging PR #${stagingPrNumber} could not be loaded: ${stagingPrFetchError.message}`);
+  for (const { number, error } of resolvedStagingPrFetchErrors) {
+    failures.push(`Referenced staging PR #${number || "unknown"} could not be loaded: ${error.message}`);
   }
 
-  if (stagingPr) {
-    if (stagingPr.base?.ref !== "staging") {
-      failures.push(`Referenced staging PR #${stagingPr.number} must target \`staging\`.`);
+  for (const currentStagingPr of resolvedStagingPrs) {
+    if (currentStagingPr.base?.ref !== "staging") {
+      failures.push(`Referenced staging PR #${currentStagingPr.number} must target \`staging\`.`);
     }
 
-    if (!stagingPr.merged_at) {
-      failures.push(`Referenced staging PR #${stagingPr.number} must be merged before opening a runtime PR to \`main\`.`);
+    if (!currentStagingPr.merged_at) {
+      failures.push(`Referenced staging PR #${currentStagingPr.number} must be merged before opening a runtime PR to \`main\`.`);
     }
 
-    if (!stagingPr.merge_commit_sha) {
-      failures.push(`Referenced staging PR #${stagingPr.number} must expose a merge commit SHA.`);
-    } else if (currentPrCommitShas.includes(stagingPr.merge_commit_sha)) {
+    if (!currentStagingPr.merge_commit_sha) {
+      failures.push(`Referenced staging PR #${currentStagingPr.number} must expose a merge commit SHA.`);
+    } else if (currentPrCommitShas.includes(currentStagingPr.merge_commit_sha)) {
       failures.push(
-        `Current main PR must use validated diff from staging PR #${stagingPr.number}, not include staging merge commit ${stagingPr.merge_commit_sha}.`,
+        `Current main PR must use validated diff from staging PR #${currentStagingPr.number}, not include staging merge commit ${currentStagingPr.merge_commit_sha}.`,
+      );
+    }
+  }
+
+  if (resolvedStagingPrs.length > 0) {
+    for (const { number, error } of resolvedStagingPrFilesFetchErrors) {
+      failures.push(
+        `Files from staging PR #${number || "unknown"} could not be loaded: ${error.message}`,
       );
     }
 
-    if (stagingPrFilesFetchError) {
-      failures.push(
-        `Files from staging PR #${stagingPr.number} could not be loaded: ${stagingPrFilesFetchError.message}`,
-      );
-    } else if (stagingPrFiles.length === 0) {
-      failures.push(`Referenced staging PR #${stagingPr.number} must expose changed files.`);
+    const stagingRuntimeFiles = stagingPrFiles.filter((file) => !isProcessOnlyFile(file.filename));
+
+    if (stagingPrFiles.length === 0) {
+      failures.push(`Referenced staging PRs #${stagingPrNumbers.join(", #")} must expose changed files.`);
+    } else if (stagingRuntimeFiles.length === 0) {
+      failures.push(`Referenced staging PRs #${stagingPrNumbers.join(", #")} must expose runtime changed files.`);
     } else {
-      const fileFailures = compareValidatedFiles(files, stagingPrFiles);
+      const fileFailures = fileContentSnapshots
+        ? compareValidatedFileContents(runtimeFiles, stagingRuntimeFiles, fileContentSnapshots)
+        : compareValidatedFiles(runtimeFiles, stagingRuntimeFiles);
 
       if (fileFailures.length > 0) {
         failures.push(
-          `Current main PR must match validated file content from staging PR #${stagingPr.number}: ${fileFailures.join("; ")}`,
+          `Current main PR must match validated runtime file content from staging PRs #${stagingPrNumbers.join(", #")}: ${fileFailures.join("; ")}`,
         );
       }
     }
@@ -372,14 +575,16 @@ function evaluatePullRequest({
       failures.push("Staging smoke run must be completed successfully.");
     }
 
-    if (stagingPr?.merge_commit_sha && stagingSmokeRun.head_sha !== stagingPr.merge_commit_sha) {
+    const finalStagingPr = resolvedStagingPrs.at(-1);
+
+    if (finalStagingPr?.merge_commit_sha && stagingSmokeRun.head_sha !== finalStagingPr.merge_commit_sha) {
       failures.push(
-        `Staging smoke run must verify staging merge commit ${stagingPr.merge_commit_sha}, got ${stagingSmokeRun.head_sha}.`,
+        `Staging smoke run must verify final staging merge commit ${finalStagingPr.merge_commit_sha} from staging PR #${finalStagingPr.number}, got ${stagingSmokeRun.head_sha}.`,
       );
     }
   }
 
-  return { failures, runtimeFiles, stagingPrNumber, stagingSmokeRunReference };
+  return { failures, runtimeFiles, stagingPrNumber, stagingPrNumbers, stagingSmokeRunReference };
 }
 
 async function githubRequest(path, token) {
@@ -441,6 +646,54 @@ async function listPullRequestCommitShas({ owner, repo, pullNumber, token }) {
   }
 }
 
+function ensureGitCommit(sha) {
+  if (!sha) {
+    return;
+  }
+
+  try {
+    gitRaw(["cat-file", "-e", `${sha}^{commit}`]);
+    return;
+  } catch {
+    // The workflow checkout is shallow. Fetch the exact validated commits only
+    // when local object storage does not already contain them.
+  }
+
+  git(["fetch", "--no-tags", "--depth=1", "origin", sha]);
+}
+
+function gitFileSnapshot(sha, filename) {
+  try {
+    return {
+      exists: true,
+      content: gitRaw(["show", `${sha}:${filename}`]),
+    };
+  } catch {
+    return {
+      exists: false,
+      content: Buffer.alloc(0),
+    };
+  }
+}
+
+function buildFileContentSnapshots({ filenames, baseSha, headSha, stagingSha }) {
+  ensureGitCommit(baseSha);
+  ensureGitCommit(headSha);
+  ensureGitCommit(stagingSha);
+
+  const snapshots = new Map();
+
+  for (const filename of filenames) {
+    snapshots.set(filename, {
+      base: gitFileSnapshot(baseSha, filename),
+      head: gitFileSnapshot(headSha, filename),
+      staging: gitFileSnapshot(stagingSha, filename),
+    });
+  }
+
+  return snapshots;
+}
+
 function parseRepository(repository) {
   const [owner, repo] = repository.split("/");
 
@@ -490,12 +743,26 @@ function runLocalPr() {
   console.log(`Base branch: ${baseRef}`);
   console.log(`Diff base: ${diffBase}`);
   console.log(`Runtime files: ${result.runtimeFiles.length}`);
+
+  if (result.stagingPrNumbers.length > 0) {
+    console.log(`Staging PRs: #${result.stagingPrNumbers.join(", #")}`);
+  }
 }
 
 function runSelfTest() {
   assert.equal(isProcessOnlyFile("docs/release.md"), true);
   assert.equal(isProcessOnlyFile(".github/copilot-instructions.md"), true);
   assert.equal(isProcessOnlyFile(".github/workflows/release-process-guard.yml"), true);
+  assert.equal(isProcessOnlyFile(".github/scripts/ab-readiness-check.mjs"), true);
+  assert.equal(isProcessOnlyFile(".github/workflows/ab-readiness-check.yml"), true);
+  assert.equal(isProcessOnlyFile(".github/scripts/copilot-feasibility-spike.mjs"), true);
+  assert.equal(isProcessOnlyFile(".github/workflows/copilot-feasibility-spike.yml"), true);
+  assert.equal(isProcessOnlyFile(".github/scripts/copilot-merge-readiness.mjs"), true);
+  assert.equal(isProcessOnlyFile(".github/workflows/copilot-merge-readiness.yml"), true);
+  assert.equal(isProcessOnlyFile("phpunit.xml"), true);
+  assert.equal(isProcessOnlyFile("scripts/ci-run-phpunit-shard.sh"), true);
+  assert.equal(isProcessOnlyFile("scripts/local-test.sh"), true);
+  assert.equal(isProcessOnlyFile("tests/Feature/ScenarioBuilderV3StateTest.php"), true);
   assert.equal(isProcessOnlyFile(".agents/skills/ab-connector-skill-authoring/agents/openai.yaml"), true);
   assert.equal(isProcessOnlyFile("app/Services/Bitrix24ContactSyncService.php"), false);
   assert.deepEqual(parseGitHubActionsRunUrl("https://github.com/Etogerman/Project-1/actions/runs/123"), {
@@ -504,6 +771,12 @@ function runSelfTest() {
     runId: 123,
   });
   assert.equal(extractStagingSmokeRunUrl("Staging smoke: [run](https://github.com/Etogerman/Project-1/actions/runs/123)"), "https://github.com/Etogerman/Project-1/actions/runs/123");
+  assert.deepEqual(extractStagingPrNumbers("Staging PR: #614"), [614]);
+  assert.deepEqual(extractStagingPrNumbers("Staging PRs: #614, #615"), [614, 615]);
+  assert.deepEqual(
+    extractStagingPrNumbers("Staging PRs: https://github.com/Etogerman/Project-1/pull/614, #615"),
+    [614, 615],
+  );
   assert.equal(
     normalizePatch("index aaa..bbb 100644\n@@ -1,3 +1,3 @@\n context\n-old\n+new"),
     "-old\n+new",
@@ -563,6 +836,12 @@ function runSelfTest() {
     merged_at: "2026-06-21T20:00:00Z",
     merge_commit_sha: "2c2097fd20d0aede9124c99fdec293f17c4d7eb1",
   };
+  const nextStagingPr = {
+    number: 615,
+    base: { ref: "staging" },
+    merged_at: "2026-06-21T21:00:00Z",
+    merge_commit_sha: "3c2097fd20d0aede9124c99fdec293f17c4d7eb2",
+  };
   const successfulSmokeRun = {
     name: STAGING_SMOKE_WORKFLOW_NAME,
     head_branch: "staging",
@@ -579,6 +858,137 @@ function runSelfTest() {
       files: runtimeFiles,
     }).failures,
     [],
+  );
+
+  assert.deepEqual(
+    evaluatePullRequest({
+      baseRef: "main",
+      title: "[codex] Исправить синхронизацию Bitrix24",
+      body: "Описание PR на русском языке.\n\nStaging PRs: #614, #615\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
+      files: [
+        {
+          ...runtimeFiles[0],
+          patch: "index aaa..bbb 100644\n@@ -10,7 +10,8 @@\n context from main\n-old\n+new\n+next",
+        },
+      ],
+      repository: { owner: "Etogerman", repo: "Project-1" },
+      stagingPrs: [stagingPr, nextStagingPr],
+      stagingPrFiles: [
+        matchingStagingFilesWithDifferentContext[0],
+        {
+          ...runtimeFiles[0],
+          patch: "index ddd..eee 100644\n@@ -100,6 +100,7 @@\n context from staging\n+next",
+        },
+      ],
+      currentPrCommitShas: ["1111111111111111111111111111111111111111"],
+      stagingSmokeRun: {
+        ...successfulSmokeRun,
+        head_sha: nextStagingPr.merge_commit_sha,
+      },
+    }).failures,
+    [],
+  );
+
+  assert.deepEqual(
+    evaluatePullRequest({
+      baseRef: "main",
+      title: "[codex] Исправить cutover автоответчика",
+      body: "Описание PR на русском языке.\n\nStaging PRs: #614, #615\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
+      files: [
+        {
+          filename: ".env.example",
+          patch: "index aaa..bbb 100644\n@@ -1,2 +1,3 @@\n context\n+BOT_LEGACY_AUTO_REPLY_RULES_ENABLED=false",
+          status: "modified",
+        },
+      ],
+      repository: { owner: "Etogerman", repo: "Project-1" },
+      stagingPrs: [stagingPr, nextStagingPr],
+      stagingPrFiles: [
+        {
+          filename: ".env.example",
+          patch: "index aaa..bbb 100644\n@@ -1,2 +1,3 @@\n context\n+BOT_LEGACY_AUTO_REPLY_RULES_ENABLED=true",
+          status: "modified",
+        },
+        {
+          filename: ".env.example",
+          patch: "index bbb..ccc 100644\n@@ -1,3 +1,3 @@\n context\n-BOT_LEGACY_AUTO_REPLY_RULES_ENABLED=true\n+BOT_LEGACY_AUTO_REPLY_RULES_ENABLED=false",
+          status: "modified",
+        },
+      ],
+      currentPrCommitShas: ["1111111111111111111111111111111111111111"],
+      stagingSmokeRun: {
+        ...successfulSmokeRun,
+        head_sha: nextStagingPr.merge_commit_sha,
+      },
+    }).failures,
+    [],
+  );
+
+  assert.deepEqual(
+    evaluatePullRequest({
+      baseRef: "main",
+      title: "[codex] Исправить синхронизацию Bitrix24",
+      body: "Описание PR на русском языке.\n\nStaging PRs: #614, #615\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
+      files: runtimeFiles,
+      repository: { owner: "Etogerman", repo: "Project-1" },
+      stagingPrs: [stagingPr, nextStagingPr],
+      stagingPrFiles: [
+        matchingStagingFiles[0],
+        {
+          filename: "app/Services/AlreadyReleasedService.php",
+          patch: "index aaa..bbb 100644\n@@ -1,3 +1,3 @@\n-old\n+already released",
+          status: "modified",
+        },
+      ],
+      fileContentSnapshots: new Map([
+        [
+          "app/Services/Bitrix24ContactSyncService.php",
+          {
+            base: { exists: true, content: Buffer.from("old") },
+            head: { exists: true, content: Buffer.from("new") },
+            staging: { exists: true, content: Buffer.from("new") },
+          },
+        ],
+        [
+          "app/Services/AlreadyReleasedService.php",
+          {
+            base: { exists: true, content: Buffer.from("already released") },
+            head: { exists: true, content: Buffer.from("already released") },
+            staging: { exists: true, content: Buffer.from("already released") },
+          },
+        ],
+      ]),
+      currentPrCommitShas: ["1111111111111111111111111111111111111111"],
+      stagingSmokeRun: {
+        ...successfulSmokeRun,
+        head_sha: nextStagingPr.merge_commit_sha,
+      },
+    }).failures,
+    [],
+  );
+
+  assert.match(
+    evaluatePullRequest({
+      baseRef: "main",
+      title: "[codex] Исправить синхронизацию Bitrix24",
+      body: "Описание PR на русском языке.\n\nStaging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
+      files: runtimeFiles,
+      stagingPr,
+      stagingPrFiles: matchingStagingFiles,
+      fileContentSnapshots: new Map([
+        [
+          "app/Services/Bitrix24ContactSyncService.php",
+          {
+            base: { exists: true, content: Buffer.from("old") },
+            head: { exists: true, content: Buffer.from("wrong") },
+            staging: { exists: true, content: Buffer.from("new") },
+          },
+        ],
+      ]),
+      currentPrCommitShas: ["1111111111111111111111111111111111111111"],
+      stagingSmokeRun: successfulSmokeRun,
+    }).failures.join("\n"),
+    /content mismatch/,
   );
 
   assert.match(
@@ -634,7 +1044,7 @@ function runSelfTest() {
       currentPrCommitShas: ["1111111111111111111111111111111111111111"],
       stagingSmokeRun: successfulSmokeRun,
     }).failures.join("\n"),
-    /must match validated file content/,
+    /must match validated runtime file content/,
   );
 
   assert.match(
@@ -679,7 +1089,7 @@ function runSelfTest() {
         head_sha: "1111111111111111111111111111111111111111",
       },
     }).failures.join("\n"),
-    /must verify staging merge commit/,
+    /must verify final staging merge commit/,
   );
 
   console.log("release-process-guard self-test passed");
@@ -713,10 +1123,11 @@ async function run() {
     repository: { owner, repo },
   });
 
-  let stagingPr = null;
-  let stagingPrFetchError = null;
+  const stagingPrs = [];
+  const stagingPrFetchErrors = [];
   let stagingPrFiles = [];
-  let stagingPrFilesFetchError = null;
+  const stagingPrFilesFetchErrors = [];
+  let fileContentSnapshots = null;
   let currentPrCommitShas = [];
   let stagingSmokeRun = null;
   let stagingSmokeRunFetchError = null;
@@ -724,18 +1135,23 @@ async function run() {
   if (pullRequest.base.ref === "main" && initialResult.runtimeFiles.length > 0) {
     currentPrCommitShas = await listPullRequestCommitShas({ owner, repo, pullNumber, token });
 
-    if (initialResult.stagingPrNumber) {
+    for (const stagingPrNumber of initialResult.stagingPrNumbers) {
+      let stagingPr = null;
+
       try {
-        stagingPr = await githubRequest(`/repos/${owner}/${repo}/pulls/${initialResult.stagingPrNumber}`, token);
+        stagingPr = await githubRequest(`/repos/${owner}/${repo}/pulls/${stagingPrNumber}`, token);
+        stagingPrs.push(stagingPr);
       } catch (error) {
-        stagingPrFetchError = error;
+        stagingPrFetchErrors.push({ number: stagingPrNumber, error });
       }
 
       if (stagingPr) {
         try {
-          stagingPrFiles = await listPullRequestFiles({ owner, repo, pullNumber: stagingPr.number, token });
+          stagingPrFiles = stagingPrFiles.concat(
+            await listPullRequestFiles({ owner, repo, pullNumber: stagingPr.number, token }),
+          );
         } catch (error) {
-          stagingPrFilesFetchError = error;
+          stagingPrFilesFetchErrors.push({ number: stagingPr.number, error });
         }
       }
     }
@@ -756,16 +1172,39 @@ async function run() {
     }
   }
 
+  if (
+    pullRequest.base.ref === "main"
+    && initialResult.runtimeFiles.length > 0
+    && stagingSmokeRun?.head_sha
+    && stagingPrFiles.length > 0
+  ) {
+    const snapshotFilenames = [
+      ...new Set(
+        [...initialResult.runtimeFiles, ...stagingPrFiles]
+          .filter((file) => !isProcessOnlyFile(file.filename))
+          .map((file) => file.filename),
+      ),
+    ].sort();
+
+    fileContentSnapshots = buildFileContentSnapshots({
+      filenames: snapshotFilenames,
+      baseSha: pullRequest.base.sha,
+      headSha: pullRequest.head.sha,
+      stagingSha: stagingSmokeRun.head_sha,
+    });
+  }
+
   const result = evaluatePullRequest({
     baseRef: pullRequest.base.ref,
     title: pullRequest.title || "",
     body: pullRequest.body || "",
     files,
     repository: { owner, repo },
-    stagingPr,
-    stagingPrFetchError,
+    stagingPrs,
+    stagingPrFetchErrors,
     stagingPrFiles,
-    stagingPrFilesFetchError,
+    stagingPrFilesFetchErrors,
+    fileContentSnapshots,
     currentPrCommitShas,
     stagingSmokeRun,
     stagingSmokeRunFetchError,
@@ -783,8 +1222,8 @@ async function run() {
   console.log(`Base branch: ${pullRequest.base.ref}`);
   console.log(`Runtime files: ${result.runtimeFiles.length}`);
 
-  if (result.stagingPrNumber) {
-    console.log(`Staging PR: #${result.stagingPrNumber}`);
+  if (result.stagingPrNumbers.length > 0) {
+    console.log(`Staging PRs: #${result.stagingPrNumbers.join(", #")}`);
   }
 }
 

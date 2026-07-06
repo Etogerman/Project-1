@@ -1,0 +1,4 @@
+interface:
+  display_name: "AB Stream State Resolver"
+  short_description: "Определяет состояние stream-а и следующий checkpoint"
+  default_prompt: "Используй $ab-stream-state-resolver, чтобы классифицировать active stream, хвосты, delivery level, execution ceiling, blockers и следующий безопасный checkpoint перед рекомендацией следующего шага AB Connector."

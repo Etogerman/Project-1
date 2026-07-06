@@ -1,28 +1,21 @@
-# Активные внешние ТЗ
+# Legacy snapshot внешних ТЗ
 
-Этот файл — локальный stream-level реестр существенных stream-ов, которые
-реально открыты в основном репозитории.
+Этот файл заморожен как исторический snapshot старого локального реестра.
+Он не является source of truth, не обновляется при открытии или закрытии stream-а
+и не используется для определения текущего статуса работ.
 
-Он не хранит slice-level state, не дублирует полный статус внешнего `Spec doc`
-и не заменяет PR audit trail с блоком `Spec repo / Spec doc / Spec revision`.
+Канонические источники:
 
-## Схема записи
+1. внешний spec repo `Etogerman/Project-1-specs`;
+2. `/Users/abrikosov/Documents/Project-1-specs/active-streams.md`;
+3. `/Users/abrikosov/Documents/Project-1-specs/streams/README.md`;
+4. конкретный `Spec doc` на зафиксированной `Spec revision`;
+5. PR audit trail с блоком `Spec repo / Spec doc / Spec revision`.
 
-Одна запись на один открытый substantial stream:
+Новые записи сюда не добавляются. Если этот snapshot расходится со spec repo или
+PR, приоритет у внешнего spec repo и зафиксированной `Spec revision`.
 
-- `[stream-name]` — Spec repo: `<repo-or-location>`; Spec doc: `<path-or-doc-name>`; Spec revision: `<commit-hash>`; status: `opened|blocked|closing`; opened-at: `YYYY-MM-DD`
-
-## Правила
-
-1. Здесь фиксируется только stream-level state.
-2. Slice-level state живёт только во внешнем spec-repo.
-3. Issue или task tracker хранит execution-state: blockers, next step, ссылки на PR и handoff notes.
-4. Запись добавляется, обновляется или удаляется в том же открывающем/закрывающем шаге, где stream реально появляется или закрывается в основном repo.
-5. Отдельный `docs-only` sync допустим как fallback, но не является default-требованием.
-6. Если внешний spec-repo, нужный `Spec doc` или согласованная `Spec revision` недоступны, substantial stream paused.
-7. Если активных substantial stream-ов нет, это указывается одной строкой: `- none`.
-
-## Текущее состояние
+## Замороженное состояние
 
 - `[telegram-account-gateway-deployment-v1]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/telegram-account/tz-gateway-deployment-v1.md`; Spec revision: `82af0ac9da1dba04ba4938e131e4c08536f5db62`; status: `opened`; opened-at: `2026-04-26`
 - `[telegram-account-outgoing-replies-v1]` — Spec repo: `Etogerman/Project-1-specs`; Spec doc: `streams/telegram-account/tz-outgoing-replies-v1.md`; Spec revision: `e846c9ff32377cc062317de6ca5ce81dc0537d0c`; status: `opened`; opened-at: `2026-04-27`
