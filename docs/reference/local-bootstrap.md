@@ -216,6 +216,33 @@ php artisan test
 Playwright smoke и remote smoke описаны в
 [docs/playwright.md](/Users/abrikosov/Documents/Проект-1/docs/playwright.md).
 
+## Безопасный test-контур
+
+Канонический runbook: [docs/runbooks/test-env.md](../runbooks/test-env.md).
+
+Перед запуском `php artisan test` проверь, что effective `DB_DATABASE` указывает
+на отдельную test database. `tests/bootstrap.php` блокирует запуск, если база не
+похожа на test/testing database или совпадает с известным runtime-именем.
+
+Текущий PHPUnit baseline:
+
+1. `APP_ENV=testing`;
+2. `DB_DATABASE=abrikosoff_connector_test`;
+3. `QUEUE_CONNECTION=sync`;
+4. `SESSION_DRIVER=array`;
+5. `CACHE_STORE=array`.
+
+`QUEUE_CONNECTION`, `SESSION_DRIVER` и `CACHE_STORE` в `phpunit.xml` сейчас
+заданы без `force="true"`, поэтому при странном поведении тестов проверь
+effective env внутри конкретного shell/container.
+
+Если bootstrap пишет `Refusing to run tests against non-test database`, защита
+сработала правильно. Исправь test database config, а не отключай guard.
+
+Важно: `.devcontainer/init.sql` создаёт `laravel_testing`, а `phpunit.xml`
+использует `abrikosoff_connector_test`. Это нужно выровнять отдельным
+code/config follow-up, если тесты запускаются через devcontainer.
+
 ## Когда нужен дополнительный setup
 
 Если задача зависит от Bitrix24, staging или внешнего webhook-контура, дальше
