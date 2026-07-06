@@ -55,6 +55,7 @@ class ClaimTelegramAccountMediaDownloadAction
                         ->whereNull('file_size_bytes')
                         ->orWhere('file_size_bytes', '<=', self::maxBytes());
                 })
+                ->orderByRaw('CASE WHEN safe_error_code IS NULL THEN 0 ELSE 1 END')
                 ->orderBy('id')
                 ->lockForUpdate()
                 ->first();
