@@ -8,7 +8,7 @@
 Разрешены только:
 
 1. `sqlite` database `:memory:`;
-2. отдельная PostgreSQL database, имя которой явно содержит `test` или
+2. отдельная database, имя которой явно содержит `test` или
    `testing`.
 
 `tests/bootstrap.php` останавливает тесты, если effective `DB_DATABASE` не
