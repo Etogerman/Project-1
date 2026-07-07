@@ -16,7 +16,7 @@ class LocalRecoverySeederTest extends TestCase
 
     public function test_local_recovery_seeder_creates_demo_dataset(): void
     {
-        Storage::fake('local');
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
 
         $this->seed(LocalRecoverySeeder::class);
 
@@ -64,7 +64,8 @@ class LocalRecoverySeederTest extends TestCase
             'local_path' => 'message-attachments/local-recovery/arrival-checklist.txt',
         ]);
 
-        Storage::disk('local')->assertExists('message-attachments/local-recovery/arrival-checklist.txt');
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)
+            ->assertExists('message-attachments/local-recovery/arrival-checklist.txt');
     }
 
     public function test_local_recovery_seeder_does_not_overwrite_existing_contacts_with_plain_names(): void

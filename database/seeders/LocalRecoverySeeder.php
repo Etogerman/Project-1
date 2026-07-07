@@ -210,14 +210,14 @@ class LocalRecoverySeeder extends Seeder
                     ],
                     'attachments' => [[
                         'provider_attachment_key' => 'photo:0',
-                        'media_kind' => 'image',
+                        'media_kind' => MessageAttachment::MEDIA_KIND_IMAGE,
                         'mime_type' => 'image/jpeg',
                         'extension' => 'jpg',
                         'original_filename' => 'document-photo.jpg',
                         'file_size_bytes' => 248000,
                         'provider_file_id' => 'local-demo-photo-file-id',
                         'provider_file_unique_id' => 'local-demo-photo-unique-id',
-                        'download_status' => 'pending_download',
+                        'download_status' => MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD,
                     ]],
                 ],
             ],
@@ -284,14 +284,14 @@ class LocalRecoverySeeder extends Seeder
                     ],
                     'attachments' => [[
                         'provider_attachment_key' => 'document:0',
-                        'media_kind' => 'document',
+                        'media_kind' => MessageAttachment::MEDIA_KIND_DOCUMENT,
                         'mime_type' => 'text/plain',
                         'extension' => 'txt',
                         'original_filename' => 'arrival-checklist.txt',
                         'file_size_bytes' => 120,
                         'provider_file_id' => 'local-demo-document-file-id',
                         'provider_file_unique_id' => 'local-demo-document-unique-id',
-                        'download_status' => 'downloaded',
+                        'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
                         'local_path' => 'message-attachments/local-recovery/arrival-checklist.txt',
                     ]],
                 ],
@@ -364,13 +364,13 @@ class LocalRecoverySeeder extends Seeder
                     ],
                     'attachments' => [[
                         'provider_attachment_key' => 'video:0',
-                        'media_kind' => 'video',
+                        'media_kind' => MessageAttachment::MEDIA_KIND_VIDEO,
                         'mime_type' => 'video/mp4',
                         'extension' => 'mp4',
                         'original_filename' => 'intro-video.mp4',
                         'file_size_bytes' => 10485760,
                         'provider_file_id' => 'local-demo-video-file-id',
-                        'download_status' => 'download_failed',
+                        'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOAD_FAILED,
                         'safe_error_code' => 'local_demo_download_failed',
                         'safe_error_message' => 'Synthetic failed download for local UI checks.',
                     ]],
@@ -551,8 +551,8 @@ class LocalRecoverySeeder extends Seeder
             return;
         }
 
-        if (($attachment['download_status'] ?? null) === 'downloaded' && isset($attachment['local_path'])) {
-            Storage::disk('local')->put(
+        if (($attachment['download_status'] ?? null) === MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED && isset($attachment['local_path'])) {
+            Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->put(
                 (string) $attachment['local_path'],
                 "Local recovery sample file.\nGenerated for AB Connector local UI checks.\n",
             );
@@ -568,7 +568,7 @@ class LocalRecoverySeeder extends Seeder
             [
                 'message_id' => $message->id,
                 'outbound_attachment_key' => null,
-                'media_kind' => $attachment['media_kind'] ?? 'unknown',
+                'media_kind' => $attachment['media_kind'] ?? MessageAttachment::MEDIA_KIND_UNKNOWN,
                 'mime_type' => $attachment['mime_type'] ?? null,
                 'extension' => $attachment['extension'] ?? null,
                 'original_filename' => $attachment['original_filename'] ?? null,
@@ -577,9 +577,9 @@ class LocalRecoverySeeder extends Seeder
                 'provider_file_unique_id' => $attachment['provider_file_unique_id'] ?? null,
                 'provider_file_reference' => null,
                 'provider_metadata' => ['local_recovery' => true],
-                'download_status' => $attachment['download_status'] ?? 'metadata_only',
-                'send_status' => 'not_applicable',
-                'local_disk' => isset($attachment['local_path']) ? 'local' : null,
+                'download_status' => $attachment['download_status'] ?? MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
+                'send_status' => MessageAttachment::SEND_STATUS_NOT_APPLICABLE,
+                'local_disk' => isset($attachment['local_path']) ? MessageAttachment::LOCAL_DISK_PRIVATE : null,
                 'local_path' => $attachment['local_path'] ?? null,
                 'safe_error_code' => $attachment['safe_error_code'] ?? null,
                 'safe_error_message' => $attachment['safe_error_message'] ?? null,
