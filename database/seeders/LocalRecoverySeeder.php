@@ -144,7 +144,7 @@ class LocalRecoverySeeder extends Seeder
             'external_username' => 'elena_demo',
             'display_name' => 'Елена Смирнова',
             'contact' => [
-                'name' => 'Елена Смирнова',
+                'name' => 'Local Demo: Елена Смирнова',
                 'first_name' => 'Елена',
                 'last_name' => 'Смирнова',
                 'gender' => 'female',
@@ -229,7 +229,7 @@ class LocalRecoverySeeder extends Seeder
             'external_username' => 'ivan_media_demo',
             'display_name' => 'Иван Петров',
             'contact' => [
-                'name' => 'Иван Петров',
+                'name' => 'Local Demo: Иван Петров',
                 'first_name' => 'Иван',
                 'last_name' => 'Петров',
                 'gender' => 'male',
@@ -315,7 +315,7 @@ class LocalRecoverySeeder extends Seeder
             'external_username' => 'max_demo_client',
             'display_name' => 'Мария Волкова',
             'contact' => [
-                'name' => 'Мария Волкова',
+                'name' => 'Local Demo: Мария Волкова',
                 'first_name' => 'Мария',
                 'last_name' => 'Волкова',
                 'gender' => 'female',
