@@ -514,7 +514,7 @@ class LocalRecoverySeeder extends Seeder
     ): Message {
         $attachments = $payload['attachments'] ?? [];
         $providerEventKey = (string) $payload['key'];
-        $direction = (string) ($payload['direction'] ?? '');
+        $direction = (string) ($payload['direction'] ?? Message::DIRECTION_INBOUND);
         unset($payload['attachments']);
         unset($payload['key']);
 
