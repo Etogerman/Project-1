@@ -37,7 +37,7 @@ live export, contact/deal sync и других Bitrix24 runtime-path дейст�
 
 Перед bootstrap, Doctor, publish registry или smoke через Bitrix24 сначала
 закройте общий локальный preflight из
-[local-bootstrap.md](/Users/abrikosov/Documents/Проект-1/docs/reference/local-bootstrap.md):
+[local-bootstrap.md](../reference/local-bootstrap.md):
 
 1. `APP_URL` или tunnel URL ведёт на ожидаемый локальный runtime;
 2. runtime identity check показывает правильный контейнер или процесс;
@@ -317,4 +317,4 @@ php artisan bitrix24:dev-profile-bootstrap dev-german-main https://new-german-ma
 1. [README.md](/Users/abrikosov/Documents/Проект-1/README.md)
 2. [setup-sheet.md](/Users/abrikosov/Documents/Проект-1/docs/bitrix24/setup-sheet.md)
 3. [staging-laravel-cloud.md](/Users/abrikosov/Documents/Проект-1/docs/staging-laravel-cloud.md)
-4. [openlines-channel-runbook.md](/Users/abrikosov/Documents/Проект-1/docs/bitrix24/openlines-channel-runbook.md)
+4. [openlines-channel-runbook.md](openlines-channel-runbook.md)
