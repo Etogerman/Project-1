@@ -514,15 +514,21 @@ class LocalRecoverySeeder extends Seeder
     ): Message {
         $attachments = $payload['attachments'] ?? [];
         $providerEventKey = (string) $payload['key'];
+        $direction = (string) ($payload['direction'] ?? Message::DIRECTION_INBOUND);
         unset($payload['attachments']);
         unset($payload['key']);
 
-        $message = Message::query()->firstOrNew(['provider_event_key' => $providerEventKey]);
+        $message = Message::query()->firstOrNew([
+            'channel_id' => $channel->id,
+            'direction' => $direction,
+            'provider_event_key' => $providerEventKey,
+        ]);
         $message->fill([
             'dialog_id' => $dialog->id,
             'contact_id' => $contact->id,
             'contact_identity_id' => $identity->id,
             'channel_id' => $channel->id,
+            'direction' => $direction,
             'provider_event_key' => $providerEventKey,
             'external_chat_id' => $dialog->external_chat_id,
             'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,

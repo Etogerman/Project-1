@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\Channel;
 use App\Models\Contact;
+use App\Models\Message;
 use App\Models\MessageAttachment;
 use Database\Seeders\LocalRecoverySeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -70,6 +71,8 @@ class LocalRecoverySeederTest extends TestCase
 
     public function test_local_recovery_seeder_does_not_overwrite_existing_contacts_with_plain_names(): void
     {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+
         $contact = Contact::factory()->create([
             'name' => 'Елена Смирнова',
             'first_name' => 'Не менять',
@@ -87,6 +90,41 @@ class LocalRecoverySeederTest extends TestCase
             'name' => 'Local Demo: Елена Смирнова',
             'first_name' => 'Елена',
         ]);
+    }
+
+    public function test_local_recovery_seeder_scopes_message_idempotency_to_channel_and_direction(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+
+        $existing = Message::factory()->create([
+            'provider_event_key' => 'local-demo:tga:2001:inbound:document',
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'text' => 'Не менять существующее сообщение.',
+        ]);
+        $existingChannelId = $existing->channel_id;
+
+        $this->seed(LocalRecoverySeeder::class);
+
+        $existing->refresh();
+
+        $this->assertSame($existingChannelId, $existing->channel_id);
+        $this->assertSame(Message::DIRECTION_OUTBOUND, $existing->direction);
+        $this->assertSame('Не менять существующее сообщение.', $existing->text);
+
+        $localChannelId = Channel::query()
+            ->where('name', 'Local Demo Telegram Account')
+            ->value('id');
+
+        $this->assertNotNull($localChannelId);
+        $this->assertDatabaseHas('messages', [
+            'channel_id' => $localChannelId,
+            'direction' => Message::DIRECTION_INBOUND,
+            'provider_event_key' => 'local-demo:tga:2001:inbound:document',
+            'text' => 'Файл во вложении.',
+        ]);
+        $this->assertSame(2, Message::query()
+            ->where('provider_event_key', 'local-demo:tga:2001:inbound:document')
+            ->count());
     }
 
     public function test_local_recovery_seeder_does_not_run_outside_local_or_testing(): void
