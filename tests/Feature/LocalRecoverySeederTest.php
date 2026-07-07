@@ -71,6 +71,8 @@ class LocalRecoverySeederTest extends TestCase
 
     public function test_local_recovery_seeder_does_not_overwrite_existing_contacts_with_plain_names(): void
     {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+
         $contact = Contact::factory()->create([
             'name' => 'Елена Смирнова',
             'first_name' => 'Не менять',
@@ -92,6 +94,8 @@ class LocalRecoverySeederTest extends TestCase
 
     public function test_local_recovery_seeder_scopes_message_idempotency_to_channel_and_direction(): void
     {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+
         $existing = Message::factory()->create([
             'provider_event_key' => 'local-demo:tga:2001:inbound:document',
             'direction' => Message::DIRECTION_OUTBOUND,
@@ -111,6 +115,7 @@ class LocalRecoverySeederTest extends TestCase
             ->where('name', 'Local Demo Telegram Account')
             ->value('id');
 
+        $this->assertNotNull($localChannelId);
         $this->assertDatabaseHas('messages', [
             'channel_id' => $localChannelId,
             'direction' => Message::DIRECTION_INBOUND,
