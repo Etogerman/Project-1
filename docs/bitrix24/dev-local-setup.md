@@ -33,6 +33,29 @@ live export, contact/deal sync и других Bitrix24 runtime-path дейст�
 контакт, тестовый диалог и test-only линию текущего `dev-*` profile. Не
 используйте общий `staging`-контакт как первую попытку воспроизведения.
 
+## Локальный preflight перед Bitrix24
+
+Перед bootstrap, Doctor, publish registry или smoke через Bitrix24 сначала
+закройте общий локальный preflight из
+[local-bootstrap.md](../reference/local-bootstrap.md):
+
+1. `APP_URL` или tunnel URL ведёт на ожидаемый локальный runtime;
+2. runtime identity check показывает правильный контейнер или процесс;
+3. смонтирован правильный worktree;
+4. видимый в админке `rev` совпадает с commit проверяемой ветки;
+5. подключена ожидаемая локальная база;
+6. режим данных явно назван: clean / recovery / existing data / demo;
+7. работают web-server, scheduler и очереди `bot-replies`, `bitrix-live`,
+   `default`.
+
+Если локальный контур является `recovery`, это не означает, что восстановлены
+старые каналы, контакты, диалоги, сценарии или автоответчики. Перед Bitrix smoke
+сначала подтвердите counts и ключевые экраны локальной админки.
+
+Если нужно запускать тесты до Bitrix smoke, используйте только отдельную test
+database. База runtime, recovery или база с локальными пользовательскими
+данными не подходит для `php artisan test`.
+
 ## Что нужно заранее
 
 Перед началом убедитесь, что у вас есть:
@@ -51,13 +74,20 @@ live export, contact/deal sync и других Bitrix24 runtime-path дейст�
 1. Для каждого `dev-*` profile используется отдельное Bitrix app.
 2. `staging` profile этой инструкцией не трогаем.
 3. Для Telegram и MAX нужны разные Open Lines.
-4. Для одного и того же `profile_key` tunnel URL можно менять без пересоздания
+4. `LINE_ID` хранится в маршруте конкретного канала в админке, а не в
+   bootstrap-команде профиля.
+5. Для одного и того же `profile_key` tunnel URL можно менять без пересоздания
    профиля.
-5. Если tunnel URL сменился, нужно снова прогнать bootstrap для того же
+6. Если tunnel URL сменился, нужно снова прогнать bootstrap для того же
    `profile_key`.
-6. После смены tunnel URL, `LINE_ID`, `connector_code` или callback owner нужно
+7. После смены tunnel URL, `LINE_ID`, `connector_code` или callback owner нужно
    заново опубликовать OpenLines registry и проверить Doctor до теста
    операторского ответа из Bitrix24.
+8. `OpenLines route registry secret` хранится в Bitrix24 profile в админке.
+   Bootstrap-проверка не заменяет сохранение этого секрета.
+9. Если Doctor возвращает `route_registry_secret_missing`, Bitrix local setup
+   не готов. Нельзя переходить к операторскому smoke через Bitrix24, пока
+   секрет не сохранён и Doctor не показывает `synced` без diff-ов.
 
 ## Шаг 1. Выберите имя профиля
 
@@ -149,16 +179,16 @@ composer dump-autoload
 1. `Telegram LINE_ID`
 2. `MAX LINE_ID`
 
-## Шаг 7. Проведите второй bootstrap-запуск
+## Шаг 7. Повторите bootstrap без LINE_ID
 
-Теперь передайте оба `LINE_ID`:
+Повторите bootstrap с тем же `profile_key` и текущим tunnel URL. Флаги
+`--telegram-line-id` и `--max-line-id` существуют только для legacy-сценариев и
+не являются основным способом настройки маршрутов.
 
 ```bash
 php artisan bitrix24:dev-profile-bootstrap dev-german-main https://german-main.trycloudflare.com \
   --client-id=ВАШ_CLIENT_ID \
-  --application-code=ВАШ_APPLICATION_CODE \
-  --telegram-line-id=TELEGRAM_LINE_ID \
-  --max-line-id=MAX_LINE_ID
+  --application-code=ВАШ_APPLICATION_CODE
 ```
 
 Ожидаемые routing values для этого профиля:
@@ -168,7 +198,38 @@ php artisan bitrix24:dev-profile-bootstrap dev-german-main https://german-main.t
 3. Telegram `connector_code`: `abc_telegram_dev_german_main`
 4. MAX `connector_code`: `abc_max_dev_german_main`
 
-## Шаг 8. Дошлите install callback на текущий tunnel URL
+## Шаг 8. Привяжите LINE_ID к маршрутам каналов в админке
+
+После создания Open Lines сохраните `LINE_ID` в маршрутах конкретных локальных
+каналов:
+
+1. откройте Laravel admin;
+2. откройте настройки Bitrix24 profile;
+3. в блоке маршрутов Open Lines выберите нужный канал;
+4. укажите `connector_code` и соответствующий `LINE_ID`;
+5. сохраните маршрут.
+
+Telegram и MAX должны использовать разные `connector_code` и разные Open Lines.
+Один и тот же `LINE_ID` нельзя назначать двум active/legacy routes.
+
+## Шаг 9. Настройте OpenLines route registry secret
+
+В настройках Bitrix24 profile в Laravel admin сохраните secret для OpenLines
+route registry. Это тот же секрет, который ожидает managed-code endpoint
+Bitrix24 для route registry.
+
+После сохранения секрета можно выполнить предварительную проверку:
+
+1. опубликуйте OpenLines registry;
+2. запустите Doctor;
+3. убедитесь, что ошибка `route_registry_secret_missing` отсутствует.
+
+Эта проверка не является финальной зелёной проверкой, пока Bitrix не отправил
+install callback на текущий ingress. Без сохранённого секрета локальный
+Bitrix-контур считается неполным, даже если каналы созданы и `LINE_ID`
+заполнены.
+
+## Шаг 10. Дошлите install callback на текущий tunnel URL
 
 После настройки приложения и линий нужно, чтобы Bitrix действительно отправил
 install callback на ваш текущий ingress.
@@ -182,9 +243,9 @@ install callback на ваш текущий ingress.
 Это важно, потому что bootstrap не считает профиль готовым, пока не увидит
 валидный install callback на текущем `callback_base_url`.
 
-## Шаг 9. Повторно запустите bootstrap-проверку
+## Шаг 11. Повторно запустите bootstrap-проверку
 
-Запустите ту же команду ещё раз с теми же параметрами.
+Запустите ту же команду ещё раз с теми же параметрами, без LINE_ID-флагов.
 
 Готовое состояние:
 
@@ -194,6 +255,15 @@ Dev-profile готов к full_live handoff и verify-контуру.
 
 Если команда пишет, что setup ещё не готов, смотрите таблицу `Status / Notes` в
 её выводе. Это и есть точный список blocking items.
+
+После зелёного bootstrap:
+
+1. заново опубликуйте OpenLines registry;
+2. запустите Doctor;
+3. убедитесь, что результат `synced`, `Diffs 0` и нет
+   `route_registry_secret_missing`.
+
+Только после этого отправляйте новое операторское smoke-сообщение из Bitrix24.
 
 ## Что делать при смене tunnel URL
 
@@ -214,9 +284,7 @@ Dev-profile готов к full_live handoff и verify-контуру.
 ```bash
 php artisan bitrix24:dev-profile-bootstrap dev-german-main https://new-german-main.trycloudflare.com \
   --client-id=ВАШ_CLIENT_ID \
-  --application-code=ВАШ_APPLICATION_CODE \
-  --telegram-line-id=TELEGRAM_LINE_ID \
-  --max-line-id=MAX_LINE_ID
+  --application-code=ВАШ_APPLICATION_CODE
 ```
 
 ## Частые ошибки
@@ -226,6 +294,9 @@ php artisan bitrix24:dev-profile-bootstrap dev-german-main https://new-german-ma
 3. В Bitrix остались старые callback URL после смены tunnel URL.
 4. Есть install callback, но он пришёл на старый ingress.
 5. На текущий ingress пришёл только `failed` install callback, а не валидный.
+6. `LINE_ID` пытаются настроить через bootstrap вместо маршрута канала в админке.
+7. Не сохранён OpenLines route registry secret, поэтому Doctor падает с
+   `route_registry_secret_missing`.
 
 ## Что проверять, если не взлетело
 
@@ -238,10 +309,12 @@ php artisan bitrix24:dev-profile-bootstrap dev-german-main https://new-german-ma
 6. После последних изменений в Bitrix был заново отправлен install callback.
 7. OpenLines registry заново опубликован после последней смены tunnel URL,
    `LINE_ID`, `connector_code` или callback owner.
-8. Doctor показывает `synced` и `Diffs 0`.
+8. В Bitrix24 profile сохранён OpenLines route registry secret.
+9. Doctor показывает `synced` и `Diffs 0`.
 
 ## Связанные документы
 
 1. [README.md](/Users/abrikosov/Documents/Проект-1/README.md)
 2. [setup-sheet.md](/Users/abrikosov/Documents/Проект-1/docs/bitrix24/setup-sheet.md)
 3. [staging-laravel-cloud.md](/Users/abrikosov/Documents/Проект-1/docs/staging-laravel-cloud.md)
+4. [openlines-channel-runbook.md](openlines-channel-runbook.md)

@@ -50,6 +50,7 @@ const STAGING_PROCESS_CI_SYNC_FILE_PATTERNS = [
   /^\.github\/workflows\/copilot-feasibility-spike\.ya?ml$/,
   /^\.github\/workflows\/copilot-merge-readiness\.ya?ml$/,
   /^\.github\/workflows\/php-artisan-test\.ya?ml$/,
+  /^\.github\/workflows\/release-process-guard\.ya?ml$/,
 ];
 
 const CYRILLIC_PATTERN = /[А-Яа-яЁё]/;
@@ -438,6 +439,7 @@ function runSelfTest() {
     { filename: ".github/workflows/ab-readiness-check.yml" },
     { filename: ".github/scripts/ci-change-scope.mjs" },
     { filename: ".github/workflows/php-artisan-test.yml" },
+    { filename: ".github/workflows/release-process-guard.yml" },
     { filename: "docs/task-delivery-workflow.md" },
   ];
 
