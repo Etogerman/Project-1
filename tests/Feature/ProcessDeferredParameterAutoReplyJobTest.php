@@ -10,6 +10,7 @@ use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
+use App\Models\DialogStage;
 use App\Models\Message;
 use App\Services\Bots\QueueDeferredParameterAutoReplyAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -125,6 +126,41 @@ class ProcessDeferredParameterAutoReplyJobTest extends TestCase
         $this->assertFalse($queued);
         Queue::assertNotPushed(ProcessDeferredParameterAutoReplyJob::class);
         $this->assertNull($dialog->fresh()->pending_auto_reply_source_message_id);
+    }
+
+    public function test_job_suppresses_and_clears_pending_when_dialog_is_blacklisted(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        [$dialog, $sourceMessage] = $this->createPendingDialogWithSource();
+        $blacklistStage = DialogStage::factory()->create([
+            'key' => 'blacklist_deferred_auto_reply',
+            'name' => 'ЧС',
+            'behavior_policy' => DialogStage::BEHAVIOR_POLICY_BLACKLIST,
+        ]);
+        $dialog->forceFill([
+            'stage' => $blacklistStage->key,
+            'stage_id' => $blacklistStage->id,
+        ])->save();
+        AutoReplyRule::factory()->forChannel($dialog->channel)->create([
+            'match_scope' => AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER,
+            'keyword' => 'promo',
+            'normalized_keyword' => AutoReplyRule::normalizeKeyword('promo'),
+            'contact_phone_condition' => AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE,
+            'reply_text' => 'Этот delayed ответ не должен уйти',
+        ]);
+
+        app()->call([new ProcessDeferredParameterAutoReplyJob($dialog->id), 'handle']);
+
+        Http::assertNothingSent();
+        Queue::assertNotPushed(ExportMessageToBitrix24OpenLinesJob::class);
+        $this->assertNull($dialog->fresh()->pending_auto_reply_source_message_id);
+        $this->assertNull($sourceMessage->fresh()->auto_reply_sent_at);
+        $this->assertDatabaseMissing('messages', [
+            'reply_to_message_id' => $sourceMessage->id,
+            'message_kind' => Message::KIND_OUTBOUND_AUTO_REPLY,
+        ]);
     }
 
     public function test_job_still_sends_delayed_reply_when_source_message_already_has_auto_reply_sent_at(): void

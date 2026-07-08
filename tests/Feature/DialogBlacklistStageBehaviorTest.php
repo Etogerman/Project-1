@@ -22,6 +22,7 @@ use App\Models\User;
 use App\Services\Analytics\BuildAnalyticsOverviewAction;
 use App\Services\Bitrix24\IsDialogReadyForBitrix24LiveBridgeAction;
 use App\Services\Bitrix24\IsMessageReadyForBitrix24LiveExportAction;
+use App\Services\Bots\DownloadBotMessageAttachmentsAction;
 use App\Services\Dialogs\BuildDialogNotificationStateAction;
 use App\Services\Dialogs\DialogAutomationGate;
 use App\Services\Dialogs\ResolveDialogInboxStatusAction;
@@ -172,6 +173,29 @@ class DialogBlacklistStageBehaviorTest extends TestCase
         $attachment->refresh();
         $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY, $attachment->download_status);
         $this->assertSame(DialogAutomationGate::REASON_BLACKLIST_STAGE, $attachment->safe_error_code);
+        $this->assertNull($attachment->local_path);
+    }
+
+    public function test_bot_media_download_marks_blacklist_media_metadata_only_with_reason(): void
+    {
+        [$dialog, $message] = $this->createDialogWithInbound(blacklisted: true);
+        $attachment = MessageAttachment::factory()->create([
+            'message_id' => $message->id,
+            'channel_id' => $dialog->channel_id,
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_BOT,
+            'provider_event_key' => $message->provider_event_key,
+            'provider_attachment_key' => 'blacklist-bot-file-1',
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD,
+            'provider_file_id' => 'telegram-bot-file-1',
+            'media_kind' => MessageAttachment::MEDIA_KIND_DOCUMENT,
+        ]);
+
+        app(DownloadBotMessageAttachmentsAction::class)->handle($message->fresh());
+
+        $attachment->refresh();
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY, $attachment->download_status);
+        $this->assertSame(DialogAutomationGate::REASON_BLACKLIST_STAGE, $attachment->safe_error_code);
+        $this->assertNull($attachment->local_disk);
         $this->assertNull($attachment->local_path);
     }
 
