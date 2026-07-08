@@ -397,6 +397,51 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('Пропущен из-за V3 cutover');
     }
 
+    public function test_dialog_view_diagnostics_ignores_activity_logs_with_empty_provider_identifiers(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(0);
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => $dialog->external_chat_id,
+            'external_message_id' => null,
+            'provider_event_key' => null,
+            'text' => 'JBTLIST',
+            'received_at' => now(),
+            'created_at' => now(),
+        ]);
+        ChannelActivityLog::query()->create([
+            'channel_id' => $dialog->channel_id,
+            'level' => 'info',
+            'event' => 'bot.reply_skipped_legacy_cutover',
+            'message' => 'Unrelated empty identifiers log.',
+            'context' => [
+                'provider_event_key' => '',
+                'external_message_id' => '',
+            ],
+            'created_at' => now(),
+        ]);
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', [
+                'record' => $dialog,
+                'tab' => SyncSystemDialogCardViewAction::TAB_DIAGNOSTICS,
+            ]))
+            ->assertOk()
+            ->assertSee('Нет события пропуска')
+            ->assertDontSee('Пропущен из-за V3 cutover')
+            ->assertDontSee('Unrelated empty identifiers log.');
+    }
+
     public function test_dialog_view_topbar_dialogs_breadcrumb_links_to_back_to_dialogs_list(): void
     {
         $admin = User::factory()->create([

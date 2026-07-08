@@ -1999,13 +1999,32 @@ class ViewDialog extends ViewRecord
             ->limit(100)
             ->get()
             ->filter(function (ChannelActivityLog $log) use ($message): bool {
-                $context = is_array($log->context) ? $log->context : [];
-
-                return (int) ($context['message_id'] ?? 0) === (int) $message->id
-                    || (string) ($context['provider_event_key'] ?? '') === (string) $message->provider_event_key
-                    || (string) ($context['external_message_id'] ?? '') === (string) $message->external_message_id;
+                return $this->automationActivityLogMatchesMessage($log, $message);
             })
             ->values();
+    }
+
+    protected function automationActivityLogMatchesMessage(ChannelActivityLog $log, Message $message): bool
+    {
+        $context = is_array($log->context) ? $log->context : [];
+
+        if ((int) ($context['message_id'] ?? 0) === (int) $message->id) {
+            return true;
+        }
+
+        return $this->automationActivityLogContextValueMatches($context, 'provider_event_key', $message->provider_event_key)
+            || $this->automationActivityLogContextValueMatches($context, 'external_message_id', $message->external_message_id);
+    }
+
+    /**
+     * @param  array<string, mixed>  $context
+     */
+    protected function automationActivityLogContextValueMatches(array $context, string $key, mixed $messageValue): bool
+    {
+        $contextValue = trim((string) ($context[$key] ?? ''));
+        $messageValue = trim((string) $messageValue);
+
+        return $contextValue !== '' && $messageValue !== '' && $contextValue === $messageValue;
     }
 
     protected function latestMessageActivityLog(Dialog $dialog, Message $message, string $event): ?ChannelActivityLog
