@@ -27,6 +27,7 @@ class DialogStageFactory extends Factory
             'sort_order' => fake()->numberBetween(60, 500),
             'system_role' => null,
             'is_seeded' => false,
+            'behavior_policy' => DialogStage::BEHAVIOR_POLICY_STANDARD,
         ];
     }
 }

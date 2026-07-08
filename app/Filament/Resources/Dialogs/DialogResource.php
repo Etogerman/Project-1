@@ -524,6 +524,10 @@ class DialogResource extends Resource
 
     protected static function resolveInboxStatusCode(Dialog $record): string
     {
+        if (app(DialogStageCatalog::class)->isBlacklistDialog($record)) {
+            return DialogInboxStatusData::CODE_NOT_REQUIRED;
+        }
+
         $latestInboundUserMessageId = $record->getAttribute('latest_inbound_user_message_id');
         $latestInboundUserMessageSortAt = $record->getAttribute('latest_inbound_user_message_sort_at');
         $latestOutboundManualReplyMessageId = $record->getAttribute('latest_outbound_manual_reply_message_id');
@@ -674,8 +678,64 @@ class DialogResource extends Resource
         })->whereNull('data_collection_completed_at');
     }
 
+    public static function applyBlacklistStageFilter(Builder $query): Builder
+    {
+        $catalog = app(DialogStageCatalog::class);
+        $stageIds = $catalog->blacklistStageIds();
+        $stageKeys = $catalog->blacklistStageKeys();
+
+        if ($stageIds === [] && $stageKeys === []) {
+            return $query->whereRaw('1 = 0');
+        }
+
+        return $query->where(function (Builder $query) use ($stageIds, $stageKeys): void {
+            $hasCondition = false;
+
+            if ($stageIds !== []) {
+                $query->whereIn('dialogs.stage_id', $stageIds);
+                $hasCondition = true;
+            }
+
+            if ($stageKeys !== []) {
+                $method = $hasCondition ? 'orWhereIn' : 'whereIn';
+                $query->{$method}('dialogs.stage', $stageKeys);
+            }
+        });
+    }
+
+    public static function applyNotBlacklistStageFilter(Builder $query): Builder
+    {
+        $catalog = app(DialogStageCatalog::class);
+        $stageIds = $catalog->blacklistStageIds();
+        $stageKeys = $catalog->blacklistStageKeys();
+
+        if ($stageIds === [] && $stageKeys === []) {
+            return $query;
+        }
+
+        return $query->where(function (Builder $query) use ($stageIds, $stageKeys): void {
+            if ($stageIds !== []) {
+                $query->where(function (Builder $query) use ($stageIds): void {
+                    $query
+                        ->whereNull('dialogs.stage_id')
+                        ->orWhereNotIn('dialogs.stage_id', $stageIds);
+                });
+            }
+
+            if ($stageKeys !== []) {
+                $query->where(function (Builder $query) use ($stageKeys): void {
+                    $query
+                        ->whereNull('dialogs.stage')
+                        ->orWhereNotIn('dialogs.stage', $stageKeys);
+                });
+            }
+        });
+    }
+
     protected static function applyRequiresManualReplyFilter(Builder $query): Builder
     {
+        static::applyNotBlacklistStageFilter($query);
+
         return $query->whereExists(function (QueryBuilder $inbound): void {
             $inbound
                 ->selectRaw('1')
@@ -718,31 +778,52 @@ class DialogResource extends Resource
             'latestInboundAfterOutboundManualReply' => $latestInboundAfterOutboundManualReply,
         ] = static::buildInboxStatusFilterFragments();
 
-        return match ($status) {
-            DialogInboxStatusData::CODE_NOT_REQUIRED => $query
-                ->whereRaw(
-                    $latestInboundUserMessageId['sql'].' is not null',
-                    $latestInboundUserMessageId['bindings'],
-                )
-                ->where(function (Builder $query) use (
-                    $latestOutboundManualReplyMessageId,
-                    $latestInboundAfterOutboundManualReply,
-                ): Builder {
-                    return $query
-                        ->whereRaw(
-                            $latestOutboundManualReplyMessageId['sql'].' is null',
-                            $latestOutboundManualReplyMessageId['bindings'],
-                        )
-                        ->orWhereRaw(
-                            $latestInboundAfterOutboundManualReply['sql'],
-                            $latestInboundAfterOutboundManualReply['bindings'],
-                        );
-                })
-                ->whereRaw(
-                    $latestInboundUserMessageId['sql'].' = dialogs.manual_reply_dismissed_source_message_id',
-                    $latestInboundUserMessageId['bindings'],
-                ),
-            DialogInboxStatusData::CODE_NO_NEW => $query->where(function (Builder $query) use (
+        if ($status === DialogInboxStatusData::CODE_NOT_REQUIRED) {
+            return $query->where(function (Builder $query) use (
+                $latestInboundUserMessageId,
+                $latestOutboundManualReplyMessageId,
+                $latestInboundAfterOutboundManualReply,
+            ): void {
+                $query
+                    ->where(function (Builder $query): void {
+                        static::applyBlacklistStageFilter($query);
+                    })
+                    ->orWhere(function (Builder $query) use (
+                        $latestInboundUserMessageId,
+                        $latestOutboundManualReplyMessageId,
+                        $latestInboundAfterOutboundManualReply,
+                    ): void {
+                        $query
+                            ->whereRaw(
+                                $latestInboundUserMessageId['sql'].' is not null',
+                                $latestInboundUserMessageId['bindings'],
+                            )
+                            ->where(function (Builder $query) use (
+                                $latestOutboundManualReplyMessageId,
+                                $latestInboundAfterOutboundManualReply,
+                            ): Builder {
+                                return $query
+                                    ->whereRaw(
+                                        $latestOutboundManualReplyMessageId['sql'].' is null',
+                                        $latestOutboundManualReplyMessageId['bindings'],
+                                    )
+                                    ->orWhereRaw(
+                                        $latestInboundAfterOutboundManualReply['sql'],
+                                        $latestInboundAfterOutboundManualReply['bindings'],
+                                    );
+                            })
+                            ->whereRaw(
+                                $latestInboundUserMessageId['sql'].' = dialogs.manual_reply_dismissed_source_message_id',
+                                $latestInboundUserMessageId['bindings'],
+                            );
+                    });
+            });
+        }
+
+        if ($status === DialogInboxStatusData::CODE_NO_NEW) {
+            static::applyNotBlacklistStageFilter($query);
+
+            return $query->where(function (Builder $query) use (
                 $latestInboundUserMessageId,
                 $latestOutboundManualReplyMessageId,
                 $latestInboundAfterOutboundManualReply,
@@ -766,9 +847,10 @@ class DialogResource extends Resource
                                 $latestInboundAfterOutboundManualReply['bindings'],
                             );
                     });
-            }),
-            default => $query,
-        };
+            });
+        }
+
+        return $query;
     }
 
     protected static function messageIsAfterSql(string $leftAlias, string $rightAlias): string

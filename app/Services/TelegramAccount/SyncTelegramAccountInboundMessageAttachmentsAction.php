@@ -5,23 +5,30 @@ namespace App\Services\TelegramAccount;
 use App\Data\TelegramAccount\NormalizedInboundMessageEvent;
 use App\Models\Message;
 use App\Models\MessageAttachment;
+use App\Services\Dialogs\DialogAutomationGate;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 
 class SyncTelegramAccountInboundMessageAttachmentsAction
 {
+    public function __construct(
+        private readonly DialogAutomationGate $dialogAutomationGate,
+    ) {}
+
     public function handle(Message $message, NormalizedInboundMessageEvent $event): void
     {
         if ($event->media === []) {
             return;
         }
 
+        $metadataOnly = ! $this->dialogAutomationGate->acceptsMessage($message);
+
         foreach (array_values($event->media) as $index => $item) {
             if (! is_array($item)) {
                 continue;
             }
 
-            $this->syncAttachment($message, $event, $item, $index);
+            $this->syncAttachment($message, $event, $item, $index, $metadataOnly);
         }
 
         $message->unsetRelation('attachments');
@@ -35,6 +42,7 @@ class SyncTelegramAccountInboundMessageAttachmentsAction
         NormalizedInboundMessageEvent $event,
         array $item,
         int $index,
+        bool $metadataOnly,
     ): void {
         $mediaKind = $this->resolveMediaKind($item);
         $identity = [
@@ -65,12 +73,18 @@ class SyncTelegramAccountInboundMessageAttachmentsAction
         ];
         $createValues = [
             ...$metadataValues,
-            'download_status' => $this->resolveDownloadStatus($item),
+            'download_status' => $metadataOnly
+                ? MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY
+                : $this->resolveDownloadStatus($item),
             'send_status' => MessageAttachment::SEND_STATUS_NOT_APPLICABLE,
             'local_disk' => null,
             'local_path' => null,
-            'safe_error_code' => $this->normalizeScalar(data_get($item, 'download_error_code')),
-            'safe_error_message' => $this->normalizeScalar(data_get($item, 'download_error_message')),
+            'safe_error_code' => $metadataOnly
+                ? DialogAutomationGate::REASON_BLACKLIST_STAGE
+                : $this->normalizeScalar(data_get($item, 'download_error_code')),
+            'safe_error_message' => $metadataOnly
+                ? 'Media download skipped because the dialog stage is blacklisted.'
+                : $this->normalizeScalar(data_get($item, 'download_error_message')),
         ];
 
         $this->createOrUpdateAttachment($identity, $createValues, $metadataValues);

@@ -12,6 +12,7 @@ use App\Services\Bots\ChannelActivityLogger;
 use App\Services\Bots\LegacyAutoReplyRuntimeGate;
 use App\Services\Bots\ProcessBotConstructorBlocksAction;
 use App\Services\Bots\ResolveAutoReplyRuleAction;
+use App\Services\Dialogs\DialogAutomationGate;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -71,9 +72,10 @@ class ProcessAutoReplyJob implements ShouldQueue
         LegacyAutoReplyRuntimeGate $legacyAutoReplyRuntimeGate,
         ResolveAutoReplyRuleAction $resolveAutoReplyRuleAction,
         ProcessBotConstructorBlocksAction $processBotConstructorBlocksAction,
+        DialogAutomationGate $dialogAutomationGate,
     ): void {
         $message = Message::query()
-            ->with(['channel', 'contactIdentity', 'contact'])
+            ->with(['channel', 'contactIdentity', 'contact', 'dialog.dialogStage'])
             ->find($this->inboundMessageId);
 
         if (! $message instanceof Message) {
@@ -85,6 +87,10 @@ class ProcessAutoReplyJob implements ShouldQueue
         }
 
         if ($message->message_kind !== Message::KIND_INBOUND_USER) {
+            return;
+        }
+
+        if (! $dialogAutomationGate->acceptsMessage($message)) {
             return;
         }
 

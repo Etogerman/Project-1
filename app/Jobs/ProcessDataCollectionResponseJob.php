@@ -27,6 +27,7 @@ use App\Services\DataCollection\ExtractCountryAction;
 use App\Services\DataCollection\ExtractFirstNameAction;
 use App\Services\DataCollection\ExtractResidenceCityAction;
 use App\Services\DataCollection\ResolveRussianRegionCandidatesLookupAction;
+use App\Services\Dialogs\DialogAutomationGate;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -93,13 +94,14 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         QueueBitrix24ContactSyncAction $queueBitrix24ContactSyncAction,
         ApplyContactFirstNameAction $applyContactFirstNameAction,
         FirstNameResolutionAnalyticsService $firstNameResolutionAnalyticsService,
+        DialogAutomationGate $dialogAutomationGate,
     ): void {
         if (! (bool) config('bots.data_collection.enabled', true)) {
             return;
         }
 
         $message = Message::query()
-            ->with(['channel', 'contact', 'contactIdentity'])
+            ->with(['channel', 'contact', 'contactIdentity', 'dialog.dialogStage'])
             ->find($this->inboundMessageId);
 
         if (! $message instanceof Message) {
@@ -107,6 +109,10 @@ class ProcessDataCollectionResponseJob implements ShouldQueue
         }
 
         if ($message->direction !== Message::DIRECTION_INBOUND || $message->message_kind !== Message::KIND_INBOUND_USER) {
+            return;
+        }
+
+        if (! $dialogAutomationGate->acceptsMessage($message)) {
             return;
         }
 

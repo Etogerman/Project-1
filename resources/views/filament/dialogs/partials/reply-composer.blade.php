@@ -67,6 +67,11 @@
                 Автоответы для этого контакта отключены. Это не влияет на ручной ответ.
             </p>
         @endif
+        @if (filled($blacklistWarning ?? null))
+            <p class="ac-note ac-note--danger">
+                {{ $blacklistWarning }}
+            </p>
+        @endif
         @if (filled($blockedReason))
             <p class="ac-note ac-note--danger">
                 {{ $blockedReason }}

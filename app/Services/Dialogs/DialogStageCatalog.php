@@ -10,12 +10,12 @@ use Illuminate\Support\Facades\Schema;
 class DialogStageCatalog
 {
     /**
-     * @var ?list<array{id:?int,key:string,name:string,color:string,color_source:?string,color_value:?string,sort_order:int,system_role:?string,is_seeded:bool}>
+     * @var ?list<array{id:?int,key:string,name:string,color:string,color_source:?string,color_value:?string,sort_order:int,system_role:?string,is_seeded:bool,behavior_policy:string}>
      */
     private ?array $stages = null;
 
     /**
-     * @return list<array{id:?int,key:string,name:string,color:string,color_source:?string,color_value:?string,sort_order:int,system_role:?string,is_seeded:bool}>
+     * @return list<array{id:?int,key:string,name:string,color:string,color_source:?string,color_value:?string,sort_order:int,system_role:?string,is_seeded:bool,behavior_policy:string}>
      */
     public function stages(): array
     {
@@ -29,6 +29,7 @@ class DialogStageCatalog
 
         $hasColorSource = Schema::hasColumn('dialog_stages', 'color_source');
         $hasColorValue = Schema::hasColumn('dialog_stages', 'color_value');
+        $hasBehaviorPolicy = Schema::hasColumn('dialog_stages', 'behavior_policy');
         $columns = ['id', 'key', 'name', 'color', 'sort_order', 'system_role', 'is_seeded'];
 
         if ($hasColorSource) {
@@ -37,6 +38,10 @@ class DialogStageCatalog
 
         if ($hasColorValue) {
             $columns[] = 'color_value';
+        }
+
+        if ($hasBehaviorPolicy) {
+            $columns[] = 'behavior_policy';
         }
 
         return $this->stages = DialogStage::query()
@@ -53,6 +58,9 @@ class DialogStageCatalog
                 'sort_order' => (int) $stage->sort_order,
                 'system_role' => $stage->system_role !== null ? (string) $stage->system_role : null,
                 'is_seeded' => (bool) $stage->is_seeded,
+                'behavior_policy' => $hasBehaviorPolicy
+                    ? $this->normalizeBehaviorPolicy($stage->getAttribute('behavior_policy'))
+                    : DialogStage::BEHAVIOR_POLICY_STANDARD,
             ])
             ->all();
     }
@@ -188,6 +196,53 @@ class DialogStageCatalog
         return in_array($this->normalizeKey($key), $this->workingStageKeys(), true);
     }
 
+    public function behaviorPolicy(?string $key): string
+    {
+        $stage = $this->stageByKey($key);
+
+        return $stage['behavior_policy'] ?? DialogStage::BEHAVIOR_POLICY_STANDARD;
+    }
+
+    public function isBlacklist(?string $key): bool
+    {
+        return $this->behaviorPolicy($key) === DialogStage::BEHAVIOR_POLICY_BLACKLIST;
+    }
+
+    public function isBlacklistDialog(Dialog $dialog): bool
+    {
+        if ($dialog->relationLoaded('dialogStage') && $dialog->dialogStage instanceof DialogStage) {
+            return $dialog->dialogStage->isBlacklistBehavior();
+        }
+
+        return $this->isBlacklist($this->keyForDialog($dialog));
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function blacklistStageKeys(): array
+    {
+        return collect($this->stages())
+            ->filter(fn (array $stage): bool => $stage['behavior_policy'] === DialogStage::BEHAVIOR_POLICY_BLACKLIST)
+            ->pluck('key')
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @return list<int>
+     */
+    public function blacklistStageIds(): array
+    {
+        return collect($this->stages())
+            ->filter(fn (array $stage): bool => $stage['behavior_policy'] === DialogStage::BEHAVIOR_POLICY_BLACKLIST)
+            ->pluck('id')
+            ->filter()
+            ->map(fn (mixed $id): int => (int) $id)
+            ->values()
+            ->all();
+    }
+
     public function stageIdForKey(?string $key): ?int
     {
         $stage = $this->stageByKey($key);
@@ -242,7 +297,7 @@ class DialogStageCatalog
     }
 
     /**
-     * @return ?array{id:?int,key:string,name:string,color:string,color_source:?string,color_value:?string,sort_order:int,system_role:?string,is_seeded:bool}
+     * @return ?array{id:?int,key:string,name:string,color:string,color_source:?string,color_value:?string,sort_order:int,system_role:?string,is_seeded:bool,behavior_policy:string}
      */
     private function stageByKey(?string $key): ?array
     {
@@ -259,7 +314,7 @@ class DialogStageCatalog
     }
 
     /**
-     * @return list<array{id:?int,key:string,name:string,color:string,color_source:?string,color_value:?string,sort_order:int,system_role:?string,is_seeded:bool}>
+     * @return list<array{id:?int,key:string,name:string,color:string,color_source:?string,color_value:?string,sort_order:int,system_role:?string,is_seeded:bool,behavior_policy:string}>
      */
     private function fallbackStages(): array
     {
@@ -274,6 +329,7 @@ class DialogStageCatalog
                 'sort_order' => $stage['sort_order'],
                 'system_role' => $stage['system_role'],
                 'is_seeded' => $stage['is_seeded'],
+                'behavior_policy' => $this->normalizeBehaviorPolicy($stage['behavior_policy'] ?? null),
             ])
             ->sortBy('sort_order')
             ->values()
@@ -283,5 +339,14 @@ class DialogStageCatalog
     private function nullableString(mixed $value): ?string
     {
         return is_string($value) && trim($value) !== '' ? $value : null;
+    }
+
+    private function normalizeBehaviorPolicy(mixed $value): string
+    {
+        $value = is_string($value) ? trim($value) : '';
+
+        return array_key_exists($value, DialogStage::behaviorPolicyOptions())
+            ? $value
+            : DialogStage::BEHAVIOR_POLICY_STANDARD;
     }
 }

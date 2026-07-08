@@ -7,6 +7,7 @@ use App\Data\Bots\MaxVideoAttachmentDownloadData;
 use App\Models\Channel;
 use App\Models\Message;
 use App\Models\MessageAttachment;
+use App\Services\Dialogs\DialogAutomationGate;
 use App\Services\Messages\StoreMessageAttachmentLocalFileAction;
 use Illuminate\Http\Client\Response as HttpResponse;
 use Illuminate\Support\Facades\DB;
@@ -20,11 +21,16 @@ class DownloadBotMessageAttachmentsAction
         private readonly TelegramBotApiService $telegramBotApiService,
         private readonly MaxBotApiService $maxBotApiService,
         private readonly StoreMessageAttachmentLocalFileAction $storeMessageAttachmentLocalFileAction,
+        private readonly DialogAutomationGate $dialogAutomationGate,
     ) {}
 
     public function handle(Message $message): void
     {
-        $message->loadMissing(['channel', 'attachments']);
+        $message->loadMissing(['channel', 'attachments', 'dialog.dialogStage']);
+
+        if (! $this->dialogAutomationGate->acceptsMessage($message)) {
+            return;
+        }
 
         $channel = $message->channel;
 

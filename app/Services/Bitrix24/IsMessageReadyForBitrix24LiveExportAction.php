@@ -5,6 +5,7 @@ namespace App\Services\Bitrix24;
 use App\Models\Bitrix24MessageExport;
 use App\Models\Channel;
 use App\Models\Message;
+use App\Services\Dialogs\DialogAutomationGate;
 
 class IsMessageReadyForBitrix24LiveExportAction
 {
@@ -32,6 +33,7 @@ class IsMessageReadyForBitrix24LiveExportAction
 
     public function __construct(
         private readonly IsDialogReadyForBitrix24LiveBridgeAction $isDialogReadyForBitrix24LiveBridgeAction,
+        private readonly DialogAutomationGate $dialogAutomationGate,
     ) {}
 
     public function handle(Message|int $message): bool
@@ -56,7 +58,13 @@ class IsMessageReadyForBitrix24LiveExportAction
             return false;
         }
 
-        if (! $this->isDialogReadyForBitrix24LiveBridgeAction->handle($message->dialog()->firstOrFail())) {
+        $dialog = $message->dialog()->with('dialogStage')->firstOrFail();
+
+        if (! $this->dialogAutomationGate->accepts($dialog)) {
+            return false;
+        }
+
+        if (! $this->isDialogReadyForBitrix24LiveBridgeAction->handle($dialog)) {
             return false;
         }
 
