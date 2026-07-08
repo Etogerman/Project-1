@@ -5,6 +5,7 @@ namespace App\Services\Dialogs;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\User;
+use App\Services\Scenarios\DispatchDialogStageChangedScenarioAction;
 use Illuminate\Support\Carbon;
 
 class CreateDialogStageHistoryMessageAction
@@ -12,6 +13,10 @@ class CreateDialogStageHistoryMessageAction
     public const SOURCE_TYPE_SYSTEM = 'system';
 
     public const SOURCE_TYPE_OPERATOR = 'operator';
+
+    public function __construct(
+        private readonly DispatchDialogStageChangedScenarioAction $dispatchDialogStageChangedScenarioAction,
+    ) {}
 
     public function handle(
         Dialog $dialog,
@@ -33,7 +38,7 @@ class CreateDialogStageHistoryMessageAction
             ? $changedBy?->id
             : null;
 
-        return $dialog->messages()->create([
+        $message = $dialog->messages()->create([
             'contact_id' => $dialog->contact_id,
             'contact_identity_id' => $dialog->current_contact_identity_id,
             'channel_id' => $dialog->channel_id,
@@ -56,6 +61,10 @@ class CreateDialogStageHistoryMessageAction
             ],
             'received_at' => $occurredAt,
         ]);
+
+        $this->dispatchDialogStageChangedScenarioAction->handle($message);
+
+        return $message;
     }
 
     private function buildHistoryText(

@@ -7,17 +7,20 @@ use App\Models\Dialog;
 
 class ResolveDialogStageAction
 {
+    public function __construct(
+        private readonly DialogStageCatalog $dialogStageCatalog,
+    ) {}
+
     public function handle(
         Dialog $dialog,
         ?Contact $contact = null,
-    ): string
-    {
+    ): string {
         $contact ??= $dialog->relationLoaded('contact')
             ? $dialog->contact
             : $dialog->contact()->firstOrFail();
 
         return $this->forAttributes(
-            currentStage: $dialog->stage,
+            currentStage: $this->dialogStageCatalog->keyForDialog($dialog),
             contact: $contact,
             phoneConfirmedAt: $dialog->phone_confirmed_at,
         );
@@ -27,8 +30,7 @@ class ResolveDialogStageAction
         ?string $currentStage,
         Contact $contact,
         mixed $phoneConfirmedAt,
-    ): string
-    {
+    ): string {
         if ($this->isManualStage($currentStage)) {
             return $currentStage;
         }
@@ -46,7 +48,7 @@ class ResolveDialogStageAction
 
     public function isManualStage(?string $stage): bool
     {
-        return in_array($stage, Dialog::manualStages(), true);
+        return $this->dialogStageCatalog->isManual($stage);
     }
 
     private function isQuestionnaireCompleted(Contact $contact): bool

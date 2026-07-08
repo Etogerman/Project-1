@@ -54,6 +54,8 @@ use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\Contacts\SyncContactDistanceToMoscowAction;
 use App\Services\DataCollection\ExtractFirstNameAction;
 use App\Services\Dialogs\DeleteLastOutboundDialogMessageAction;
+use App\Services\Dialogs\DialogStageCatalog;
+use App\Services\Dialogs\ResolveDialogStageAction;
 use App\Services\Geo\ApplyGeoResolutionToContactAction;
 use App\Services\Geo\ResolveAndApplyGeoCityAction;
 use App\Services\Geo\ResolveGeoCityAction;
@@ -81,6 +83,12 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
     private const V3_START_PRIORITY_MIN = 1;
 
     private const V3_START_PRIORITY_MAX = 100;
+
+    private const V3_START_EVENT_MESSAGE = 'message';
+
+    private const V3_START_EVENT_MESSAGE_IN_STAGE = 'message_in_stage';
+
+    private const V3_START_EVENT_STAGE_CHANGED = 'stage_changed';
 
     private const V3_BUTTON_TYPE_TEXT = 'text';
 
@@ -532,16 +540,15 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         $this->matchedV3RuntimeBlockId = null;
         $this->v3SimulateStartDepth = 0;
 
-        if (
-            ! in_array($message->channel?->platform, [Channel::PLATFORM_TELEGRAM, Channel::PLATFORM_MAX], true)
-            || $message->message_kind !== Message::KIND_INBOUND_USER
-            || $message->dialog_id === null
-            || ($message->contact !== null && ! $message->contact->isAutoReplyEnabled())
-        ) {
+        if (! $this->canEvaluateStartMessage($message)) {
             return false;
         }
 
         $v3Runtime = $this->v3RuntimeOrNull();
+
+        if ($this->isDialogStageChangedMessage($message) && $v3Runtime === null) {
+            return false;
+        }
 
         if (
             $message->channel?->platform === Channel::PLATFORM_TELEGRAM
@@ -605,6 +612,28 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         }
 
         return null;
+    }
+
+    private function canEvaluateStartMessage(Message $message): bool
+    {
+        if (
+            ! in_array($message->channel?->platform, [Channel::PLATFORM_TELEGRAM, Channel::PLATFORM_MAX], true)
+            || $message->dialog_id === null
+            || ($message->contact !== null && ! $message->contact->isAutoReplyEnabled())
+        ) {
+            return false;
+        }
+
+        return $message->message_kind === Message::KIND_INBOUND_USER
+            || $this->isDialogStageChangedMessage($message);
+    }
+
+    private function isDialogStageChangedMessage(Message $message): bool
+    {
+        return $message->message_kind === Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE
+            && $message->sent_by_system_code === Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE
+            && (string) data_get($message->raw_payload, 'event', '') === Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE
+            && filled(data_get($message->raw_payload, 'to_stage'));
     }
 
     private function runtimeEligibleBuilderStartBlocks(): Collection
@@ -7318,6 +7347,10 @@ TEXT;
             return null;
         }
 
+        if (! $this->v3EntrypointAllowsStartEvent($message, $entrypoint)) {
+            return null;
+        }
+
         if (! $this->v3EntrypointAllowsContactPhone($message, $entrypoint)) {
             return null;
         }
@@ -7410,6 +7443,61 @@ TEXT;
         return $condition === AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE
             ? $hasPhone
             : ! $hasPhone;
+    }
+
+    /**
+     * @param  array<string, mixed>  $entrypoint
+     */
+    private function v3EntrypointAllowsStartEvent(Message $message, array $entrypoint): bool
+    {
+        $event = trim((string) ($entrypoint['event'] ?? self::V3_START_EVENT_MESSAGE));
+
+        if ($event === '' || $event === self::V3_START_EVENT_MESSAGE) {
+            return $message->message_kind === Message::KIND_INBOUND_USER;
+        }
+
+        if ($event === self::V3_START_EVENT_STAGE_CHANGED) {
+            return $this->isDialogStageChangedMessage($message)
+                && trim((string) data_get($message->raw_payload, 'to_stage', '')) === trim((string) ($entrypoint['stage_key'] ?? ''));
+        }
+
+        if ($event !== self::V3_START_EVENT_MESSAGE_IN_STAGE) {
+            return false;
+        }
+
+        if ($message->message_kind !== Message::KIND_INBOUND_USER) {
+            return false;
+        }
+
+        $expectedStageKey = trim((string) ($entrypoint['stage_key'] ?? ''));
+
+        if ($expectedStageKey === '') {
+            return false;
+        }
+
+        $dialog = $message->relationLoaded('dialog') ? $message->dialog : null;
+
+        if (! $dialog instanceof Dialog && $message->dialog_id !== null) {
+            $dialog = Dialog::query()
+                ->with(['contact', 'dialogStage'])
+                ->find($message->dialog_id);
+        }
+
+        if (! $dialog instanceof Dialog) {
+            return false;
+        }
+
+        $actualStageKey = app(DialogStageCatalog::class)->keyForDialog($dialog);
+
+        if ($actualStageKey === null) {
+            try {
+                $actualStageKey = app(ResolveDialogStageAction::class)->handle($dialog);
+            } catch (Throwable) {
+                return false;
+            }
+        }
+
+        return $actualStageKey === $expectedStageKey;
     }
 
     /**

@@ -134,6 +134,9 @@
                                 data-role="dialog-stage-step"
                                 data-state="{{ $stageState }}"
                                 data-tone="{{ $stageStep['tone'] }}"
+                                data-stage-color="{{ $stageStep['color_hex'] }}"
+                                data-stage-accent-color="{{ $stageStep['accent_color'] }}"
+                                style="--stage-step-bg: {{ $stageStep['background_color'] }}; --stage-step-border: {{ $stageStep['border_color'] }}; --stage-step-text: {{ $stageStep['text_color'] }}; --stage-step-shadow: {{ $stageStep['shadow_color'] }}; --stage-step-accent: {{ $stageStep['accent_color'] }};"
                                 wire:click="selectDialogStage('{{ $stageStep['value'] }}')"
                                 @disabled(! $stageStep['is_clickable'])
                                 class="ac-dialog-stage-step"

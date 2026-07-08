@@ -12,6 +12,7 @@ class SyncDialogConfirmedPhoneAction
         private readonly ResolveOrCreateDialogAction $resolveOrCreateDialogAction,
         private readonly ResolveDialogStageAction $resolveDialogStageAction,
         private readonly CreateDialogStageHistoryMessageAction $createDialogStageHistoryMessageAction,
+        private readonly DialogStageCatalog $dialogStageCatalog,
     ) {}
 
     public function handle(Message $inboundMessage, string $phoneRaw, string $phoneNormalized): Dialog
@@ -43,10 +44,11 @@ class SyncDialogConfirmedPhoneAction
         }
 
         $payload['stage'] = $this->resolveDialogStageAction->forAttributes(
-            currentStage: $dialog->stage,
+            currentStage: $this->dialogStageCatalog->keyForDialog($dialog),
             contact: $dialog->contact,
             phoneConfirmedAt: $payload['phone_confirmed_at'] ?? $dialog->phone_confirmed_at,
         );
+        $payload['stage_id'] = $this->dialogStageCatalog->stageIdForKey($payload['stage']);
 
         if (! $this->dialogNeedsUpdate($dialog, $payload)) {
             return $dialog;

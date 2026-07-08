@@ -4,7 +4,6 @@ namespace App\Services\Dialogs;
 
 use App\Models\Channel;
 use App\Models\Contact;
-use App\Models\ContactIdentity;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\ScenarioRun;
@@ -21,6 +20,7 @@ class ConsolidateDialogsForRootContactAction
         private readonly MessageChronology $messageChronology,
         private readonly ResolveDialogStageAction $resolveDialogStageAction,
         private readonly BuildDialogMessageSnapshotPayloadAction $buildDialogMessageSnapshotPayloadAction,
+        private readonly DialogStageCatalog $dialogStageCatalog,
     ) {}
 
     /**
@@ -353,6 +353,7 @@ class ConsolidateDialogsForRootContactAction
             messages: $messages,
             phoneConfirmedAt: $payload['phone_confirmed_at'] ?? $survivingDialog->phone_confirmed_at,
         );
+        $payload['stage_id'] = $this->dialogStageCatalog->stageIdForKey($payload['stage']);
 
         return $payload;
     }

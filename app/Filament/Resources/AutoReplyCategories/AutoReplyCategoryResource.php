@@ -2,7 +2,9 @@
 
 namespace App\Filament\Resources\AutoReplyCategories;
 
+use App\Filament\Forms\Components\ColorPicker;
 use App\Filament\Resources\AutoReplyCategories\Pages\ManageAutoReplyCategories;
+use App\Filament\Tables\Columns\ColorBadgeColumn;
 use App\Models\AutoReplyCategory;
 use BackedEnum;
 use Filament\Actions\Action;
@@ -18,7 +20,6 @@ use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Facades\Schema as SchemaFacade;
 use Illuminate\Validation\ValidationException;
 use UnitEnum;
 
@@ -42,7 +43,7 @@ class AutoReplyCategoryResource extends Resource
 
     public static function shouldRegisterNavigation(): bool
     {
-        return SchemaFacade::hasTable('auto_reply_categories');
+        return false;
     }
 
     public static function getEloquentQuery(): Builder
@@ -65,6 +66,9 @@ class AutoReplyCategoryResource extends Resource
                             ->label('Порядок')
                             ->numeric()
                             ->default(0)
+                            ->required(),
+                        ColorPicker::make('color')
+                            ->label('Цвет')
                             ->required(),
                     ])
                     ->columnSpanFull()
@@ -89,6 +93,9 @@ class AutoReplyCategoryResource extends Resource
                 TextColumn::make('sort_order')
                     ->label('Порядок')
                     ->sortable()
+                    ->toggleable(),
+                ColorBadgeColumn::make('color')
+                    ->label('Цвет')
                     ->toggleable(),
                 TextColumn::make('rules_count')
                     ->label('Правил')

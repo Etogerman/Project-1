@@ -4550,19 +4550,21 @@
     .ac-dialog-stage-strip__track {
         display: flex;
         min-width: 0;
-        overflow-x: auto;
-        gap: 0.65rem;
-        padding-right: 0.8rem;
+        width: 100%;
+        overflow: visible;
+        gap: 0.12rem;
+        padding-right: 0;
         padding-bottom: 0.1rem;
-        scrollbar-width: thin;
+        scrollbar-width: none;
     }
 
     .ac-dialog-stage-step {
         --stage-arrow-width: 0.78rem;
         --stage-border-width: 1px;
-        --stage-fill-top: rgba(247, 249, 252, 0.96);
-        --stage-fill-bottom: rgba(225, 231, 239, 0.96);
-        --stage-outline: rgba(112, 127, 148, 0.3);
+        --stage-accent: var(--stage-step-accent, var(--stage-outline));
+        --stage-fill-top: var(--stage-step-bg, rgba(247, 249, 252, 0.96));
+        --stage-fill-bottom: var(--stage-step-bg, rgba(225, 231, 239, 0.96));
+        --stage-outline: var(--stage-step-border, rgba(112, 127, 148, 0.3));
         --stage-shape: polygon(
             0 0,
             calc(100% - var(--stage-arrow-width)) 0,
@@ -4572,8 +4574,8 @@
         );
         position: relative;
         display: inline-flex;
-        flex: 1 0 9.75rem;
-        min-width: 9.75rem;
+        flex: 1 1 0;
+        min-width: 0;
         min-height: 2.2rem;
         align-items: center;
         justify-content: center;
@@ -4583,12 +4585,15 @@
         border-radius: 0;
         padding: 0.34rem 0.74rem 0.34rem 0.9rem;
         background: transparent;
-        color: #4a5870;
+        color: var(--stage-step-text, #4a5870);
         font-size: 0.82rem;
         font-weight: 800;
+        letter-spacing: 0;
         line-height: 1.2;
         text-align: center;
         transition:
+            flex-grow 0.18s ease,
+            min-width 0.18s ease,
             filter 0.16s ease,
             color 0.16s ease;
     }
@@ -4608,24 +4613,28 @@
         position: absolute;
         inset: var(--stage-border-width);
         background: linear-gradient(180deg, var(--stage-fill-top) 0%, var(--stage-fill-bottom) 100%);
+        box-shadow: inset 0 -0.18rem 0 var(--stage-accent);
         clip-path: var(--stage-shape);
-        transition: background 0.16s ease, inset 0.16s ease;
+        transition: background 0.16s ease, box-shadow 0.16s ease, inset 0.16s ease;
         z-index: 1;
     }
 
     .ac-dialog-stage-step__label {
         display: block;
         min-width: 0;
+        max-width: 100%;
         position: relative;
         z-index: 2;
-        overflow-wrap: anywhere;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     .ac-dialog-stage-step[data-state="completed"] {
-        --stage-fill-top: var(--stage-active-top);
-        --stage-fill-bottom: var(--stage-active-bottom);
-        --stage-outline: var(--stage-active-outline);
-        color: var(--stage-active-text);
+        --stage-fill-top: var(--stage-step-bg, var(--stage-active-top));
+        --stage-fill-bottom: var(--stage-step-bg, var(--stage-active-bottom));
+        --stage-outline: var(--stage-step-border, var(--stage-active-outline));
+        color: var(--stage-step-text, var(--stage-active-text));
     }
 
     .ac-dialog-stage-step[data-state="completed"]:not(:disabled) {
@@ -4633,93 +4642,97 @@
     }
 
     .ac-dialog-stage-step[data-state="current"] {
-        --stage-fill-top: var(--stage-active-top);
-        --stage-fill-bottom: var(--stage-active-bottom);
-        --stage-outline: var(--stage-active-outline);
+        --stage-fill-top: var(--stage-step-bg, var(--stage-active-top));
+        --stage-fill-bottom: var(--stage-step-bg, var(--stage-active-bottom));
+        --stage-outline: var(--stage-step-border, var(--stage-active-outline));
         --stage-border-width: 2px;
-        color: var(--stage-active-text);
-        filter: drop-shadow(0 0.75rem 1.1rem var(--stage-active-shadow));
+        color: var(--stage-step-text, var(--stage-active-text));
+        filter: drop-shadow(0 0.75rem 1.1rem var(--stage-step-shadow, var(--stage-active-shadow)));
         z-index: 1;
     }
 
     .ac-dialog-stage-step[data-state="available"] {
-        --stage-fill-top: rgba(244, 247, 251, 0.96);
-        --stage-fill-bottom: rgba(220, 227, 236, 0.96);
-        --stage-outline: rgba(122, 136, 155, 0.46);
-        color: #526072;
+        --stage-fill-top: var(--stage-step-bg, rgba(244, 247, 251, 0.96));
+        --stage-fill-bottom: var(--stage-step-bg, rgba(220, 227, 236, 0.96));
+        --stage-outline: var(--stage-step-border, rgba(122, 136, 155, 0.46));
+        color: var(--stage-step-text, #526072);
         cursor: pointer;
     }
 
-    .ac-dialog-stage-step[data-state="available"]:hover,
-    .ac-dialog-stage-step[data-state="available"]:focus-visible {
-        --stage-fill-top: #f6fcfd;
-        --stage-fill-bottom: #e7f7fa;
-        --stage-outline: #3cb8c8;
-        color: #20364a;
-        filter: drop-shadow(0 0.7rem 1rem rgba(37, 137, 154, 0.14));
+    .ac-dialog-stage-step:hover,
+    .ac-dialog-stage-step:focus-visible {
+        --stage-border-width: 2px;
+        flex-grow: 1.65;
+        min-width: min(13rem, 42vw);
         outline: none;
         z-index: 2;
     }
 
+    .ac-dialog-stage-step[data-state="available"]:hover,
+    .ac-dialog-stage-step[data-state="available"]:focus-visible {
+        filter: drop-shadow(0 0.7rem 1rem var(--stage-step-shadow, rgba(37, 137, 154, 0.14)));
+    }
+
     .ac-dialog-stage-step[data-state="available"]:active {
-        --stage-fill-top: #fff2b6;
-        --stage-fill-bottom: #ffd95a;
-        --stage-outline: #c18c14;
         --stage-border-width: 2px;
-        color: #17283a;
-        filter: drop-shadow(0 0.55rem 0.9rem rgba(193, 140, 20, 0.16));
+        filter: drop-shadow(0 0.55rem 0.9rem var(--stage-step-shadow, rgba(193, 140, 20, 0.16)));
     }
 
     .ac-dialog-stage-step[data-state="locked"] {
-        --stage-fill-top: rgba(243, 246, 250, 0.9);
-        --stage-fill-bottom: rgba(219, 226, 235, 0.9);
-        --stage-outline: rgba(122, 136, 155, 0.36);
-        color: #7b8798;
+        --stage-fill-top: var(--stage-step-bg, rgba(243, 246, 250, 0.9));
+        --stage-fill-bottom: var(--stage-step-bg, rgba(219, 226, 235, 0.9));
+        --stage-outline: var(--stage-step-border, rgba(122, 136, 155, 0.36));
+        color: var(--stage-step-text, #7b8798);
+        opacity: 0.72;
     }
 
     html.dark .ac-dialog-stage-step {
-        --stage-fill-top: #222938;
-        --stage-fill-bottom: #1a202d;
-        --stage-outline: #3a4455;
-        color: #cbd5e1;
+        --stage-fill-top: var(--stage-step-bg, #222938);
+        --stage-fill-bottom: var(--stage-step-bg, #1a202d);
+        --stage-outline: var(--stage-step-border, #3a4455);
+        color: var(--stage-step-text, #cbd5e1);
     }
 
     html.dark .ac-dialog-stage-step[data-state="available"] {
-        --stage-fill-top: #273142;
-        --stage-fill-bottom: #202838;
-        --stage-outline: #4b5b72;
-        color: #d7dee9;
+        --stage-fill-top: var(--stage-step-bg, #273142);
+        --stage-fill-bottom: var(--stage-step-bg, #202838);
+        --stage-outline: var(--stage-step-border, #4b5b72);
+        color: var(--stage-step-text, #d7dee9);
     }
 
     html.dark .ac-dialog-stage-step[data-state="available"]:hover,
     html.dark .ac-dialog-stage-step[data-state="available"]:focus-visible {
-        --stage-fill-top: #203848;
-        --stage-fill-bottom: #182c3a;
-        --stage-outline: #56cfe1;
-        color: #f8fafc;
+        --stage-border-width: 2px;
+        filter: drop-shadow(0 0.7rem 1rem var(--stage-step-shadow, rgba(14, 116, 144, 0.28)));
     }
 
     html.dark .ac-dialog-stage-step[data-state="locked"] {
-        --stage-fill-top: #202636;
-        --stage-fill-bottom: #191f2c;
-        --stage-outline: #343d4f;
-        color: #94a3b8;
+        --stage-fill-top: var(--stage-step-bg, #202636);
+        --stage-fill-bottom: var(--stage-step-bg, #191f2c);
+        --stage-outline: var(--stage-step-border, #343d4f);
+        color: var(--stage-step-text, #94a3b8);
     }
 
     html.dark .ac-dialog-stage-step[data-state="completed"],
     html.dark .ac-dialog-stage-step[data-state="current"] {
-        --stage-fill-top: #1ea9bd;
-        --stage-fill-bottom: #0e7490;
-        --stage-outline: #38bdf8;
-        color: #ecfeff;
+        --stage-fill-top: var(--stage-step-bg, #1ea9bd);
+        --stage-fill-bottom: var(--stage-step-bg, #0e7490);
+        --stage-outline: var(--stage-step-border, #38bdf8);
+        color: var(--stage-step-text, #ecfeff);
     }
 
     html.dark .ac-dialog-stage-step[data-state="current"] {
-        filter: drop-shadow(0 0.7rem 1rem rgba(14, 116, 144, 0.28));
+        filter: drop-shadow(0 0.7rem 1rem var(--stage-step-shadow, rgba(14, 116, 144, 0.28)));
     }
 
     .ac-dialog-stage-step:disabled {
         cursor: default;
+    }
+
+    .ac-dialog-stage-step:hover .ac-dialog-stage-step__label,
+    .ac-dialog-stage-step:focus-visible .ac-dialog-stage-step__label {
+        overflow: visible;
+        text-overflow: clip;
     }
 
     .ac-dialog-stage-strip__hint {
@@ -6091,8 +6104,12 @@
         align-items: center;
         gap: 0.5rem;
         min-width: 0;
-        padding-bottom: 0.6rem;
-        border-bottom: 1px solid #eceae6;
+        margin: -0.75rem -0.75rem 0.75rem;
+        padding: 0.65rem 0.75rem;
+        border-bottom: 1px solid var(--ac-kanban-stage-border, #eceae6);
+        border-radius: 0.75rem 0.75rem 0 0;
+        background: var(--ac-kanban-stage-bg, transparent);
+        color: var(--ac-kanban-stage-text, #2d2d2d);
     }
 
     .ac-kanban-column__bullet {
@@ -6125,10 +6142,10 @@
         flex: 1;
         margin: 0;
         overflow: hidden;
-        color: #2d2d2d;
+        color: inherit;
         font-size: 0.88rem;
         font-weight: 800;
-        letter-spacing: -0.01em;
+        letter-spacing: 0;
         line-height: 1.25;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -6141,8 +6158,8 @@
         min-width: 1.9rem;
         height: 1.1rem;
         border-radius: 999px;
-        background: #f3f2ef;
-        color: #9a9690;
+        background: var(--ac-kanban-stage-count-bg, #f3f2ef);
+        color: inherit;
         font-size: 0.75rem;
         font-weight: 800;
         font-variant-numeric: tabular-nums;

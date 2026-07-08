@@ -9,6 +9,7 @@ use App\Models\ContactIdentity;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\MessageAttachment;
+use App\Services\Dialogs\DialogStageCatalog;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Schema;
@@ -443,16 +444,22 @@ class LocalRecoverySeeder extends Seeder
             ],
         );
 
+        $dialogPayload = $scenario['dialog'] + [
+            'current_contact_identity_id' => $identity->id,
+            'external_chat_id' => $scenario['external_chat_id'],
+            'bitrix24_live_status' => Dialog::BITRIX24_LIVE_STATUS_NOT_LINKED,
+        ];
+
+        if (isset($dialogPayload['stage']) && is_string($dialogPayload['stage'])) {
+            $dialogPayload['stage_id'] = app(DialogStageCatalog::class)->stageIdForKey($dialogPayload['stage']);
+        }
+
         $dialog = Dialog::query()->updateOrCreate(
             [
                 'contact_id' => $contact->id,
                 'channel_id' => $channel->id,
             ],
-            $scenario['dialog'] + [
-                'current_contact_identity_id' => $identity->id,
-                'external_chat_id' => $scenario['external_chat_id'],
-                'bitrix24_live_status' => Dialog::BITRIX24_LIVE_STATUS_NOT_LINKED,
-            ],
+            $dialogPayload,
         );
 
         $messages = collect($scenario['messages'])
