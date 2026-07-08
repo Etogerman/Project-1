@@ -8,9 +8,10 @@ use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Services\Bots\ChannelActivityLogger;
-use App\Services\DataCollection\ResolveNextDataCollectionFieldAction;
 use App\Services\Bots\SendBotDialogTextAction;
 use App\Services\Bots\StorePhoneCaptureConfirmationAction;
+use App\Services\DataCollection\ResolveNextDataCollectionFieldAction;
+use App\Services\Dialogs\DialogAutomationGate;
 use App\Services\Dialogs\ResolveDialogRouteSourceAction;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -61,9 +62,10 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
         ChannelActivityLogger $channelActivityLogger,
         ResolveNextDataCollectionFieldAction $resolveNextDataCollectionFieldAction,
         ResolveDialogRouteSourceAction $resolveDialogRouteSourceAction,
+        DialogAutomationGate $dialogAutomationGate,
     ): void {
         $message = Message::query()
-            ->with(['channel', 'contact', 'contactIdentity', 'dialog.channel', 'dialog.contact', 'dialog.currentContactIdentity'])
+            ->with(['channel', 'contact', 'contactIdentity', 'dialog.channel', 'dialog.contact', 'dialog.currentContactIdentity', 'dialog.dialogStage'])
             ->find($this->inboundMessageId);
 
         if (! $message instanceof Message) {
@@ -75,6 +77,10 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
         }
 
         if ($message->message_kind !== Message::KIND_INBOUND_CONTACT_SHARE) {
+            return;
+        }
+
+        if (! $dialogAutomationGate->acceptsMessage($message)) {
             return;
         }
 
@@ -99,6 +105,10 @@ class ProcessPhoneCaptureFollowUpJob implements ShouldQueue
 
         $channel = $routeDialog?->channel ?? $sourceChannel;
         $contact = $routeDialog?->contact ?? $message->contact;
+
+        if ($routeDialog instanceof Dialog && ! $dialogAutomationGate->accepts($routeDialog)) {
+            return;
+        }
 
         if ($this->confirmationAlreadyExists($message)) {
             $channelActivityLogger->info(

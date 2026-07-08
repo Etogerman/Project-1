@@ -5,6 +5,8 @@ namespace App\Services\Scenarios;
 use App\Jobs\ProcessScenarioStartJob;
 use App\Models\Message;
 use App\Models\ScenarioChannelBinding;
+use App\Services\Dialogs\DialogAutomationGate;
+use App\Services\Dialogs\DialogStageCatalog;
 use Illuminate\Support\Facades\DB;
 
 class DispatchDialogStageChangedScenarioAction
@@ -13,6 +15,8 @@ class DispatchDialogStageChangedScenarioAction
 
     public function __construct(
         private readonly ScenarioRegistry $scenarioRegistry,
+        private readonly DialogAutomationGate $dialogAutomationGate,
+        private readonly DialogStageCatalog $dialogStageCatalog,
     ) {}
 
     public function handle(Message $stageChangedMessage): bool
@@ -31,7 +35,15 @@ class DispatchDialogStageChangedScenarioAction
                 return false;
             }
 
-            $lockedMessage->loadMissing(['contact', 'channel', 'contactIdentity', 'dialog']);
+            $lockedMessage->loadMissing(['contact', 'channel', 'contactIdentity', 'dialog.dialogStage']);
+
+            if (! $this->dialogAutomationGate->acceptsMessage($lockedMessage)) {
+                return false;
+            }
+
+            if ($this->touchesBlacklistStage($lockedMessage)) {
+                return false;
+            }
 
             foreach ($this->activeBindingsForChannel((int) $lockedMessage->channel_id) as $binding) {
                 if (! $this->scenarioRegistry->enabledForNewStarts($binding->scenario_code)) {
@@ -79,6 +91,15 @@ class DispatchDialogStageChangedScenarioAction
             && $message->sent_by_system_code === Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE
             && (string) data_get($message->raw_payload, 'event', '') === Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE
             && filled(data_get($message->raw_payload, 'to_stage'));
+    }
+
+    private function touchesBlacklistStage(Message $message): bool
+    {
+        $fromStage = data_get($message->raw_payload, 'from_stage');
+        $toStage = data_get($message->raw_payload, 'to_stage');
+
+        return $this->dialogStageCatalog->isBlacklist(is_string($fromStage) ? $fromStage : null)
+            || $this->dialogStageCatalog->isBlacklist(is_string($toStage) ? $toStage : null);
     }
 
     private function wasAlreadyDispatched(Message $message): bool

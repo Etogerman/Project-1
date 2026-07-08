@@ -7,6 +7,7 @@ use App\Models\Message;
 use App\Models\ScenarioChannelBinding;
 use App\Models\ScenarioRun;
 use App\Services\Dialogs\CanSendThroughDialogAction;
+use App\Services\Dialogs\DialogAutomationGate;
 use App\Services\Scenarios\PrioritizedScenarioRuntime;
 use App\Services\Scenarios\ScenarioRegistry;
 use Illuminate\Bus\Queueable;
@@ -65,12 +66,14 @@ class ProcessScenarioStartJob implements ShouldQueue
 
     public function handle(
         ScenarioRegistry $scenarioRegistry,
+        ?DialogAutomationGate $dialogAutomationGate = null,
         ?CanSendThroughDialogAction $canSendThroughDialogAction = null,
     ): void {
+        $dialogAutomationGate ??= app(DialogAutomationGate::class);
         $canSendThroughDialogAction ??= app(CanSendThroughDialogAction::class);
 
         $message = Message::query()
-            ->with(['channel', 'contact', 'contactIdentity', 'dialog.channel', 'dialog.currentContactIdentity'])
+            ->with(['channel', 'contact', 'contactIdentity', 'dialog.channel', 'dialog.currentContactIdentity', 'dialog.dialogStage'])
             ->find($this->inboundMessageId);
 
         if (! $message instanceof Message || ! $this->canUseMessageAsStartSource($message)) {
@@ -85,6 +88,10 @@ class ProcessScenarioStartJob implements ShouldQueue
         }
 
         if (! $message->dialog instanceof Dialog || ! $canSendThroughDialogAction->handle($message->dialog)) {
+            return;
+        }
+
+        if (! $dialogAutomationGate->accepts($message->dialog)) {
             return;
         }
 

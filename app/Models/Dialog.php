@@ -169,6 +169,11 @@ class Dialog extends Model
         return app(DialogStageCatalog::class)->isWorking($stage);
     }
 
+    public function isBlacklistStage(): bool
+    {
+        return app(DialogStageCatalog::class)->isBlacklistDialog($this);
+    }
+
     /**
      * @return array<string, string>
      */

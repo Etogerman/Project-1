@@ -2,8 +2,10 @@
 
 namespace App\Services\TelegramAccount;
 
+use App\Filament\Resources\Dialogs\DialogResource;
 use App\Models\Channel;
 use App\Models\MessageAttachment;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
 
 class ClaimTelegramAccountMediaDownloadAction
@@ -41,6 +43,7 @@ class ClaimTelegramAccountMediaDownloadAction
     {
         return DB::transaction(function () use ($channel): ?MessageAttachment {
             $this->releaseStaleDownloads($channel);
+            $this->markBlacklistedDownloadsMetadataOnly($channel);
             $this->failNonClaimableDownloads($channel);
 
             $attachment = MessageAttachment::query()
@@ -50,6 +53,9 @@ class ClaimTelegramAccountMediaDownloadAction
                 ->whereIn('media_kind', self::supportedMediaKinds())
                 ->whereNotNull('provider_file_id')
                 ->where('provider_file_id', '!=', '')
+                ->whereHas('message.dialog', function (Builder $query): void {
+                    DialogResource::applyNotBlacklistStageFilter($query);
+                })
                 ->where(function ($query): void {
                     $query
                         ->whereNull('file_size_bytes')
@@ -86,6 +92,24 @@ class ClaimTelegramAccountMediaDownloadAction
                 'download_status' => MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD,
                 'safe_error_code' => 'download_claim_timeout',
                 'safe_error_message' => 'Gateway did not report media download result before processing timeout.',
+                'updated_at' => now(),
+            ]);
+    }
+
+    private function markBlacklistedDownloadsMetadataOnly(Channel $channel): void
+    {
+        MessageAttachment::query()
+            ->where('channel_id', $channel->id)
+            ->where('provider', MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT)
+            ->where('download_status', MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD)
+            ->whereHas('message.dialog', function (Builder $query): void {
+                DialogResource::applyBlacklistStageFilter($query);
+            })
+            ->lockForUpdate()
+            ->update([
+                'download_status' => MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
+                'safe_error_code' => 'dialog_blacklist_stage',
+                'safe_error_message' => 'Media download skipped because the dialog stage is blacklisted.',
                 'updated_at' => now(),
             ]);
     }
