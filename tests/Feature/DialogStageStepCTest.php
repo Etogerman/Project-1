@@ -17,7 +17,6 @@ use App\Services\Dialogs\UpdateDialogStageAction;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -130,7 +129,7 @@ class DialogStageStepCTest extends TestCase
             ->assertSee('Телефон получен');
     }
 
-    public function test_route_incomplete_dialog_blocks_manual_stage_change(): void
+    public function test_route_incomplete_dialog_allows_stage_change_without_history_note(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -143,12 +142,12 @@ class DialogStageStepCTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
-            ->assertSee('Ручная смена этапа недоступна, пока не заполнен полный route context канала.')
             ->set('dialogStageSelection', Dialog::STAGE_TRANSFERRED_TO_MPL)
             ->call('updateDialogStage')
-            ->assertNotified();
+            ->assertNotified()
+            ->assertSet('dialogStageSelection', Dialog::STAGE_TRANSFERRED_TO_MPL);
 
-        $this->assertSame(Dialog::STAGE_NEW_DIALOG, $dialog->fresh()->stage);
+        $this->assertSame(Dialog::STAGE_TRANSFERRED_TO_MPL, $dialog->fresh()->stage);
         $this->assertDatabaseMissing('messages', [
             'dialog_id' => $dialog->id,
             'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE,
@@ -205,7 +204,7 @@ class DialogStageStepCTest extends TestCase
         $this->assertSame(Dialog::STAGE_TRANSFERRED_TO_MPP, $dialog->fresh()->stage);
     }
 
-    public function test_update_dialog_stage_action_rejects_manual_transition_to_automatic_stage(): void
+    public function test_update_dialog_stage_action_allows_manual_transition_to_any_working_stage(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -226,23 +225,14 @@ class DialogStageStepCTest extends TestCase
             'stage' => Dialog::STAGE_TRANSFERRED_TO_MPL,
         ]);
 
-        try {
-            app(UpdateDialogStageAction::class)->handle(
-                $dialog,
-                $admin,
-                Dialog::STAGE_PHONE_RECEIVED,
-            );
+        app(UpdateDialogStageAction::class)->handle(
+            $dialog,
+            $admin,
+            Dialog::STAGE_PHONE_RECEIVED,
+        );
 
-            $this->fail('Expected manual to automatic transition to be rejected.');
-        } catch (ValidationException $exception) {
-            $this->assertSame(
-                'Недопустимый ручной переход этапа.',
-                $exception->errors()['dialogStageSelection'][0] ?? null,
-            );
-        }
-
-        $this->assertSame(Dialog::STAGE_TRANSFERRED_TO_MPL, $dialog->fresh()->stage);
-        $this->assertDatabaseMissing('messages', [
+        $this->assertSame(Dialog::STAGE_PHONE_RECEIVED, $dialog->fresh()->stage);
+        $this->assertDatabaseHas('messages', [
             'dialog_id' => $dialog->id,
             'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE,
         ]);

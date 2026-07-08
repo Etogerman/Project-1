@@ -26,6 +26,11 @@ class FilamentAutoReplyCategoriesResourceTest extends TestCase
         Filament::bootCurrentPanel();
     }
 
+    public function test_auto_reply_categories_are_hidden_from_navigation(): void
+    {
+        $this->assertFalse(AutoReplyCategoryResource::shouldRegisterNavigation());
+    }
+
     public function test_active_admin_can_open_auto_reply_categories_page(): void
     {
         $admin = User::factory()->create([
@@ -142,6 +147,7 @@ class FilamentAutoReplyCategoriesResourceTest extends TestCase
             ->test(ManageAutoReplyCategories::class)
             ->callAction('create', [
                 'name' => 'Старт',
+                'color' => 'ab_blue',
                 'sort_order' => 10,
             ])
             ->assertHasNoFormErrors();
@@ -149,12 +155,15 @@ class FilamentAutoReplyCategoriesResourceTest extends TestCase
         $category = AutoReplyCategory::query()->firstOrFail();
 
         $this->assertSame('Старт', $category->name);
+        $this->assertSame('primary', $category->color);
+        $this->assertSame('ab_blue', $category->color_value);
         $this->assertSame(10, $category->sort_order);
 
         Livewire::actingAs($admin)
             ->test(ManageAutoReplyCategories::class)
             ->callTableAction('edit', $category, [
                 'name' => 'Сбор контакта',
+                'color' => '#1A2B3C',
                 'sort_order' => 20,
             ])
             ->assertHasNoTableActionErrors();
@@ -162,6 +171,8 @@ class FilamentAutoReplyCategoriesResourceTest extends TestCase
         $category->refresh();
 
         $this->assertSame('Сбор контакта', $category->name);
+        $this->assertSame('gray', $category->color);
+        $this->assertSame('#1A2B3C', $category->color_value);
         $this->assertSame(20, $category->sort_order);
 
         Livewire::actingAs($admin)

@@ -2,9 +2,11 @@
 
 namespace App\Filament\Resources\Tags;
 
+use App\Filament\Forms\Components\ColorPicker;
 use App\Filament\Resources\AutoReplyRules\AutoReplyRuleResource;
 use App\Filament\Resources\Contacts\ContactResource;
 use App\Filament\Resources\Tags\Pages\ManageTags;
+use App\Filament\Tables\Columns\ColorBadgeColumn;
 use App\Models\Tag;
 use BackedEnum;
 use Filament\Actions\Action;
@@ -12,7 +14,6 @@ use Filament\Actions\DeleteAction;
 use Filament\Actions\EditAction;
 use Filament\Forms\Components\Checkbox;
 use Filament\Forms\Components\TextInput;
-use Filament\Forms\Components\ToggleButtons;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
@@ -63,18 +64,9 @@ class TagResource extends Resource
                             ->required()
                             ->maxLength(255)
                             ->unique(ignoreRecord: true),
-                        ToggleButtons::make('color')
+                        ColorPicker::make('color')
                             ->label('Цвет')
-                            ->options(Tag::colorOptions())
-                            ->colors([
-                                Tag::COLOR_GRAY => 'gray',
-                                Tag::COLOR_PRIMARY => 'info',
-                                Tag::COLOR_SUCCESS => 'success',
-                                Tag::COLOR_WARNING => 'warning',
-                                Tag::COLOR_DANGER => 'danger',
-                            ])
                             ->required()
-                            ->inline()
                             ->extraAttributes(['class' => 'ac-tag-color-picker']),
                         Checkbox::make('is_active')
                             ->label('Тег активный')
@@ -106,18 +98,8 @@ class TagResource extends Resource
                     ->searchable()
                     ->copyable()
                     ->toggleable(isToggledHiddenByDefault: true),
-                TextColumn::make('color')
+                ColorBadgeColumn::make('color')
                     ->label('Цвет')
-                    ->badge()
-                    ->formatStateUsing(fn (string $state): string => Tag::colorOptions()[$state] ?? $state)
-                    ->color(fn (string $state): string => match ($state) {
-                        Tag::COLOR_GRAY => 'gray',
-                        Tag::COLOR_PRIMARY => 'info',
-                        Tag::COLOR_SUCCESS => 'success',
-                        Tag::COLOR_WARNING => 'warning',
-                        Tag::COLOR_DANGER => 'danger',
-                        default => 'gray',
-                    })
                     ->toggleable(),
                 TextColumn::make('contacts_count')
                     ->label('Контакты')

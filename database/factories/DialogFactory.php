@@ -37,6 +37,7 @@ class DialogFactory extends Factory
                     : Channel::factory();
             },
             'stage' => null,
+            'stage_id' => null,
             'manual_reply_dismissed_source_message_id' => null,
             'bot_subscription_status' => null,
             'bot_subscription_changed_at' => null,

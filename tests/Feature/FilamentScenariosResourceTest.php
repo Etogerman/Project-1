@@ -2,9 +2,9 @@
 
 namespace Tests\Feature;
 
+use App\Filament\Pages\ScenarioConstructor;
 use App\Filament\Resources\Scenarios\Pages\ManageScenarios;
 use App\Filament\Resources\Scenarios\ScenarioResource;
-use App\Filament\Pages\ScenarioConstructor;
 use App\Models\AutoReplyRule;
 use App\Models\Channel;
 use App\Models\Scenario;
@@ -23,13 +23,13 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
-use Tests\TestCase;
 use Tests\Feature\Concerns\BuildsIbizaMvpSchema;
+use Tests\TestCase;
 
 class FilamentScenariosResourceTest extends TestCase
 {
-    use RefreshDatabase;
     use BuildsIbizaMvpSchema;
+    use RefreshDatabase;
 
     protected function setUp(): void
     {
@@ -37,6 +37,11 @@ class FilamentScenariosResourceTest extends TestCase
 
         Filament::setCurrentPanel(Filament::getPanel('admin'));
         Filament::bootCurrentPanel();
+    }
+
+    public function test_scenarios_resource_is_hidden_from_navigation(): void
+    {
+        $this->assertFalse(ScenarioResource::shouldRegisterNavigation());
     }
 
     public function test_active_admin_can_open_scenarios_page(): void

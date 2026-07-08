@@ -50,6 +50,9 @@ class ScenarioBuilderV3StateTest extends TestCase
             ->assertJsonPath('builder.blocks', [])
             ->assertJsonPath('builder.edges', [])
             ->assertJsonPath('builder.visible_scope.block_ids', [])
+            ->assertJsonPath('catalogs.color_palette.default', 'ab_slate')
+            ->assertJsonPath('catalogs.color_palette.recommended.3.value', 'ab_blue')
+            ->assertJsonPath('catalogs.color_palette.recommended.3.hex', '#3366CC')
             ->assertJsonPath('server.timezone', config('app.timezone', 'UTC'));
     }
 
@@ -380,7 +383,7 @@ class ScenarioBuilderV3StateTest extends TestCase
             ->assertJsonPath('builder.sheets.0.id', 'main')
             ->assertJsonPath('builder.sheets.0.name', 'Главный')
             ->assertJsonPath('builder.sheets.1.id', 'sheet_2')
-            ->assertJsonPath('builder.sheets.1.color', 'blue')
+            ->assertJsonPath('builder.sheets.1.color', 'ab_blue')
             ->assertJsonPath('builder.meta.next_sheet_number', 3)
             ->assertJsonPath('builder.blocks.0.settings_payload.ui.sheet_id', 'sheet_2');
     }
@@ -3155,6 +3158,112 @@ class ScenarioBuilderV3StateTest extends TestCase
         ]);
     }
 
+    public function test_put_state_publishes_message_in_stage_start_condition(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['is_active' => true]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_start_in_stage',
+            'name' => 'V3 Start In Stage',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $startSettings = $this->startSettings('/stage', [(int) $channel->id]);
+        $startSettings['modules'][0]['payload']['start_event'] = 'message_in_stage';
+        $startSettings['modules'][0]['payload']['stage_key'] = Dialog::STAGE_TRANSFERRED_TO_MPL;
+
+        $saved = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, [
+                [
+                    'id' => null,
+                    'client_key' => 'tmp_start_stage',
+                    'type' => 'state',
+                    'title' => 'Старт по стадии',
+                    'position' => ['x' => 80, 'y' => 96],
+                    'settings_payload' => $startSettings,
+                ],
+            ]))
+            ->assertOk()
+            ->assertJsonPath('builder.blocks.0.settings_payload.modules.0.payload.start_event', 'message_in_stage')
+            ->assertJsonPath('builder.blocks.0.settings_payload.modules.0.payload.stage_key', Dialog::STAGE_TRANSFERRED_TO_MPL)
+            ->json();
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $saved['scenario']['draft_version_id'],
+                'base_revision' => $saved['builder']['revision'],
+            ])
+            ->assertOk();
+
+        $scenario->refresh()->load('publishedVersion');
+
+        $this->assertSame(
+            'message_in_stage',
+            data_get($scenario->publishedVersion?->schema_payload, 'builder_v3_runtime.entrypoints.0.event'),
+        );
+        $this->assertSame(
+            Dialog::STAGE_TRANSFERRED_TO_MPL,
+            data_get($scenario->publishedVersion?->schema_payload, 'builder_v3_runtime.entrypoints.0.stage_key'),
+        );
+    }
+
+    public function test_put_state_publishes_stage_changed_start_condition_without_command(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['is_active' => true]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_start_on_stage_changed',
+            'name' => 'V3 Start On Stage Changed',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $startSettings = $this->startSettings('/old-command', [(int) $channel->id]);
+        $startSettings['modules'][0]['payload']['start_event'] = 'stage_changed';
+        $startSettings['modules'][0]['payload']['stage_key'] = Dialog::STAGE_TRANSFERRED_TO_MPL;
+
+        $saved = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, [
+                [
+                    'id' => null,
+                    'client_key' => 'tmp_start_stage_changed',
+                    'type' => 'state',
+                    'title' => 'Старт при смене стадии',
+                    'position' => ['x' => 80, 'y' => 96],
+                    'settings_payload' => $startSettings,
+                ],
+            ]))
+            ->assertOk()
+            ->assertJsonPath('builder.blocks.0.settings_payload.modules.0.payload.start_event', 'stage_changed')
+            ->assertJsonPath('builder.blocks.0.settings_payload.modules.0.payload.stage_key', Dialog::STAGE_TRANSFERRED_TO_MPL)
+            ->assertJsonPath('builder.blocks.0.settings_payload.modules.0.payload.command', '')
+            ->assertJsonPath('builder.blocks.0.settings_payload.modules.0.payload.match', AutoReplyRule::MATCH_SCOPE_ANY_INBOUND)
+            ->json();
+
+        $this->actingAs($admin)
+            ->postJson($this->publishUrl($scenario), [
+                'draft_version_id' => $saved['scenario']['draft_version_id'],
+                'base_revision' => $saved['builder']['revision'],
+            ])
+            ->assertOk();
+
+        $scenario->refresh()->load('publishedVersion');
+
+        $this->assertSame(
+            'stage_changed',
+            data_get($scenario->publishedVersion?->schema_payload, 'builder_v3_runtime.entrypoints.0.event'),
+        );
+        $this->assertSame(
+            Dialog::STAGE_TRANSFERRED_TO_MPL,
+            data_get($scenario->publishedVersion?->schema_payload, 'builder_v3_runtime.entrypoints.0.stage_key'),
+        );
+        $this->assertSame(
+            AutoReplyRule::MATCH_SCOPE_ANY_INBOUND,
+            data_get($scenario->publishedVersion?->schema_payload, 'builder_v3_runtime.entrypoints.0.match'),
+        );
+        $this->assertSame(
+            [''],
+            data_get($scenario->publishedVersion?->schema_payload, 'builder_v3_runtime.entrypoints.0.values'),
+        );
+    }
+
     public function test_put_state_rejects_invalid_start_condition_expression(): void
     {
         $admin = $this->adminUser();
@@ -4224,6 +4333,36 @@ class ScenarioBuilderV3StateTest extends TestCase
         $this->assertSame('link', data_get($buttonsModule, 'payload.rows.0.0.type'));
         $this->assertSame('https://example.com/form', data_get($buttonsModule, 'payload.rows.0.0.url'));
         $this->assertSame([], data_get($response, 'builder.blocks.0.settings_payload.outputs'));
+    }
+
+    public function test_put_state_normalizes_legacy_button_color_to_shared_palette_key(): void
+    {
+        $admin = $this->adminUser();
+        $channel = Channel::factory()->create(['is_active' => true]);
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_save_button_color',
+            'name' => 'V3 Save Button Color',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $settings = $this->startMessageButtonsSettings(
+            '/start',
+            [(int) $channel->id],
+            'Выберите действие',
+            'Продолжить',
+        );
+        data_set($settings, 'modules.2.payload.rows.0.0.color', 'green');
+
+        $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $this->payloadFromState($state, [[
+                'id' => null,
+                'client_key' => 'tmp_start',
+                'type' => 'state',
+                'title' => 'Старт',
+                'position' => ['x' => 64, 'y' => 64],
+                'settings_payload' => $settings,
+            ]]))
+            ->assertOk()
+            ->assertJsonPath('builder.blocks.0.settings_payload.modules.2.payload.rows.0.0.color', 'ab_emerald');
     }
 
     public function test_put_state_rejects_link_button_without_valid_url(): void

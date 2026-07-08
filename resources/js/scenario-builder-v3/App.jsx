@@ -18,15 +18,40 @@ const MAIN_SHEET = {
     color: 'none',
     view: { tx: 120, ty: 88, zoom: 1 },
 };
-const SHEET_COLORS = [
-    ['none', 'Без цвета'],
-    ['blue', 'Синий'],
-    ['green', 'Зелёный'],
-    ['yellow', 'Жёлтый'],
-    ['red', 'Красный'],
-    ['purple', 'Фиолетовый'],
-    ['teal', 'Бирюзовый'],
-    ['gray', 'Серый'],
+const LEGACY_BUILDER_COLOR_ALIASES = {
+    blue: 'ab_blue',
+    green: 'ab_emerald',
+    yellow: 'ab_amber',
+    red: 'ab_red',
+    purple: 'ab_violet',
+    teal: 'ab_teal',
+    gray: 'ab_slate',
+};
+const FALLBACK_BUILDER_COLORS = [
+    { value: 'ab_slate', label: 'Сланцевый', hex: '#666666' },
+    { value: 'ab_gray', label: 'Серый', hex: '#999999' },
+    { value: 'ab_sky', label: 'Небесный', hex: '#0099FF' },
+    { value: 'ab_blue', label: 'Синий', hex: '#3366CC' },
+    { value: 'ab_navy', label: 'Тёмно-синий', hex: '#003399' },
+    { value: 'ab_cyan', label: 'Циан', hex: '#00CCCC' },
+    { value: 'ab_teal', label: 'Бирюзовый', hex: '#009999' },
+    { value: 'ab_aqua', label: 'Голубой', hex: '#66CCFF' },
+    { value: 'ab_emerald', label: 'Изумрудный', hex: '#009966' },
+    { value: 'ab_green', label: 'Зелёный', hex: '#339933' },
+    { value: 'ab_mint', label: 'Мятный', hex: '#66CC99' },
+    { value: 'ab_lime', label: 'Лаймовый', hex: '#99CC00' },
+    { value: 'ab_yellow', label: 'Жёлтый', hex: '#FFCC00' },
+    { value: 'ab_amber', label: 'Янтарный', hex: '#CC9900' },
+    { value: 'ab_orange', label: 'Оранжевый', hex: '#FF9900' },
+    { value: 'ab_coral', label: 'Коралловый', hex: '#FF6633' },
+    { value: 'ab_red', label: 'Красный', hex: '#CC0000' },
+    { value: 'ab_rose', label: 'Розово-красный', hex: '#CC0066' },
+    { value: 'ab_pink', label: 'Розовый', hex: '#FF66CC' },
+    { value: 'ab_magenta', label: 'Маджента', hex: '#CC00CC' },
+    { value: 'ab_violet', label: 'Фиолетовый', hex: '#9933CC' },
+    { value: 'ab_purple', label: 'Пурпурный', hex: '#6600CC' },
+    { value: 'ab_indigo', label: 'Индиго', hex: '#333399' },
+    { value: 'ab_brown', label: 'Коричневый', hex: '#996633' },
 ];
 const AUTO_REPLY_IMPORT_PLACEMENTS = [
     ['single_sheet', 'Один новый лист'],
@@ -67,6 +92,14 @@ const MATCH_OPTIONS = [
     ['exact_text_or_parameter', 'Текст или параметр'],
     ['exact_callback', 'Точный callback'],
     ['any_inbound', 'Любое входящее'],
+];
+const START_EVENT_MESSAGE = 'message';
+const START_EVENT_MESSAGE_IN_STAGE = 'message_in_stage';
+const START_EVENT_STAGE_CHANGED = 'stage_changed';
+const START_EVENT_OPTIONS = [
+    [START_EVENT_MESSAGE, 'Новое сообщение'],
+    [START_EVENT_MESSAGE_IN_STAGE, 'Сообщение в стадии'],
+    [START_EVENT_STAGE_CHANGED, 'Диалог перешёл в стадию'],
 ];
 const AUTO_REPLY_TABLE_COLUMNS = [
     { id: 'active', label: 'Вкл', width: '46px', sortable: true },
@@ -498,12 +531,6 @@ const BUTTON_PLACEMENT_OPTIONS = [
 ];
 let activeFieldDictionary = null;
 const REQUEST_PHONE_BUTTON_TEXT = 'Поделиться номером телефона';
-const BUTTON_COLOR_OPTIONS = [
-    [null, 'Без цвета', null],
-    ['blue', 'Синий', '#2ea3db'],
-    ['red', 'Красный', '#ef3d3d'],
-    ['green', 'Зелёный', '#43a047'],
-];
 const DEFAULT_AI_PROMPT = 'Проанализируй данные:\n{{input.client_messages}}\nВыбери ID одного варианта результата.';
 const DEFAULT_AI_RETRY_DELAY_SECONDS = 10;
 const DEFAULT_AI_VARIANTS = [
@@ -876,9 +903,18 @@ export default function App({
     const allEdges = builder?.edges ?? [];
     const channels = state?.catalogs?.channels ?? [];
     const tags = state?.catalogs?.tags ?? [];
+    const dialogStages = state?.catalogs?.dialog_stages ?? [];
     const fieldDictionary = useMemo(
         () => normalizeFieldDictionary(state?.catalogs?.field_dictionary),
         [state?.catalogs?.field_dictionary],
+    );
+    const colorPalette = useMemo(
+        () => builderColorPaletteFromCatalog(state?.catalogs?.color_palette),
+        [state?.catalogs?.color_palette],
+    );
+    const sheetColorOptions = useMemo(
+        () => sheetColorOptionsFromPalette(colorPalette),
+        [colorPalette],
     );
     activeFieldDictionary = fieldDictionary;
     const scheduledTransitions = builder?.diagnostics?.scheduled_transitions ?? [];
@@ -1455,7 +1491,7 @@ export default function App({
 
     function renameSheet(sheetId, name, color = 'none') {
         const nextName = String(name ?? '').trim();
-        const nextColor = SHEET_COLORS.some(([value]) => value === color) ? color : 'none';
+        const nextColor = normalizeBuilderColorValue(color, sheetColorOptions, { allowNone: true }) ?? 'none';
 
         if (nextName === '') {
             setNotice('Название листа не может быть пустым.');
@@ -3663,6 +3699,7 @@ export default function App({
         <section
             className={`ac-v3-builder ${mode === 'auto_reply' ? 'is-auto-reply-mode' : ''}`}
             data-active-sheet-color={activeSheet.color || 'none'}
+            style={sheetColorStyle(activeSheet.color, colorPalette, '--active-sheet-color')}
         >
             <header className={`ac-v3-builder__topbar ${mode === 'auto_reply' ? 'is-auto-reply' : ''}`}>
                 {mode === 'auto_reply' ? (
@@ -3866,6 +3903,7 @@ export default function App({
                         type="button"
                         className={sheet.id === activeSheet.id ? 'is-active' : ''}
                         data-sheet-color={sheet.color || 'none'}
+                        style={sheetColorStyle(sheet.color, colorPalette)}
                         onClick={(event) => {
                             if (event.target.closest('[data-sheet-settings]')) {
                                 openSheetSettings(sheet);
@@ -4005,6 +4043,7 @@ export default function App({
                     blocks={allBlocks}
                     importBatches={importBatches}
                     activeSheetId={activeSheet.id}
+                    colorPalette={colorPalette}
                     query={sheetListQuery}
                     onQuery={setSheetListQuery}
                     onOpen={(sheetId) => {
@@ -4038,6 +4077,8 @@ export default function App({
             {sheetDialog ? (
                 <SheetManageDialog
                     dialog={sheetDialog}
+                    colorOptions={sheetColorOptions}
+                    colorPalette={colorPalette}
                     onRename={renameSheet}
                     onDelete={deleteSheet}
                     onClose={() => setSheetDialog(null)}
@@ -4075,6 +4116,7 @@ export default function App({
                         edges={allEdges}
                         sheets={sheets}
                         channels={channels}
+                        dialogStages={dialogStages}
                         selectedBlockKey={selectedBlockKey}
                         onSelectBlock={selectAutoReplyBlock}
                         onOpenConstructor={openAutoReplyBlockInConstructor}
@@ -4216,6 +4258,8 @@ export default function App({
                                 block={inspectorBlock}
                                 channels={channels}
                                 tags={tags}
+                                dialogStages={dialogStages}
+                                colorOptions={sheetColorOptions}
                                 blocks={blocks}
                                 dialogFieldKeys={dialogFieldKeys}
                                 onCollapse={collapsePanel}
@@ -4984,18 +5028,18 @@ function AutoReplyWorkspace({
     );
 }
 
-function SheetManageDialog({ dialog, onRename, onDelete, onClose }) {
+function SheetManageDialog({ dialog, colorOptions, colorPalette, onRename, onDelete, onClose }) {
     const [name, setName] = useState(dialog.name ?? '');
-    const [color, setColor] = useState(dialog.color ?? 'none');
+    const [color, setColor] = useState(normalizeBuilderColorValue(dialog.color, colorOptions, { allowNone: true }) ?? 'none');
     const [isConfirmingDelete, setIsConfirmingDelete] = useState(Boolean(dialog.confirmDelete));
     const canDelete = dialog.sheetId !== MAIN_SHEET.id && dialog.isMain !== true;
     const blockCount = Number.isFinite(Number(dialog.blockCount)) ? Number(dialog.blockCount) : 0;
 
     useEffect(() => {
         setName(dialog.name ?? '');
-        setColor(dialog.color ?? 'none');
+        setColor(normalizeBuilderColorValue(dialog.color, colorOptions, { allowNone: true }) ?? 'none');
         setIsConfirmingDelete(Boolean(dialog.confirmDelete));
-    }, [dialog.sheetId, dialog.name, dialog.color, dialog.confirmDelete]);
+    }, [dialog.sheetId, dialog.name, dialog.color, dialog.confirmDelete, colorOptions]);
 
     function handleSubmit(event) {
         event.preventDefault();
@@ -5025,17 +5069,18 @@ function SheetManageDialog({ dialog, onRename, onDelete, onClose }) {
                         </label>
                         <span>Цвет листа</span>
                         <div className="ac-v3-builder__sheet-color-grid" role="radiogroup" aria-label="Цвет листа">
-                            {SHEET_COLORS.map(([value, label]) => (
+                            {colorOptions.map((option) => (
                                 <button
-                                    key={value}
+                                    key={option.value}
                                     type="button"
-                                    className={color === value ? 'is-active' : ''}
-                                    data-sheet-color={value}
-                                    aria-pressed={color === value ? 'true' : 'false'}
-                                    onClick={() => setColor(value)}
+                                    className={color === option.value ? 'is-active' : ''}
+                                    data-sheet-color={option.value}
+                                    style={sheetColorStyle(option.value, colorPalette)}
+                                    aria-pressed={color === option.value ? 'true' : 'false'}
+                                    onClick={() => setColor(option.value)}
                                 >
-                                    <i aria-hidden="true" />
-                                    <span>{label}</span>
+                                    {option.hex ? <i aria-hidden="true" /> : <b aria-hidden="true">⊘</b>}
+                                    <span>{option.label}</span>
                                 </button>
                             ))}
                         </div>
@@ -5100,6 +5145,7 @@ function SheetListDialog({
     blocks,
     importBatches,
     activeSheetId,
+    colorPalette,
     query,
     onQuery,
     onOpen,
@@ -5164,11 +5210,15 @@ function SheetListDialog({
                             return (
                                 <article key={sheet.id} className={isActive ? 'is-active' : ''}>
                                     <div className="ac-v3-builder__sheet-list-main">
-                                        <i data-sheet-color={sheet.color || 'none'} aria-hidden="true" />
+                                        <i
+                                            data-sheet-color={sheet.color || 'none'}
+                                            style={sheetColorStyle(sheet.color, colorPalette)}
+                                            aria-hidden="true"
+                                        />
                                         <div>
                                             <strong>{sheet.name || sheet.id}</strong>
                                             <small>
-                                                {sheetBlockCount(blocks, sheet.id)} блоков · {sheetColorLabel(sheet.color)}
+                                                {sheetBlockCount(blocks, sheet.id)} блоков · {sheetColorLabel(sheet.color, colorPalette)}
                                                 {sheetImportCreatedBatchId(sheet) ? ' · Импорт Excel' : ''}
                                             </small>
                                         </div>
@@ -7173,6 +7223,8 @@ function BlockPanel({
     block,
     channels,
     tags,
+    dialogStages,
+    colorOptions,
     blocks,
     dialogFieldKeys,
     onCollapse,
@@ -7388,6 +7440,7 @@ function BlockPanel({
                                         channels={channels}
                                         startChannels={startChannels}
                                         tags={tags}
+                                        dialogStages={dialogStages}
                                         blockKey={block.client_key}
                                         onUpdateModulePayload={onUpdateModulePayload}
                                         onUpdateStartChannels={onUpdateStartChannels}
@@ -7404,6 +7457,7 @@ function BlockPanel({
                                     <ButtonsFields
                                         buttons={buttons}
                                         blockKey={block.client_key}
+                                        colorOptions={colorOptions}
                                         onAddButton={onAddButton}
                                         onUpdatePlacement={(placement) => onUpdateModulePayload(block.client_key, 'buttons', { placement })}
                                         onUpdateButton={onUpdateButton}
@@ -7444,6 +7498,7 @@ function BlockPanel({
 function ButtonsFields({
     buttons,
     blockKey,
+    colorOptions,
     onAddButton,
     onUpdatePlacement,
     onUpdateButton,
@@ -7665,6 +7720,7 @@ function ButtonsFields({
             {editingButton ? (
                 <ButtonEditDialog
                     button={editingButton}
+                    colorOptions={colorOptions}
                     onClose={() => setEditingButtonId(null)}
                     onSave={(patch) => {
                         onUpdateButton(blockKey, editingButton.id, patch);
@@ -7676,13 +7732,13 @@ function ButtonsFields({
     );
 }
 
-function ButtonEditDialog({ button, onClose, onSave }) {
+function ButtonEditDialog({ button, colorOptions, onClose, onSave }) {
     const inputRef = useRef(null);
     const onCloseRef = useRef(onClose);
     const [text, setText] = useState(button.text ?? '');
     const [type, setType] = useState(BUTTON_TYPE_OPTIONS.some(([value]) => value === button.type) ? button.type : BUTTON_TYPE_TEXT);
     const [url, setUrl] = useState(button.url ?? '');
-    const [color, setColor] = useState(button.color ?? null);
+    const [color, setColor] = useState(normalizeBuilderColorValue(button.color, colorOptions) ?? null);
 
     useEffect(() => {
         onCloseRef.current = onClose;
@@ -7772,16 +7828,16 @@ function ButtonEditDialog({ button, onClose, onSave }) {
                 <div className="ac-v3-builder__button-dialog-field">
                     <span>Цвет кнопки</span>
                     <div className="ac-v3-builder__button-color-grid" role="radiogroup" aria-label="Цвет кнопки">
-                        {BUTTON_COLOR_OPTIONS.map(([value, label, swatch]) => (
+                        {colorOptions.map((option) => (
                             <button
-                                key={value ?? 'none'}
+                                key={option.value}
                                 type="button"
-                                className={color === value ? 'is-active' : ''}
-                                aria-pressed={color === value ? 'true' : 'false'}
-                                onClick={() => setColor(value)}
+                                className={color === option.value ? 'is-active' : ''}
+                                aria-pressed={color === option.value ? 'true' : 'false'}
+                                onClick={() => setColor(option.value === 'none' ? null : option.value)}
                             >
-                                {swatch ? <i style={{ backgroundColor: swatch }} /> : <b>⊘</b>}
-                                <span>{label}</span>
+                                {option.hex ? <i style={{ backgroundColor: option.hex }} /> : <b>⊘</b>}
+                                <span>{option.label}</span>
                             </button>
                         ))}
                     </div>
@@ -7791,7 +7847,12 @@ function ButtonEditDialog({ button, onClose, onSave }) {
                     <button
                         type="button"
                         className="ac-v3-builder__primary-btn"
-                        onClick={() => onSave({ text, type, url: type === BUTTON_TYPE_LINK ? url : null, color })}
+                        onClick={() => onSave({
+                            text,
+                            type,
+                            url: type === BUTTON_TYPE_LINK ? url : null,
+                            color: normalizeBuilderColorValue(color, colorOptions),
+                        })}
                     >
                         Сохранить
                     </button>
@@ -9466,6 +9527,7 @@ function StartConditionFields({
     channels,
     startChannels,
     tags = [],
+    dialogStages = [],
     blockKey,
     onUpdateModulePayload,
     onUpdateStartChannels,
@@ -9474,8 +9536,23 @@ function StartConditionFields({
     const expressionHelpButtonRef = useRef(null);
     const expressionTextareaRef = useRef(null);
     const selectedMatch = startMatchForUi(start?.payload?.match);
-    const usesCommandValue = selectedMatch !== 'any_inbound';
     const expression = start?.payload?.expression ?? '';
+    const stageOptions = Array.isArray(dialogStages)
+        ? dialogStages
+            .map((stage) => ({
+                value: String(stage?.value ?? stage?.key ?? ''),
+                label: String(stage?.label ?? stage?.name ?? stage?.value ?? stage?.key ?? ''),
+            }))
+            .filter((stage) => stage.value !== '')
+        : [];
+    const selectedStartEvent = start?.payload?.start_event === START_EVENT_MESSAGE_IN_STAGE
+        ? START_EVENT_MESSAGE_IN_STAGE
+        : (start?.payload?.start_event === START_EVENT_STAGE_CHANGED ? START_EVENT_STAGE_CHANGED : START_EVENT_MESSAGE);
+    const usesStageSelector = selectedStartEvent === START_EVENT_MESSAGE_IN_STAGE
+        || selectedStartEvent === START_EVENT_STAGE_CHANGED;
+    const usesMatchControls = selectedStartEvent !== START_EVENT_STAGE_CHANGED;
+    const usesCommandValue = usesMatchControls && selectedMatch !== 'any_inbound';
+    const selectedStageKey = String(start?.payload?.stage_key ?? '');
 
     useEffect(() => {
         const migration = migrateStartPhoneConditions(start?.payload ?? {});
@@ -9509,17 +9586,62 @@ function StartConditionFields({
         });
     }
 
+    function updateStartEvent(event) {
+        const nextEvent = event === START_EVENT_MESSAGE_IN_STAGE
+            ? START_EVENT_MESSAGE_IN_STAGE
+            : (event === START_EVENT_STAGE_CHANGED ? START_EVENT_STAGE_CHANGED : START_EVENT_MESSAGE);
+        const nextUsesStage = nextEvent === START_EVENT_MESSAGE_IN_STAGE || nextEvent === START_EVENT_STAGE_CHANGED;
+
+        onUpdateModulePayload(blockKey, 'start_condition', {
+            start_event: nextEvent,
+            stage_key: nextUsesStage
+                ? (selectedStageKey || stageOptions[0]?.value || '')
+                : '',
+            ...(nextEvent === START_EVENT_STAGE_CHANGED ? { match: 'any_inbound', command: '' } : {}),
+        });
+    }
+
     return (
         <>
             <label>
-                Совпадение
+                Событие запуска
                 <select
-                    value={selectedMatch}
-                    onChange={(event) => onUpdateModulePayload(blockKey, 'start_condition', { match: event.target.value })}
+                    value={selectedStartEvent}
+                    onChange={(event) => updateStartEvent(event.target.value)}
                 >
-                    {MATCH_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                    {START_EVENT_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                 </select>
             </label>
+            {usesStageSelector ? (
+                <label>
+                    Стадия диалога
+                    <select
+                        value={selectedStageKey}
+                        onChange={(event) => onUpdateModulePayload(blockKey, 'start_condition', { stage_key: event.target.value })}
+                    >
+                        {stageOptions.length === 0 ? (
+                            <option value="">Стадии не найдены</option>
+                        ) : null}
+                        {stageOptions.length > 0 && selectedStageKey === '' ? (
+                            <option value="">Выберите стадию</option>
+                        ) : null}
+                        {stageOptions.map((stage) => (
+                            <option key={stage.value} value={stage.value}>{stage.label}</option>
+                        ))}
+                    </select>
+                </label>
+            ) : null}
+            {usesMatchControls ? (
+                <label>
+                    Совпадение
+                    <select
+                        value={selectedMatch}
+                        onChange={(event) => onUpdateModulePayload(blockKey, 'start_condition', { match: event.target.value })}
+                    >
+                        {MATCH_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                    </select>
+                </label>
+            ) : null}
             {usesCommandValue ? (
                 <label>
                     Фраза или команда
@@ -12200,8 +12322,84 @@ function autoReplyImportBatches(builder) {
     });
 }
 
-function sheetColorLabel(color) {
-    return SHEET_COLORS.find(([value]) => value === color)?.[1] ?? 'Без цвета';
+function builderColorPaletteFromCatalog(catalog) {
+    const recommended = Array.isArray(catalog?.recommended) ? catalog.recommended : [];
+    const colors = recommended
+        .map((item) => ({
+            value: String(item?.value ?? '').trim(),
+            label: String(item?.label ?? item?.name ?? '').trim(),
+            hex: normalizeHexColor(item?.hex),
+        }))
+        .filter((item) => item.value !== '' && item.label !== '' && item.hex);
+
+    return colors.length > 0 ? colors : FALLBACK_BUILDER_COLORS;
+}
+
+function sheetColorOptionsFromPalette(palette) {
+    return [
+        { value: 'none', label: 'Без цвета', hex: null },
+        ...(Array.isArray(palette) && palette.length > 0 ? palette : FALLBACK_BUILDER_COLORS),
+    ];
+}
+
+function normalizeBuilderColorValue(color, options, { allowNone = false } = {}) {
+    const value = String(color ?? '').trim();
+
+    if (value === '') {
+        return allowNone ? 'none' : null;
+    }
+
+    if (value === 'none') {
+        return allowNone ? 'none' : null;
+    }
+
+    const normalized = LEGACY_BUILDER_COLOR_ALIASES[value] ?? value;
+
+    if (normalizeHexColor(normalized)) {
+        return normalizeHexColor(normalized);
+    }
+
+    return colorOptionForValue(normalized, options)?.value ?? (allowNone ? 'none' : null);
+}
+
+function colorOptionForValue(color, paletteOrOptions) {
+    const value = String(color ?? '').trim();
+
+    if (value === '') {
+        return null;
+    }
+
+    const normalized = LEGACY_BUILDER_COLOR_ALIASES[value] ?? value;
+    const options = Array.isArray(paletteOrOptions) ? paletteOrOptions : FALLBACK_BUILDER_COLORS;
+    const option = options.find((item) => item.value === normalized);
+
+    if (option) {
+        return option;
+    }
+
+    const hex = normalizeHexColor(normalized);
+
+    return hex ? { value: hex, label: hex, hex } : null;
+}
+
+function sheetColorStyle(color, paletteOrOptions, variable = '--sheet-color') {
+    const option = colorOptionForValue(color, paletteOrOptions);
+
+    return option?.hex ? { [variable]: option.hex } : undefined;
+}
+
+function sheetColorLabel(color, paletteOrOptions = FALLBACK_BUILDER_COLORS) {
+    return colorOptionForValue(color, paletteOrOptions)?.label ?? 'Без цвета';
+}
+
+function normalizeHexColor(value) {
+    const color = String(value ?? '').trim();
+
+    if (/^#[0-9A-Fa-f]{6}$/.test(color)) {
+        return color.toUpperCase();
+    }
+
+    return null;
 }
 
 function createAutoReplyImportBatchId() {
@@ -12937,6 +13135,8 @@ function moduleTemplate(type, channels, blocks = [], currentBlockKey = null) {
             enabled: true,
             payload: {
                 command: '/start',
+                start_event: START_EVENT_MESSAGE,
+                stage_key: '',
                 values: [],
                 match: 'exact_keyword',
                 variable: '',

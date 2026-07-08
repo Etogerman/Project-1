@@ -11,6 +11,7 @@ use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\Dialog;
+use App\Models\DialogStage;
 use App\Models\Message;
 use App\Models\User;
 use App\Services\Dialogs\BuildDialogMessageSnapshotPayloadAction;
@@ -672,11 +673,11 @@ class DialogKanbanLocalContourTest extends TestCase
         ]);
     }
 
-    public function test_kanban_page_blocks_invalid_move(): void
+    public function test_kanban_page_can_move_card_to_any_working_stage(): void
     {
         $admin = $this->createAdmin();
         $dialog = $this->createKanbanDialog([
-            'contactName' => 'Невалидный переход',
+            'contactName' => 'Переход в любую рабочую стадию',
             'stage' => Dialog::STAGE_TRANSFERRED_TO_MPL,
         ]);
 
@@ -684,14 +685,14 @@ class DialogKanbanLocalContourTest extends TestCase
             ->test(DialogKanban::class)
             ->call('moveDialogCard', $dialog->id, Dialog::STAGE_PHONE_RECEIVED);
 
-        $this->assertSame(Dialog::STAGE_TRANSFERRED_TO_MPL, $dialog->fresh()->stage);
-        $this->assertDatabaseMissing('messages', [
+        $this->assertSame(Dialog::STAGE_PHONE_RECEIVED, $dialog->fresh()->stage);
+        $this->assertDatabaseHas('messages', [
             'dialog_id' => $dialog->id,
             'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE,
         ]);
     }
 
-    public function test_kanban_page_blocks_route_incomplete_move_to_manual_stage(): void
+    public function test_kanban_page_allows_route_incomplete_move_without_history(): void
     {
         $admin = $this->createAdmin();
         $dialog = Dialog::factory()->create([
@@ -706,7 +707,11 @@ class DialogKanbanLocalContourTest extends TestCase
             ->test(DialogKanban::class)
             ->call('moveDialogCard', $dialog->id, Dialog::STAGE_TRANSFERRED_TO_MPL);
 
-        $this->assertSame(Dialog::STAGE_NEW_DIALOG, $dialog->fresh()->stage);
+        $this->assertSame(Dialog::STAGE_TRANSFERRED_TO_MPL, $dialog->fresh()->stage);
+        $this->assertDatabaseMissing('messages', [
+            'dialog_id' => $dialog->id,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE,
+        ]);
     }
 
     public function test_kanban_page_loads_more_cards_per_column(): void
@@ -742,6 +747,31 @@ class DialogKanbanLocalContourTest extends TestCase
             ->assertOk()
             ->assertDontSee('Требует проверки')
             ->assertSee($dialog->contact->display_name);
+    }
+
+    public function test_kanban_column_headers_use_stage_colors_with_contrast_text(): void
+    {
+        $admin = $this->createAdmin();
+
+        DialogStage::query()
+            ->where('key', Dialog::STAGE_NEW_DIALOG)
+            ->firstOrFail()
+            ->update(['color' => 'ab_navy']);
+
+        DialogStage::query()
+            ->where('key', Dialog::STAGE_PHONE_RECEIVED)
+            ->firstOrFail()
+            ->update(['color' => 'ab_yellow']);
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('kanban'))
+            ->assertOk()
+            ->assertSeeHtml('data-stage-color="#003399"')
+            ->assertSeeHtml('--ac-kanban-stage-bg: #003399')
+            ->assertSeeHtml('--ac-kanban-stage-text: #FFFFFF')
+            ->assertSeeHtml('data-stage-color="#FFCC00"')
+            ->assertSeeHtml('--ac-kanban-stage-bg: #FFCC00')
+            ->assertSeeHtml('--ac-kanban-stage-text: #111827');
     }
 
     private function createAdmin(): User

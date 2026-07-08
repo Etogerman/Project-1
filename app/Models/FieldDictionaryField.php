@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\Dialogs\DialogStageCatalog;
 use App\Services\Scenarios\EngineFieldRegistry;
 use App\Services\Scenarios\FieldDictionaryEngineSupport;
 use Illuminate\Database\Eloquent\Builder;
@@ -385,6 +386,12 @@ class FieldDictionaryField extends Model
             ->where('field_key', $fieldKey)
             ->first(['options', 'type']);
 
+        if ($entity === self::ENTITY_DIALOG && $fieldKey === 'stage') {
+            return collect(self::dialogStageOptionsWithDictionaryOverrides($field?->options ?? []))
+                ->mapWithKeys(fn (array $option): array => [$option['value'] => $option['label']])
+                ->all();
+        }
+
         if (! $field instanceof self || $field->type !== self::TYPE_SELECT) {
             return [];
         }
@@ -448,6 +455,9 @@ class FieldDictionaryField extends Model
             ])
             ->each(function (FieldDictionaryField $field) use (&$catalog): void {
                 $support = app(FieldDictionaryEngineSupport::class)->supportFor($field);
+                $options = $field->entity === self::ENTITY_DIALOG && $field->field_key === 'stage'
+                    ? self::dialogStageOptionsWithDictionaryOverrides($field->options ?? [])
+                    : self::normalizeOptions($field->options ?? []);
 
                 $catalog[$field->entity][] = [
                     'id' => (int) $field->id,
@@ -455,7 +465,7 @@ class FieldDictionaryField extends Model
                     'key' => (string) $field->field_key,
                     'label' => (string) $field->name,
                     'type' => (string) $field->type,
-                    'options' => self::normalizeOptions($field->options ?? []),
+                    'options' => $options,
                     'source_field_key' => filled($field->source_field_key) ? (string) $field->source_field_key : null,
                     'sort_order' => (int) $field->sort_order,
                     'is_multiple' => (bool) $field->is_multiple,
@@ -800,13 +810,7 @@ class FieldDictionaryField extends Model
             self::definition(self::ENTITY_DIALOG, 'channel_id', 'Канал', self::TYPE_NUMBER, 20),
             self::definition(self::ENTITY_DIALOG, 'status', 'Статус', self::TYPE_TEXT, 30),
             self::definition(self::ENTITY_DIALOG, 'assigned_user_id', 'Ответственный', self::TYPE_NUMBER, 35, conditionVisibility: self::CONDITION_VISIBILITY_DISPLAY_ONLY, writeAccess: self::WRITE_ACCESS_READ_ONLY, hintGroup: self::HINT_GROUP_SYSTEM),
-            self::definition(self::ENTITY_DIALOG, 'stage', 'Этап', self::TYPE_SELECT, 40, [
-                ['value' => Dialog::STAGE_NEW_DIALOG, 'label' => 'Новый диалог', 'is_system' => true],
-                ['value' => Dialog::STAGE_PHONE_RECEIVED, 'label' => 'Телефон получен', 'is_system' => true],
-                ['value' => Dialog::STAGE_QUESTIONNAIRE_COMPLETED, 'label' => 'Данные собраны', 'is_system' => true],
-                ['value' => Dialog::STAGE_TRANSFERRED_TO_MPL, 'label' => 'МПЛ взял в работу', 'is_system' => true],
-                ['value' => Dialog::STAGE_TRANSFERRED_TO_MPP, 'label' => 'Передан в МПП', 'is_system' => true],
-            ]),
+            self::definition(self::ENTITY_DIALOG, 'stage', 'Этап', self::TYPE_SELECT, 40, self::dialogStageOptionsWithDictionaryOverrides()),
             self::definition(self::ENTITY_DIALOG, 'current_block_id', 'Текущий блок', self::TYPE_TEXT, 45),
             self::definition(self::ENTITY_DIALOG, 'phone', 'Телефон', self::TYPE_PHONE, 50),
             self::definition(self::ENTITY_DIALOG, 'external_username', 'Юзернейм', self::TYPE_TEXT, 55),
@@ -921,6 +925,31 @@ class FieldDictionaryField extends Model
                 'label' => $label,
                 'is_system' => true,
             ])
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $storedOptions
+     * @return list<array{value:string,label:string,is_system:bool}>
+     */
+    protected static function dialogStageOptionsWithDictionaryOverrides(array $storedOptions = []): array
+    {
+        $storedLabels = collect(self::normalizeOptions($storedOptions))
+            ->mapWithKeys(fn (array $option): array => [$option['value'] => $option['label']])
+            ->all();
+
+        return collect(app(DialogStageCatalog::class)->options())
+            ->map(function (array $option) use ($storedLabels): array {
+                $value = (string) $option['value'];
+                $storedLabel = trim((string) ($storedLabels[$value] ?? ''));
+
+                if ($storedLabel !== '') {
+                    $option['label'] = $storedLabel;
+                }
+
+                return $option;
+            })
             ->values()
             ->all();
     }

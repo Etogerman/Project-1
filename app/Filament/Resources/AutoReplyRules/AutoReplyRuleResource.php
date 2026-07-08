@@ -62,6 +62,11 @@ class AutoReplyRuleResource extends Resource
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedDocumentText;
 
+    public static function shouldRegisterNavigation(): bool
+    {
+        return false;
+    }
+
     public static function getEloquentQuery(): Builder
     {
         $relations = ['channel', 'channels', 'tagEffects.tag', 'tagConditions.tag'];

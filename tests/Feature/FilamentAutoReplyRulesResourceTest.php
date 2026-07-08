@@ -30,6 +30,11 @@ class FilamentAutoReplyRulesResourceTest extends TestCase
         Filament::bootCurrentPanel();
     }
 
+    public function test_auto_reply_rules_archive_is_hidden_from_navigation(): void
+    {
+        $this->assertFalse(AutoReplyRuleResource::shouldRegisterNavigation());
+    }
+
     public function test_active_admin_can_open_auto_reply_rules_archive_page(): void
     {
         $admin = User::factory()->create([

@@ -14,6 +14,7 @@ class UpdateDialogStageAction
     public function __construct(
         private readonly ResolveDialogStageAction $resolveDialogStageAction,
         private readonly CreateDialogStageHistoryMessageAction $createDialogStageHistoryMessageAction,
+        private readonly DialogStageCatalog $dialogStageCatalog,
     ) {}
 
     public function handle(Dialog $dialog, User $employee, string $targetStage): DialogStageUpdateResultData
@@ -29,17 +30,12 @@ class UpdateDialogStageAction
                 ->lockForUpdate()
                 ->firstOrFail();
 
-            $currentStage = $this->resolveDialogStageAction->handle($dialog);
+            $currentStage = $this->dialogStageCatalog->keyForDialog($dialog)
+                ?? $this->resolveDialogStageAction->handle($dialog);
 
             if (! Dialog::canManuallyTransition($currentStage, $targetStage)) {
                 throw ValidationException::withMessages([
                     'dialogStageSelection' => 'Недопустимый ручной переход этапа.',
-                ]);
-            }
-
-            if (! $dialog->hasCompleteStageHistoryRouteContext()) {
-                throw ValidationException::withMessages([
-                    'dialogStageSelection' => 'Ручная смена этапа недоступна, пока не заполнен полный route context канала.',
                 ]);
             }
 
@@ -52,6 +48,7 @@ class UpdateDialogStageAction
 
             $dialog->forceFill([
                 'stage' => $targetStage,
+                'stage_id' => $this->dialogStageCatalog->stageIdForKey($targetStage),
             ])->save();
 
             $historyMessage = $this->createDialogStageHistoryMessageAction->handle(

@@ -312,31 +312,9 @@ class BuildAnalyticsOverviewAction
 
     private function applyEffectiveStageFilter(Builder $query, string $stage): Builder
     {
-        if (Dialog::isManualStage($stage)) {
-            return $query->where('dialogs.stage', $stage);
-        }
+        DialogResource::applyStageFilter($query, $stage);
 
-        $this->applyNotManualStage($query);
-
-        return match ($stage) {
-            Dialog::STAGE_QUESTIONNAIRE_COMPLETED => $query
-                ->whereHas('contact', fn (Builder $query): Builder => $this->applyCompletedContactScope($query)),
-            Dialog::STAGE_PHONE_RECEIVED => $query
-                ->whereNotNull('dialogs.phone_confirmed_at')
-                ->whereHas('contact', fn (Builder $query): Builder => $this->applyNotCompletedContactScope($query)),
-            default => $query
-                ->whereNull('dialogs.phone_confirmed_at')
-                ->whereHas('contact', fn (Builder $query): Builder => $this->applyNotCompletedContactScope($query)),
-        };
-    }
-
-    private function applyNotManualStage(Builder $query): Builder
-    {
-        return $query->where(function (Builder $query): void {
-            $query
-                ->whereNull('dialogs.stage')
-                ->orWhereNotIn('dialogs.stage', Dialog::manualStages());
-        });
+        return $query;
     }
 
     private function applyCompletedContactScope(Builder $query): Builder
