@@ -5,6 +5,7 @@ namespace App\Services\Dialogs;
 use App\Models\Dialog;
 use App\Models\DialogStage;
 use App\Services\Colors\ColorRegistry;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Schema;
 
 class DialogStageCatalog
@@ -241,6 +242,58 @@ class DialogStageCatalog
             ->map(fn (mixed $id): int => (int) $id)
             ->values()
             ->all();
+    }
+
+    public function applyBlacklistStageFilter(Builder $query): Builder
+    {
+        $stageIds = $this->blacklistStageIds();
+        $stageKeys = $this->blacklistStageKeys();
+
+        if ($stageIds === [] && $stageKeys === []) {
+            return $query->whereRaw('1 = 0');
+        }
+
+        return $query->where(function (Builder $query) use ($stageIds, $stageKeys): void {
+            $hasCondition = false;
+
+            if ($stageIds !== []) {
+                $query->whereIn('dialogs.stage_id', $stageIds);
+                $hasCondition = true;
+            }
+
+            if ($stageKeys !== []) {
+                $method = $hasCondition ? 'orWhereIn' : 'whereIn';
+                $query->{$method}('dialogs.stage', $stageKeys);
+            }
+        });
+    }
+
+    public function applyNotBlacklistStageFilter(Builder $query): Builder
+    {
+        $stageIds = $this->blacklistStageIds();
+        $stageKeys = $this->blacklistStageKeys();
+
+        if ($stageIds === [] && $stageKeys === []) {
+            return $query;
+        }
+
+        return $query->where(function (Builder $query) use ($stageIds, $stageKeys): void {
+            if ($stageIds !== []) {
+                $query->where(function (Builder $query) use ($stageIds): void {
+                    $query
+                        ->whereNull('dialogs.stage_id')
+                        ->orWhereNotIn('dialogs.stage_id', $stageIds);
+                });
+            }
+
+            if ($stageKeys !== []) {
+                $query->where(function (Builder $query) use ($stageKeys): void {
+                    $query
+                        ->whereNull('dialogs.stage')
+                        ->orWhereNotIn('dialogs.stage', $stageKeys);
+                });
+            }
+        });
     }
 
     public function stageIdForKey(?string $key): ?int

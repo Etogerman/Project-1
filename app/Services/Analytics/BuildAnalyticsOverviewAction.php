@@ -19,6 +19,7 @@ class BuildAnalyticsOverviewAction
 {
     public function __construct(
         private readonly MessageChronology $messageChronology,
+        private readonly DialogStageCatalog $dialogStageCatalog,
     ) {}
 
     /**
@@ -145,7 +146,7 @@ class BuildAnalyticsOverviewAction
     private function buildStageRows(): array
     {
         $stages = collect(Dialog::workingStages())
-            ->reject(fn (string $stage): bool => app(DialogStageCatalog::class)->isBlacklist($stage))
+            ->reject(fn (string $stage): bool => $this->dialogStageCatalog->isBlacklist($stage))
             ->values();
 
         $total = max(1, $this->rootNonBlacklistedDialogsQuery()->count());
@@ -252,7 +253,7 @@ class BuildAnalyticsOverviewAction
             ->orderByDesc('dialogs.id')
             ->limit(10);
 
-        DialogResource::applyNotBlacklistStageFilter($query);
+        $this->dialogStageCatalog->applyNotBlacklistStageFilter($query);
 
         /** @var Collection<int, Dialog> $dialogs */
         $dialogs = $query->get();
@@ -300,7 +301,7 @@ class BuildAnalyticsOverviewAction
     {
         $query = $this->rootDialogsQuery();
 
-        DialogResource::applyNotBlacklistStageFilter($query);
+        $this->dialogStageCatalog->applyNotBlacklistStageFilter($query);
 
         return $query;
     }
@@ -319,7 +320,7 @@ class BuildAnalyticsOverviewAction
     private function groupDialogCountsByChannel(string $timestampColumn, Carbon $periodStart, Carbon $periodEnd): Collection
     {
         $query = $this->rootDialogsQuery();
-        DialogResource::applyNotBlacklistStageFilter($query);
+        $this->dialogStageCatalog->applyNotBlacklistStageFilter($query);
 
         return $query
             ->whereBetween($timestampColumn, [$periodStart, $periodEnd])
@@ -364,7 +365,7 @@ class BuildAnalyticsOverviewAction
             'latestInboundAfterOutboundManualReply' => $latestInboundAfterOutboundManualReply,
         ] = $this->buildInboxStatusFilterFragments();
 
-        DialogResource::applyNotBlacklistStageFilter($query);
+        $this->dialogStageCatalog->applyNotBlacklistStageFilter($query);
 
         return $query
             ->whereRaw(
@@ -495,7 +496,7 @@ class BuildAnalyticsOverviewAction
 
     private function isRequiresReplyOverdue(Dialog $dialog, Carbon $slaCutoff): bool
     {
-        if (app(DialogStageCatalog::class)->isBlacklistDialog($dialog)) {
+        if ($this->dialogStageCatalog->isBlacklistDialog($dialog)) {
             return false;
         }
 

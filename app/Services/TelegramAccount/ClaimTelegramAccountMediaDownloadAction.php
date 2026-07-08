@@ -2,9 +2,10 @@
 
 namespace App\Services\TelegramAccount;
 
-use App\Filament\Resources\Dialogs\DialogResource;
 use App\Models\Channel;
 use App\Models\MessageAttachment;
+use App\Services\Dialogs\DialogAutomationGate;
+use App\Services\Dialogs\DialogStageCatalog;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
 
@@ -17,6 +18,10 @@ class ClaimTelegramAccountMediaDownloadAction
     public const ERROR_UNSUPPORTED_MEDIA_KIND = 'unsupported_media_kind';
 
     private const PROCESSING_TIMEOUT_MINUTES = 10;
+
+    public function __construct(
+        private readonly DialogStageCatalog $dialogStageCatalog,
+    ) {}
 
     /**
      * @return list<string>
@@ -54,7 +59,7 @@ class ClaimTelegramAccountMediaDownloadAction
                 ->whereNotNull('provider_file_id')
                 ->where('provider_file_id', '!=', '')
                 ->whereHas('message.dialog', function (Builder $query): void {
-                    DialogResource::applyNotBlacklistStageFilter($query);
+                    $this->dialogStageCatalog->applyNotBlacklistStageFilter($query);
                 })
                 ->where(function ($query): void {
                     $query
@@ -103,12 +108,12 @@ class ClaimTelegramAccountMediaDownloadAction
             ->where('provider', MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT)
             ->where('download_status', MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD)
             ->whereHas('message.dialog', function (Builder $query): void {
-                DialogResource::applyBlacklistStageFilter($query);
+                $this->dialogStageCatalog->applyBlacklistStageFilter($query);
             })
             ->lockForUpdate()
             ->update([
                 'download_status' => MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
-                'safe_error_code' => 'dialog_blacklist_stage',
+                'safe_error_code' => DialogAutomationGate::REASON_BLACKLIST_STAGE,
                 'safe_error_message' => 'Media download skipped because the dialog stage is blacklisted.',
                 'updated_at' => now(),
             ]);
