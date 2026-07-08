@@ -11,6 +11,7 @@ use App\Data\Bots\BotDialogTextSendResult;
 use App\Data\Bots\StoredInboundMessageResult;
 use App\Data\Dialogs\DialogRouteStatusData;
 use App\Jobs\InferContactGenderFromFirstNameJob;
+use App\Jobs\ProcessAutoReplyJob;
 use App\Jobs\ProcessScenarioInboundJob;
 use App\Jobs\ProcessScenarioStartJob;
 use App\Jobs\ProcessScenarioV3AiAnalysisJob;
@@ -9371,6 +9372,53 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertTrue($handled);
         Queue::assertPushed(ProcessScenarioStartJob::class, fn (ProcessScenarioStartJob $job): bool => $job->scenarioCode === $scenario->code);
         Queue::assertNotPushed(ProcessScenarioInboundJob::class);
+    }
+
+    public function test_v3_active_run_releases_unmatched_inbound_to_auto_reply(): void
+    {
+        Queue::fake();
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('v3_unmatched_fallback', $this->v3CatalogRuntimeSchema($channel->id));
+
+        $run = ScenarioRun::query()->create([
+            'dialog_id' => $dialog->id,
+            'scenario_code' => $scenario->code,
+            'status' => ScenarioRun::STATUS_ACTIVE,
+            'current_step' => 'start',
+            'state_payload' => [
+                'v3' => [
+                    'schema_version' => 3,
+                    'published_version_id' => $scenario->publishedVersion?->id,
+                    'status' => 'waiting_input',
+                    'current_block_id' => 'start',
+                    'waiting_output_ids' => ['btn_catalog'],
+                ],
+            ],
+            'started_at' => now()->subMinute(),
+        ]);
+
+        $message = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'JBTLIST',
+        ]);
+
+        (new ProcessScenarioInboundJob($message->id, $run->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $run->refresh();
+
+        $this->assertSame(ScenarioRun::STATUS_ACTIVE, $run->status);
+        $this->assertSame('start', $run->current_step);
+        Queue::assertPushed(ProcessAutoReplyJob::class, fn (ProcessAutoReplyJob $job): bool => $job->inboundMessageId === $message->id);
     }
 
     public function test_published_builder_start_condition_only_starts_on_selected_channels(): void

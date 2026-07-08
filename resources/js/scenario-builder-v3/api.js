@@ -56,8 +56,14 @@ export async function exportScenarioBuilderSheet(exportUrl, sheetId = null) {
     return parseJsonResponse(response);
 }
 
-export async function exportScenarioBuilderAutoReplies(exportUrl) {
-    const response = await fetch(exportUrl, {
+export async function exportScenarioBuilderAutoReplies(exportUrl, sheetId = null) {
+    const url = new URL(exportUrl, window.location.origin);
+
+    if (sheetId) {
+        url.searchParams.set('sheet_id', sheetId);
+    }
+
+    const response = await fetch(url.toString(), {
         headers: {
             Accept: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         },

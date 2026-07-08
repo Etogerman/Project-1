@@ -8,6 +8,7 @@ use App\Models\Scenario;
 use App\Models\Tag;
 use App\Models\User;
 use App\Services\AutoReplyRules\AutoReplyRuleWorkbookFormat;
+use Illuminate\Validation\ValidationException;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 use PhpOffice\PhpSpreadsheet\Cell\DataType;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
@@ -21,7 +22,7 @@ class ExportScenarioBuilderV3AutoReplyWorkbookAction
         private readonly BuildScenarioBuilderV3StateAction $buildScenarioBuilderV3StateAction,
     ) {}
 
-    public function handle(Scenario $scenario, User $user): Spreadsheet
+    public function handle(Scenario $scenario, User $user, mixed $requestedSheetId = null): Spreadsheet
     {
         $state = $this->buildScenarioBuilderV3StateAction->handle(
             $scenario->fresh(['draftVersion', 'publishedVersion']),
@@ -29,11 +30,13 @@ class ExportScenarioBuilderV3AutoReplyWorkbookAction
         );
         $builder = is_array($state['builder'] ?? null) ? $state['builder'] : [];
         $sheets = $this->sheets($builder);
+        $sheetId = $this->requestedSheetId($sheets, $requestedSheetId);
+        $exportSheets = $sheetId !== null ? [$sheetId => $sheets[$sheetId]] : $sheets;
         $tagsById = $this->tagsById();
         $spreadsheet = new Spreadsheet;
 
-        $this->buildRulesSheet($spreadsheet->getActiveSheet(), $builder, $sheets, $tagsById);
-        $this->buildCategoriesSheet($spreadsheet, $sheets);
+        $this->buildRulesSheet($spreadsheet->getActiveSheet(), $builder, $exportSheets, $tagsById, $sheetId);
+        $this->buildCategoriesSheet($spreadsheet, $exportSheets);
         $this->buildChannelsSheet($spreadsheet);
         $this->buildTagsSheet($spreadsheet, $tagsById);
         $this->buildInstructionsSheet($spreadsheet);
@@ -48,14 +51,14 @@ class ExportScenarioBuilderV3AutoReplyWorkbookAction
      * @param  array<string, array<string, mixed>>  $sheets
      * @param  array<int, Tag>  $tagsById
      */
-    private function buildRulesSheet(Worksheet $sheet, array $builder, array $sheets, array $tagsById): void
+    private function buildRulesSheet(Worksheet $sheet, array $builder, array $sheets, array $tagsById, ?string $sheetId): void
     {
         $sheet->setTitle(AutoReplyRuleWorkbookFormat::SHEET_RULES);
         $this->writeRow($sheet, 1, AutoReplyRuleWorkbookFormat::rulesColumns());
 
         $rowIndex = 2;
 
-        foreach ($this->autoReplyBlocks($builder) as $block) {
+        foreach ($this->autoReplyBlocks($builder, $sheetId) as $block) {
             $this->writeRow($sheet, $rowIndex, $this->ruleRow($block, $sheets, $tagsById));
             $rowIndex++;
         }
@@ -164,10 +167,11 @@ class ExportScenarioBuilderV3AutoReplyWorkbookAction
      * @param  array<string, mixed>  $builder
      * @return list<array<string, mixed>>
      */
-    private function autoReplyBlocks(array $builder): array
+    private function autoReplyBlocks(array $builder, ?string $sheetId = null): array
     {
         $blocks = collect(is_array($builder['blocks'] ?? null) ? $builder['blocks'] : [])
             ->filter(fn (mixed $block): bool => is_array($block) && $this->startModule($block) !== null)
+            ->filter(fn (array $block): bool => $sheetId === null || $this->blockSheetId($block) === $sheetId)
             ->values()
             ->all();
 
@@ -257,6 +261,36 @@ class ExportScenarioBuilderV3AutoReplyWorkbookAction
         }
 
         return $sheets;
+    }
+
+    /**
+     * @param  array<string, array<string, mixed>>  $sheets
+     */
+    private function requestedSheetId(array $sheets, mixed $requestedSheetId): ?string
+    {
+        $sheetId = trim((string) $requestedSheetId);
+
+        if ($sheetId === '') {
+            return null;
+        }
+
+        if (! isset($sheets[$sheetId])) {
+            throw ValidationException::withMessages([
+                'sheet_id' => 'Лист для экспорта не найден.',
+            ]);
+        }
+
+        return $sheetId;
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     */
+    private function blockSheetId(array $block): string
+    {
+        $sheetId = trim((string) data_get($block, 'settings_payload.ui.sheet_id', 'main'));
+
+        return $sheetId !== '' ? $sheetId : 'main';
     }
 
     /**

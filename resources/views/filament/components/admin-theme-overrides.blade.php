@@ -4212,6 +4212,27 @@
         overflow-wrap: anywhere;
     }
 
+    .ac-dialog-side-list .ac-meta__value-wrap {
+        min-width: 0;
+        text-align: right;
+    }
+
+    .ac-dialog-side-list .ac-meta__detail {
+        margin: 0.18rem 0 0;
+        color: var(--ac-text-muted);
+        font-size: 0.72rem;
+        line-height: 1.35;
+        overflow-wrap: anywhere;
+    }
+
+    .ac-dialog-side-list .ac-meta__value--warning {
+        color: var(--ac-warning);
+    }
+
+    .ac-dialog-side-list .ac-meta__value--success {
+        color: var(--ac-success);
+    }
+
     .ac-dialog-side-list .ac-meta__link {
         color: var(--ac-accent);
         font-weight: 650;

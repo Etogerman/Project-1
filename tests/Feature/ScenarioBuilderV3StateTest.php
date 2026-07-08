@@ -721,6 +721,79 @@ class ScenarioBuilderV3StateTest extends TestCase
         $this->assertCount(2, $response['builder']['blocks']);
     }
 
+    public function test_sheet_import_apply_uses_requested_target_sheet_when_saved_active_sheet_is_main(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_sheet_apply_target',
+            'name' => 'V3 Sheet Apply Target',
+        ]);
+        $state = $this->actingAs($admin)->getJson($this->stateUrl($scenario))->json();
+        $secondarySettings = $this->messageSettings('Старый secondary');
+        $secondarySettings['ui']['sheet_id'] = 'secondary';
+        $payload = $this->payloadFromState($state, [
+            [
+                'id' => null,
+                'client_key' => 'tmp_main',
+                'type' => 'state',
+                'title' => 'Старый main',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $this->messageSettings('Старый main'),
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_secondary',
+                'type' => 'state',
+                'title' => 'Старый secondary',
+                'position' => ['x' => 520, 'y' => 160],
+                'settings_payload' => $secondarySettings,
+            ],
+        ]);
+        $payload['builder']['active_sheet_id'] = 'main';
+        $payload['builder']['sheets'][] = [
+            'id' => 'secondary',
+            'name' => 'Новый лист',
+            'color' => 'none',
+            'view' => ['tx' => 0, 'ty' => 0, 'zoom' => 1],
+        ];
+
+        $saved = $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $payload)
+            ->assertOk()
+            ->json();
+        $document = $this->sheetImportDocument([
+            $this->sheetImportBlock('block_000001', 'Новый secondary'),
+        ]);
+        $preview = $this->actingAs($admin)
+            ->postJson($this->sheetImportPreviewUrl($scenario), [
+                'json' => json_encode($document, JSON_UNESCAPED_UNICODE),
+                'target_sheet_id' => 'secondary',
+            ])
+            ->assertOk()
+            ->assertJsonPath('sheet_id', 'secondary')
+            ->json();
+
+        $response = $this->actingAs($admin)
+            ->postJson($this->sheetImportApplyUrl($scenario), [
+                'json' => json_encode($document, JSON_UNESCAPED_UNICODE),
+                'draft_version_id' => $preview['draft_version_id'],
+                'base_builder_revision' => $preview['base_builder_revision'],
+                'target_sheet_id' => 'secondary',
+                'selected_channels' => [],
+            ])
+            ->assertOk()
+            ->assertJsonPath('import.sheet_id', 'secondary')
+            ->json();
+
+        $this->assertNotNull(ScenarioBuilderBlock::query()->find($saved['id_map']['blocks']['tmp_main']));
+        $this->assertNull(ScenarioBuilderBlock::query()->find($saved['id_map']['blocks']['tmp_secondary']));
+        $this->assertDatabaseHas('scenario_builder_blocks', [
+            'title' => 'Новый secondary',
+            'scenario_version_id' => $scenario->fresh()->draftVersion?->id,
+        ]);
+        $this->assertCount(2, $response['builder']['blocks']);
+    }
+
     public function test_sheet_import_blocks_broken_edge_and_extra_selected_channel_key(): void
     {
         $admin = $this->adminUser();
@@ -4680,6 +4753,94 @@ class ScenarioBuilderV3StateTest extends TestCase
         }
     }
 
+    public function test_auto_reply_export_can_be_limited_to_requested_sheet(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_auto_reply_export_sheet',
+            'name' => 'V3 Auto Reply Export Sheet',
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+        $state = $this->actingAs($admin)
+            ->getJson($this->stateUrl($scenario))
+            ->assertOk()
+            ->json();
+        $mainSettings = $this->startMessageButtonsSettings('main-key', [(int) $channel->id], 'Ответ main', 'Кнопка');
+        $secondarySettings = $this->startMessageButtonsSettings('secondary-key', [(int) $channel->id], 'Ответ secondary', 'Кнопка');
+        $secondarySettings['ui']['sheet_id'] = 'secondary';
+        $payload = $this->payloadFromState($state, [
+            [
+                'id' => null,
+                'client_key' => 'tmp_main_reply',
+                'type' => 'state',
+                'title' => 'Автоответ main',
+                'position' => ['x' => 120, 'y' => 160],
+                'settings_payload' => $mainSettings,
+            ],
+            [
+                'id' => null,
+                'client_key' => 'tmp_secondary_reply',
+                'type' => 'state',
+                'title' => 'Автоответ secondary',
+                'position' => ['x' => 520, 'y' => 160],
+                'settings_payload' => $secondarySettings,
+            ],
+        ]);
+        $payload['builder']['sheets'][] = [
+            'id' => 'secondary',
+            'name' => 'Второй лист',
+            'color' => 'none',
+            'view' => ['tx' => 0, 'ty' => 0, 'zoom' => 1],
+        ];
+
+        $this->actingAs($admin)
+            ->putJson($this->stateUrl($scenario), $payload)
+            ->assertOk();
+
+        $response = $this->actingAs($admin)
+            ->get($this->autoReplyExportUrl($scenario).'?sheet_id=secondary')
+            ->assertOk();
+        $path = tempnam(sys_get_temp_dir(), 'v3-auto-reply-export-sheet');
+
+        if ($path === false) {
+            $this->fail('Failed to allocate temporary workbook path.');
+        }
+
+        $finalPath = $path.'.xlsx';
+
+        try {
+            file_put_contents($finalPath, $response->streamedContent());
+
+            $spreadsheet = IOFactory::load($finalPath);
+
+            try {
+                $rulesSheet = $spreadsheet->getSheetByName(AutoReplyRuleWorkbookFormat::SHEET_RULES);
+                $this->assertNotNull($rulesSheet);
+
+                $rows = $rulesSheet->toArray(null, true, true, false);
+
+                $this->assertCount(2, $rows);
+                $this->assertSame('Автоответ secondary', $rows[1][1] ?? null);
+                $this->assertSame('Второй лист', $rows[1][2] ?? null);
+                $this->assertSame('secondary-key', $rows[1][6] ?? null);
+            } finally {
+                $spreadsheet->disconnectWorksheets();
+                unset($spreadsheet);
+            }
+        } finally {
+            if (file_exists($finalPath)) {
+                unlink($finalPath);
+            }
+
+            if (file_exists($path)) {
+                unlink($path);
+            }
+        }
+    }
+
     public function test_auto_reply_import_maps_workbook_tag_conditions_to_start_module(): void
     {
         $admin = $this->adminUser();
@@ -4841,6 +5002,69 @@ class ScenarioBuilderV3StateTest extends TestCase
         $this->assertSame(data_get($firstBlocks[0], 'position'), data_get($updatedBlocks[0], 'position'));
         $this->assertSame('auto_reply_xlsx_20260604_120000_ab12', data_get($updatedBlocks[0], 'settings_payload.ui.import_source.created_batch_id'));
         $this->assertSame('auto_reply_xlsx_20260604_121500_cd34', data_get($updatedBlocks[0], 'settings_payload.ui.import_source.last_import_batch_id'));
+    }
+
+    public function test_auto_reply_import_current_sheet_does_not_update_same_rule_on_main_sheet(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_auto_reply_current_sheet_import',
+            'name' => 'V3 Auto Reply Current Sheet Import',
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+        $state = $this->actingAs($admin)
+            ->getJson($this->stateUrl($scenario))
+            ->assertOk()
+            ->json();
+
+        $mainPreview = $this->actingAs($admin)
+            ->post($this->autoReplyImportPreviewUrl($scenario), [
+                'workbook' => $this->autoReplyWorkbookFile([
+                    $this->autoReplyWorkbookRuleRow(1001, 'Правило main', 'Главный', 'same', 'Ответ main', $channel),
+                ]),
+                'builder_state' => json_encode(['builder' => $state['builder']], JSON_UNESCAPED_UNICODE),
+                'placement_mode' => json_encode('current_sheet'),
+                'target_sheet_id' => json_encode('main'),
+                'import_batch_id' => json_encode('auto_reply_xlsx_main'),
+            ])
+            ->assertOk()
+            ->json();
+        $builderWithMainImport = $this->builderWithAutoReplyImportPlan($state['builder'], $mainPreview['plan']);
+        $builderWithMainImport['active_sheet_id'] = 'main';
+        $builderWithMainImport['sheets'][] = [
+            'id' => 'secondary',
+            'name' => 'Новый лист',
+            'color' => 'none',
+            'view' => ['tx' => 0, 'ty' => 0, 'zoom' => 1],
+        ];
+
+        $secondaryPreview = $this->actingAs($admin)
+            ->post($this->autoReplyImportPreviewUrl($scenario), [
+                'workbook' => $this->autoReplyWorkbookFile([
+                    $this->autoReplyWorkbookRuleRow(1001, 'Правило secondary', 'Новый лист', 'same', 'Ответ secondary', $channel),
+                ]),
+                'builder_state' => json_encode(['builder' => $builderWithMainImport], JSON_UNESCAPED_UNICODE),
+                'placement_mode' => json_encode('current_sheet'),
+                'target_sheet_id' => json_encode('secondary'),
+                'import_batch_id' => json_encode('auto_reply_xlsx_secondary'),
+            ])
+            ->assertOk()
+            ->json();
+
+        $this->assertSame(1, $secondaryPreview['summary']['created']);
+        $this->assertSame(0, $secondaryPreview['summary']['updated']);
+
+        $block = data_get($secondaryPreview, 'plan.blocks.0.block');
+
+        $this->assertSame('secondary', data_get($block, 'settings_payload.ui.sheet_id'));
+        $this->assertSame('Правило secondary', data_get($block, 'title'));
+        $this->assertNotSame(
+            data_get($builderWithMainImport, 'blocks.0.client_key'),
+            data_get($block, 'client_key'),
+        );
     }
 
     public function test_employee_without_channel_edit_cannot_see_or_save_v3_start_channels(): void

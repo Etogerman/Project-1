@@ -266,7 +266,7 @@
                         handleRefreshComplete(detail = {}) {
                             this.isRefreshing = false;
 
-                            if ((detail.appendedCount ?? 0) < 1) {
+                            if (((detail.appendedCount ?? 0) + (detail.updatedCount ?? 0)) < 1) {
                                 return;
                             }
 
@@ -409,6 +409,20 @@
             </div>
                 @elseif ($activeTab === \App\Services\Dialogs\SyncSystemDialogCardViewAction::TAB_DIAGNOSTICS)
             <div data-role="dialog-diagnostics-tab" class="ac-dialog-side-stack">
+                @if (($dialogAutomationDiagnostics['is_visible'] ?? false) && ($dialogAutomationDiagnostics['rows'] ?? []) !== [])
+                    <section class="ac-surface ac-dialog-side-card" data-role="dialog-automation-diagnostics">
+                        <div class="ac-surface__header ac-surface__header--centered">
+                            <div class="ac-surface__title-group">
+                                <h3 class="ac-surface__title">Автоответы и V3</h3>
+                            </div>
+                        </div>
+
+                        @include('filament.dialogs.partials.dialog-side-field-list', [
+                            'rows' => $dialogAutomationDiagnostics['rows'],
+                        ])
+                    </section>
+                @endif
+
                 @foreach ($dialogDiagnosticsBlocks as $section)
                     @foreach (($section['blocks'] ?? []) as $blockKey)
                         @if ($blockKey === \App\Services\Dialogs\SyncSystemDialogCardViewAction::BLOCK_DIALOG_PEER_SYNC && $peerSyncState['is_visible'])
