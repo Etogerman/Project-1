@@ -225,6 +225,16 @@ class DialogStageResource extends Resource
 
     private static function scenarioReferenceCount(DialogStage $record): int
     {
-        return app(DeleteDialogStageWithReplacementAction::class)->countScenarioReferences($record);
+        $cacheKey = 'dialog_stage_scenario_reference_count.'.$record->getKey();
+        $request = request();
+
+        if (! $request->attributes->has($cacheKey)) {
+            $request->attributes->set(
+                $cacheKey,
+                app(DeleteDialogStageWithReplacementAction::class)->countScenarioReferences($record),
+            );
+        }
+
+        return (int) $request->attributes->get($cacheKey);
     }
 }
