@@ -682,8 +682,12 @@ class SaveScenarioBuilderV3StateAction
 
             $payload = is_array($module['payload'] ?? null) ? $module['payload'] : [];
             $matchOperator = (string) ($payload['match'] ?? AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD);
+            $startEvent = (string) ($payload['start_event'] ?? 'message');
 
-            if ($matchOperator === AutoReplyRule::MATCH_SCOPE_ANY_INBOUND) {
+            if ($startEvent === 'stage_changed') {
+                $payload['match'] = AutoReplyRule::MATCH_SCOPE_ANY_INBOUND;
+                $payload['command'] = '';
+            } elseif ($matchOperator === AutoReplyRule::MATCH_SCOPE_ANY_INBOUND) {
                 $payload['command'] = '';
             } else {
                 $payload['command'] = trim((string) ($payload['command'] ?? ''));
@@ -718,12 +722,18 @@ class SaveScenarioBuilderV3StateAction
         $payload = is_array($startModule['payload'] ?? null) ? $startModule['payload'] : [];
         $channelIds = $this->normalizeIdList(data_get($payload, 'channels.ids', []));
         $matchOperator = (string) ($payload['match'] ?? 'strict');
-        $conditionValues = collect([$payload['command'] ?? null])
-            ->map(fn (mixed $value): string => trim((string) $value))
-            ->filter(fn (string $value): bool => $value !== '')
-            ->unique()
-            ->values()
-            ->all();
+        $conditionValues = (string) ($payload['start_event'] ?? 'message') === 'stage_changed'
+            ? ['']
+            : collect([$payload['command'] ?? null])
+                ->map(fn (mixed $value): string => trim((string) $value))
+                ->filter(fn (string $value): bool => $value !== '')
+                ->unique()
+                ->values()
+                ->all();
+
+        if ((string) ($payload['start_event'] ?? 'message') === 'stage_changed') {
+            $matchOperator = AutoReplyRule::MATCH_SCOPE_ANY_INBOUND;
+        }
 
         if ($matchOperator === AutoReplyRule::MATCH_SCOPE_ANY_INBOUND && $conditionValues === []) {
             $conditionValues = [''];

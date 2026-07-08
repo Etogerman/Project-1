@@ -5,6 +5,8 @@ namespace App\Services\Scenarios;
 use App\Models\AutoReplyRule;
 use App\Models\Channel;
 use App\Models\Tag;
+use App\Services\Colors\ColorRegistry;
+use App\Services\Dialogs\DialogStageCatalog;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Collection;
 use Illuminate\Validation\ValidationException;
@@ -12,7 +14,10 @@ use Throwable;
 
 class ValidateScenarioBuilderV3StateAction
 {
-    public function __construct(private readonly FieldDictionaryEngineSupport $fieldDictionaryEngineSupport) {}
+    public function __construct(
+        private readonly FieldDictionaryEngineSupport $fieldDictionaryEngineSupport,
+        private readonly ColorRegistry $colorRegistry,
+    ) {}
 
     private const MAX_BLOCKS = 500;
 
@@ -38,13 +43,23 @@ class ValidateScenarioBuilderV3StateAction
 
     private const DEFAULT_SHEET_NAME = 'Главный';
 
-    private const SHEET_COLORS = ['none', 'blue', 'green', 'yellow', 'red', 'purple', 'teal', 'gray'];
-
     private const MODULE_TYPES = ['start_condition', 'message', 'buttons', 'ai', 'action'];
 
     private const START_PRIORITY_MIN = 1;
 
     private const START_PRIORITY_MAX = 100;
+
+    private const START_EVENT_MESSAGE = 'message';
+
+    private const START_EVENT_MESSAGE_IN_STAGE = 'message_in_stage';
+
+    private const START_EVENT_STAGE_CHANGED = 'stage_changed';
+
+    private const START_EVENTS = [
+        self::START_EVENT_MESSAGE,
+        self::START_EVENT_MESSAGE_IN_STAGE,
+        self::START_EVENT_STAGE_CHANGED,
+    ];
 
     private const AI_SOURCES = [
         'current_inbound_message',
@@ -437,9 +452,13 @@ class ValidateScenarioBuilderV3StateAction
         }
 
         $match = $this->normalizeStartConditionMatch($payload['match'] ?? null, $blockIndex, $moduleIndex);
+        $startEvent = $this->normalizeStartEvent($payload['start_event'] ?? null, $blockIndex, $moduleIndex);
+        $stageKey = $this->normalizeStartStageKey($payload['stage_key'] ?? null, $startEvent, $blockIndex, $moduleIndex);
 
         return [
             'command' => (string) ($payload['command'] ?? ''),
+            'start_event' => $startEvent,
+            'stage_key' => $stageKey,
             'values' => $this->stringList($payload['values'] ?? []),
             'match' => $match,
             'variable' => (string) ($payload['variable'] ?? ''),
@@ -482,10 +501,38 @@ class ValidateScenarioBuilderV3StateAction
             : AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD;
 
         if (! in_array($match, self::START_MATCH_OPERATORS, true)) {
-            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.match", 'Unknown start condition match.');
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.match", 'Выбран неизвестный оператор стартового условия.');
         }
 
         return $match;
+    }
+
+    private function normalizeStartEvent(mixed $value, int $blockIndex, int $moduleIndex): string
+    {
+        $event = is_string($value) && trim($value) !== ''
+            ? trim($value)
+            : self::START_EVENT_MESSAGE;
+
+        if (! in_array($event, self::START_EVENTS, true)) {
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.start_event", 'Выбрано неизвестное стартовое событие.');
+        }
+
+        return $event;
+    }
+
+    private function normalizeStartStageKey(mixed $value, string $startEvent, int $blockIndex, int $moduleIndex): string
+    {
+        if (! in_array($startEvent, [self::START_EVENT_MESSAGE_IN_STAGE, self::START_EVENT_STAGE_CHANGED], true)) {
+            return '';
+        }
+
+        $stageKey = is_string($value) ? trim($value) : '';
+
+        if ($stageKey === '' || ! app(DialogStageCatalog::class)->isWorking($stageKey)) {
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.stage_key", 'Выберите стадию диалога.');
+        }
+
+        return $stageKey;
     }
 
     private function normalizeStartExpression(mixed $expression, int $blockIndex, int $moduleIndex): string
@@ -697,7 +744,10 @@ class ValidateScenarioBuilderV3StateAction
                     'type' => $buttonType,
                     'fn' => (string) ($button['fn'] ?? 'default'),
                     'url' => $this->normalizeButtonUrl($button['url'] ?? null, $buttonType, $blockIndex, $moduleIndex, $rowIndex, $buttonIndex),
-                    'color' => filled($button['color'] ?? null) ? (string) $button['color'] : null,
+                    'color' => $this->normalizeOptionalColor(
+                        $button['color'] ?? null,
+                        "builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.rows.$rowIndex.$buttonIndex.color",
+                    ),
                 ];
             }
 
@@ -2623,12 +2673,7 @@ class ValidateScenarioBuilderV3StateAction
                 $this->fail("builder.sheets.$index.name", 'Название листа должно быть от 1 до 40 символов.');
             }
 
-            $color = trim((string) ($sheet['color'] ?? 'none'));
-            $color = $color !== '' ? $color : 'none';
-
-            if (! in_array($color, self::SHEET_COLORS, true)) {
-                $this->fail("builder.sheets.$index.color", 'Некорректный цвет листа.');
-            }
+            $color = $this->normalizeOptionalColor($sheet['color'] ?? 'none', "builder.sheets.$index.color", allowNone: true) ?? 'none';
 
             $normalizedSheet = [
                 'id' => $id,
@@ -2660,6 +2705,31 @@ class ValidateScenarioBuilderV3StateAction
             ->all();
 
         return [$mainSheet, ...$otherSheets];
+    }
+
+    private function normalizeOptionalColor(mixed $color, string $path, bool $allowNone = false): ?string
+    {
+        if ($color === null) {
+            return $allowNone ? 'none' : null;
+        }
+
+        $value = trim((string) $color);
+
+        if ($value === '') {
+            return $allowNone ? 'none' : null;
+        }
+
+        if ($value === 'none') {
+            return $allowNone ? 'none' : null;
+        }
+
+        $normalized = $this->colorRegistry->normalizeInputValue($value, allowNone: $allowNone);
+
+        if ($normalized === null) {
+            $this->fail($path, 'Некорректный цвет.');
+        }
+
+        return $normalized;
     }
 
     /**

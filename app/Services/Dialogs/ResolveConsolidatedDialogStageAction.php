@@ -12,6 +12,7 @@ class ResolveConsolidatedDialogStageAction
     public function __construct(
         private readonly ResolveDialogStageAction $resolveDialogStageAction,
         private readonly MessageChronology $messageChronology,
+        private readonly DialogStageCatalog $dialogStageCatalog,
     ) {}
 
     /**
@@ -25,13 +26,15 @@ class ResolveConsolidatedDialogStageAction
         Collection $messages,
         mixed $phoneConfirmedAt,
     ): string {
-        if (Dialog::isManualStage($survivingDialog->stage)) {
-            return (string) $survivingDialog->stage;
+        $survivingStage = $this->dialogStageCatalog->keyForDialog($survivingDialog);
+
+        if (Dialog::isManualStage($survivingStage)) {
+            return (string) $survivingStage;
         }
 
         $redundantManualDialogs = $dialogs
             ->filter(fn (Dialog $dialog): bool => $dialog->id !== $survivingDialog->id)
-            ->filter(fn (Dialog $dialog): bool => Dialog::isManualStage($dialog->stage))
+            ->filter(fn (Dialog $dialog): bool => Dialog::isManualStage($this->dialogStageCatalog->keyForDialog($dialog)))
             ->values();
 
         if ($redundantManualDialogs->isNotEmpty()) {
@@ -39,7 +42,7 @@ class ResolveConsolidatedDialogStageAction
         }
 
         return $this->resolveDialogStageAction->forAttributes(
-            currentStage: $survivingDialog->stage,
+            currentStage: $survivingStage,
             contact: $rootContact,
             phoneConfirmedAt: $phoneConfirmedAt,
         );
@@ -71,7 +74,7 @@ class ResolveConsolidatedDialogStageAction
             })
             ->last();
 
-        return (string) $winner->stage;
+        return (string) $this->dialogStageCatalog->keyForDialog($winner);
     }
 
     /**

@@ -28,6 +28,7 @@ use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
 use App\Models\DataDictionaryEntry;
 use App\Models\Dialog;
+use App\Models\DialogStage;
 use App\Models\GeoResolutionEvent;
 use App\Models\Message;
 use App\Models\Scenario;
@@ -7885,6 +7886,287 @@ class GenericDbScenarioRuntimeTest extends TestCase
         ]);
 
         $this->assertTrue($runtime->shouldStart($messageWithPhone));
+    }
+
+    public function test_v3_start_condition_respects_dialog_stage_condition(): void
+    {
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $schema = $this->v3CatalogRuntimeSchema($channel->id);
+
+        data_set($schema, 'builder_v3_runtime.entrypoints.0.event', 'message_in_stage');
+        data_set($schema, 'builder_v3_runtime.entrypoints.0.stage_key', Dialog::STAGE_TRANSFERRED_TO_MPL);
+
+        $scenario = $this->createPublishedScenario('v3_stage_condition_start', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $messageBeforeStage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+            'message_parameter' => null,
+        ]);
+
+        $runtime = app(ScenarioRegistry::class)->makeRuntime($scenario->code);
+
+        $this->assertNotNull($runtime);
+        $this->assertFalse($runtime->shouldStart($messageBeforeStage));
+
+        $dialog->forceFill([
+            'stage' => Dialog::STAGE_TRANSFERRED_TO_MPL,
+            'stage_id' => DialogStage::query()
+                ->where('key', Dialog::STAGE_TRANSFERRED_TO_MPL)
+                ->value('id'),
+        ])->save();
+
+        $messageAfterStage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'старт',
+            'message_parameter' => null,
+        ]);
+
+        $this->assertTrue($runtime->shouldStart($messageAfterStage));
+    }
+
+    public function test_v3_start_condition_respects_stage_changed_event(): void
+    {
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $schema = $this->v3CatalogRuntimeSchema($channel->id);
+
+        data_set($schema, 'builder_v3_runtime.entrypoints.0.event', 'stage_changed');
+        data_set($schema, 'builder_v3_runtime.entrypoints.0.stage_key', Dialog::STAGE_TRANSFERRED_TO_MPL);
+        data_set($schema, 'builder_v3_runtime.entrypoints.0.match', AutoReplyRule::MATCH_SCOPE_ANY_INBOUND);
+        data_set($schema, 'builder_v3_runtime.entrypoints.0.values', ['']);
+
+        $scenario = $this->createPublishedScenario('v3_stage_changed_start', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $runtime = app(ScenarioRegistry::class)->makeRuntime($scenario->code);
+
+        $this->assertNotNull($runtime);
+
+        $inboundMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'любое сообщение',
+            'message_parameter' => null,
+        ]);
+
+        $this->assertFalse($runtime->shouldStart($inboundMessage));
+
+        $wrongStageMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'Система изменила этап диалога',
+            'raw_payload' => [
+                'event' => Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE,
+                'from_stage' => Dialog::STAGE_NEW_DIALOG,
+                'to_stage' => Dialog::STAGE_TRANSFERRED_TO_MPP,
+            ],
+        ]);
+
+        $this->assertFalse($runtime->shouldStart($wrongStageMessage));
+
+        $matchingStageMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'Система изменила этап диалога',
+            'raw_payload' => [
+                'event' => Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE,
+                'from_stage' => Dialog::STAGE_NEW_DIALOG,
+                'to_stage' => Dialog::STAGE_TRANSFERRED_TO_MPL,
+            ],
+        ]);
+
+        $this->assertTrue($runtime->shouldStart($matchingStageMessage));
+    }
+
+    public function test_dialog_stage_history_dispatches_matching_stage_changed_scenario(): void
+    {
+        Queue::fake();
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $schema = $this->v3CatalogRuntimeSchema($channel->id);
+
+        data_set($schema, 'builder_v3_runtime.entrypoints.0.event', 'stage_changed');
+        data_set($schema, 'builder_v3_runtime.entrypoints.0.stage_key', Dialog::STAGE_TRANSFERRED_TO_MPL);
+        data_set($schema, 'builder_v3_runtime.entrypoints.0.match', AutoReplyRule::MATCH_SCOPE_ANY_INBOUND);
+        data_set($schema, 'builder_v3_runtime.entrypoints.0.values', ['']);
+
+        $scenario = $this->createPublishedScenario('v3_stage_changed_dispatch', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $historyMessage = app(\App\Services\Dialogs\CreateDialogStageHistoryMessageAction::class)->handle(
+            $dialog,
+            Dialog::STAGE_NEW_DIALOG,
+            Dialog::STAGE_TRANSFERRED_TO_MPL,
+            \App\Services\Dialogs\CreateDialogStageHistoryMessageAction::SOURCE_TYPE_SYSTEM,
+        );
+
+        $this->assertInstanceOf(Message::class, $historyMessage);
+
+        Queue::assertPushed(ProcessScenarioStartJob::class, function (ProcessScenarioStartJob $job) use ($dialog, $historyMessage, $scenario): bool {
+            return $job->inboundMessageId === $historyMessage->id
+                && $job->dialogId === $dialog->id
+                && $job->scenarioCode === $scenario->code;
+        });
+
+        $this->assertSame(
+            $scenario->code,
+            data_get($historyMessage->fresh()->raw_payload, 'scenario_stage_changed_dispatch.scenario_code'),
+        );
+    }
+
+    public function test_dialog_stage_history_dispatch_is_idempotent_for_same_stage_event(): void
+    {
+        Queue::fake();
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $schema = $this->v3CatalogRuntimeSchema($channel->id);
+
+        data_set($schema, 'builder_v3_runtime.entrypoints.0.event', 'stage_changed');
+        data_set($schema, 'builder_v3_runtime.entrypoints.0.stage_key', Dialog::STAGE_TRANSFERRED_TO_MPL);
+        data_set($schema, 'builder_v3_runtime.entrypoints.0.match', AutoReplyRule::MATCH_SCOPE_ANY_INBOUND);
+        data_set($schema, 'builder_v3_runtime.entrypoints.0.values', ['']);
+
+        $scenario = $this->createPublishedScenario('v3_stage_changed_dispatch_once', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $historyMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'Система изменила этап диалога',
+            'raw_payload' => [
+                'event' => Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE,
+                'from_stage' => Dialog::STAGE_NEW_DIALOG,
+                'to_stage' => Dialog::STAGE_TRANSFERRED_TO_MPL,
+            ],
+        ]);
+
+        $dispatcher = app(\App\Services\Scenarios\DispatchDialogStageChangedScenarioAction::class);
+
+        $this->assertTrue($dispatcher->handle($historyMessage));
+        $this->assertFalse($dispatcher->handle($historyMessage->fresh()));
+
+        Queue::assertPushed(ProcessScenarioStartJob::class, 1);
+    }
+
+    public function test_stage_changed_start_job_is_idempotent_for_same_stage_event(): void
+    {
+        Http::fake([
+            'https://api.telegram.org/*' => Http::sequence()
+                ->push(['ok' => true, 'result' => ['message_id' => 9501]]),
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $schema = $this->v3CatalogRuntimeSchema($channel->id);
+
+        data_set($schema, 'builder_v3_runtime.entrypoints.0.event', 'stage_changed');
+        data_set($schema, 'builder_v3_runtime.entrypoints.0.stage_key', Dialog::STAGE_TRANSFERRED_TO_MPL);
+        data_set($schema, 'builder_v3_runtime.entrypoints.0.match', AutoReplyRule::MATCH_SCOPE_ANY_INBOUND);
+        data_set($schema, 'builder_v3_runtime.entrypoints.0.values', ['']);
+
+        $scenario = $this->createPublishedScenario('v3_stage_changed_job_once', $schema);
+
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $channel->id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        $historyMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE,
+            'sent_by_type' => Message::SENT_BY_TYPE_SYSTEM,
+            'sent_by_system_code' => Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'Система изменила этап диалога',
+            'raw_payload' => [
+                'event' => Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE,
+                'from_stage' => Dialog::STAGE_NEW_DIALOG,
+                'to_stage' => Dialog::STAGE_TRANSFERRED_TO_MPL,
+            ],
+        ]);
+
+        (new ProcessScenarioStartJob($historyMessage->id, $dialog->id, $scenario->code))->handle(app(ScenarioRegistry::class));
+        (new ProcessScenarioStartJob($historyMessage->id, $dialog->id, $scenario->code))->handle(app(ScenarioRegistry::class));
+
+        $this->assertSame(1, ScenarioRun::query()
+            ->where('dialog_id', $dialog->id)
+            ->where('scenario_code', $scenario->code)
+            ->count());
+        $this->assertSame(
+            $historyMessage->id,
+            (int) data_get(ScenarioRun::query()->firstOrFail()->state_payload, 'v3.entrypoint.source_message_id'),
+        );
     }
 
     public function test_v3_non_state_button_target_sends_message_and_does_not_wait(): void

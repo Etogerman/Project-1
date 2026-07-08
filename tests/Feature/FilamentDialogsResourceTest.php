@@ -13,6 +13,7 @@ use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
+use App\Models\DialogStage;
 use App\Models\FieldDictionaryField;
 use App\Models\Message;
 use App\Models\MessageAttachment;
@@ -2154,13 +2155,61 @@ class FilamentDialogsResourceTest extends TestCase
             ->getContent();
 
         $this->assertMatchesRegularExpression(
-            '~<button[^>]*data-role="dialog-stage-step"[^>]*data-state="completed"[^>]*data-tone="warning"[^>]*>\s*<span class="ac-dialog-stage-step__label">\s*МПЛ взял в работу\s*</span>~su',
+            '~<button[^>]*data-role="dialog-stage-step"[^>]*data-state="completed"[^>]*data-tone="primary"[^>]*data-stage-color="#3366CC"[^>]*>\s*<span class="ac-dialog-stage-step__label">\s*МПЛ взял в работу\s*</span>~su',
             $html,
         );
         $this->assertMatchesRegularExpression(
-            '~<button[^>]*data-role="dialog-stage-step"[^>]*data-state="current"[^>]*data-tone="primary"[^>]*>\s*<span class="ac-dialog-stage-step__label">\s*Передан в МПП\s*</span>~su',
+            '~<button[^>]*data-role="dialog-stage-step"[^>]*data-state="current"[^>]*data-tone="primary"[^>]*data-stage-color="#3366CC"[^>]*>\s*<span class="ac-dialog-stage-step__label">\s*Передан в МПП\s*</span>~su',
             $html,
         );
+    }
+
+    public function test_dialog_view_stage_strip_uses_current_stage_color_for_progress_and_gray_for_future_steps(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages();
+
+        DialogStage::query()
+            ->where('key', Dialog::STAGE_NEW_DIALOG)
+            ->firstOrFail()
+            ->update(['color' => 'ab_navy']);
+
+        DialogStage::query()
+            ->where('key', Dialog::STAGE_TRANSFERRED_TO_MPL)
+            ->firstOrFail()
+            ->update(['color' => 'ab_red']);
+
+        DialogStage::query()
+            ->where('key', Dialog::STAGE_TRANSFERRED_TO_MPP)
+            ->firstOrFail()
+            ->update(['color' => 'ab_yellow']);
+
+        $dialog->contact()->update([
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_COMPLETED,
+            'data_collection_completed_at' => now(),
+        ]);
+        $dialog->forceFill([
+            'stage' => Dialog::STAGE_TRANSFERRED_TO_MPL,
+        ])->save();
+
+        $html = $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]))
+            ->assertOk()
+            ->getContent();
+
+        $this->assertSame(4, substr_count($html, 'data-stage-color="#CC0000"'));
+        $this->assertSame(4, substr_count($html, '--stage-step-bg: #CC0000'));
+        $this->assertStringContainsString('--stage-step-text: #FFFFFF', $html);
+
+        $this->assertMatchesRegularExpression(
+            '~<button[^>]*data-state="available"[^>]*data-tone="gray"[^>]*data-stage-color="#666666"[^>]*data-stage-accent-color="#FFCC00"[^>]*>\s*<span class="ac-dialog-stage-step__label">\s*Передан в МПП\s*</span>~su',
+            $html,
+        );
+        $this->assertStringNotContainsString('data-stage-color="#003399"', $html);
+        $this->assertStringNotContainsString('data-stage-color="#FFCC00"', $html);
     }
 
     public function test_dialog_view_uses_yellow_highlight_buttons_and_green_send_button(): void

@@ -93,6 +93,12 @@ ENV SHELL=/bin/bash
 # Enable Xdebug coverage mode
 ENV XDEBUG_MODE=coverage
 
+# Keep PHP upload limits aligned with local media-download limits.
+RUN { \
+        echo 'upload_max_filesize=32M'; \
+        echo 'post_max_size=32M'; \
+    } > /usr/local/etc/php/conf.d/ab-connector-upload-limits.ini
+
 # Copy starship config
 COPY starship.toml /root/.config/starship.toml
 

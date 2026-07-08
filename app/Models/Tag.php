@@ -2,6 +2,8 @@
 
 namespace App\Models;
 
+use App\Services\Colors\ColorRegistry;
+use App\Support\Colors\AbColorPalette;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -32,6 +34,8 @@ class Tag extends Model
         'name',
         'slug',
         'color',
+        'color_source',
+        'color_value',
         'is_active',
     ];
 
@@ -143,15 +147,17 @@ class Tag extends Model
 
     protected function guardColor(): void
     {
-        $color = is_string($this->color) ? trim($this->color) : '';
+        $colorInput = is_string($this->color) ? trim($this->color) : null;
 
-        if (! array_key_exists($color, self::colorOptions())) {
-            throw ValidationException::withMessages([
-                'color' => 'Нужно выбрать допустимый цвет тега.',
-            ]);
-        }
+        $normalized = app(ColorRegistry::class)->normalizeForStorage(
+            source: $this->isDirty('color') ? null : $this->color_source,
+            value: $this->isDirty('color') ? $colorInput : $this->color_value,
+            legacy: $colorInput,
+        );
 
-        $this->color = $color;
+        $this->color_source = $normalized['color_source'];
+        $this->color_value = $normalized['color_value'];
+        $this->color = $normalized['legacy_color'];
     }
 
     protected function synchronizeSlug(): void
@@ -176,5 +182,16 @@ class Tag extends Model
         }
 
         $this->slug = $slug;
+    }
+
+    public function getColorValueAttribute(mixed $value): string
+    {
+        if (is_string($value) && trim($value) !== '') {
+            return $value;
+        }
+
+        return is_string($this->color) && trim($this->color) !== ''
+            ? $this->color
+            : AbColorPalette::DEFAULT_PRESET_KEY;
     }
 }

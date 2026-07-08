@@ -9,6 +9,7 @@ use App\Models\Dialog;
 use App\Models\FieldDictionaryField;
 use App\Models\User;
 use App\Services\Contacts\ResolveContactDisplayNameAction;
+use App\Services\Dialogs\DialogStageCatalog;
 use App\Services\Dialogs\ResolveDialogInboxStatusAction;
 use App\Services\Dialogs\ResolveDialogRouteStatusAction;
 use App\Services\Dialogs\ResolveDialogStageAction;
@@ -347,6 +348,7 @@ class DialogKanban extends Page
                 'stage' => $stage,
                 'label' => $this->dialogOptionLabel('stage', $stage, Dialog::stageLabel($stage)),
                 'tone' => Dialog::stageTone($stage),
+                ...$this->buildColumnColorData($stage),
                 'count' => $dialogsInColumn->count(),
                 'has_more' => $dialogsInColumn->count() > $visibleCount,
                 'cards' => $dialogsInColumn
@@ -375,9 +377,29 @@ class DialogKanban extends Page
             'stage' => $stage,
             'label' => $this->dialogOptionLabel('stage', $stage, Dialog::stageLabel($stage)),
             'tone' => Dialog::stageTone($stage),
+            ...$this->buildColumnColorData($stage),
             'count' => $count,
             'has_more' => $count > $visibleCount,
             'visible_ids' => $this->visibleDialogIdsForStage($stage, $visibleCount),
+        ];
+    }
+
+    /**
+     * @return array{stage_color_hex:string,stage_background_color:string,stage_border_color:string,stage_text_color:string,stage_count_background_color:string}
+     */
+    private function buildColumnColorData(string $stage): array
+    {
+        $color = app(DialogStageCatalog::class)->colorTokens($stage);
+        $textColor = (string) $color['text'];
+
+        return [
+            'stage_color_hex' => (string) $color['hex'],
+            'stage_background_color' => (string) $color['background'],
+            'stage_border_color' => (string) $color['border'],
+            'stage_text_color' => $textColor,
+            'stage_count_background_color' => $textColor === '#FFFFFF'
+                ? 'rgba(255, 255, 255, 0.22)'
+                : 'rgba(17, 24, 39, 0.10)',
         ];
     }
 
@@ -394,6 +416,11 @@ class DialogKanban extends Page
                 'stage' => $column['stage'],
                 'label' => $column['label'],
                 'tone' => $column['tone'],
+                'stage_color_hex' => $column['stage_color_hex'],
+                'stage_background_color' => $column['stage_background_color'],
+                'stage_border_color' => $column['stage_border_color'],
+                'stage_text_color' => $column['stage_text_color'],
+                'stage_count_background_color' => $column['stage_count_background_color'],
                 'count' => $column['count'],
                 'has_more' => $column['has_more'],
                 'cards' => collect($column['visible_ids'])
@@ -669,7 +696,8 @@ class DialogKanban extends Page
 
     private function resolveKanbanColumnStage(Dialog $dialog): string
     {
-        return app(ResolveDialogStageAction::class)->handle($dialog);
+        return app(DialogStageCatalog::class)->keyForDialog($dialog)
+            ?? app(ResolveDialogStageAction::class)->handle($dialog);
     }
 
     /**
@@ -678,10 +706,6 @@ class DialogKanban extends Page
     private function allowedTargetStages(Dialog $dialog, string $currentColumnStage): array
     {
         if (! $this->canCurrentUserManageDialogStages()) {
-            return [];
-        }
-
-        if (! $dialog->hasCompleteStageHistoryRouteContext()) {
             return [];
         }
 
@@ -698,10 +722,6 @@ class DialogKanban extends Page
         }
 
         if (! Dialog::canManuallyTransition($currentColumnStage, $targetStage)) {
-            return false;
-        }
-
-        if (Dialog::isManualStage($targetStage) && ! $dialog->hasCompleteStageHistoryRouteContext()) {
             return false;
         }
 

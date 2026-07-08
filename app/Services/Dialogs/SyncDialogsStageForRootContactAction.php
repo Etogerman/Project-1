@@ -15,6 +15,7 @@ class SyncDialogsStageForRootContactAction
         private readonly ResolveRootContactAction $resolveRootContactAction,
         private readonly ResolveDialogStageAction $resolveDialogStageAction,
         private readonly CreateDialogStageHistoryMessageAction $createDialogStageHistoryMessageAction,
+        private readonly DialogStageCatalog $dialogStageCatalog,
     ) {}
 
     /**
@@ -29,8 +30,7 @@ class SyncDialogsStageForRootContactAction
         bool $apply = true,
         bool $writeHistory = true,
         ?Contact $historySourceContact = null,
-    ): array
-    {
+    ): array {
         if ($apply) {
             return DB::transaction(fn (): array => $this->syncStages(
                 contact: $contact,
@@ -60,8 +60,7 @@ class SyncDialogsStageForRootContactAction
         bool $apply,
         bool $writeHistory,
         ?Contact $historySourceContact,
-    ): array
-    {
+    ): array {
         $rootContact = $this->resolveRootContactAction->handle($contact);
         $memberContactIds = $this->resolveMemberContactIds($rootContact);
 
@@ -90,7 +89,9 @@ class SyncDialogsStageForRootContactAction
                 $dialog,
                 $rootContact,
             );
-            $needsPersistedStageRewrite = $dialog->stage !== $stage;
+            $stageId = $this->dialogStageCatalog->stageIdForKey($stage);
+            $needsPersistedStageRewrite = $dialog->stage !== $stage
+                || ($stageId !== null && (int) ($dialog->stage_id ?? 0) !== $stageId);
 
             if (! $needsPersistedStageRewrite && $fromStage === $stage) {
                 $stats['dialogs_already_correct']++;
@@ -106,6 +107,7 @@ class SyncDialogsStageForRootContactAction
 
             $dialog->forceFill([
                 'stage' => $stage,
+                'stage_id' => $stageId,
             ])->save();
 
             if ($writeHistory && $fromStage !== $stage) {

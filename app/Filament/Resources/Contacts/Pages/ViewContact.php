@@ -17,6 +17,8 @@ use App\Services\Contacts\AddContactTimelineCommentAction;
 use App\Services\Contacts\BuildContactCardViewLayoutAction;
 use App\Services\Contacts\ContactCardViewBlockRegistry;
 use App\Services\Contacts\SyncSystemContactCardViewAction;
+use App\Services\Dialogs\DialogStageCatalog;
+use App\Services\Dialogs\ResolveDialogStageAction;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
 use Filament\Support\Enums\Width;
@@ -1460,8 +1462,19 @@ class ViewContact extends ViewRecord
     protected function buildStatsViewData(Contact $record): array
     {
         $dialogCount = $record->dialogs()->count();
+        $workingStageIds = collect(Dialog::workingStages())
+            ->map(fn (string $stage): ?int => app(DialogStageCatalog::class)->stageIdForKey($stage))
+            ->filter()
+            ->values()
+            ->all();
         $workingDialogCount = $record->dialogs()
-            ->whereIn('stage', Dialog::workingStages())
+            ->where(function (Builder $query) use ($workingStageIds): void {
+                $query->whereIn('stage', Dialog::workingStages());
+
+                if ($workingStageIds !== []) {
+                    $query->orWhereIn('stage_id', $workingStageIds);
+                }
+            })
             ->count();
         $closedDialogCount = $record->dialogs()
             ->where('bitrix24_live_status', Dialog::BITRIX24_LIVE_STATUS_CLOSED)
@@ -1474,10 +1487,14 @@ class ViewContact extends ViewRecord
         $lastContactValue = $latestDialog instanceof Dialog
             ? $this->formatDateTime($latestDialog->last_message_at)
             : '—';
+        $latestDialogStage = $latestDialog instanceof Dialog
+            ? app(ResolveDialogStageAction::class)->handle($latestDialog)
+            : null;
+
         $lastContactMeta = $latestDialog instanceof Dialog
             ? trim(sprintf(
                 '%s · %s',
-                $this->dialogOptionLabel('stage', $latestDialog->stage, Dialog::stageLabel($latestDialog->stage)),
+                $this->dialogOptionLabel('stage', $latestDialogStage, Dialog::stageLabel($latestDialogStage)),
                 $latestDialog->last_inbound_at !== null ? 'входящее' : 'нет входящих'
             ))
             : 'Диалогов пока нет';

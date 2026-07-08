@@ -219,8 +219,11 @@
                         allowedTargets = [];
                     "
                 >
-                    <div class="ac-kanban-column__header">
-                        <span class="ac-kanban-column__bullet" data-tone="{{ $column['tone'] }}"></span>
+                    <div
+                        class="ac-kanban-column__header ac-kanban-column__header--colored"
+                        data-stage-color="{{ $column['stage_color_hex'] }}"
+                        style="--ac-kanban-stage-bg: {{ $column['stage_background_color'] }}; --ac-kanban-stage-border: {{ $column['stage_border_color'] }}; --ac-kanban-stage-text: {{ $column['stage_text_color'] }}; --ac-kanban-stage-count-bg: {{ $column['stage_count_background_color'] }};"
+                    >
                         <h3 class="ac-kanban-column__title">{{ $column['label'] }}</h3>
                         <span class="ac-kanban-column__count">
                             {{ $column['count'] }}

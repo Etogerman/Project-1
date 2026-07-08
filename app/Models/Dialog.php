@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Services\Dialogs\ApplyDialogRoutePredicateAction;
+use App\Services\Dialogs\DialogStageCatalog;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -40,30 +41,17 @@ class Dialog extends Model
      */
     public static function stageLabels(): array
     {
-        return [
-            self::STAGE_NEW_DIALOG => 'Новый диалог',
-            self::STAGE_PHONE_RECEIVED => 'Телефон получен',
-            self::STAGE_QUESTIONNAIRE_COMPLETED => 'Данные собраны',
-            self::STAGE_TRANSFERRED_TO_MPL => 'МПЛ взял в работу',
-            self::STAGE_TRANSFERRED_TO_MPP => 'Передан в МПП',
-        ];
+        return app(DialogStageCatalog::class)->labels();
     }
 
     public static function stageLabel(?string $stage): string
     {
-        return self::stageLabels()[$stage] ?? 'Неизвестный этап';
+        return app(DialogStageCatalog::class)->label($stage);
     }
 
     public static function stageTone(?string $stage): string
     {
-        return match ($stage) {
-            self::STAGE_NEW_DIALOG => 'gray',
-            self::STAGE_PHONE_RECEIVED => 'info',
-            self::STAGE_QUESTIONNAIRE_COMPLETED => 'success',
-            self::STAGE_TRANSFERRED_TO_MPL => 'warning',
-            self::STAGE_TRANSFERRED_TO_MPP => 'primary',
-            default => 'gray',
-        };
+        return app(DialogStageCatalog::class)->color($stage);
     }
 
     /**
@@ -73,6 +61,7 @@ class Dialog extends Model
         'contact_id',
         'channel_id',
         'stage',
+        'stage_id',
         'current_contact_identity_id',
         'pending_auto_reply_source_message_id',
         'manual_reply_dismissed_source_message_id',
@@ -112,6 +101,7 @@ class Dialog extends Model
         'bitrix24_live_last_imported_at' => 'datetime',
         'bitrix24_open_line_binding_verified_at' => 'datetime',
         'bot_subscription_changed_at' => 'datetime',
+        'stage_id' => 'integer',
         'phone_confirmed_at' => 'datetime',
         'fields_payload' => 'array',
         'last_message_at' => 'datetime',
@@ -124,11 +114,7 @@ class Dialog extends Model
      */
     public static function automaticStages(): array
     {
-        return [
-            self::STAGE_NEW_DIALOG,
-            self::STAGE_PHONE_RECEIVED,
-            self::STAGE_QUESTIONNAIRE_COMPLETED,
-        ];
+        return app(DialogStageCatalog::class)->automaticStageKeys();
     }
 
     /**
@@ -136,10 +122,7 @@ class Dialog extends Model
      */
     public static function manualStages(): array
     {
-        return [
-            self::STAGE_TRANSFERRED_TO_MPL,
-            self::STAGE_TRANSFERRED_TO_MPP,
-        ];
+        return app(DialogStageCatalog::class)->manualStageKeys();
     }
 
     /**
@@ -147,7 +130,7 @@ class Dialog extends Model
      */
     public static function serviceStages(): array
     {
-        return [];
+        return app(DialogStageCatalog::class)->serviceStageKeys();
     }
 
     /**
@@ -155,10 +138,7 @@ class Dialog extends Model
      */
     public static function workingStages(): array
     {
-        return [
-            ...self::automaticStages(),
-            ...self::manualStages(),
-        ];
+        return app(DialogStageCatalog::class)->workingStageKeys();
     }
 
     /**
@@ -166,27 +146,27 @@ class Dialog extends Model
      */
     public static function kanbanStages(): array
     {
-        return self::workingStages();
+        return app(DialogStageCatalog::class)->kanbanStageKeys();
     }
 
     public static function isAutomaticStage(?string $stage): bool
     {
-        return in_array($stage, self::automaticStages(), true);
+        return app(DialogStageCatalog::class)->isAutomatic($stage);
     }
 
     public static function isManualStage(?string $stage): bool
     {
-        return in_array($stage, self::manualStages(), true);
+        return app(DialogStageCatalog::class)->isManual($stage);
     }
 
     public static function isServiceStage(?string $stage): bool
     {
-        return in_array($stage, self::serviceStages(), true);
+        return app(DialogStageCatalog::class)->isService($stage);
     }
 
     public static function isWorkingStage(?string $stage): bool
     {
-        return in_array($stage, self::workingStages(), true);
+        return app(DialogStageCatalog::class)->isWorking($stage);
     }
 
     /**
@@ -222,18 +202,10 @@ class Dialog extends Model
      */
     public static function allowedOperatorTransitionTargets(?string $currentStage): array
     {
-        if (self::isAutomaticStage($currentStage) || $currentStage === null) {
-            return [
-                self::STAGE_TRANSFERRED_TO_MPL,
-                self::STAGE_TRANSFERRED_TO_MPP,
-            ];
-        }
-
-        return match ($currentStage) {
-            self::STAGE_TRANSFERRED_TO_MPL => [self::STAGE_TRANSFERRED_TO_MPP],
-            self::STAGE_TRANSFERRED_TO_MPP => [self::STAGE_TRANSFERRED_TO_MPL],
-            default => [],
-        };
+        return collect(self::workingStages())
+            ->reject(fn (string $stage): bool => $stage === $currentStage)
+            ->values()
+            ->all();
     }
 
     public static function canManuallyTransition(?string $currentStage, string $targetStage): bool
@@ -242,11 +214,7 @@ class Dialog extends Model
             return self::isServiceStage($targetStage) || self::isWorkingStage($targetStage);
         }
 
-        if (! self::isManualStage($targetStage)) {
-            return false;
-        }
-
-        return in_array($targetStage, self::allowedManualTransitionTargets($currentStage), true);
+        return self::isWorkingStage($targetStage);
     }
 
     public function isBotBlockedByUser(): bool
@@ -267,6 +235,11 @@ class Dialog extends Model
     public function channel(): BelongsTo
     {
         return $this->belongsTo(Channel::class);
+    }
+
+    public function dialogStage(): BelongsTo
+    {
+        return $this->belongsTo(DialogStage::class, 'stage_id');
     }
 
     public function bitrix24OpenLineRoute(): BelongsTo

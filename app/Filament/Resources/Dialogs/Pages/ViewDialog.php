@@ -22,9 +22,11 @@ use App\Services\CardViews\CardViewFieldRendererRegistry;
 use App\Services\Contacts\ResolveContactDisplayNameAction;
 use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\Contacts\SetContactAssigneeAction;
+use App\Services\Colors\ColorRegistry;
 use App\Services\Dialogs\BuildConversationFeedViewDataAction;
 use App\Services\Dialogs\BuildDialogCardViewLayoutAction;
 use App\Services\Dialogs\DialogCardViewBlockRegistry;
+use App\Services\Dialogs\DialogStageCatalog;
 use App\Services\Dialogs\LoadDialogMessagesPageAction;
 use App\Services\Dialogs\ResolveDialogInboxStatusAction;
 use App\Services\Dialogs\ResolveDialogRouteStatusAction;
@@ -1079,6 +1081,12 @@ class ViewDialog extends ViewRecord
      *         value:string,
      *         label:string,
      *         tone:string,
+     *         color_hex:string,
+     *         background_color:string,
+     *         border_color:string,
+     *         text_color:string,
+     *         shadow_color:string,
+     *         accent_color:string,
      *         is_current:bool,
      *         is_clickable:bool,
      *         is_completed:bool
@@ -1094,26 +1102,75 @@ class ViewDialog extends ViewRecord
         $allowedTargets = Dialog::allowedManualTransitionTargets($currentStage);
         $workingStages = Dialog::workingStages();
         $currentIndex = array_search($currentStage, $workingStages, true);
+        $currentStageColorData = $this->buildDialogStageStepColorData($currentStage);
+        $futureStageColorData = $this->buildNeutralDialogStageStepColorData();
+        $stageAccentColorData = collect($workingStages)
+            ->mapWithKeys(fn (string $stage): array => [$stage => $this->buildDialogStageStepColorData($stage)['color_hex']])
+            ->all();
 
         return [
             'current_label' => $this->dialogOptionLabel('stage', $currentStage, Dialog::stageLabel($currentStage)),
             'current_tone' => Dialog::stageTone($currentStage),
             'is_editable' => $isEditable,
-            'blocked_reason' => $this->getDialogStageBlockedReason(),
+            'blocked_reason' => null,
             'stage_model' => 'dialogStageSelection',
             'update_method' => 'updateDialogStage',
             'options' => $this->applyDialogDictionaryOptionLabels('stage', Dialog::manualTransitionOptions($currentStage)),
             'steps' => collect($workingStages)
-                ->map(fn (string $stage, int $index): array => [
-                    'value' => $stage,
-                    'label' => $this->dialogOptionLabel('stage', $stage, Dialog::stageLabel($stage)),
-                    'tone' => Dialog::stageTone($stage),
-                    'is_current' => $stage === $currentStage,
-                    'is_clickable' => $isEditable && in_array($stage, $allowedTargets, true),
-                    'is_completed' => $currentIndex !== false && $index < $currentIndex,
-                ])
+                ->map(function (string $stage, int $index) use ($allowedTargets, $currentIndex, $currentStage, $currentStageColorData, $futureStageColorData, $isEditable, $stageAccentColorData): array {
+                    $isCurrent = $stage === $currentStage;
+                    $isCompleted = $currentIndex !== false && $index < $currentIndex;
+                    $displayColorData = $isCurrent || $isCompleted
+                        ? $currentStageColorData
+                        : $futureStageColorData;
+
+                    return [
+                        'value' => $stage,
+                        'label' => $this->dialogOptionLabel('stage', $stage, Dialog::stageLabel($stage)),
+                        'tone' => $isCurrent || $isCompleted ? Dialog::stageTone($currentStage) : 'gray',
+                        ...$displayColorData,
+                        'accent_color' => $isCurrent || $isCompleted
+                            ? $currentStageColorData['color_hex']
+                            : ($stageAccentColorData[$stage] ?? $futureStageColorData['color_hex']),
+                        'is_current' => $isCurrent,
+                        'is_clickable' => $isEditable && in_array($stage, $allowedTargets, true),
+                        'is_completed' => $isCompleted,
+                    ];
+                })
                 ->values()
                 ->all(),
+        ];
+    }
+
+    /**
+     * @return array{color_hex:string,background_color:string,border_color:string,text_color:string,shadow_color:string}
+     */
+    private function buildDialogStageStepColorData(string $stage): array
+    {
+        $color = app(DialogStageCatalog::class)->colorTokens($stage);
+
+        return [
+            'color_hex' => (string) $color['hex'],
+            'background_color' => (string) $color['background'],
+            'border_color' => (string) $color['border'],
+            'text_color' => (string) $color['text'],
+            'shadow_color' => (string) $color['soft'],
+        ];
+    }
+
+    /**
+     * @return array{color_hex:string,background_color:string,border_color:string,text_color:string,shadow_color:string}
+     */
+    private function buildNeutralDialogStageStepColorData(): array
+    {
+        $color = app(ColorRegistry::class)->resolve(null, null, 'gray');
+
+        return [
+            'color_hex' => (string) $color['hex'],
+            'background_color' => (string) $color['background'],
+            'border_color' => (string) $color['border'],
+            'text_color' => (string) $color['text'],
+            'shadow_color' => (string) $color['soft'],
         ];
     }
 
@@ -1959,7 +2016,8 @@ class ViewDialog extends ViewRecord
 
     protected function resolveEffectiveDialogStage(Dialog $dialog): string
     {
-        return app(ResolveDialogStageAction::class)->handle($dialog);
+        return app(DialogStageCatalog::class)->keyForDialog($dialog)
+            ?? app(ResolveDialogStageAction::class)->handle($dialog);
     }
 
     protected function appendLatestConversationMessages(): int
@@ -2390,9 +2448,7 @@ class ViewDialog extends ViewRecord
 
     protected function getDialogStageBlockedReason(): ?string
     {
-        return $this->getRecord()->hasCompleteStageHistoryRouteContext()
-            ? null
-            : 'Ручная смена этапа недоступна, пока не заполнен полный route context канала.';
+        return null;
     }
 
     /**

@@ -9,6 +9,7 @@ use App\Models\ScenarioBuilderBlock;
 use App\Models\ScenarioBuilderCondition;
 use App\Models\ScenarioBuilderEdge;
 use App\Models\ScenarioVersion;
+use App\Services\Dialogs\DialogStageCatalog;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Collection;
 use Illuminate\Validation\ValidationException;
@@ -33,6 +34,12 @@ class CompileScenarioBuilderV3RuntimeAction
     private const START_PRIORITY_MIN = 1;
 
     private const START_PRIORITY_MAX = 100;
+
+    private const START_EVENT_MESSAGE = 'message';
+
+    private const START_EVENT_MESSAGE_IN_STAGE = 'message_in_stage';
+
+    private const START_EVENT_STAGE_CHANGED = 'stage_changed';
 
     /**
      * @return array<string, mixed>
@@ -621,13 +628,22 @@ class CompileScenarioBuilderV3RuntimeAction
                     ->map(fn (mixed $id): int => (int) $id)
                     ->values()
                     ->all();
-                $values = $block->conditions
-                    ->map(fn (ScenarioBuilderCondition $condition): string => trim((string) $condition->value))
-                    ->filter(fn (string $value): bool => $value !== '')
-                    ->unique()
-                    ->values()
-                    ->all();
-                $match = (string) ($block->conditions->first()?->match_operator ?? data_get($start, 'payload.match', 'strict'));
+                $startEvent = $this->normalizeStartEvent(data_get($start, 'payload.start_event', self::START_EVENT_MESSAGE));
+                $stageKey = $this->normalizeStartStageKey(
+                    data_get($start, 'payload.stage_key', ''),
+                    $startEvent,
+                );
+                $values = $startEvent === self::START_EVENT_STAGE_CHANGED
+                    ? ['']
+                    : $block->conditions
+                        ->map(fn (ScenarioBuilderCondition $condition): string => trim((string) $condition->value))
+                        ->filter(fn (string $value): bool => $value !== '')
+                        ->unique()
+                        ->values()
+                        ->all();
+                $match = $startEvent === self::START_EVENT_STAGE_CHANGED
+                    ? AutoReplyRule::MATCH_SCOPE_ANY_INBOUND
+                    : (string) ($block->conditions->first()?->match_operator ?? data_get($start, 'payload.match', 'strict'));
 
                 if ($match === AutoReplyRule::MATCH_SCOPE_ANY_INBOUND && $values === []) {
                     $values = [''];
@@ -641,6 +657,8 @@ class CompileScenarioBuilderV3RuntimeAction
                     'block_id' => $runtimeBlockId,
                     'display_id' => $this->entrypointDisplayId($block, $settings),
                     'db_block_id' => (int) $block->id,
+                    'event' => $startEvent,
+                    'stage_key' => $stageKey,
                     'channel_ids' => $channelIds,
                     'match' => $match,
                     'values' => $values,
@@ -703,6 +721,30 @@ class CompileScenarioBuilderV3RuntimeAction
     private function normalizeStartPriority(mixed $value): int
     {
         return max(self::START_PRIORITY_MIN, min(self::START_PRIORITY_MAX, (int) $value));
+    }
+
+    private function normalizeStartEvent(mixed $event): string
+    {
+        return match ($event) {
+            self::START_EVENT_MESSAGE_IN_STAGE => self::START_EVENT_MESSAGE_IN_STAGE,
+            self::START_EVENT_STAGE_CHANGED => self::START_EVENT_STAGE_CHANGED,
+            default => self::START_EVENT_MESSAGE,
+        };
+    }
+
+    private function normalizeStartStageKey(mixed $stageKey, string $startEvent): string
+    {
+        if (! in_array($startEvent, [self::START_EVENT_MESSAGE_IN_STAGE, self::START_EVENT_STAGE_CHANGED], true)) {
+            return '';
+        }
+
+        $stageKey = is_string($stageKey) ? trim($stageKey) : '';
+
+        if ($stageKey === '' || ! app(DialogStageCatalog::class)->isWorking($stageKey)) {
+            $this->fail('builder.start_condition.stage_key', 'Выбранная стадия для запуска сценария не найдена.');
+        }
+
+        return $stageKey;
     }
 
     /**
