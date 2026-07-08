@@ -19,10 +19,10 @@ use App\Models\User;
 use App\Services\Bots\ContactIdentityAvatarStorage;
 use App\Services\Bots\SendManualDialogReplyAction;
 use App\Services\CardViews\CardViewFieldRendererRegistry;
+use App\Services\Colors\ColorRegistry;
 use App\Services\Contacts\ResolveContactDisplayNameAction;
 use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\Contacts\SetContactAssigneeAction;
-use App\Services\Colors\ColorRegistry;
 use App\Services\Dialogs\BuildConversationFeedViewDataAction;
 use App\Services\Dialogs\BuildDialogCardViewLayoutAction;
 use App\Services\Dialogs\DialogCardViewBlockRegistry;
@@ -412,6 +412,8 @@ class ViewDialog extends ViewRecord
                 ->title('Не удалось изменить этап')
                 ->body($throwable->getMessage())
                 ->send();
+        } finally {
+            $this->dispatch('dialog-stage-selection-settled');
         }
     }
 
@@ -1007,6 +1009,7 @@ class ViewDialog extends ViewRecord
      *     isVisible:bool,
      *     canReply:bool,
      *     blockedReason:?string,
+     *     blacklistWarning:?string,
      *     autoReplyEnabled:bool,
      *     replyTextModel:string,
      *     replyFormatModel:string,
@@ -1023,6 +1026,9 @@ class ViewDialog extends ViewRecord
             'isVisible' => $this->canCurrentUserManageDialogReplies(),
             'canReply' => $this->canCurrentUserReplyToDialog(),
             'blockedReason' => $this->getDialogReplyBlockedReason(),
+            'blacklistWarning' => app(DialogStageCatalog::class)->isBlacklistDialog($this->getRecord())
+                ? 'Диалог находится в ЧС-стадии: автоматизация отключена, ручной ответ будет отправлен оператором.'
+                : null,
             'autoReplyEnabled' => $replyOwner?->isAutoReplyEnabled() ?? false,
             'replyTextModel' => 'dialogReplyText',
             'replyFormatModel' => 'dialogReplyFormat',
@@ -1087,6 +1093,16 @@ class ViewDialog extends ViewRecord
      *         text_color:string,
      *         shadow_color:string,
      *         accent_color:string,
+     *         active_background_color:string,
+     *         active_border_color:string,
+     *         active_text_color:string,
+     *         active_shadow_color:string,
+     *         active_accent_color:string,
+     *         future_background_color:string,
+     *         future_border_color:string,
+     *         future_text_color:string,
+     *         future_shadow_color:string,
+     *         future_accent_color:string,
      *         is_current:bool,
      *         is_clickable:bool,
      *         is_completed:bool
@@ -1123,6 +1139,8 @@ class ViewDialog extends ViewRecord
                     $displayColorData = $isCurrent || $isCompleted
                         ? $currentStageColorData
                         : $futureStageColorData;
+                    $stageColorData = $this->buildDialogStageStepColorData($stage);
+                    $futureAccentColor = $stageAccentColorData[$stage] ?? $futureStageColorData['color_hex'];
 
                     return [
                         'value' => $stage,
@@ -1131,7 +1149,17 @@ class ViewDialog extends ViewRecord
                         ...$displayColorData,
                         'accent_color' => $isCurrent || $isCompleted
                             ? $currentStageColorData['color_hex']
-                            : ($stageAccentColorData[$stage] ?? $futureStageColorData['color_hex']),
+                            : $futureAccentColor,
+                        'active_background_color' => $stageColorData['background_color'],
+                        'active_border_color' => $stageColorData['border_color'],
+                        'active_text_color' => $stageColorData['text_color'],
+                        'active_shadow_color' => $stageColorData['shadow_color'],
+                        'active_accent_color' => $stageColorData['color_hex'],
+                        'future_background_color' => $futureStageColorData['background_color'],
+                        'future_border_color' => $futureStageColorData['border_color'],
+                        'future_text_color' => $futureStageColorData['text_color'],
+                        'future_shadow_color' => $futureStageColorData['shadow_color'],
+                        'future_accent_color' => $futureAccentColor,
                         'is_current' => $isCurrent,
                         'is_clickable' => $isEditable && in_array($stage, $allowedTargets, true),
                         'is_completed' => $isCompleted,

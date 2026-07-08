@@ -149,7 +149,7 @@ class DialogResource extends Resource
                     ->label($dialogFieldLabel('status', 'Статус'))
                     ->state(fn (Dialog $record): string => static::formatInboxStatus($record))
                     ->badge()
-                    ->color(fn (Dialog $record): string => static::getInboxStatusColor($record))
+                    ->color(fn (mixed $state): string => static::getInboxStatusColorForLabel(is_string($state) ? $state : null))
                     ->toggleable(),
                 TextColumn::make('preview_text')
                     ->label($dialogFieldLabel('last_message_at', 'Последнее сообщение'))
@@ -524,6 +524,10 @@ class DialogResource extends Resource
 
     protected static function resolveInboxStatusCode(Dialog $record): string
     {
+        if (app(DialogStageCatalog::class)->isBlacklistDialog($record)) {
+            return DialogInboxStatusData::CODE_NOT_REQUIRED;
+        }
+
         $latestInboundUserMessageId = $record->getAttribute('latest_inbound_user_message_id');
         $latestInboundUserMessageSortAt = $record->getAttribute('latest_inbound_user_message_sort_at');
         $latestOutboundManualReplyMessageId = $record->getAttribute('latest_outbound_manual_reply_message_id');
@@ -556,7 +560,12 @@ class DialogResource extends Resource
 
     protected static function formatInboxStatus(Dialog $record): string
     {
-        return match (static::resolveInboxStatusCode($record)) {
+        return static::formatInboxStatusCode(static::resolveInboxStatusCode($record));
+    }
+
+    protected static function formatInboxStatusCode(?string $code): string
+    {
+        return match ($code) {
             DialogInboxStatusData::CODE_REQUIRES_REPLY => 'Требует ответа',
             DialogInboxStatusData::CODE_NOT_REQUIRED => 'Не требует ответа',
             default => 'Нет новых',
@@ -565,7 +574,21 @@ class DialogResource extends Resource
 
     protected static function getInboxStatusColor(Dialog $record): string
     {
-        return match (static::resolveInboxStatusCode($record)) {
+        return static::getInboxStatusColorForCode(static::resolveInboxStatusCode($record));
+    }
+
+    protected static function getInboxStatusColorForLabel(?string $label): string
+    {
+        return match ($label) {
+            'Требует ответа' => 'warning',
+            'Не требует ответа' => 'gray',
+            default => 'success',
+        };
+    }
+
+    protected static function getInboxStatusColorForCode(?string $code): string
+    {
+        return match ($code) {
             DialogInboxStatusData::CODE_REQUIRES_REPLY => 'warning',
             DialogInboxStatusData::CODE_NOT_REQUIRED => 'gray',
             default => 'success',
@@ -674,8 +697,20 @@ class DialogResource extends Resource
         })->whereNull('data_collection_completed_at');
     }
 
+    public static function applyBlacklistStageFilter(Builder $query): Builder
+    {
+        return app(DialogStageCatalog::class)->applyBlacklistStageFilter($query);
+    }
+
+    public static function applyNotBlacklistStageFilter(Builder $query): Builder
+    {
+        return app(DialogStageCatalog::class)->applyNotBlacklistStageFilter($query);
+    }
+
     protected static function applyRequiresManualReplyFilter(Builder $query): Builder
     {
+        static::applyNotBlacklistStageFilter($query);
+
         return $query->whereExists(function (QueryBuilder $inbound): void {
             $inbound
                 ->selectRaw('1')
@@ -718,31 +753,52 @@ class DialogResource extends Resource
             'latestInboundAfterOutboundManualReply' => $latestInboundAfterOutboundManualReply,
         ] = static::buildInboxStatusFilterFragments();
 
-        return match ($status) {
-            DialogInboxStatusData::CODE_NOT_REQUIRED => $query
-                ->whereRaw(
-                    $latestInboundUserMessageId['sql'].' is not null',
-                    $latestInboundUserMessageId['bindings'],
-                )
-                ->where(function (Builder $query) use (
-                    $latestOutboundManualReplyMessageId,
-                    $latestInboundAfterOutboundManualReply,
-                ): Builder {
-                    return $query
-                        ->whereRaw(
-                            $latestOutboundManualReplyMessageId['sql'].' is null',
-                            $latestOutboundManualReplyMessageId['bindings'],
-                        )
-                        ->orWhereRaw(
-                            $latestInboundAfterOutboundManualReply['sql'],
-                            $latestInboundAfterOutboundManualReply['bindings'],
-                        );
-                })
-                ->whereRaw(
-                    $latestInboundUserMessageId['sql'].' = dialogs.manual_reply_dismissed_source_message_id',
-                    $latestInboundUserMessageId['bindings'],
-                ),
-            DialogInboxStatusData::CODE_NO_NEW => $query->where(function (Builder $query) use (
+        if ($status === DialogInboxStatusData::CODE_NOT_REQUIRED) {
+            return $query->where(function (Builder $query) use (
+                $latestInboundUserMessageId,
+                $latestOutboundManualReplyMessageId,
+                $latestInboundAfterOutboundManualReply,
+            ): void {
+                $query
+                    ->where(function (Builder $query): void {
+                        static::applyBlacklistStageFilter($query);
+                    })
+                    ->orWhere(function (Builder $query) use (
+                        $latestInboundUserMessageId,
+                        $latestOutboundManualReplyMessageId,
+                        $latestInboundAfterOutboundManualReply,
+                    ): void {
+                        $query
+                            ->whereRaw(
+                                $latestInboundUserMessageId['sql'].' is not null',
+                                $latestInboundUserMessageId['bindings'],
+                            )
+                            ->where(function (Builder $query) use (
+                                $latestOutboundManualReplyMessageId,
+                                $latestInboundAfterOutboundManualReply,
+                            ): Builder {
+                                return $query
+                                    ->whereRaw(
+                                        $latestOutboundManualReplyMessageId['sql'].' is null',
+                                        $latestOutboundManualReplyMessageId['bindings'],
+                                    )
+                                    ->orWhereRaw(
+                                        $latestInboundAfterOutboundManualReply['sql'],
+                                        $latestInboundAfterOutboundManualReply['bindings'],
+                                    );
+                            })
+                            ->whereRaw(
+                                $latestInboundUserMessageId['sql'].' = dialogs.manual_reply_dismissed_source_message_id',
+                                $latestInboundUserMessageId['bindings'],
+                            );
+                    });
+            });
+        }
+
+        if ($status === DialogInboxStatusData::CODE_NO_NEW) {
+            static::applyNotBlacklistStageFilter($query);
+
+            return $query->where(function (Builder $query) use (
                 $latestInboundUserMessageId,
                 $latestOutboundManualReplyMessageId,
                 $latestInboundAfterOutboundManualReply,
@@ -766,9 +822,10 @@ class DialogResource extends Resource
                                 $latestInboundAfterOutboundManualReply['bindings'],
                             );
                     });
-            }),
-            default => $query,
-        };
+            });
+        }
+
+        return $query;
     }
 
     protected static function messageIsAfterSql(string $leftAlias, string $rightAlias): string

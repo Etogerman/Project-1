@@ -10,6 +10,7 @@ use App\Models\Message;
 use App\Services\Bots\ChannelActivityLogger;
 use App\Services\Bots\SendBotDialogTextAction;
 use App\Services\Bots\StoreDataCollectionOutboundMessageAction;
+use App\Services\Dialogs\DialogAutomationGate;
 use App\Services\Dialogs\ResolveDialogRouteSourceAction;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -69,16 +70,21 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
         StoreDataCollectionOutboundMessageAction $storeDataCollectionOutboundMessageAction,
         ChannelActivityLogger $channelActivityLogger,
         ResolveDialogRouteSourceAction $resolveDialogRouteSourceAction,
+        DialogAutomationGate $dialogAutomationGate,
     ): void {
         if (! (bool) config('bots.data_collection.enabled', true)) {
             return;
         }
 
         $message = Message::query()
-            ->with(['channel', 'contact', 'contactIdentity', 'dialog.channel', 'dialog.contact', 'dialog.currentContactIdentity'])
+            ->with(['channel', 'contact', 'contactIdentity', 'dialog.channel', 'dialog.contact', 'dialog.currentContactIdentity', 'dialog.dialogStage'])
             ->find($this->sourceMessageId);
 
         if (! $message instanceof Message) {
+            return;
+        }
+
+        if (! $dialogAutomationGate->acceptsMessage($message)) {
             return;
         }
 
@@ -97,6 +103,10 @@ class ProcessDataCollectionQuestionJob implements ShouldQueue
 
         $channel = $routeDialog?->channel ?? $sourceChannel;
         $contact = $routeDialog?->contact ?? $message->contact;
+
+        if ($routeDialog instanceof Dialog && ! $dialogAutomationGate->accepts($routeDialog)) {
+            return;
+        }
 
         if (! $channel instanceof Channel || ! $channel->is_active || ! $contact instanceof Contact) {
             return;

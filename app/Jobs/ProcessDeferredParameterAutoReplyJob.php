@@ -11,6 +11,7 @@ use App\Services\Bots\ResolveAutoReplyRuleAction;
 use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\DataCollection\ResolveNextDataCollectionFieldAction;
 use App\Services\Dialogs\CanSendThroughDialogAction;
+use App\Services\Dialogs\DialogAutomationGate;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
@@ -55,9 +56,10 @@ class ProcessDeferredParameterAutoReplyJob implements ShouldQueue
         ResolveAutoReplyRuleAction $resolveAutoReplyRuleAction,
         BotAutoReplyService $botAutoReplyService,
         LegacyAutoReplyRuntimeGate $legacyAutoReplyRuntimeGate,
+        DialogAutomationGate $dialogAutomationGate,
     ): void {
         $dialog = Dialog::query()
-            ->with(['channel', 'contact', 'currentContactIdentity'])
+            ->with(['channel', 'contact', 'currentContactIdentity', 'dialogStage'])
             ->find($this->dialogId);
 
         if (! $dialog instanceof Dialog) {
@@ -71,11 +73,17 @@ class ProcessDeferredParameterAutoReplyJob implements ShouldQueue
         }
 
         $sourceMessage = Message::query()
-            ->with(['channel', 'contactIdentity', 'contact', 'dialog'])
+            ->with(['channel', 'contactIdentity', 'contact', 'dialog.dialogStage'])
             ->find($sourceMessageId);
 
         if (! $sourceMessage instanceof Message) {
             $this->clearPendingIfCurrent($dialog->id, (int) $sourceMessageId);
+
+            return;
+        }
+
+        if (! $dialogAutomationGate->accepts($dialog)) {
+            $this->clearPendingIfCurrent($dialog->id, $sourceMessage->id);
 
             return;
         }

@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Models\Message;
 use App\Models\ScenarioRun;
+use App\Services\Dialogs\DialogAutomationGate;
 use App\Services\Scenarios\ScenarioRegistry;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -56,10 +57,14 @@ class ProcessScenarioInboundJob implements ShouldQueue
         ];
     }
 
-    public function handle(ScenarioRegistry $scenarioRegistry): void
-    {
+    public function handle(
+        ScenarioRegistry $scenarioRegistry,
+        ?DialogAutomationGate $dialogAutomationGate = null,
+    ): void {
+        $dialogAutomationGate ??= app(DialogAutomationGate::class);
+
         $message = Message::query()
-            ->with(['channel', 'contact', 'contactIdentity', 'dialog'])
+            ->with(['channel', 'contact', 'contactIdentity', 'dialog.dialogStage'])
             ->find($this->inboundMessageId);
 
         $run = ScenarioRun::query()->find($this->scenarioRunId);
@@ -71,6 +76,12 @@ class ProcessScenarioInboundJob implements ShouldQueue
             || $message->dialog_id === null
             || (int) $run->dialog_id !== (int) $message->dialog_id
         ) {
+            return;
+        }
+
+        if (! $dialogAutomationGate->acceptsMessage($message)) {
+            $this->cancelRunBecauseDialogBlacklisted($run);
+
             return;
         }
 
@@ -108,5 +119,19 @@ class ProcessScenarioInboundJob implements ShouldQueue
         if (! $result->consumed) {
             ProcessAutoReplyJob::dispatch($message->id)->afterCommit();
         }
+    }
+
+    private function cancelRunBecauseDialogBlacklisted(ScenarioRun $run): void
+    {
+        if (! $run->isActive()) {
+            return;
+        }
+
+        $run->forceFill([
+            'status' => ScenarioRun::STATUS_CANCELLED,
+            'current_step' => null,
+            'exit_outcome' => DialogAutomationGate::REASON_BLACKLIST_STAGE,
+            'finished_at' => now(),
+        ])->save();
     }
 }

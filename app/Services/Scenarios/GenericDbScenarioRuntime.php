@@ -54,6 +54,7 @@ use App\Services\Contacts\ResolveRootContactAction;
 use App\Services\Contacts\SyncContactDistanceToMoscowAction;
 use App\Services\DataCollection\ExtractFirstNameAction;
 use App\Services\Dialogs\DeleteLastOutboundDialogMessageAction;
+use App\Services\Dialogs\DialogAutomationGate;
 use App\Services\Dialogs\DialogStageCatalog;
 use App\Services\Dialogs\ResolveDialogStageAction;
 use App\Services\Geo\ApplyGeoResolutionToContactAction;
@@ -357,6 +358,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         $this->withDeferredV3ScenarioMessages(function () use ($scenarioRunId, $dialogId, $inboundMessageId, $blockId, $token): void {
             DB::transaction(function () use ($scenarioRunId, $dialogId, $inboundMessageId, $blockId, $token): void {
                 $dialog = Dialog::query()
+                    ->with('dialogStage')
                     ->whereKey($dialogId)
                     ->lockForUpdate()
                     ->first();
@@ -365,7 +367,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                     ->lockForUpdate()
                     ->first();
                 $message = Message::query()
-                    ->with(['channel', 'contact', 'contactIdentity', 'dialog'])
+                    ->with(['channel', 'contact', 'contactIdentity', 'dialog.dialogStage'])
                     ->find($inboundMessageId);
 
                 if (
@@ -375,6 +377,12 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                     || ! $message instanceof Message
                     || (int) $run->dialog_id !== $dialogId
                 ) {
+                    return;
+                }
+
+                if (! app(DialogAutomationGate::class)->accepts($dialog)) {
+                    $this->cancelRunBecauseDialogBlacklisted($run);
+
                     return;
                 }
 
@@ -463,6 +471,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                 }
 
                 $dialog = Dialog::query()
+                    ->with('dialogStage')
                     ->whereKey($dialogId)
                     ->lockForUpdate()
                     ->first();
@@ -471,7 +480,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                     ->lockForUpdate()
                     ->first();
                 $message = Message::query()
-                    ->with(['channel', 'contact', 'contactIdentity', 'dialog'])
+                    ->with(['channel', 'contact', 'contactIdentity', 'dialog.dialogStage'])
                     ->find($inboundMessageId);
 
                 if (
@@ -481,6 +490,12 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
                     || ! $message instanceof Message
                     || (int) $run->dialog_id !== $dialogId
                 ) {
+                    return;
+                }
+
+                if (! app(DialogAutomationGate::class)->accepts($dialog)) {
+                    $this->cancelRunBecauseDialogBlacklisted($run);
+
                     return;
                 }
 
@@ -6984,6 +6999,7 @@ TEXT;
                 }
 
                 $dialog = Dialog::query()
+                    ->with('dialogStage')
                     ->whereKey($lockedTransition->dialog_id)
                     ->lockForUpdate()
                     ->first();
@@ -6992,7 +7008,7 @@ TEXT;
                     ->lockForUpdate()
                     ->first();
                 $message = Message::query()
-                    ->with(['channel', 'contact', 'contactIdentity', 'dialog'])
+                    ->with(['channel', 'contact', 'contactIdentity', 'dialog.dialogStage'])
                     ->find($lockedTransition->inbound_message_id);
 
                 if (
@@ -7006,6 +7022,17 @@ TEXT;
                         $lockedTransition,
                         ScenarioV3ScheduledTransition::STATUS_CANCELLED,
                         'Активный run, диалог или исходное сообщение не найдены.',
+                    );
+
+                    return;
+                }
+
+                if (! app(DialogAutomationGate::class)->accepts($dialog)) {
+                    $this->cancelRunBecauseDialogBlacklisted($run);
+                    $this->finishV3ScheduledTransition(
+                        $lockedTransition,
+                        ScenarioV3ScheduledTransition::STATUS_CANCELLED,
+                        'Диалог находится в ЧС-стадии.',
                     );
 
                     return;
@@ -8444,11 +8471,28 @@ TEXT;
         }
 
         $inboundMessage = $outboundMessage->inbound_message_id !== null
-            ? Message::query()->with(['channel', 'contact', 'contactIdentity', 'dialog'])->find($outboundMessage->inbound_message_id)
+            ? Message::query()->with(['channel', 'contact', 'contactIdentity', 'dialog.dialogStage'])->find($outboundMessage->inbound_message_id)
             : null;
 
         if (! $inboundMessage instanceof Message) {
             $this->finishV3OutboundMessage($outboundMessage, null, 'Исходное сообщение для доставки не найдено.', retryable: false);
+
+            return;
+        }
+
+        if (! app(DialogAutomationGate::class)->acceptsMessage($inboundMessage)) {
+            $scenarioRun = $outboundMessage->scenarioRun()->first();
+
+            $this->finishV3OutboundMessage(
+                $outboundMessage,
+                null,
+                'Диалог находится в ЧС-стадии.',
+                retryable: false,
+            );
+
+            if ($scenarioRun instanceof ScenarioRun) {
+                $this->cancelRunBecauseDialogBlacklisted($scenarioRun);
+            }
 
             return;
         }
@@ -8675,6 +8719,20 @@ TEXT;
         $this->failV3ScheduledTransitionDelivery($outboundMessage, $safeErrorMessage);
     }
 
+    private function cancelRunBecauseDialogBlacklisted(ScenarioRun $run): void
+    {
+        if (! $run->isActive()) {
+            return;
+        }
+
+        $run->forceFill([
+            'status' => ScenarioRun::STATUS_CANCELLED,
+            'current_step' => null,
+            'exit_outcome' => DialogAutomationGate::REASON_BLACKLIST_STAGE,
+            'finished_at' => now(),
+        ])->save();
+    }
+
     private function v3OutboundRetryBackoffSeconds(int $attempts): int
     {
         return self::V3_OUTBOUND_RETRY_BACKOFF_SECONDS[max(0, min(
@@ -8862,6 +8920,10 @@ TEXT;
         ?ScenarioRun $scenarioRun = null,
         bool $removeTelegramKeyboardBeforeMessage = false,
     ): bool {
+        if (! app(DialogAutomationGate::class)->acceptsMessage($message)) {
+            return false;
+        }
+
         if ($this->v3ScenarioMessageDeferralDepth > 0) {
             $this->deferredV3ScenarioOutboundMessageIds[] = $this->createDeferredV3OutboundMessage(
                 $message,

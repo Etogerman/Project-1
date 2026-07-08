@@ -2117,6 +2117,7 @@ class FilamentDialogsResourceTest extends TestCase
             ->get(DialogResource::getUrl('view', ['record' => $dialog]))
             ->assertOk()
             ->assertSee('data-role="dialog-stage-strip"', false)
+            ->assertSee('data-role="dialog-stage-track"', false)
             ->assertSee('data-current-tone="warning"', false)
             ->assertSee('class="ac-dialog-stage-strip ac-dialog-summary__stage"', false)
             ->assertSee('data-role="dialog-stage-step"', false)
@@ -2130,6 +2131,34 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertDontSee('<p class="ac-dialog-stage-strip__label">', false)
             ->assertDontSee('class="ac-dialog-stage-strip ac-surface__divider"', false)
             ->assertDontSee('data-role="dialog-stage-select"', false);
+    }
+
+    public function test_dialog_view_stage_strip_renders_optimistic_click_contract(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages();
+
+        $dialog->contact()->update([
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_COMPLETED,
+            'data_collection_completed_at' => now(),
+        ]);
+        $dialog->forceFill([
+            'stage' => Dialog::STAGE_TRANSFERRED_TO_MPL,
+        ])->save();
+
+        $html = $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]))
+            ->assertOk()
+            ->getContent();
+
+        $this->assertStringContainsString('optimisticStageIndex: null', $html);
+        $this->assertStringContainsString('x-on:dialog-stage-selection-settled.window="clearOptimisticStage()"', $html);
+        $this->assertStringContainsString('x-bind:data-state="stageState(', $html);
+        $this->assertStringContainsString('x-bind:style="stageStyle(', $html);
+        $this->assertStringContainsString('x-on:click="selectOptimisticStage(', $html);
     }
 
     public function test_dialog_view_keeps_clickable_previous_stage_colored_as_completed(): void
@@ -2201,7 +2230,7 @@ class FilamentDialogsResourceTest extends TestCase
             ->getContent();
 
         $this->assertSame(4, substr_count($html, 'data-stage-color="#CC0000"'));
-        $this->assertSame(4, substr_count($html, '--stage-step-bg: #CC0000'));
+        $this->assertSame(4, substr_count($html, 'style="--stage-step-bg: #CC0000'));
         $this->assertStringContainsString('--stage-step-text: #FFFFFF', $html);
 
         $this->assertMatchesRegularExpression(

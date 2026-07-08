@@ -8,6 +8,7 @@ use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Services\Contacts\ResolveContactDisplayNameAction;
+use App\Services\Dialogs\DialogStageCatalog;
 use App\Services\Dialogs\MessageChronology;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
@@ -18,6 +19,7 @@ class BuildAnalyticsOverviewAction
 {
     public function __construct(
         private readonly MessageChronology $messageChronology,
+        private readonly DialogStageCatalog $dialogStageCatalog,
     ) {}
 
     /**
@@ -56,7 +58,7 @@ class BuildAnalyticsOverviewAction
             $this->metric(
                 'new_dialogs',
                 'Новые диалоги',
-                $this->rootDialogsQuery()
+                $this->rootNonBlacklistedDialogsQuery()
                     ->whereBetween('dialogs.created_at', [$periodStart, $periodEnd])
                     ->count(),
                 'dialogs.created_at',
@@ -72,7 +74,7 @@ class BuildAnalyticsOverviewAction
             $this->metric(
                 'phones_received',
                 'Телефон получен',
-                $this->rootDialogsQuery()
+                $this->rootNonBlacklistedDialogsQuery()
                     ->whereBetween('dialogs.phone_confirmed_at', [$periodStart, $periodEnd])
                     ->count(),
                 'dialogs.phone_confirmed_at',
@@ -143,11 +145,15 @@ class BuildAnalyticsOverviewAction
      */
     private function buildStageRows(): array
     {
-        $total = max(1, $this->rootDialogsQuery()->count());
+        $stages = collect(Dialog::workingStages())
+            ->reject(fn (string $stage): bool => $this->dialogStageCatalog->isBlacklist($stage))
+            ->values();
 
-        return collect(Dialog::workingStages())
+        $total = max(1, $this->rootNonBlacklistedDialogsQuery()->count());
+
+        return $stages
             ->map(function (string $stage) use ($total): array {
-                $query = $this->rootDialogsQuery();
+                $query = $this->rootNonBlacklistedDialogsQuery();
                 $this->applyEffectiveStageFilter($query, $stage);
                 $count = $query->count();
 
@@ -247,6 +253,8 @@ class BuildAnalyticsOverviewAction
             ->orderByDesc('dialogs.id')
             ->limit(10);
 
+        $this->dialogStageCatalog->applyNotBlacklistStageFilter($query);
+
         /** @var Collection<int, Dialog> $dialogs */
         $dialogs = $query->get();
 
@@ -289,6 +297,15 @@ class BuildAnalyticsOverviewAction
             ->whereHas('contact', fn (Builder $query): Builder => $query->whereNull('merged_into_contact_id'));
     }
 
+    private function rootNonBlacklistedDialogsQuery(): Builder
+    {
+        $query = $this->rootDialogsQuery();
+
+        $this->dialogStageCatalog->applyNotBlacklistStageFilter($query);
+
+        return $query;
+    }
+
     private function botBlockMessagesQuery(Carbon $periodStart, Carbon $periodEnd): Builder
     {
         return Message::query()
@@ -302,7 +319,10 @@ class BuildAnalyticsOverviewAction
      */
     private function groupDialogCountsByChannel(string $timestampColumn, Carbon $periodStart, Carbon $periodEnd): Collection
     {
-        return $this->rootDialogsQuery()
+        $query = $this->rootDialogsQuery();
+        $this->dialogStageCatalog->applyNotBlacklistStageFilter($query);
+
+        return $query
             ->whereBetween($timestampColumn, [$periodStart, $periodEnd])
             ->select('dialogs.channel_id', DB::raw('count(*) as aggregate_count'))
             ->groupBy('dialogs.channel_id')
@@ -344,6 +364,8 @@ class BuildAnalyticsOverviewAction
             'latestOutboundManualReplyMessageId' => $latestOutboundManualReplyMessageId,
             'latestInboundAfterOutboundManualReply' => $latestInboundAfterOutboundManualReply,
         ] = $this->buildInboxStatusFilterFragments();
+
+        $this->dialogStageCatalog->applyNotBlacklistStageFilter($query);
 
         return $query
             ->whereRaw(
@@ -474,6 +496,10 @@ class BuildAnalyticsOverviewAction
 
     private function isRequiresReplyOverdue(Dialog $dialog, Carbon $slaCutoff): bool
     {
+        if ($this->dialogStageCatalog->isBlacklistDialog($dialog)) {
+            return false;
+        }
+
         $latestInboundUserMessageId = $dialog->getAttribute('latest_inbound_user_message_id');
         $latestInboundUserMessageSortAt = $dialog->getAttribute('latest_inbound_user_message_sort_at');
         $latestOutboundManualReplyMessageId = $dialog->getAttribute('latest_outbound_manual_reply_message_id');

@@ -7,6 +7,7 @@ use App\Data\Bots\MaxVideoAttachmentDownloadData;
 use App\Models\Channel;
 use App\Models\Message;
 use App\Models\MessageAttachment;
+use App\Services\Dialogs\DialogAutomationGate;
 use App\Services\Messages\StoreMessageAttachmentLocalFileAction;
 use Illuminate\Http\Client\Response as HttpResponse;
 use Illuminate\Support\Facades\DB;
@@ -20,11 +21,18 @@ class DownloadBotMessageAttachmentsAction
         private readonly TelegramBotApiService $telegramBotApiService,
         private readonly MaxBotApiService $maxBotApiService,
         private readonly StoreMessageAttachmentLocalFileAction $storeMessageAttachmentLocalFileAction,
+        private readonly DialogAutomationGate $dialogAutomationGate,
     ) {}
 
     public function handle(Message $message): void
     {
-        $message->loadMissing(['channel', 'attachments']);
+        $message->loadMissing(['channel', 'attachments', 'dialog.dialogStage']);
+
+        if (! $this->dialogAutomationGate->acceptsMessage($message)) {
+            $this->markBlacklistedAttachmentsMetadataOnly($message);
+
+            return;
+        }
 
         $channel = $message->channel;
 
@@ -39,6 +47,30 @@ class DownloadBotMessageAttachmentsAction
 
             $this->download($channel, $message, $attachment);
         }
+
+        $message->unsetRelation('attachments');
+    }
+
+    private function markBlacklistedAttachmentsMetadataOnly(Message $message): void
+    {
+        MessageAttachment::query()
+            ->where('message_id', $message->id)
+            ->whereIn('provider', [
+                MessageAttachment::PROVIDER_TELEGRAM_BOT,
+                MessageAttachment::PROVIDER_MAX_BOT,
+            ])
+            ->whereIn('download_status', [
+                MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
+                MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD,
+            ])
+            ->update([
+                'download_status' => MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
+                'local_disk' => null,
+                'local_path' => null,
+                'safe_error_code' => DialogAutomationGate::REASON_BLACKLIST_STAGE,
+                'safe_error_message' => 'Media download skipped because the dialog stage is blacklisted.',
+                'updated_at' => now(),
+            ]);
 
         $message->unsetRelation('attachments');
     }
