@@ -121,20 +121,19 @@ return new class extends Migration
 
         $aliases = AbColorPalette::legacyAliases();
 
-        DB::table($tableName)->update([
-            'color_source' => AbColorPalette::ENTITY_SOURCE_PRESET,
-            'color_value' => AbColorPalette::DEFAULT_PRESET_KEY,
-        ]);
+        DB::table($tableName)
+            ->select(['id', 'color'])
+            ->orderBy('id')
+            ->get()
+            ->each(function (object $record) use ($aliases, $tableName): void {
+                $presetKey = $aliases[(string) $record->color] ?? AbColorPalette::DEFAULT_PRESET_KEY;
 
-        foreach (array_unique($aliases) as $presetKey) {
-            $legacyColors = array_keys($aliases, $presetKey, true);
-
-            DB::table($tableName)
-                ->whereIn('color', $legacyColors)
-                ->update([
-                    'color_source' => AbColorPalette::ENTITY_SOURCE_PRESET,
-                    'color_value' => $presetKey,
-                ]);
-        }
+                DB::table($tableName)
+                    ->where('id', $record->id)
+                    ->update([
+                        'color_source' => AbColorPalette::ENTITY_SOURCE_PRESET,
+                        'color_value' => $presetKey,
+                    ]);
+            });
     }
 };
