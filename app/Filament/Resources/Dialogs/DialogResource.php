@@ -149,7 +149,7 @@ class DialogResource extends Resource
                     ->label($dialogFieldLabel('status', 'Статус'))
                     ->state(fn (Dialog $record): string => static::formatInboxStatus($record))
                     ->badge()
-                    ->color(fn (Dialog $record): string => static::getInboxStatusColor($record))
+                    ->color(fn (mixed $state): string => static::getInboxStatusColorForLabel(is_string($state) ? $state : null))
                     ->toggleable(),
                 TextColumn::make('preview_text')
                     ->label($dialogFieldLabel('last_message_at', 'Последнее сообщение'))
@@ -560,7 +560,12 @@ class DialogResource extends Resource
 
     protected static function formatInboxStatus(Dialog $record): string
     {
-        return match (static::resolveInboxStatusCode($record)) {
+        return static::formatInboxStatusCode(static::resolveInboxStatusCode($record));
+    }
+
+    protected static function formatInboxStatusCode(?string $code): string
+    {
+        return match ($code) {
             DialogInboxStatusData::CODE_REQUIRES_REPLY => 'Требует ответа',
             DialogInboxStatusData::CODE_NOT_REQUIRED => 'Не требует ответа',
             default => 'Нет новых',
@@ -569,7 +574,21 @@ class DialogResource extends Resource
 
     protected static function getInboxStatusColor(Dialog $record): string
     {
-        return match (static::resolveInboxStatusCode($record)) {
+        return static::getInboxStatusColorForCode(static::resolveInboxStatusCode($record));
+    }
+
+    protected static function getInboxStatusColorForLabel(?string $label): string
+    {
+        return match ($label) {
+            'Требует ответа' => 'warning',
+            'Не требует ответа' => 'gray',
+            default => 'success',
+        };
+    }
+
+    protected static function getInboxStatusColorForCode(?string $code): string
+    {
+        return match ($code) {
             DialogInboxStatusData::CODE_REQUIRES_REPLY => 'warning',
             DialogInboxStatusData::CODE_NOT_REQUIRED => 'gray',
             default => 'success',
@@ -680,56 +699,12 @@ class DialogResource extends Resource
 
     public static function applyBlacklistStageFilter(Builder $query): Builder
     {
-        $catalog = app(DialogStageCatalog::class);
-        $stageIds = $catalog->blacklistStageIds();
-        $stageKeys = $catalog->blacklistStageKeys();
-
-        if ($stageIds === [] && $stageKeys === []) {
-            return $query->whereRaw('1 = 0');
-        }
-
-        return $query->where(function (Builder $query) use ($stageIds, $stageKeys): void {
-            $hasCondition = false;
-
-            if ($stageIds !== []) {
-                $query->whereIn('dialogs.stage_id', $stageIds);
-                $hasCondition = true;
-            }
-
-            if ($stageKeys !== []) {
-                $method = $hasCondition ? 'orWhereIn' : 'whereIn';
-                $query->{$method}('dialogs.stage', $stageKeys);
-            }
-        });
+        return app(DialogStageCatalog::class)->applyBlacklistStageFilter($query);
     }
 
     public static function applyNotBlacklistStageFilter(Builder $query): Builder
     {
-        $catalog = app(DialogStageCatalog::class);
-        $stageIds = $catalog->blacklistStageIds();
-        $stageKeys = $catalog->blacklistStageKeys();
-
-        if ($stageIds === [] && $stageKeys === []) {
-            return $query;
-        }
-
-        return $query->where(function (Builder $query) use ($stageIds, $stageKeys): void {
-            if ($stageIds !== []) {
-                $query->where(function (Builder $query) use ($stageIds): void {
-                    $query
-                        ->whereNull('dialogs.stage_id')
-                        ->orWhereNotIn('dialogs.stage_id', $stageIds);
-                });
-            }
-
-            if ($stageKeys !== []) {
-                $query->where(function (Builder $query) use ($stageKeys): void {
-                    $query
-                        ->whereNull('dialogs.stage')
-                        ->orWhereNotIn('dialogs.stage', $stageKeys);
-                });
-            }
-        });
+        return app(DialogStageCatalog::class)->applyNotBlacklistStageFilter($query);
     }
 
     protected static function applyRequiresManualReplyFilter(Builder $query): Builder
