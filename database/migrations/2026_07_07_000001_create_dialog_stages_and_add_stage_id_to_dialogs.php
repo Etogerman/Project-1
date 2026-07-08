@@ -81,10 +81,14 @@ return new class extends Migration
 
         $stageIds = DB::table('dialog_stages')->pluck('id', 'key');
 
-        foreach ($stageIds as $key => $id) {
+        foreach ($this->seededStages as $key => $stage) {
+            if ($stage['system_role'] !== null) {
+                continue;
+            }
+
             DB::table('dialogs')
                 ->where('stage', $key)
-                ->update(['stage_id' => $id]);
+                ->update(['stage_id' => (int) $stageIds[$key]]);
         }
 
         $this->backfillDerivedStage(
