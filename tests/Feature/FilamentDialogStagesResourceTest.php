@@ -8,6 +8,9 @@ use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\DialogStage;
+use App\Models\Scenario;
+use App\Models\ScenarioBuilderBlock;
+use App\Models\ScenarioVersion;
 use App\Models\User;
 use Filament\Facades\Filament;
 use Filament\Support\Icons\Heroicon;
@@ -244,6 +247,109 @@ class FilamentDialogStagesResourceTest extends TestCase
 
         $this->assertSame($replacementStage->id, $dialog->stage_id);
         $this->assertSame($replacementStage->key, $dialog->stage);
+    }
+
+    public function test_admin_can_delete_manual_stage_with_scenario_reference_replacement(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $sourceStage = DialogStage::factory()->create([
+            'key' => 'operator_follow_up',
+            'name' => 'Дожим оператором',
+            'sort_order' => 60,
+            'system_role' => null,
+        ]);
+        $replacementStage = DialogStage::query()
+            ->where('key', DialogStage::KEY_TRANSFERRED_TO_MPP)
+            ->firstOrFail();
+        $dialog = Dialog::factory()->create([
+            'contact_id' => Contact::factory(),
+            'channel_id' => Channel::factory(),
+            'stage' => $sourceStage->key,
+            'stage_id' => $sourceStage->id,
+        ]);
+        $scenario = Scenario::query()->create([
+            'code' => 'stage_reference_transfer',
+            'name' => 'Stage Reference Transfer',
+            'is_active' => true,
+            'is_archived' => false,
+        ]);
+        $draftVersion = ScenarioVersion::query()->create([
+            'scenario_id' => $scenario->id,
+            'version_number' => 1,
+            'status' => ScenarioVersion::STATUS_DRAFT,
+            'schema_payload' => [],
+        ]);
+        $publishedVersion = ScenarioVersion::query()->create([
+            'scenario_id' => $scenario->id,
+            'version_number' => 2,
+            'status' => ScenarioVersion::STATUS_PUBLISHED,
+            'schema_payload' => [
+                'builder_v3_runtime' => [
+                    'entrypoints' => [
+                        [
+                            'event' => 'stage_changed',
+                            'stage_key' => $sourceStage->key,
+                            'channel_ids' => [$dialog->channel_id],
+                            'values' => [''],
+                        ],
+                    ],
+                ],
+            ],
+        ]);
+        $draftBlock = ScenarioBuilderBlock::query()->create([
+            'scenario_version_id' => $draftVersion->id,
+            'type' => 'state',
+            'title' => 'Старт по стадии',
+            'position_x' => 80,
+            'position_y' => 96,
+            'settings_payload' => [
+                'schema_version' => 3,
+                'kind' => 'state',
+                'modules' => [
+                    [
+                        'id' => 'mod_start_condition',
+                        'type' => 'start_condition',
+                        'payload' => [
+                            'start_event' => 'message_in_stage',
+                            'stage_key' => $sourceStage->key,
+                            'command' => '',
+                        ],
+                    ],
+                ],
+            ],
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageDialogStages::class)
+            ->mountTableAction('delete', $sourceStage)
+            ->assertMountedActionModalSee('Будет перенесено: диалогов — 1, ссылок сценариев — 2.')
+            ->assertMountedActionModalSee('Подтверждаю перенос ссылок сценариев')
+            ->setTableActionData([
+                'replacement_stage_id' => $replacementStage->id,
+                'confirm_scenario_reference_transfer' => true,
+            ])
+            ->callMountedTableAction()
+            ->assertHasNoTableActionErrors();
+
+        $this->assertModelMissing($sourceStage);
+
+        $dialog->refresh();
+        $draftBlock->refresh();
+        $publishedVersion->refresh();
+
+        $this->assertSame($replacementStage->id, $dialog->stage_id);
+        $this->assertSame($replacementStage->key, $dialog->stage);
+        $this->assertSame(
+            $replacementStage->key,
+            data_get($draftBlock->settings_payload, 'modules.0.payload.stage_key'),
+        );
+        $this->assertSame(
+            $replacementStage->key,
+            data_get($publishedVersion->schema_payload, 'builder_v3_runtime.entrypoints.0.stage_key'),
+        );
     }
 
     public function test_dialog_stages_table_uses_inline_list_page_standard(): void

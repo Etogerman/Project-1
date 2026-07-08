@@ -10,6 +10,8 @@ use App\Services\Dialogs\DeleteDialogStageWithReplacementAction;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Actions\EditAction;
+use Filament\Forms\Components\Checkbox;
+use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Notifications\Notification;
@@ -159,11 +161,14 @@ class DialogStageResource extends Resource
                     ->visible(fn (DialogStage $record): bool => ! $record->isSystemDerivedStage())
                     ->requiresConfirmation()
                     ->modalHeading(fn (DialogStage $record): string => "Удалить стадию «{$record->name}»?")
-                    ->modalDescription('Перед удалением выберите стадию, в которую будут перенесены диалоги.')
+                    ->modalDescription(fn (DialogStage $record): string => static::deleteModalDescription($record))
                     ->modalSubmitActionLabel('Удалить')
                     ->form([
+                        Placeholder::make('delete_summary')
+                            ->hiddenLabel()
+                            ->content(fn (DialogStage $record): string => static::deleteTransferSummary($record)),
                         Select::make('replacement_stage_id')
-                            ->label('Куда перенести диалоги')
+                            ->label('Куда перенести диалоги и ссылки сценариев')
                             ->options(fn (DialogStage $record): array => DialogStage::query()
                                 ->whereKeyNot($record->getKey())
                                 ->ordered()
@@ -172,9 +177,16 @@ class DialogStageResource extends Resource
                             ->required()
                             ->searchable()
                             ->native(false),
+                        Checkbox::make('confirm_scenario_reference_transfer')
+                            ->label('Подтверждаю перенос ссылок сценариев на выбранную стадию')
+                            ->helperText('Сценарии продолжат запускаться от стадии-замены.')
+                            ->accepted(fn (DialogStage $record): bool => static::scenarioReferenceCount($record) > 0)
+                            ->required(fn (DialogStage $record): bool => static::scenarioReferenceCount($record) > 0)
+                            ->visible(fn (DialogStage $record): bool => static::scenarioReferenceCount($record) > 0)
+                            ->dehydrated(false),
                     ])
                     ->action(function (DialogStage $record, array $data): void {
-                        app(DeleteDialogStageWithReplacementAction::class)->handle(
+                        $result = app(DeleteDialogStageWithReplacementAction::class)->handle(
                             $record,
                             (int) $data['replacement_stage_id'],
                         );
@@ -182,7 +194,7 @@ class DialogStageResource extends Resource
                         Notification::make()
                             ->success()
                             ->title('Стадия удалена')
-                            ->body('Диалоги перенесены в выбранную стадию.')
+                            ->body("Перенесено: диалогов — {$result['dialogs']}, ссылок сценариев — {$result['scenario_references']}.")
                             ->send();
                     }),
             ])
@@ -194,5 +206,25 @@ class DialogStageResource extends Resource
         return [
             'index' => ManageDialogStages::route('/'),
         ];
+    }
+
+    private static function deleteModalDescription(DialogStage $record): string
+    {
+        return static::scenarioReferenceCount($record) > 0
+            ? 'Перед удалением выберите стадию-замену и подтвердите перенос ссылок сценариев. История старых переходов не переписывается.'
+            : 'Перед удалением выберите стадию, в которую будут перенесены диалоги. История старых переходов не переписывается.';
+    }
+
+    private static function deleteTransferSummary(DialogStage $record): string
+    {
+        $dialogsCount = (int) ($record->dialogs_count ?? $record->dialogs()->count());
+        $scenarioReferenceCount = static::scenarioReferenceCount($record);
+
+        return "Будет перенесено: диалогов — {$dialogsCount}, ссылок сценариев — {$scenarioReferenceCount}.";
+    }
+
+    private static function scenarioReferenceCount(DialogStage $record): int
+    {
+        return app(DeleteDialogStageWithReplacementAction::class)->countScenarioReferences($record);
     }
 }
