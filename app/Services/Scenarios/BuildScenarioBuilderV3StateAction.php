@@ -13,6 +13,8 @@ use App\Models\ScenarioV3ScheduledTransition;
 use App\Models\ScenarioVersion;
 use App\Models\Tag;
 use App\Models\User;
+use App\Services\Colors\ColorRegistry;
+use App\Services\Dialogs\DialogStageCatalog;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
 
@@ -73,6 +75,8 @@ class BuildScenarioBuilderV3StateAction
             'catalogs' => [
                 'channels' => $this->channelsCatalog($user),
                 'tags' => $this->tagsCatalog(),
+                'color_palette' => $this->colorPaletteCatalog(),
+                'dialog_stages' => $this->dialogStagesCatalog(),
                 'field_dictionary' => FieldDictionaryField::constructorCatalog(),
                 'module_types' => ['start_condition', 'message', 'buttons'],
             ],
@@ -149,19 +153,75 @@ class BuildScenarioBuilderV3StateAction
     }
 
     /**
-     * @return list<array{id: int, name: string, color: string, is_active: bool}>
+     * @return list<array{id: int, name: string, color: string, color_source: string|null, color_value: string|null, color_hex: string, is_active: bool}>
      */
     private function tagsCatalog(): array
     {
+        $colorRegistry = app(ColorRegistry::class);
+
         return Tag::query()
             ->active()
             ->orderBy('name')
             ->get()
-            ->map(fn (Tag $tag): array => [
-                'id' => (int) $tag->id,
-                'name' => (string) $tag->name,
-                'color' => (string) $tag->color,
-                'is_active' => (bool) $tag->is_active,
+            ->map(function (Tag $tag) use ($colorRegistry): array {
+                $color = $colorRegistry->resolve($tag->color_source, $tag->color_value, $tag->color);
+
+                return [
+                    'id' => (int) $tag->id,
+                    'name' => (string) $tag->name,
+                    'color' => (string) $tag->color,
+                    'color_source' => $tag->color_source !== null ? (string) $tag->color_source : null,
+                    'color_value' => $tag->color_value !== null ? (string) $tag->color_value : null,
+                    'color_hex' => $color['hex'],
+                    'is_active' => (bool) $tag->is_active,
+                ];
+            })
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @return array{default:string,recommended:list<array{value:string,label:string,hex:string,text:string}>,web_safe:list<array{value:string,label:string,hex:string,text:string}>}
+     */
+    private function colorPaletteCatalog(): array
+    {
+        $colorRegistry = app(ColorRegistry::class);
+
+        return [
+            'default' => $colorRegistry->inputValue(null, null),
+            'recommended' => $this->colorCatalogItems($colorRegistry->recommended()),
+            'web_safe' => $this->colorCatalogItems($colorRegistry->webSafe()),
+        ];
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $colors
+     * @return list<array{value:string,label:string,hex:string,text:string}>
+     */
+    private function colorCatalogItems(array $colors): array
+    {
+        return collect($colors)
+            ->map(fn (array $color): array => [
+                'value' => (string) $color['value'],
+                'label' => (string) $color['name'],
+                'hex' => (string) $color['hex'],
+                'text' => (string) $color['text'],
+            ])
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @return list<array{value:string,key:string,label:string,is_system:bool}>
+     */
+    private function dialogStagesCatalog(): array
+    {
+        return collect(app(DialogStageCatalog::class)->options())
+            ->map(fn (array $stage): array => [
+                'value' => (string) $stage['value'],
+                'key' => (string) $stage['value'],
+                'label' => (string) $stage['label'],
+                'is_system' => (bool) $stage['is_system'],
             ])
             ->values()
             ->all();
@@ -288,7 +348,7 @@ class BuildScenarioBuilderV3StateAction
                 $normalized = [
                     'id' => (string) ($sheet['id'] ?? self::DEFAULT_SHEET_ID),
                     'name' => (string) ($sheet['name'] ?? self::DEFAULT_SHEET_NAME),
-                    'color' => (string) ($sheet['color'] ?? 'none'),
+                    'color' => app(ColorRegistry::class)->normalizeInputValue($sheet['color'] ?? 'none', allowNone: true) ?? 'none',
                     'view' => [
                         'tx' => (float) data_get($sheet, 'view.tx', 0),
                         'ty' => (float) data_get($sheet, 'view.ty', 0),
@@ -446,6 +506,8 @@ class BuildScenarioBuilderV3StateAction
                 'enabled' => true,
                 'payload' => [
                     'command' => (string) ($block->conditions->first()?->value ?? ''),
+                    'start_event' => 'message',
+                    'stage_key' => '',
                     'match' => (string) ($block->conditions->first()?->match_operator ?? 'strict'),
                     'variable' => '',
                     'exclude' => '',
@@ -513,6 +575,12 @@ class BuildScenarioBuilderV3StateAction
             : [];
 
         $payload['command'] = (string) ($conditions->first()?->value ?? ($payload['command'] ?? ''));
+        $payload['start_event'] = in_array($payload['start_event'] ?? null, ['message_in_stage', 'stage_changed'], true)
+            ? (string) $payload['start_event']
+            : 'message';
+        $payload['stage_key'] = in_array($payload['start_event'], ['message_in_stage', 'stage_changed'], true)
+            ? (string) ($payload['stage_key'] ?? '')
+            : '';
         $payload['values'] = $conditions
             ->map(fn (ScenarioBuilderCondition $condition): string => (string) $condition->value)
             ->values()

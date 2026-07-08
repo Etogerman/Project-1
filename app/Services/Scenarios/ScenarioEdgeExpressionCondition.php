@@ -8,6 +8,7 @@ use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Services\Contacts\ResolveRootContactAction;
+use App\Services\Dialogs\ResolveDialogStageAction;
 use DateTimeInterface;
 use InvalidArgumentException;
 
@@ -198,6 +199,7 @@ class ScenarioEdgeExpressionCondition
     private function dialogSystemValue(string $field, Dialog $dialog): mixed
     {
         return match ($field) {
+            'stage' => app(ResolveDialogStageAction::class)->handle($dialog),
             'phone' => $dialog->confirmed_phone_raw ?: $dialog->confirmed_phone_normalized,
             'external_username' => $dialog->currentContactIdentity?->external_username,
             'last_inbound_message_at' => $dialog->last_inbound_at,

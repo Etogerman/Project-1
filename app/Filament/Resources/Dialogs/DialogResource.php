@@ -15,6 +15,7 @@ use App\Models\Message;
 use App\Models\User;
 use App\Services\Contacts\ResolveContactDisplayNameAction;
 use App\Services\Dialogs\BuildConversationFeedViewDataAction;
+use App\Services\Dialogs\DialogStageCatalog;
 use App\Services\Dialogs\MessageChronology;
 use App\Services\Dialogs\ResolveDialogRouteStatusAction;
 use App\Services\Dialogs\ResolveDialogStageAction;
@@ -60,6 +61,7 @@ class DialogResource extends Resource
             ->with([
                 'channel.connectionTypeDefinition',
                 'currentContactIdentity',
+                'dialogStage',
                 'contact.assignedUser',
                 'contact.phoneNumbers',
                 'contact.primaryIdentity',
@@ -95,6 +97,7 @@ class DialogResource extends Resource
             ->with([
                 'channel.connectionTypeDefinition',
                 'currentContactIdentity',
+                'dialogStage',
                 'contact.assignedUser',
                 'contact.primaryIdentity',
                 'lastMessage.channel.connectionTypeDefinition',
@@ -114,6 +117,7 @@ class DialogResource extends Resource
             ->with([
                 'channel.connectionTypeDefinition',
                 'currentContactIdentity',
+                'dialogStage',
                 'contact.assignedUser',
             ]);
 
@@ -582,30 +586,28 @@ class DialogResource extends Resource
 
     protected static function resolveEffectiveStage(Dialog $record): string
     {
-        return app(ResolveDialogStageAction::class)->handle($record);
+        return app(DialogStageCatalog::class)->keyForDialog($record)
+            ?? app(ResolveDialogStageAction::class)->handle($record);
     }
 
     public static function applyStageFilter(Builder $query, string $stage): void
     {
         if (Dialog::isServiceStage($stage)) {
-            $query->where('dialogs.stage', $stage);
+            static::applyPersistedStageCondition($query, $stage);
 
             return;
         }
 
         if (Dialog::isManualStage($stage)) {
-            $query->where('dialogs.stage', $stage);
+            static::applyPersistedStageCondition($query, $stage);
 
             return;
         }
 
         $query->where(function (Builder $query) use ($stage): void {
-            $query->where('dialogs.stage', $stage)
+            static::applyPersistedStageCondition($query, $stage)
                 ->orWhere(function (Builder $query) use ($stage): void {
-                    $query->where(function (Builder $query): void {
-                        $query->whereNull('dialogs.stage')
-                            ->orWhereNotIn('dialogs.stage', Dialog::workingStages());
-                    });
+                    static::applyNotWorkingPersistedStageScope($query);
 
                     match ($stage) {
                         Dialog::STAGE_QUESTIONNAIRE_COMPLETED => $query
@@ -619,6 +621,41 @@ class DialogResource extends Resource
                     };
                 });
         });
+    }
+
+    protected static function applyPersistedStageCondition(Builder $query, string $stage): Builder
+    {
+        $stageId = app(DialogStageCatalog::class)->stageIdForKey($stage);
+
+        return $query->where(function (Builder $query) use ($stage, $stageId): void {
+            $query->where('dialogs.stage', $stage);
+
+            if ($stageId !== null) {
+                $query->orWhere('dialogs.stage_id', $stageId);
+            }
+        });
+    }
+
+    protected static function applyNotWorkingPersistedStageScope(Builder $query): Builder
+    {
+        $workingStageIds = collect(Dialog::workingStages())
+            ->map(fn (string $stage): ?int => app(DialogStageCatalog::class)->stageIdForKey($stage))
+            ->filter()
+            ->values()
+            ->all();
+
+        return $query
+            ->where(function (Builder $query) use ($workingStageIds): void {
+                $query->whereNull('dialogs.stage_id');
+
+                if ($workingStageIds !== []) {
+                    $query->orWhereNotIn('dialogs.stage_id', $workingStageIds);
+                }
+            })
+            ->where(function (Builder $query): void {
+                $query->whereNull('dialogs.stage')
+                    ->orWhereNotIn('dialogs.stage', Dialog::workingStages());
+            });
     }
 
     protected static function applyCompletedContactScope(Builder $query): Builder

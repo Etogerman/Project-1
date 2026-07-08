@@ -73,7 +73,7 @@ class ProcessScenarioStartJob implements ShouldQueue
             ->with(['channel', 'contact', 'contactIdentity', 'dialog.channel', 'dialog.currentContactIdentity'])
             ->find($this->inboundMessageId);
 
-        if (! $message instanceof Message || $message->message_kind !== Message::KIND_INBOUND_USER || $message->dialog_id === null) {
+        if (! $message instanceof Message || ! $this->canUseMessageAsStartSource($message)) {
             return;
         }
 
@@ -108,6 +108,10 @@ class ProcessScenarioStartJob implements ShouldQueue
             return;
         }
 
+        if ($this->hasRunForStartSource($effectiveDialogId, $binding->scenario_code, $message)) {
+            return;
+        }
+
         $activeRun = $this->activeRun($effectiveDialogId);
 
         if ($activeRun instanceof ScenarioRun) {
@@ -130,7 +134,7 @@ class ProcessScenarioStartJob implements ShouldQueue
                 'scenario_code' => $binding->scenario_code,
                 'status' => ScenarioRun::STATUS_ACTIVE,
                 'current_step' => null,
-                'state_payload' => [],
+                'state_payload' => $this->initialStatePayloadForStartSource($message),
                 'started_at' => now(),
             ]);
         } catch (QueryException $exception) {
@@ -160,6 +164,65 @@ class ProcessScenarioStartJob implements ShouldQueue
     protected function activeRunExists(int $dialogId): bool
     {
         return $this->activeRun($dialogId) instanceof ScenarioRun;
+    }
+
+    protected function canUseMessageAsStartSource(Message $message): bool
+    {
+        if ($message->dialog_id === null) {
+            return false;
+        }
+
+        return $message->message_kind === Message::KIND_INBOUND_USER
+            || $this->isDialogStageChangeMessage($message);
+    }
+
+    protected function isDialogStageChangeMessage(Message $message): bool
+    {
+        return $message->message_kind === Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE
+            && $message->sent_by_system_code === Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE
+            && (string) data_get($message->raw_payload, 'event', '') === Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE
+            && filled(data_get($message->raw_payload, 'to_stage'));
+    }
+
+    protected function hasRunForStartSource(int $dialogId, string $scenarioCode, Message $message): bool
+    {
+        if (! $this->isDialogStageChangeMessage($message)) {
+            return false;
+        }
+
+        return ScenarioRun::query()
+            ->where('dialog_id', $dialogId)
+            ->where('scenario_code', $scenarioCode)
+            ->whereRaw(
+                "state_payload #>> '{v3,entrypoint,source_event}' = ?",
+                [Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE],
+            )
+            ->whereRaw(
+                "state_payload #>> '{v3,entrypoint,source_message_id}' = ?",
+                [(string) $message->id],
+            )
+            ->exists();
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function initialStatePayloadForStartSource(Message $message): array
+    {
+        if (! $this->isDialogStageChangeMessage($message)) {
+            return [];
+        }
+
+        return [
+            'v3' => [
+                'entrypoint' => [
+                    'source_event' => Message::SENT_BY_SYSTEM_CODE_DIALOG_STAGE_CHANGE,
+                    'source_message_id' => (int) $message->id,
+                    'source_stage_from_key' => trim((string) data_get($message->raw_payload, 'from_stage', '')),
+                    'source_stage_to_key' => trim((string) data_get($message->raw_payload, 'to_stage', '')),
+                ],
+            ],
+        ];
     }
 
     protected function activeRun(int $dialogId): ?ScenarioRun

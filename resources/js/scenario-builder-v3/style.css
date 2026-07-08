@@ -4633,7 +4633,7 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
 .ac-v3-builder__sheet-color-grid {
     display: grid;
     gap: 8px;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(142px, 1fr));
 }
 
 .ac-v3-builder__sheet-color-grid button {
@@ -4661,6 +4661,14 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
     border: 1px solid var(--border-strong);
     border-radius: 999px;
     background: var(--sheet-color, transparent);
+}
+
+.ac-v3-builder__sheet-color-grid b {
+    width: 14px;
+    color: var(--text-3);
+    font-size: 14px;
+    font-weight: 500;
+    text-align: center;
 }
 
 .ac-v3-builder__sheet-dialog-danger {
@@ -5203,16 +5211,16 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
 
 .ac-v3-builder__button-color-grid {
     display: grid;
-    grid-template-columns: 1.45fr repeat(3, 1fr);
+    grid-template-columns: repeat(auto-fill, minmax(124px, 1fr));
     gap: 12px;
 }
 
 .ac-v3-builder__button-color-grid button {
     display: flex !important;
     width: 100% !important;
-    min-height: 58px !important;
+    min-height: 48px !important;
     align-items: center;
-    justify-content: center;
+    justify-content: flex-start;
     border: 1px solid var(--border-strong) !important;
     border-radius: 12px !important;
     background: var(--surface) !important;
@@ -5229,10 +5237,11 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
 
 .ac-v3-builder__button-color-grid i {
     display: block;
-    width: 100%;
-    height: 100%;
-    min-height: 44px;
-    border-radius: 10px;
+    width: 18px;
+    height: 18px;
+    min-height: 18px;
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
 }
 
 .ac-v3-builder__button-color-grid b {
