@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Models\Message;
 use App\Models\MessageAttachment;
 use App\Services\Bots\DownloadBotMessageAttachmentsAction;
+use App\Services\Dialogs\DialogAutomationGate;
 use Illuminate\Console\Command;
 
 class DownloadPendingBotMediaAttachmentsCommand extends Command
@@ -62,6 +63,11 @@ class DownloadPendingBotMediaAttachmentsCommand extends Command
                 MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
                 MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD,
             ])
+            ->where(function ($query): void {
+                $query
+                    ->whereNull('safe_error_code')
+                    ->orWhere('safe_error_code', '!=', DialogAutomationGate::REASON_BLACKLIST_STAGE);
+            })
             ->when(filled($channelId), fn ($builder) => $builder->where('channel_id', (int) $channelId))
             ->orderBy('id');
 

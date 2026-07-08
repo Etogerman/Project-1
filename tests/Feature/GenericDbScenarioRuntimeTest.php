@@ -52,8 +52,11 @@ use App\Services\Bots\SendBotDialogTextAction;
 use App\Services\Bots\StoreOutboundScenarioMessageAction;
 use App\Services\Contacts\AddContactPhoneAction;
 use App\Services\DataCollection\ExtractFirstNameAction;
+use App\Services\Dialogs\CreateDialogStageHistoryMessageAction;
 use App\Services\Dialogs\DeleteLastOutboundDialogMessageAction;
+use App\Services\Dialogs\DialogAutomationGate;
 use App\Services\Geo\ResolveGeoCityAction;
+use App\Services\Scenarios\DispatchDialogStageChangedScenarioAction;
 use App\Services\Scenarios\DispatchStoredInboundScenarioAction;
 use App\Services\Scenarios\GenericDbScenarioRuntime;
 use App\Services\Scenarios\ScenarioEdgeExpressionCondition;
@@ -4768,6 +4771,93 @@ class GenericDbScenarioRuntimeTest extends TestCase
         $this->assertSame($outbound->id, data_get($run->state_payload, 'v3.delivery_error.outbound_message_id'));
     }
 
+    public function test_v3_outbound_blacklist_stage_cancels_run_before_delivery(): void
+    {
+        Queue::fake([
+            ProcessScenarioV3OutboundMessageJob::class,
+        ]);
+
+        $channel = $this->createTelegramChannel();
+        [$contact, $identity, $dialog] = $this->createDialogContext($channel);
+        $scenario = $this->createPublishedScenario('v3_outbox_blacklist_cancel', $this->v3CatalogRuntimeSchema($channel->id));
+        $blacklistStage = DialogStage::factory()->create([
+            'key' => 'blacklist_v3_outbound',
+            'name' => 'ЧС',
+            'behavior_policy' => DialogStage::BEHAVIOR_POLICY_BLACKLIST,
+        ]);
+        $dialog->forceFill([
+            'stage' => $blacklistStage->key,
+            'stage_id' => $blacklistStage->id,
+        ])->save();
+
+        $run = ScenarioRun::query()->create([
+            'dialog_id' => $dialog->id,
+            'scenario_code' => $scenario->code,
+            'status' => ScenarioRun::STATUS_ACTIVE,
+            'current_step' => 'catalog',
+            'state_payload' => [
+                'v3' => [
+                    'published_version_id' => $scenario->publishedVersion?->id,
+                    'current_block_id' => 'catalog',
+                ],
+            ],
+            'started_at' => now(),
+        ]);
+
+        $inboundMessage = Message::factory()->create([
+            'contact_id' => $contact->id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'dialog_id' => $dialog->id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'external_chat_id' => $dialog->external_chat_id,
+            'text' => 'Получить каталог',
+        ]);
+
+        $outbound = ScenarioV3OutboundMessage::query()->create([
+            'scenario_run_id' => $run->id,
+            'dialog_id' => $dialog->id,
+            'channel_id' => $channel->id,
+            'inbound_message_id' => $inboundMessage->id,
+            'published_version_id' => $scenario->publishedVersion?->id,
+            'scenario_code' => $scenario->code,
+            'block_id' => 'catalog',
+            'text' => 'Вот каталог',
+            'text_format' => Message::TEXT_FORMAT_PLAIN_TEXT,
+            'delivery_payload' => [
+                'request_phone' => false,
+                'remove_telegram_keyboard' => false,
+                'reply_button_rows' => null,
+                'button_placement' => 'auto',
+                'v3_callback_block_id' => 'catalog',
+            ],
+            'status' => ScenarioV3OutboundMessage::STATUS_PENDING,
+            'attempts' => 0,
+            'available_at' => now(),
+        ]);
+
+        $sendAction = Mockery::mock(SendBotDialogTextAction::class);
+        $sendAction->shouldNotReceive('handleMessage');
+        $this->app->instance(SendBotDialogTextAction::class, $sendAction);
+
+        (new ProcessScenarioV3OutboundMessageJob($outbound->id))
+            ->handle(app(ScenarioRegistry::class));
+
+        $outbound->refresh();
+        $run->refresh();
+
+        $this->assertSame(ScenarioV3OutboundMessage::STATUS_FAILED, $outbound->status);
+        $this->assertSame(1, $outbound->attempts);
+        $this->assertSame('Диалог находится в ЧС-стадии.', $outbound->error_message);
+        $this->assertSame(ScenarioRun::STATUS_CANCELLED, $run->status);
+        $this->assertNull($run->current_step);
+        $this->assertSame(DialogAutomationGate::REASON_BLACKLIST_STAGE, $run->exit_outcome);
+        $this->assertNotNull($run->finished_at);
+        $this->assertSame(0, Message::query()->where('direction', Message::DIRECTION_OUTBOUND)->count());
+    }
+
     public function test_v3_outbound_store_failure_after_provider_acceptance_is_uncertain_without_retry(): void
     {
         Queue::fake([
@@ -8047,11 +8137,11 @@ class GenericDbScenarioRuntimeTest extends TestCase
             'is_active' => true,
         ]);
 
-        $historyMessage = app(\App\Services\Dialogs\CreateDialogStageHistoryMessageAction::class)->handle(
+        $historyMessage = app(CreateDialogStageHistoryMessageAction::class)->handle(
             $dialog,
             Dialog::STAGE_NEW_DIALOG,
             Dialog::STAGE_TRANSFERRED_TO_MPL,
-            \App\Services\Dialogs\CreateDialogStageHistoryMessageAction::SOURCE_TYPE_SYSTEM,
+            CreateDialogStageHistoryMessageAction::SOURCE_TYPE_SYSTEM,
         );
 
         $this->assertInstanceOf(Message::class, $historyMessage);
@@ -8107,7 +8197,7 @@ class GenericDbScenarioRuntimeTest extends TestCase
             ],
         ]);
 
-        $dispatcher = app(\App\Services\Scenarios\DispatchDialogStageChangedScenarioAction::class);
+        $dispatcher = app(DispatchDialogStageChangedScenarioAction::class);
 
         $this->assertTrue($dispatcher->handle($historyMessage));
         $this->assertFalse($dispatcher->handle($historyMessage->fresh()));

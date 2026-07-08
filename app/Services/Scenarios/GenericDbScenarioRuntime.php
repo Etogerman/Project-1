@@ -8481,12 +8481,18 @@ TEXT;
         }
 
         if (! app(DialogAutomationGate::class)->acceptsMessage($inboundMessage)) {
+            $scenarioRun = $outboundMessage->scenarioRun()->first();
+
             $this->finishV3OutboundMessage(
                 $outboundMessage,
                 null,
                 'Диалог находится в ЧС-стадии.',
                 retryable: false,
             );
+
+            if ($scenarioRun instanceof ScenarioRun) {
+                $this->cancelRunBecauseDialogBlacklisted($scenarioRun);
+            }
 
             return;
         }
