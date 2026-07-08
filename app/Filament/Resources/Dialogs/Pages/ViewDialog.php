@@ -6,7 +6,9 @@ use App\Data\Dialogs\DialogInboxStatusData;
 use App\Data\Dialogs\DialogRouteStatusData;
 use App\Filament\Resources\Contacts\ContactResource;
 use App\Filament\Resources\Dialogs\DialogResource;
+use App\Models\AutoReplyRule;
 use App\Models\Channel;
+use App\Models\ChannelActivityLog;
 use App\Models\ChannelPeerSyncState;
 use App\Models\Contact;
 use App\Models\ContactPhoneNumber;
@@ -34,6 +36,7 @@ use App\Services\Dialogs\ResolveDialogStageAction;
 use App\Services\Dialogs\SyncSystemDialogCardViewAction;
 use App\Services\Dialogs\UpdateDialogInboxStatusAction;
 use App\Services\Dialogs\UpdateDialogStageAction;
+use App\Services\Scenarios\ScenarioEdgeExpressionCondition;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
 use Filament\Support\Enums\Width;
@@ -218,9 +221,13 @@ class ViewDialog extends ViewRecord
         $this->syncDialogInboxStatusSelection();
         $this->syncDialogStageSelection();
 
-        $appendedCount = $this->appendLatestConversationMessages();
+        $refreshResult = $this->appendLatestConversationMessages();
 
-        $this->dispatch('dialog-history-refreshed', appendedCount: $appendedCount);
+        $this->dispatch(
+            'dialog-history-refreshed',
+            appendedCount: $refreshResult['appended_count'],
+            updatedCount: $refreshResult['updated_count'],
+        );
     }
 
     public function updateDialogInboxStatus(): void
@@ -590,6 +597,9 @@ class ViewDialog extends ViewRecord
             'dialogDiagnosticsBlocks' => $this->activeTab === SyncSystemDialogCardViewAction::TAB_DIAGNOSTICS
                 ? $this->buildDialogDiagnosticsBlocks()
                 : [],
+            'dialogAutomationDiagnostics' => $this->activeTab === SyncSystemDialogCardViewAction::TAB_DIAGNOSTICS
+                ? $this->getDialogAutomationDiagnosticsViewData()
+                : ['is_visible' => false, 'rows' => []],
             'dialogCustomSections' => $this->isKnownCardTab($this->activeTab)
                 ? []
                 : $this->buildDialogCustomSections($this->activeTab),
@@ -1470,6 +1480,616 @@ class ViewDialog extends ViewRecord
 
     /**
      * @return array{
+     *     is_visible: bool,
+     *     rows: list<array{
+     *         key: string,
+     *         label: string,
+     *         value: string,
+     *         detail: ?string,
+     *         url: ?string,
+     *         value_role: ?string,
+     *         tone: ?string
+     *     }>
+     * }
+     */
+    protected function getDialogAutomationDiagnosticsViewData(): array
+    {
+        $dialog = $this->getRecord();
+        $latestInbound = Message::query()
+            ->with(['channel', 'contact.phoneNumbers', 'dialog.dialogStage'])
+            ->where('dialog_id', $dialog->id)
+            ->where('direction', Message::DIRECTION_INBOUND)
+            ->where('message_kind', Message::KIND_INBOUND_USER)
+            ->orderByDesc('id')
+            ->first();
+
+        if (! $latestInbound instanceof Message) {
+            return [
+                'is_visible' => true,
+                'rows' => [
+                    $this->dialogSystemFieldRow(
+                        'automation_latest_inbound',
+                        'Последнее входящее',
+                        'Нет входящих сообщений',
+                        'Диагностика автоответов появится после первого входящего сообщения.',
+                        tone: 'muted',
+                    ),
+                ],
+            ];
+        }
+
+        $v3Diagnostics = $this->diagnoseLatestInboundV3Start($dialog, $latestInbound);
+        $legacyCutoverLog = $this->latestMessageActivityLog($dialog, $latestInbound, 'bot.reply_skipped_legacy_cutover');
+        $automationLogs = $this->latestMessageAutomationActivityLogs($dialog, $latestInbound);
+        $currentBlock = $this->getCurrentDialogBlockViewData($dialog);
+
+        $rows = [
+            $this->dialogSystemFieldRow(
+                'automation_latest_inbound',
+                'Последнее входящее',
+                $this->formatAutomationInboundMessageLabel($latestInbound),
+                $this->formatAutomationInboundMessageDetail($latestInbound),
+            ),
+            $this->dialogSystemFieldRow(
+                'automation_v3_start',
+                'V3-start',
+                $v3Diagnostics['status_label'],
+                $v3Diagnostics['detail'],
+                tone: $v3Diagnostics['tone'],
+            ),
+            $this->dialogSystemFieldRow(
+                'automation_current_block',
+                'Активный сценарий',
+                $currentBlock['value'],
+                $currentBlock['detail'],
+                tone: $currentBlock['tone'],
+            ),
+            $this->dialogSystemFieldRow(
+                'automation_legacy_cutover',
+                'Старый автоответчик',
+                $legacyCutoverLog instanceof ChannelActivityLog ? 'Пропущен из-за V3 cutover' : 'Нет события пропуска',
+                $legacyCutoverLog instanceof ChannelActivityLog
+                    ? $this->formatAutomationActivityLogDetail($legacyCutoverLog)
+                    : 'Если V3 не стартовал и legacy не отключён, здесь появится событие старого автоответчика.',
+                tone: $legacyCutoverLog instanceof ChannelActivityLog ? 'warning' : 'muted',
+            ),
+        ];
+
+        if (($v3Diagnostics['candidate_label'] ?? null) !== null) {
+            $rows[] = $this->dialogSystemFieldRow(
+                'automation_v3_candidate',
+                'Ближайший кандидат',
+                (string) $v3Diagnostics['candidate_label'],
+                $v3Diagnostics['candidate_detail'],
+                tone: $v3Diagnostics['candidate_tone'],
+            );
+        }
+
+        if ($automationLogs->isNotEmpty()) {
+            $rows[] = $this->dialogSystemFieldRow(
+                'automation_last_event',
+                'Последнее событие',
+                (string) $automationLogs->first()?->event,
+                $this->formatAutomationActivityLogDetail($automationLogs->first()),
+                tone: $this->automationLogTone($automationLogs->first()),
+            );
+        }
+
+        return [
+            'is_visible' => true,
+            'rows' => $rows,
+        ];
+    }
+
+    /**
+     * @return array{
+     *     status_label: string,
+     *     detail: ?string,
+     *     tone: ?string,
+     *     candidate_label?: ?string,
+     *     candidate_detail?: ?string,
+     *     candidate_tone?: ?string
+     * }
+     */
+    protected function diagnoseLatestInboundV3Start(Dialog $dialog, Message $message): array
+    {
+        $versions = $this->publishedV3ScenarioVersionsForMessage($message);
+
+        if ($versions->isEmpty()) {
+            return [
+                'status_label' => 'Нет опубликованного V3 для канала',
+                'detail' => 'Для канала последнего входящего не найден активный опубликованный V3-сценарий.',
+                'tone' => 'warning',
+            ];
+        }
+
+        $matchingCandidates = [];
+
+        foreach ($versions as $version) {
+            $runtime = data_get($version->schema_payload, 'builder_v3_runtime');
+
+            if (! is_array($runtime)) {
+                continue;
+            }
+
+            foreach ($this->v3DiagnosticEntrypoints($runtime) as $entrypoint) {
+                if (! is_array($entrypoint) || ! $this->v3DiagnosticEntrypointMatchesMessageValue($message, $entrypoint)) {
+                    continue;
+                }
+
+                $matchingCandidates[] = $this->diagnoseV3EntrypointCandidate($dialog, $message, $version, $runtime, $entrypoint);
+            }
+        }
+
+        $successfulCandidate = collect($matchingCandidates)
+            ->first(fn (array $candidate): bool => $candidate['reasons'] === []);
+
+        if (is_array($successfulCandidate)) {
+            return [
+                'status_label' => 'Нашёл подходящий V3-start',
+                'detail' => 'По условиям опубликованного V3 этот entrypoint должен стартовать.',
+                'tone' => 'success',
+                'candidate_label' => $successfulCandidate['label'],
+                'candidate_detail' => 'Все условия входа выполнены.',
+                'candidate_tone' => 'success',
+            ];
+        }
+
+        if ($matchingCandidates === []) {
+            return [
+                'status_label' => 'V3-start не найден',
+                'detail' => 'В опубликованных V3 entrypoint-ах нет совпадения по тексту или параметру: '.$this->formatAutomationMessageText($message),
+                'tone' => 'warning',
+            ];
+        }
+
+        $candidate = $matchingCandidates[0];
+
+        return [
+            'status_label' => 'V3-start отклонён условиями',
+            'detail' => implode('; ', $candidate['reasons']),
+            'tone' => 'warning',
+            'candidate_label' => $candidate['label'],
+            'candidate_detail' => implode('; ', $candidate['reasons']),
+            'candidate_tone' => 'warning',
+        ];
+    }
+
+    /**
+     * @return Collection<int, ScenarioVersion>
+     */
+    protected function publishedV3ScenarioVersionsForMessage(Message $message): Collection
+    {
+        if ($message->channel_id === null) {
+            return collect();
+        }
+
+        $scenarioCodes = DB::table('scenario_channel_bindings')
+            ->where('channel_id', $message->channel_id)
+            ->where('is_active', true)
+            ->pluck('scenario_code')
+            ->filter()
+            ->values()
+            ->all();
+
+        if ($scenarioCodes === []) {
+            return collect();
+        }
+
+        $scenarioOrder = array_flip(array_map('strval', $scenarioCodes));
+
+        return ScenarioVersion::query()
+            ->with('scenario:id,code,name')
+            ->where('status', ScenarioVersion::STATUS_PUBLISHED)
+            ->whereHas('scenario', function ($query) use ($scenarioCodes): void {
+                $query
+                    ->whereIn('code', $scenarioCodes)
+                    ->where('is_active', true)
+                    ->where('is_archived', false);
+            })
+            ->orderByDesc('version_number')
+            ->get()
+            ->filter(fn (ScenarioVersion $version): bool => is_array(data_get($version->schema_payload, 'builder_v3_runtime.entrypoints')))
+            ->sortBy(fn (ScenarioVersion $version): int => $scenarioOrder[(string) ($version->scenario?->code ?? '')] ?? PHP_INT_MAX)
+            ->values();
+    }
+
+    /**
+     * @param  array<string, mixed>  $runtime
+     * @return list<array<string, mixed>>
+     */
+    protected function v3DiagnosticEntrypoints(array $runtime): array
+    {
+        $entrypoints = is_array($runtime['entrypoints'] ?? null) ? $runtime['entrypoints'] : [];
+
+        return collect($entrypoints)
+            ->filter(fn (mixed $entrypoint): bool => is_array($entrypoint))
+            ->sort(fn (array $left, array $right): int => $this->compareV3DiagnosticEntrypoints($left, $right, $runtime))
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  array<string, mixed>  $left
+     * @param  array<string, mixed>  $right
+     * @param  array<string, mixed>  $runtime
+     */
+    protected function compareV3DiagnosticEntrypoints(array $left, array $right, array $runtime): int
+    {
+        return [
+            $this->v3DiagnosticEntrypointPriority($right),
+            $this->v3DiagnosticEntrypointDisplayOrder($right, $runtime),
+            $this->v3DiagnosticEntrypointDisplayId($right, $runtime),
+        ] <=> [
+            $this->v3DiagnosticEntrypointPriority($left),
+            $this->v3DiagnosticEntrypointDisplayOrder($left, $runtime),
+            $this->v3DiagnosticEntrypointDisplayId($left, $runtime),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $entrypoint
+     */
+    protected function v3DiagnosticEntrypointPriority(array $entrypoint): int
+    {
+        return max(1, min(100, (int) ($entrypoint['priority'] ?? 10)));
+    }
+
+    /**
+     * @param  array<string, mixed>  $entrypoint
+     * @param  array<string, mixed>  $runtime
+     */
+    protected function v3DiagnosticEntrypointDisplayOrder(array $entrypoint, array $runtime): int
+    {
+        $displayId = $this->v3DiagnosticEntrypointDisplayId($entrypoint, $runtime);
+
+        return is_numeric($displayId) ? (int) $displayId : PHP_INT_MIN;
+    }
+
+    /**
+     * @param  array<string, mixed>  $entrypoint
+     * @param  array<string, mixed>  $runtime
+     */
+    protected function v3DiagnosticEntrypointDisplayId(array $entrypoint, array $runtime): string
+    {
+        $displayId = trim((string) ($entrypoint['display_id'] ?? $entrypoint['display_number'] ?? ''));
+
+        if ($displayId !== '') {
+            return $displayId;
+        }
+
+        $blockId = trim((string) ($entrypoint['block_id'] ?? ''));
+        $block = is_array($runtime['blocks'] ?? null) ? ($runtime['blocks'][$blockId] ?? null) : null;
+
+        if (is_array($block)) {
+            $displayId = trim((string) ($block['display_number'] ?? $block['card_id'] ?? $block['db_id'] ?? $block['id'] ?? ''));
+        }
+
+        return $displayId !== '' ? $displayId : $blockId;
+    }
+
+    /**
+     * @param  array<string, mixed>  $entrypoint
+     */
+    protected function v3DiagnosticEntrypointMatchesMessageValue(Message $message, array $entrypoint): bool
+    {
+        $match = (string) ($entrypoint['match'] ?? AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER);
+
+        if ($match === AutoReplyRule::MATCH_SCOPE_ANY_INBOUND) {
+            return true;
+        }
+
+        foreach ($entrypoint['values'] ?? [] as $value) {
+            if ($this->messageMatchesV3DiagnosticValue($message, $match, (string) $value)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  array<string, mixed>  $runtime
+     * @param  array<string, mixed>  $entrypoint
+     * @return array{label:string,reasons:list<string>}
+     */
+    protected function diagnoseV3EntrypointCandidate(
+        Dialog $dialog,
+        Message $message,
+        ScenarioVersion $version,
+        array $runtime,
+        array $entrypoint,
+    ): array {
+        $reasons = [];
+        $channelIds = collect($entrypoint['channel_ids'] ?? [])
+            ->map(fn (mixed $id): int => (int) $id)
+            ->filter(fn (int $id): bool => $id > 0)
+            ->values()
+            ->all();
+
+        if ($message->channel_id === null || ! in_array((int) $message->channel_id, $channelIds, true)) {
+            $reasons[] = 'канал сообщения не входит в список каналов entrypoint-а';
+        }
+
+        $startEventReason = $this->v3DiagnosticStartEventFailureReason($dialog, $message, $entrypoint);
+
+        if ($startEventReason !== null) {
+            $reasons[] = $startEventReason;
+        }
+
+        $contactPhoneReason = $this->v3DiagnosticContactPhoneFailureReason($message, $entrypoint);
+
+        if ($contactPhoneReason !== null) {
+            $reasons[] = $contactPhoneReason;
+        }
+
+        $dialogPhoneReason = $this->v3DiagnosticDialogPhoneFailureReason($dialog, $entrypoint);
+
+        if ($dialogPhoneReason !== null) {
+            $reasons[] = $dialogPhoneReason;
+        }
+
+        $expressionReason = $this->v3DiagnosticExpressionFailureReason($message, $entrypoint);
+
+        if ($expressionReason !== null) {
+            $reasons[] = $expressionReason;
+        }
+
+        $tagReason = $this->v3DiagnosticTagFailureReason($message, $entrypoint);
+
+        if ($tagReason !== null) {
+            $reasons[] = $tagReason;
+        }
+
+        $blockId = trim((string) ($entrypoint['block_id'] ?? ''));
+        $block = is_array($runtime['blocks'] ?? null) ? ($runtime['blocks'][$blockId] ?? null) : null;
+
+        if (! is_array($block)) {
+            $reasons[] = 'целевой блок entrypoint-а не найден в опубликованном runtime';
+        }
+
+        $displayNumber = trim((string) ($entrypoint['display_id'] ?? data_get($block, 'display_number', $blockId)));
+        $title = trim((string) data_get($block, 'title', ''));
+        $scenarioCode = (string) ($version->scenario?->code ?? 'V3');
+
+        return [
+            'label' => '#'.($displayNumber !== '' ? $displayNumber : $blockId).' · '.($title !== '' ? $title : 'entrypoint').' · '.$scenarioCode.' v'.$version->version_number,
+            'reasons' => $reasons,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $entrypoint
+     */
+    protected function v3DiagnosticStartEventFailureReason(Dialog $dialog, Message $message, array $entrypoint): ?string
+    {
+        $event = trim((string) ($entrypoint['event'] ?? 'message'));
+
+        if ($event === '' || $event === 'message') {
+            return $message->message_kind === Message::KIND_INBOUND_USER
+                ? null
+                : 'entrypoint ждёт обычное входящее сообщение';
+        }
+
+        if ($event === 'message_in_stage') {
+            $expectedStageKey = trim((string) ($entrypoint['stage_key'] ?? ''));
+            $actualStageKey = app(DialogStageCatalog::class)->keyForDialog($dialog)
+                ?? app(ResolveDialogStageAction::class)->handle($dialog);
+
+            return $expectedStageKey !== '' && $actualStageKey === $expectedStageKey
+                ? null
+                : 'entrypoint ждёт сообщение на этапе '.$this->formatAutomationEmptyValue($expectedStageKey).', сейчас '.$this->formatAutomationEmptyValue($actualStageKey);
+        }
+
+        if ($event === 'stage_changed') {
+            return 'entrypoint запускается только при смене этапа, а последнее сообщение обычное входящее';
+        }
+
+        return 'неизвестный тип события entrypoint-а: '.$event;
+    }
+
+    /**
+     * @param  array<string, mixed>  $entrypoint
+     */
+    protected function v3DiagnosticContactPhoneFailureReason(Message $message, array $entrypoint): ?string
+    {
+        $condition = trim((string) ($entrypoint['contact_phone_condition'] ?? ''));
+
+        if ($condition === '') {
+            return null;
+        }
+
+        $hasPhone = $message->contact_id !== null
+            && ContactPhoneNumber::query()->where('contact_id', $message->contact_id)->exists();
+
+        return match ($condition) {
+            AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE => $hasPhone ? null : 'у контакта нет телефона, а entrypoint требует телефон',
+            AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE => $hasPhone ? 'у контакта есть телефон, а entrypoint ждёт отсутствие телефона' : null,
+            default => 'неизвестное условие телефона контакта: '.$condition,
+        };
+    }
+
+    /**
+     * @param  array<string, mixed>  $entrypoint
+     */
+    protected function v3DiagnosticExpressionFailureReason(Message $message, array $entrypoint): ?string
+    {
+        $expression = trim((string) ($entrypoint['expression'] ?? ''));
+
+        if ($expression === '') {
+            return null;
+        }
+
+        try {
+            return app(ScenarioEdgeExpressionCondition::class)->evaluate($expression, $message)
+                ? null
+                : 'expression-условие entrypoint-а вернуло false';
+        } catch (Throwable $throwable) {
+            return 'expression-условие entrypoint-а не выполнилось: '.$throwable->getMessage();
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $entrypoint
+     */
+    protected function v3DiagnosticDialogPhoneFailureReason(Dialog $dialog, array $entrypoint): ?string
+    {
+        $condition = trim((string) ($entrypoint['dialog_phone_condition'] ?? ''));
+
+        if ($condition === '') {
+            return null;
+        }
+
+        $hasPhone = filled($dialog->confirmed_phone_raw) || filled($dialog->confirmed_phone_normalized);
+
+        return match ($condition) {
+            AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE => $hasPhone ? null : 'в диалоге нет подтверждённого телефона, а entrypoint требует телефон',
+            AutoReplyRule::CONTACT_PHONE_CONDITION_MISSING_PHONE => $hasPhone ? 'в диалоге есть подтверждённый телефон, а entrypoint ждёт отсутствие телефона' : null,
+            default => 'неизвестное условие телефона диалога: '.$condition,
+        };
+    }
+
+    /**
+     * @param  array<string, mixed>  $entrypoint
+     */
+    protected function v3DiagnosticTagFailureReason(Message $message, array $entrypoint): ?string
+    {
+        $condition = is_array($entrypoint['tag_condition'] ?? null) ? $entrypoint['tag_condition'] : [];
+
+        if ((bool) ($condition['enabled'] ?? false) !== true) {
+            return null;
+        }
+
+        $tagIds = collect($condition['tag_ids'] ?? [])
+            ->map(fn (mixed $id): int => (int) $id)
+            ->filter(fn (int $id): bool => $id > 0)
+            ->values()
+            ->all();
+
+        if ($tagIds === [] || $message->contact_id === null) {
+            return 'в entrypoint включено условие по тегам, но теги не заданы';
+        }
+
+        $contactTagIds = DB::table('contact_tag')
+            ->where('contact_id', $message->contact_id)
+            ->pluck('tag_id')
+            ->map(fn (mixed $id): int => (int) $id)
+            ->all();
+        $matchedTagIds = array_intersect($tagIds, $contactTagIds);
+        $mode = (string) ($condition['mode'] ?? 'has_all');
+        $passes = match ($mode) {
+            'has_any' => $matchedTagIds !== [],
+            'has_none' => $matchedTagIds === [],
+            default => count($matchedTagIds) === count($tagIds),
+        };
+
+        return $passes ? null : 'условие по тегам entrypoint-а не выполнено';
+    }
+
+    protected function messageMatchesV3DiagnosticValue(Message $message, string $match, string $expectedValue): bool
+    {
+        $expectedValue = $this->normalizeV3DiagnosticText($expectedValue);
+        $messageText = $this->normalizeV3DiagnosticText((string) $message->text);
+        $messageParameter = $this->normalizeV3DiagnosticText((string) $message->message_parameter);
+
+        if ($expectedValue === '') {
+            return false;
+        }
+
+        return match ($match) {
+            'contains', AutoReplyRule::MATCH_SCOPE_CONTAINS_TEXT => str_contains($messageText, $expectedValue)
+                || str_contains($messageParameter, $expectedValue),
+            'starts', 'starts_with' => str_starts_with($messageText, $expectedValue)
+                || str_starts_with($messageParameter, $expectedValue),
+            AutoReplyRule::MATCH_SCOPE_EXACT_PARAMETER => $messageParameter === $expectedValue,
+            AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD => $messageText === $expectedValue,
+            AutoReplyRule::MATCH_SCOPE_EXACT_TEXT_OR_PARAMETER => $messageText === $expectedValue
+                || $messageParameter === $expectedValue,
+            default => $messageText === $expectedValue || $messageParameter === $expectedValue,
+        };
+    }
+
+    protected function normalizeV3DiagnosticText(string $text): string
+    {
+        return mb_strtolower(preg_replace('/\s+/u', ' ', trim($text)) ?? trim($text));
+    }
+
+    /**
+     * @return Collection<int, ChannelActivityLog>
+     */
+    protected function latestMessageAutomationActivityLogs(Dialog $dialog, Message $message): Collection
+    {
+        return ChannelActivityLog::query()
+            ->where('channel_id', $dialog->channel_id)
+            ->where('created_at', '>=', ($message->created_at ?? now())->copy()->subMinutes(2))
+            ->where('created_at', '<=', ($message->created_at ?? now())->copy()->addMinutes(2))
+            ->orderByDesc('id')
+            ->limit(100)
+            ->get()
+            ->filter(function (ChannelActivityLog $log) use ($message): bool {
+                $context = is_array($log->context) ? $log->context : [];
+
+                return (int) ($context['message_id'] ?? 0) === (int) $message->id
+                    || (string) ($context['provider_event_key'] ?? '') === (string) $message->provider_event_key
+                    || (string) ($context['external_message_id'] ?? '') === (string) $message->external_message_id;
+            })
+            ->values();
+    }
+
+    protected function latestMessageActivityLog(Dialog $dialog, Message $message, string $event): ?ChannelActivityLog
+    {
+        return $this->latestMessageAutomationActivityLogs($dialog, $message)
+            ->first(fn (ChannelActivityLog $log): bool => $log->event === $event);
+    }
+
+    protected function formatAutomationInboundMessageLabel(Message $message): string
+    {
+        return '#'.$message->id.' · '.$this->formatDialogTimestamp($message->received_at).' · '.$this->formatAutomationMessageText($message);
+    }
+
+    protected function formatAutomationInboundMessageDetail(Message $message): string
+    {
+        return 'provider event: '.$this->formatAutomationEmptyValue($message->provider_event_key)
+            .' · external message: '.$this->formatAutomationEmptyValue($message->external_message_id);
+    }
+
+    protected function formatAutomationMessageText(Message $message): string
+    {
+        $text = trim((string) ($message->text ?: $message->message_parameter));
+
+        if ($text === '') {
+            return '—';
+        }
+
+        return mb_strlen($text) > 80 ? mb_substr($text, 0, 80).'…' : $text;
+    }
+
+    protected function formatAutomationActivityLogDetail(?ChannelActivityLog $log): ?string
+    {
+        if (! $log instanceof ChannelActivityLog) {
+            return null;
+        }
+
+        return $this->formatDialogTimestamp($log->created_at).' · '.$log->message;
+    }
+
+    protected function automationLogTone(?ChannelActivityLog $log): ?string
+    {
+        return match ($log?->level) {
+            'warning', 'error' => 'warning',
+            default => null,
+        };
+    }
+
+    protected function formatAutomationEmptyValue(mixed $value): string
+    {
+        $value = trim((string) $value);
+
+        return $value !== '' ? $value : '—';
+    }
+
+    /**
+     * @return array{
      *     key: string,
      *     label: string,
      *     value: string,
@@ -2048,7 +2668,10 @@ class ViewDialog extends ViewRecord
             ?? app(ResolveDialogStageAction::class)->handle($dialog);
     }
 
-    protected function appendLatestConversationMessages(): int
+    /**
+     * @return array{appended_count:int,updated_count:int}
+     */
+    protected function appendLatestConversationMessages(): array
     {
         if ($this->conversationMessages === []) {
             $page = app(LoadDialogMessagesPageAction::class)->handle(
@@ -2062,7 +2685,10 @@ class ViewDialog extends ViewRecord
                 $this->nextOlderCursor = null;
                 $this->latestKnownMessageId = null;
 
-                return 0;
+                return [
+                    'appended_count' => 0,
+                    'updated_count' => 0,
+                ];
             }
 
             $this->conversationMessages = app(BuildConversationFeedViewDataAction::class)->handle($page->messages);
@@ -2070,10 +2696,13 @@ class ViewDialog extends ViewRecord
             $this->nextOlderCursor = $page->nextOlderCursor;
             $this->latestKnownMessageId = $this->resolveLatestKnownMessageId($page->messages);
 
-            return count($this->conversationMessages);
+            return [
+                'appended_count' => count($this->conversationMessages),
+                'updated_count' => 0,
+            ];
         }
 
-        $this->refreshVisibleConversationMessages();
+        $updatedCount = $this->refreshVisibleConversationMessages();
 
         $messages = app(LoadDialogMessagesPageAction::class)->loadMessagesAddedAfterId(
             $this->getRecord(),
@@ -2081,10 +2710,13 @@ class ViewDialog extends ViewRecord
             self::LIVE_REFRESH_MESSAGE_LIMIT,
         );
 
-        return $this->appendConversationMessages($messages);
+        return [
+            'appended_count' => $this->appendConversationMessages($messages),
+            'updated_count' => $updatedCount,
+        ];
     }
 
-    protected function refreshVisibleConversationMessages(): void
+    protected function refreshVisibleConversationMessages(): int
     {
         $messageIds = collect($this->conversationMessages)
             ->flatMap(fn (array $message): array => $this->conversationItemMessageIds($message))
@@ -2093,7 +2725,7 @@ class ViewDialog extends ViewRecord
             ->values();
 
         if ($messageIds->isEmpty()) {
-            return;
+            return 0;
         }
 
         $messageIds = $messageIds
@@ -2109,23 +2741,25 @@ class ViewDialog extends ViewRecord
             ->get();
 
         if ($messages->isEmpty()) {
-            return;
+            return 0;
         }
 
         $refreshedViewData = app(BuildConversationFeedViewDataAction::class)->handle($messages);
 
         if ($refreshedViewData === []) {
-            return;
+            return 0;
         }
 
         $nextConversationMessages = $this->replaceConversationItemsByKey($this->conversationMessages, $refreshedViewData);
         $nextConversationMessages = $this->sortConversationMessages($nextConversationMessages);
 
         if ($nextConversationMessages === $this->conversationMessages) {
-            return;
+            return 0;
         }
 
         $this->conversationMessages = $nextConversationMessages;
+
+        return count($refreshedViewData);
     }
 
     /**

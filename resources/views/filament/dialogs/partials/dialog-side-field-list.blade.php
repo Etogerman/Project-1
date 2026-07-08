@@ -5,6 +5,7 @@
             $isAssigneeRow = ($row['key'] ?? '') === 'assigned_user_id' && isset($dialogAssignee);
             $canEdit = (bool) ($row['can_edit'] ?? false);
             $rowValue = trim((string) ($row['value'] ?? ''));
+            $rowDetail = trim((string) ($row['detail'] ?? ''));
             $canCopy = ! $isStatusRow
                 && ! $isAssigneeRow
                 && ! $canEdit
@@ -100,9 +101,23 @@
                     >
                 </div>
             @else
-                <p class="ac-meta__value" title="{{ $row['value'] }}">
-                    {{ $row['value'] }}
-                </p>
+                <div class="ac-meta__value-wrap">
+                    <p
+                        @class([
+                            'ac-meta__value',
+                            'ac-meta__value--muted' => ($row['tone'] ?? null) === 'muted',
+                            'ac-meta__value--warning' => ($row['tone'] ?? null) === 'warning',
+                            'ac-meta__value--success' => ($row['tone'] ?? null) === 'success',
+                        ])
+                        title="{{ $row['value'] }}"
+                    >
+                        {{ $row['value'] }}
+                    </p>
+
+                    @if ($rowDetail !== '')
+                        <p class="ac-meta__detail">{{ $rowDetail }}</p>
+                    @endif
+                </div>
             @endif
         </div>
     @endforeach

@@ -1493,7 +1493,7 @@ class GenericDbScenarioRuntime implements PrioritizedScenarioRuntime, ResolvedSc
         }
 
         return new ScenarioInboundResult(
-            consumed: true,
+            consumed: false,
             status: ScenarioRun::STATUS_ACTIVE,
             currentStep: $currentBlockId,
             statePayload: $this->markV3Waiting($statePayload, $currentBlockId, $block, $message->channel),

@@ -159,7 +159,7 @@ class ScenarioBuilderV3SheetTransferService
         $document = $this->decodeDocument($input['json'] ?? null);
         $state = $this->currentState($scenario, $user);
         $builder = $state['builder'];
-        $sheetId = $this->activeSheetId($builder);
+        $sheetId = $this->importTargetSheetId($builder, $input['target_sheet_id'] ?? $input['sheet_id'] ?? null);
 
         $this->validateDocument($document);
         $this->guardNoCurrentCrossSheetEdges($builder, $sheetId);
@@ -191,7 +191,7 @@ class ScenarioBuilderV3SheetTransferService
 
         $state = $this->currentState($scenario, $user);
         $builder = $state['builder'];
-        $sheetId = $this->activeSheetId($builder);
+        $sheetId = $this->importTargetSheetId($builder, $input['target_sheet_id'] ?? $input['sheet_id'] ?? null);
 
         $this->guardNoCurrentCrossSheetEdges($builder, $sheetId);
 
@@ -955,21 +955,47 @@ class ScenarioBuilderV3SheetTransferService
             return $this->activeSheetId($builder);
         }
 
-        if ($sheetId === self::DEFAULT_SHEET_ID) {
-            return $sheetId;
-        }
-
-        $exists = collect($builder['sheets'] ?? [])->contains(
-            fn (mixed $sheet): bool => is_array($sheet) && (string) ($sheet['id'] ?? '') === $sheetId,
-        );
-
-        if (! $exists) {
+        if (! $this->sheetExists($builder, $sheetId)) {
             throw ValidationException::withMessages([
                 'sheet_id' => 'Лист для экспорта не найден.',
             ]);
         }
 
         return $sheetId;
+    }
+
+    /**
+     * @param  array<string, mixed>  $builder
+     */
+    private function importTargetSheetId(array $builder, mixed $requestedSheetId): string
+    {
+        $sheetId = trim((string) $requestedSheetId);
+
+        if ($sheetId === '') {
+            return $this->activeSheetId($builder);
+        }
+
+        if (! $this->sheetExists($builder, $sheetId)) {
+            throw ValidationException::withMessages([
+                'target_sheet_id' => 'Лист для импорта не найден.',
+            ]);
+        }
+
+        return $sheetId;
+    }
+
+    /**
+     * @param  array<string, mixed>  $builder
+     */
+    private function sheetExists(array $builder, string $sheetId): bool
+    {
+        if ($sheetId === self::DEFAULT_SHEET_ID) {
+            return true;
+        }
+
+        return collect($builder['sheets'] ?? [])->contains(
+            fn (mixed $sheet): bool => is_array($sheet) && (string) ($sheet['id'] ?? '') === $sheetId,
+        );
     }
 
     /**
