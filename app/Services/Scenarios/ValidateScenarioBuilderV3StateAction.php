@@ -501,7 +501,7 @@ class ValidateScenarioBuilderV3StateAction
             : AutoReplyRule::MATCH_SCOPE_EXACT_KEYWORD;
 
         if (! in_array($match, self::START_MATCH_OPERATORS, true)) {
-            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.match", 'Unknown start condition match.');
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.match", 'Выбран неизвестный оператор стартового условия.');
         }
 
         return $match;
@@ -514,7 +514,7 @@ class ValidateScenarioBuilderV3StateAction
             : self::START_EVENT_MESSAGE;
 
         if (! in_array($event, self::START_EVENTS, true)) {
-            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.start_event", 'Unknown start event.');
+            $this->fail("builder.blocks.$blockIndex.settings_payload.modules.$moduleIndex.payload.start_event", 'Выбрано неизвестное стартовое событие.');
         }
 
         return $event;
