@@ -1519,8 +1519,10 @@ class ViewDialog extends ViewRecord
         }
 
         $v3Diagnostics = $this->diagnoseLatestInboundV3Start($dialog, $latestInbound);
-        $legacyCutoverLog = $this->latestMessageActivityLog($dialog, $latestInbound, 'bot.reply_skipped_legacy_cutover');
         $automationLogs = $this->latestMessageAutomationActivityLogs($dialog, $latestInbound);
+        $legacyCutoverLog = $automationLogs->first(
+            fn (ChannelActivityLog $log): bool => $log->event === 'bot.reply_skipped_legacy_cutover',
+        );
         $currentBlock = $this->getCurrentDialogBlockViewData($dialog);
 
         $rows = [
@@ -1667,6 +1669,7 @@ class ViewDialog extends ViewRecord
         $scenarioCodes = DB::table('scenario_channel_bindings')
             ->where('channel_id', $message->channel_id)
             ->where('is_active', true)
+            ->orderBy('id')
             ->pluck('scenario_code')
             ->filter()
             ->values()
@@ -2066,12 +2069,6 @@ class ViewDialog extends ViewRecord
         $messageValue = trim((string) $messageValue);
 
         return $contextValue !== '' && $messageValue !== '' && $contextValue === $messageValue;
-    }
-
-    protected function latestMessageActivityLog(Dialog $dialog, Message $message, string $event): ?ChannelActivityLog
-    {
-        return $this->latestMessageAutomationActivityLogs($dialog, $message)
-            ->first(fn (ChannelActivityLog $log): bool => $log->event === $event);
     }
 
     protected function formatAutomationInboundMessageLabel(Message $message): string
