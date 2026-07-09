@@ -171,7 +171,11 @@ class ScenarioBuilderV3StateController extends Controller
         ExportScenarioBuilderV3AutoReplyWorkbookAction $exportScenarioBuilderV3AutoReplyWorkbookAction,
     ): StreamedResponse {
         $user = $this->authorizeScenarioBuilderAccess($request, $scenario);
-        $spreadsheet = $exportScenarioBuilderV3AutoReplyWorkbookAction->handle($scenario, $user);
+        $spreadsheet = $exportScenarioBuilderV3AutoReplyWorkbookAction->handle(
+            $scenario,
+            $user,
+            $request->query('sheet_id'),
+        );
 
         return response()->streamDownload(function () use ($spreadsheet): void {
             try {
@@ -248,6 +252,7 @@ class ScenarioBuilderV3StateController extends Controller
             'overwrite_conflict_row_numbers',
             'placement_mode',
             'import_batch_id',
+            'target_sheet_id',
         ] as $key) {
             $value = $request->input($key);
 

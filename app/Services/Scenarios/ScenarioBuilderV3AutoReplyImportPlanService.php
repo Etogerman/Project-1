@@ -48,6 +48,9 @@ class ScenarioBuilderV3AutoReplyImportPlanService
         $excludedRows = $this->integerSet($payload['excluded_row_numbers'] ?? []);
         $overwriteRows = $this->integerSet($payload['overwrite_conflict_row_numbers'] ?? []);
         $placementMode = $this->placementMode($payload['placement_mode'] ?? null);
+        $targetSheetId = $placementMode === self::PLACEMENT_CURRENT_SHEET
+            ? $this->targetSheetId($builder, $payload['target_sheet_id'] ?? null)
+            : 'main';
         $importBatchId = $this->importBatchId($payload['import_batch_id'] ?? null);
         $parsed = $this->parseWorkbook($file);
         $availableChannels = $this->availableChannels($user);
@@ -55,7 +58,10 @@ class ScenarioBuilderV3AutoReplyImportPlanService
         $channelRefs = $parsed['channel_refs'];
         $tagRefs = $parsed['tag_refs'];
         $rows = $parsed['rows'];
-        $existingBlocks = $this->existingImportedBlocks($builder);
+        $existingBlocks = $this->existingImportedBlocks(
+            $builder,
+            $placementMode === self::PLACEMENT_CURRENT_SHEET ? $targetSheetId : null,
+        );
         $plannedSheets = $this->plannedSheets($builder);
         $newBlockLayout = [];
         $usedClientKeys = collect($builder['blocks'] ?? [])
@@ -189,6 +195,7 @@ class ScenarioBuilderV3AutoReplyImportPlanService
                     $builder,
                     $plannedSheets,
                     $placementMode,
+                    $targetSheetId,
                     (string) ($row['category_name'] ?? ''),
                     $importBatchId,
                 );
@@ -354,6 +361,38 @@ class ScenarioBuilderV3AutoReplyImportPlanService
         }
 
         return 'auto_reply_xlsx_'.now()->format('Ymd_His').'_'.Str::lower(Str::random(6));
+    }
+
+    /**
+     * @param  array<string, mixed>  $builder
+     */
+    private function targetSheetId(array $builder, mixed $requestedSheetId): string
+    {
+        $sheetId = trim((string) $requestedSheetId);
+
+        if ($sheetId === '') {
+            $sheetId = trim((string) ($builder['active_sheet_id'] ?? 'main'));
+        }
+
+        if ($sheetId === '') {
+            $sheetId = 'main';
+        }
+
+        if ($sheetId === 'main') {
+            return $sheetId;
+        }
+
+        $exists = collect($builder['sheets'] ?? [])->contains(
+            fn (mixed $sheet): bool => is_array($sheet) && (string) ($sheet['id'] ?? '') === $sheetId,
+        );
+
+        if (! $exists) {
+            throw ValidationException::withMessages([
+                'target_sheet_id' => 'Лист для импорта не найден.',
+            ]);
+        }
+
+        return $sheetId;
     }
 
     /**
@@ -754,7 +793,7 @@ class ScenarioBuilderV3AutoReplyImportPlanService
     /**
      * @return array<int, array<string, mixed>>
      */
-    private function existingImportedBlocks(array $builder): array
+    private function existingImportedBlocks(array $builder, ?string $sheetId = null): array
     {
         $blocks = is_array($builder['blocks'] ?? null) ? $builder['blocks'] : [];
         $result = [];
@@ -769,6 +808,10 @@ class ScenarioBuilderV3AutoReplyImportPlanService
             }
 
             if (data_get($block, 'settings_payload.ui.import_source.source_workbook_key') !== self::WORKBOOK_KEY) {
+                continue;
+            }
+
+            if ($sheetId !== null && (string) data_get($block, 'settings_payload.ui.sheet_id', 'main') !== $sheetId) {
                 continue;
             }
 
@@ -818,13 +861,12 @@ class ScenarioBuilderV3AutoReplyImportPlanService
         array $builder,
         array &$plannedSheets,
         string $placementMode,
+        string $targetSheetId,
         string $categoryName,
         string $importBatchId,
     ): string {
         if ($placementMode === self::PLACEMENT_CURRENT_SHEET) {
-            $activeSheetId = trim((string) ($builder['active_sheet_id'] ?? 'main'));
-
-            return isset($plannedSheets[$activeSheetId]) ? $activeSheetId : 'main';
+            return isset($plannedSheets[$targetSheetId]) ? $targetSheetId : 'main';
         }
 
         if ($placementMode === self::PLACEMENT_BY_CATEGORY) {
