@@ -1473,6 +1473,7 @@ class ViewDialog extends ViewRecord
             ->where('dialog_id', $dialog->id)
             ->where('direction', Message::DIRECTION_INBOUND)
             ->where('message_kind', Message::KIND_INBOUND_USER)
+            ->orderByDesc('received_at')
             ->orderByDesc('id')
             ->first();
 
@@ -2050,8 +2051,8 @@ class ViewDialog extends ViewRecord
 
     protected function formatAutomationInboundMessageDetail(Message $message): string
     {
-        return 'provider event: '.$this->formatAutomationEmptyValue($message->provider_event_key)
-            .' · external message: '.$this->formatAutomationEmptyValue($message->external_message_id);
+        return 'Событие провайдера: '.$this->formatAutomationEmptyValue($message->provider_event_key)
+            .' · Внешнее сообщение: '.$this->formatAutomationEmptyValue($message->external_message_id);
     }
 
     protected function formatAutomationMessageText(Message $message): string

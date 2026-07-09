@@ -5041,6 +5041,35 @@ class ScenarioBuilderV3StateTest extends TestCase
         }
     }
 
+    public function test_auto_reply_import_reports_missing_legacy_sheet_id_on_both_validation_keys(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_auto_reply_legacy_sheet_validation',
+            'name' => 'V3 Auto Reply Legacy Sheet Validation',
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+        $state = $this->actingAs($admin)
+            ->getJson($this->stateUrl($scenario))
+            ->assertOk()
+            ->json();
+
+        $this->actingAs($admin)
+            ->post($this->autoReplyImportPreviewUrl($scenario), [
+                'workbook' => $this->autoReplyWorkbookFile([
+                    $this->autoReplyWorkbookRuleRow(1001, 'Правило legacy', 'Категория', 'same', 'Ответ', $channel),
+                ]),
+                'builder_state' => json_encode(['builder' => $state['builder']], JSON_UNESCAPED_UNICODE),
+                'placement_mode' => json_encode('current_sheet'),
+                'sheet_id' => json_encode('missing-legacy-sheet'),
+                'import_batch_id' => json_encode('auto_reply_xlsx_legacy_sheet_validation'),
+            ])
+            ->assertJsonValidationErrors(['target_sheet_id', 'sheet_id']);
+    }
+
     public function test_auto_reply_import_current_sheet_does_not_update_same_rule_on_main_sheet(): void
     {
         $admin = $this->adminUser();

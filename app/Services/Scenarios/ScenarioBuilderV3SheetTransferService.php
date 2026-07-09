@@ -978,6 +978,7 @@ class ScenarioBuilderV3SheetTransferService
         if (! $this->sheetExists($builder, $sheetId)) {
             throw ValidationException::withMessages([
                 'target_sheet_id' => 'Лист для импорта не найден.',
+                'sheet_id' => 'Лист для импорта не найден.',
             ]);
         }
 

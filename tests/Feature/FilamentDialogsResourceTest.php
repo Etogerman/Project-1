@@ -370,6 +370,19 @@ class FilamentDialogsResourceTest extends TestCase
             'text' => 'JBTLIST',
             'received_at' => now(),
         ]);
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => $dialog->external_chat_id,
+            'external_message_id' => 'older-message',
+            'provider_event_key' => 'older-event',
+            'text' => 'СТАРОЕ СООБЩЕНИЕ',
+            'received_at' => now()->subHour(),
+        ]);
         ChannelActivityLog::query()->create([
             'channel_id' => $dialog->channel_id,
             'level' => 'info',
@@ -394,6 +407,11 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('V3-start отклонён условиями')
             ->assertSee('у контакта нет телефона')
             ->assertSee('#141 · JBTLIST')
+            ->assertSee('Событие провайдера')
+            ->assertSee('Внешнее сообщение')
+            ->assertDontSee('provider event')
+            ->assertDontSee('external message')
+            ->assertDontSee('СТАРОЕ СООБЩЕНИЕ')
             ->assertSee('Пропущен из-за V3 cutover');
     }
 
