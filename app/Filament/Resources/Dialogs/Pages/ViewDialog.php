@@ -11,6 +11,7 @@ use App\Models\Channel;
 use App\Models\ChannelActivityLog;
 use App\Models\ChannelPeerSyncState;
 use App\Models\Contact;
+use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
 use App\Models\FieldDictionaryField;
 use App\Models\Message;
