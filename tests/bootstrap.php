@@ -1,5 +1,7 @@
 <?php
 
+use Tests\Support\TestingDatabaseGuard;
+
 $pdoConstantFixScript = __DIR__.'/../scripts/fix-framework-pdo-constant.php';
 
 if (file_exists($pdoConstantFixScript)) {
@@ -7,6 +9,7 @@ if (file_exists($pdoConstantFixScript)) {
 }
 
 require __DIR__.'/../vendor/autoload.php';
+require __DIR__.'/Support/TestingDatabaseGuard.php';
 
 $projectRoot = dirname(__DIR__);
 $testingEnvPath = $projectRoot.'/.env.testing';
@@ -18,46 +21,17 @@ if ($appEnv === 'testing' && ! file_exists($testingEnvPath) && file_exists($test
 }
 
 $envValue = static function (string $key): ?string {
-    $value = $_SERVER[$key] ?? $_ENV[$key] ?? getenv($key);
-
-    if ($value === false || $value === null || $value === '') {
-        return null;
-    }
-
-    return (string) $value;
-};
-
-$connection = strtolower($envValue('DB_CONNECTION') ?? '');
-$database = $envValue('DB_DATABASE');
-$isSqliteMemory = $connection === 'sqlite' && $database === ':memory:';
-$isExplicitTestDatabase = is_string($database)
-    && preg_match('/(^|[_-])(test|testing)([_-]|$)/i', $database) === 1;
-$knownRuntimeDatabasePatterns = [
-    '/^abrikosoff_connector$/',
-    '/^abrikosoff_connector_recovery$/',
-    '/^abrikosoff_connector_recovered_/i',
-    '/^abrikosoff_connector_restored_/i',
-];
-$isKnownRuntimeDatabase = false;
-
-if (is_string($database)) {
-    foreach ($knownRuntimeDatabasePatterns as $pattern) {
-        if (preg_match($pattern, $database) === 1) {
-            $isKnownRuntimeDatabase = true;
-            break;
+    foreach ([$_SERVER[$key] ?? null, $_ENV[$key] ?? null, getenv($key)] as $value) {
+        if ($value !== false && $value !== null && $value !== '') {
+            return trim((string) $value, " \t\n\r\0\x0B\"'");
         }
     }
-}
 
-if (
-    ! $isSqliteMemory
-    && (
-        ! $isExplicitTestDatabase
-        || $isKnownRuntimeDatabase
-    )
-) {
-    throw new RuntimeException(sprintf(
-        'Refusing to run tests against non-test database "%s". Configure DB_DATABASE to a dedicated *_test database.',
-        $database ?? '<empty>'
-    ));
-}
+    return null;
+};
+
+TestingDatabaseGuard::assertSafe(
+    $envValue('DB_CONNECTION'),
+    $envValue('DB_DATABASE'),
+    $envValue('DB_URL'),
+);
