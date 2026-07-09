@@ -9,7 +9,6 @@ if (file_exists($pdoConstantFixScript)) {
 }
 
 require __DIR__.'/../vendor/autoload.php';
-require __DIR__.'/Support/TestingDatabaseGuard.php';
 
 $projectRoot = dirname(__DIR__);
 $testingEnvPath = $projectRoot.'/.env.testing';
