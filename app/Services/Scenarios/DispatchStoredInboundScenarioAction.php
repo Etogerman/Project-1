@@ -8,6 +8,7 @@ use App\Models\Channel;
 use App\Models\Message;
 use App\Models\ScenarioChannelBinding;
 use App\Models\ScenarioRun;
+use App\Services\Dialogs\DialogAutomationGate;
 
 class DispatchStoredInboundScenarioAction
 {
@@ -22,6 +23,7 @@ class DispatchStoredInboundScenarioAction
 
     public function __construct(
         private readonly ScenarioRegistry $scenarioRegistry,
+        private readonly DialogAutomationGate $dialogAutomationGate,
     ) {}
 
     public function handle(Channel $channel, Message $storedMessage): bool
@@ -33,6 +35,10 @@ class DispatchStoredInboundScenarioAction
             ], true)
             || $storedMessage->dialog_id === null
         ) {
+            return false;
+        }
+
+        if (! $this->dialogAutomationGate->acceptsMessage($storedMessage)) {
             return false;
         }
 
@@ -64,7 +70,11 @@ class DispatchStoredInboundScenarioAction
             return false;
         }
 
-        $storedMessage->loadMissing(['contact', 'channel', 'contactIdentity', 'dialog']);
+        $storedMessage->loadMissing(['contact', 'channel', 'contactIdentity', 'dialog.dialogStage']);
+
+        if (! $this->dialogAutomationGate->acceptsMessage($storedMessage)) {
+            return false;
+        }
 
         foreach ($this->activeBindingsForChannel($channel->id) as $binding) {
             if (! $this->scenarioRegistry->enabledForNewStarts($binding->scenario_code)) {
@@ -102,6 +112,10 @@ class DispatchStoredInboundScenarioAction
             ], true)
             || $storedMessage->dialog_id === null
         ) {
+            return false;
+        }
+
+        if (! $this->dialogAutomationGate->acceptsMessage($storedMessage)) {
             return false;
         }
 
@@ -179,7 +193,11 @@ class DispatchStoredInboundScenarioAction
             return true;
         }
 
-        $storedMessage->loadMissing(['contact', 'channel', 'contactIdentity', 'dialog']);
+        $storedMessage->loadMissing(['contact', 'channel', 'contactIdentity', 'dialog.dialogStage']);
+
+        if (! $this->dialogAutomationGate->acceptsMessage($storedMessage)) {
+            return false;
+        }
 
         foreach ($this->activeBindingsForChannel($channel->id) as $binding) {
             if (! $this->scenarioRegistry->enabledForNewStarts($binding->scenario_code)) {

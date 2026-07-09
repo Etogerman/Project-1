@@ -28,8 +28,9 @@
                 @endif
 
                 @php($isSystemMessage = $message['is_system_message'] ?? ($message['is_system_event'] ?? false))
-                @php($messageMediaItems = $message['media_items'] ?? [])
+                @php($messageMediaItems = is_array($message['media_items'] ?? null) ? $message['media_items'] : [])
                 @php($messageMediaCollection = collect($messageMediaItems))
+                @php($messageMediaRenderKey = (string) ($message['media_render_key'] ?? 'none'))
                 @php($previewableMediaItems = $messageMediaCollection->filter(fn ($mediaItem): bool => ! empty($mediaItem['is_previewable']) && filled($mediaItem['preview_url'] ?? null))->values())
                 @php($previewableImageMediaItems = $previewableMediaItems->filter(fn ($mediaItem): bool => ($mediaItem['preview_kind'] ?? null) === \App\Models\MessageAttachment::PREVIEW_KIND_IMAGE)->values())
                 @php($previewableRegularVideoMediaItems = $previewableMediaItems->filter(fn ($mediaItem): bool => empty($mediaItem['is_video_note']) && ($mediaItem['preview_kind'] ?? null) === \App\Models\MessageAttachment::PREVIEW_KIND_VIDEO)->values())
@@ -51,7 +52,7 @@
                 @php($hideGeneratedContactShareSummary = is_array($contactShareContext) && ($message['kind'] ?? null) === \App\Models\Message::KIND_INBOUND_CONTACT_SHARE)
                 @php($isRemoved = ! empty($message['is_removed'] ?? false))
                 <div
-                    wire:key="conversation-message-{{ $message['item_key'] ?? $message['id'] }}"
+                    wire:key="conversation-message-{{ $message['item_key'] ?? $message['id'] }}-media-{{ $messageMediaRenderKey }}"
                     data-role="conversation-message"
                     data-direction="{{ $message['direction'] }}"
                     data-kind="{{ $message['kind'] }}"

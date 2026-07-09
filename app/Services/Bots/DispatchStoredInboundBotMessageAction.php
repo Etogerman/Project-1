@@ -13,6 +13,7 @@ use App\Models\Contact;
 use App\Models\Message;
 use App\Models\Scenario;
 use App\Services\DataCollection\DataCollectionPromptHelper;
+use App\Services\Dialogs\DialogAutomationGate;
 use App\Services\Scenarios\DispatchStoredInboundScenarioAction;
 
 class DispatchStoredInboundBotMessageAction
@@ -26,6 +27,7 @@ class DispatchStoredInboundBotMessageAction
         protected StoreOutboundAutoReplyMessageAction $storeOutboundAutoReplyMessageAction,
         protected DataCollectionPromptHelper $dataCollectionPromptHelper,
         protected LegacyAutoReplyRuntimeGate $legacyAutoReplyRuntimeGate,
+        protected DialogAutomationGate $dialogAutomationGate,
     ) {}
 
     public function handle(
@@ -69,6 +71,20 @@ class DispatchStoredInboundBotMessageAction
                     $duplicateContext,
                 );
             }
+
+            return;
+        }
+
+        if (! $this->dialogAutomationGate->acceptsMessage($storedMessage)) {
+            $this->channelActivityLogger->info(
+                $channel,
+                'dialog.blacklist_automation_skipped',
+                'Автоматизация не запущена: диалог находится в ЧС-стадии.',
+                $duplicateContext + [
+                    'dialog_id' => $storedMessage->dialog_id,
+                    'reason' => DialogAutomationGate::REASON_BLACKLIST_STAGE,
+                ],
+            );
 
             return;
         }

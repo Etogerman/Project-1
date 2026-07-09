@@ -303,7 +303,31 @@ class DialogKanbanLocalContourTest extends TestCase
         $this->actingAs($admin)
             ->get(DialogResource::getUrl('kanban'))
             ->assertOk()
-            ->assertSee('ac-kanban-column--empty', false);
+            ->assertSee('ac-kanban-column--empty', false)
+            ->assertSee('--ac-kanban-column-width: min(12rem, calc(100vw - 2rem));', false)
+            ->assertDontSee('.ac-kanban-column--empty.ac-kanban-column--drop-target', false)
+            ->assertDontSee('flex-basis 180ms ease', false);
+    }
+
+    public function test_kanban_page_renders_optimistic_drag_drop_contract(): void
+    {
+        $admin = $this->createAdmin();
+        $dialog = $this->createKanbanDialog([
+            'contactName' => 'Оптимистичный перенос',
+            'stage' => Dialog::STAGE_NEW_DIALOG,
+        ]);
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('kanban'))
+            ->assertOk()
+            ->assertSee('data-role="dialog-kanban-column-cards"', false)
+            ->assertSee('data-role="dialog-kanban-column-count"', false)
+            ->assertSee('data-dialog-id="'.$dialog->id.'"', false)
+            ->assertSee('data-current-stage="'.Dialog::STAGE_NEW_DIALOG.'"', false)
+            ->assertSee('dropCard($el', false)
+            ->assertSee('optimisticMove(targetColumn, dialogId, targetStage)', false)
+            ->assertSee('ac-kanban-card--optimistic-move', false)
+            ->assertSee('ac-kanban-column--optimistic-target', false);
     }
 
     public function test_kanban_page_restores_filters_from_query_string(): void

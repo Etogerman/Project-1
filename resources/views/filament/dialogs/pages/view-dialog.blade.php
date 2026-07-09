@@ -120,23 +120,103 @@
                     data-current-tone="{{ $dialogStage['current_tone'] }}"
                     class="ac-dialog-stage-strip ac-dialog-summary__stage"
                 >
-                    <div class="ac-dialog-stage-strip__track" role="group" aria-label="{{ $dialogFieldLabel('stage', 'Этап') }} диалога">
-                        @foreach ($dialogStage['steps'] as $stageStep)
+                    <div
+                        data-role="dialog-stage-track"
+                        class="ac-dialog-stage-strip__track"
+                        role="group"
+                        aria-label="{{ $dialogFieldLabel('stage', 'Этап') }} диалога"
+                        x-data="{
+                            optimisticStageIndex: null,
+                            optimisticProgressStyle: null,
+                            clearOptimisticStage() {
+                                this.optimisticStageIndex = null;
+                                this.optimisticProgressStyle = null;
+                            },
+                            selectOptimisticStage(index, progressStyle) {
+                                this.optimisticStageIndex = index;
+                                this.optimisticProgressStyle = progressStyle;
+                            },
+                            stageState(index, fallbackState, isClickable) {
+                                if (this.optimisticStageIndex === null) {
+                                    return fallbackState;
+                                }
+
+                                if (index < this.optimisticStageIndex) {
+                                    return 'completed';
+                                }
+
+                                if (index === this.optimisticStageIndex) {
+                                    return 'current';
+                                }
+
+                                return isClickable ? 'available' : 'locked';
+                            },
+                            stageStyle(index, defaultStyle, futureStyle) {
+                                if (this.optimisticStageIndex === null) {
+                                    return defaultStyle;
+                                }
+
+                                return index <= this.optimisticStageIndex
+                                    ? this.optimisticProgressStyle
+                                    : futureStyle;
+                            },
+                        }"
+                        x-on:dialog-stage-selection-settled.window="clearOptimisticStage()"
+                    >
+                        @foreach ($dialogStage['steps'] as $stageIndex => $stageStep)
                             @php
                                 $stageState = $stageStep['is_current']
                                     ? 'current'
                                     : ($stageStep['is_completed']
                                         ? 'completed'
                                         : ($stageStep['is_clickable'] ? 'available' : 'locked'));
+                                $stageStepStyle = static fn (
+                                    string $backgroundColor,
+                                    string $borderColor,
+                                    string $textColor,
+                                    string $shadowColor,
+                                    string $accentColor,
+                                ): string => sprintf(
+                                    '--stage-step-bg: %s; --stage-step-border: %s; --stage-step-text: %s; --stage-step-shadow: %s; --stage-step-accent: %s;',
+                                    $backgroundColor,
+                                    $borderColor,
+                                    $textColor,
+                                    $shadowColor,
+                                    $accentColor,
+                                );
+                                $defaultStageStyle = $stageStepStyle(
+                                    $stageStep['background_color'],
+                                    $stageStep['border_color'],
+                                    $stageStep['text_color'],
+                                    $stageStep['shadow_color'],
+                                    $stageStep['accent_color'],
+                                );
+                                $progressStageStyle = $stageStepStyle(
+                                    $stageStep['active_background_color'],
+                                    $stageStep['active_border_color'],
+                                    $stageStep['active_text_color'],
+                                    $stageStep['active_shadow_color'],
+                                    $stageStep['active_accent_color'],
+                                );
+                                $futureStageStyle = $stageStepStyle(
+                                    $stageStep['future_background_color'],
+                                    $stageStep['future_border_color'],
+                                    $stageStep['future_text_color'],
+                                    $stageStep['future_shadow_color'],
+                                    $stageStep['future_accent_color'],
+                                );
                             @endphp
                             <button
                                 type="button"
                                 data-role="dialog-stage-step"
                                 data-state="{{ $stageState }}"
+                                x-bind:data-state="stageState({{ $stageIndex }}, @js($stageState), {{ $stageStep['is_clickable'] ? 'true' : 'false' }})"
                                 data-tone="{{ $stageStep['tone'] }}"
                                 data-stage-color="{{ $stageStep['color_hex'] }}"
                                 data-stage-accent-color="{{ $stageStep['accent_color'] }}"
-                                style="--stage-step-bg: {{ $stageStep['background_color'] }}; --stage-step-border: {{ $stageStep['border_color'] }}; --stage-step-text: {{ $stageStep['text_color'] }}; --stage-step-shadow: {{ $stageStep['shadow_color'] }}; --stage-step-accent: {{ $stageStep['accent_color'] }};"
+                                style="{{ $defaultStageStyle }}"
+                                x-bind:style="stageStyle({{ $stageIndex }}, @js($defaultStageStyle), @js($futureStageStyle))"
+                                x-on:click="selectOptimisticStage({{ $stageIndex }}, @js($progressStageStyle))"
                                 wire:click="selectDialogStage('{{ $stageStep['value'] }}')"
                                 @disabled(! $stageStep['is_clickable'])
                                 class="ac-dialog-stage-step"
@@ -266,7 +346,7 @@
                         handleRefreshComplete(detail = {}) {
                             this.isRefreshing = false;
 
-                            if ((detail.appendedCount ?? 0) < 1) {
+                            if (((detail.appendedCount ?? 0) + (detail.updatedCount ?? 0)) < 1) {
                                 return;
                             }
 
@@ -409,6 +489,20 @@
             </div>
                 @elseif ($activeTab === \App\Services\Dialogs\SyncSystemDialogCardViewAction::TAB_DIAGNOSTICS)
             <div data-role="dialog-diagnostics-tab" class="ac-dialog-side-stack">
+                @if (($dialogAutomationDiagnostics['is_visible'] ?? false) && ($dialogAutomationDiagnostics['rows'] ?? []) !== [])
+                    <section class="ac-surface ac-dialog-side-card" data-role="dialog-automation-diagnostics">
+                        <div class="ac-surface__header ac-surface__header--centered">
+                            <div class="ac-surface__title-group">
+                                <h3 class="ac-surface__title">Автоответы и V3</h3>
+                            </div>
+                        </div>
+
+                        @include('filament.dialogs.partials.dialog-side-field-list', [
+                            'rows' => $dialogAutomationDiagnostics['rows'],
+                        ])
+                    </section>
+                @endif
+
                 @foreach ($dialogDiagnosticsBlocks as $section)
                     @foreach (($section['blocks'] ?? []) as $blockKey)
                         @if ($blockKey === \App\Services\Dialogs\SyncSystemDialogCardViewAction::BLOCK_DIALOG_PEER_SYNC && $peerSyncState['is_visible'])

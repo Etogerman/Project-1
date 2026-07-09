@@ -196,13 +196,106 @@
 
         <div
             data-role="dialog-kanban-board"
-            x-data="{ draggingDialogId: null, allowedTargets: [] }"
+            x-data="{
+                draggingDialogId: null,
+                allowedTargets: [],
+                emptyColumnNode() {
+                    const node = document.createElement('div');
+
+                    node.dataset.role = 'dialog-kanban-empty-column';
+                    node.className = 'ac-kanban-empty-column';
+                    node.textContent = 'Пусто';
+
+                    return node;
+                },
+                columnCount(column) {
+                    const count = column?.querySelector('[data-role=\'dialog-kanban-column-count\']');
+                    const value = Number.parseInt((count?.textContent || '0').trim(), 10);
+
+                    return Number.isFinite(value) ? value : 0;
+                },
+                setColumnCount(column, value) {
+                    const count = column?.querySelector('[data-role=\'dialog-kanban-column-count\']');
+                    const normalizedValue = Math.max(0, value);
+
+                    if (count) {
+                        count.textContent = String(normalizedValue);
+                    }
+
+                    column?.classList.toggle('ac-kanban-column--empty', normalizedValue === 0);
+                },
+                syncColumnEmptyState(column) {
+                    const cards = column?.querySelector('[data-role=\'dialog-kanban-column-cards\']');
+                    const empty = cards?.querySelector('[data-role=\'dialog-kanban-empty-column\']');
+                    const hasVisibleCard = Boolean(cards?.querySelector('[data-role=\'dialog-kanban-card\']'));
+
+                    if (! cards) {
+                        return;
+                    }
+
+                    if (hasVisibleCard) {
+                        empty?.remove();
+
+                        return;
+                    }
+
+                    if (this.columnCount(column) === 0 && ! empty) {
+                        cards.appendChild(this.emptyColumnNode());
+                    }
+                },
+                optimisticMove(targetColumn, dialogId, targetStage) {
+                    const root = targetColumn?.closest('[data-role=\'dialog-kanban-page\']');
+                    const card = root?.querySelector(`[data-role='dialog-kanban-card'][data-dialog-id='${dialogId}']`);
+                    const sourceColumn = card?.closest('[data-role=\'dialog-kanban-column\']');
+                    const targetCards = targetColumn?.querySelector('[data-role=\'dialog-kanban-column-cards\']');
+
+                    if (! root || ! card || ! sourceColumn || ! targetColumn || ! targetCards || sourceColumn === targetColumn) {
+                        return;
+                    }
+
+                    targetCards.querySelector('[data-role=\'dialog-kanban-empty-column\']')?.remove();
+                    targetCards.prepend(card);
+
+                    this.setColumnCount(sourceColumn, this.columnCount(sourceColumn) - 1);
+                    this.setColumnCount(targetColumn, this.columnCount(targetColumn) + 1);
+                    this.syncColumnEmptyState(sourceColumn);
+                    this.syncColumnEmptyState(targetColumn);
+
+                    card.dataset.currentStage = targetStage;
+                    card.setAttribute('draggable', 'false');
+                    card.classList.add('ac-kanban-card--optimistic-move');
+                    targetColumn.classList.add('ac-kanban-column--optimistic-target');
+
+                    window.setTimeout(() => {
+                        card.classList.remove('ac-kanban-card--optimistic-move');
+                        targetColumn.classList.remove('ac-kanban-column--optimistic-target');
+                    }, 700);
+                },
+                dropCard(targetColumn, dialogId, targetStage, persistMove) {
+                    this.optimisticMove(targetColumn, dialogId, targetStage);
+
+                    let moveRequest = null;
+
+                    try {
+                        moveRequest = typeof persistMove === 'function' ? persistMove() : null;
+                    } catch (error) {
+                        window.location.reload();
+
+                        return;
+                    }
+
+                    if (moveRequest && typeof moveRequest.catch === 'function') {
+                        moveRequest.catch(() => window.location.reload());
+                    }
+                },
+            }"
             class="ac-kanban-board"
         >
             @foreach ($columns as $column)
                 <section
                     data-role="dialog-kanban-column"
                     data-stage="{{ $column['stage'] }}"
+                    wire:key="dialog-kanban-column-{{ $column['stage'] }}"
                     class="ac-surface ac-surface--secondary ac-kanban-column{{ $column['count'] === 0 ? ' ac-kanban-column--empty' : '' }}"
                     x-bind:class="draggingDialogId === null
                         ? ''
@@ -212,7 +305,7 @@
                     x-on:dragover.prevent
                     x-on:drop.prevent="
                         if (draggingDialogId !== null && allowedTargets.includes('{{ $column['stage'] }}')) {
-                            $wire.moveDialogCard(draggingDialogId, '{{ $column['stage'] }}');
+                            dropCard($el, draggingDialogId, '{{ $column['stage'] }}', () => $wire.moveDialogCard(draggingDialogId, '{{ $column['stage'] }}'));
                         }
 
                         draggingDialogId = null;
@@ -225,16 +318,18 @@
                         style="--ac-kanban-stage-bg: {{ $column['stage_background_color'] }}; --ac-kanban-stage-border: {{ $column['stage_border_color'] }}; --ac-kanban-stage-text: {{ $column['stage_text_color'] }}; --ac-kanban-stage-count-bg: {{ $column['stage_count_background_color'] }};"
                     >
                         <h3 class="ac-kanban-column__title">{{ $column['label'] }}</h3>
-                        <span class="ac-kanban-column__count">
+                        <span class="ac-kanban-column__count" data-role="dialog-kanban-column-count">
                             {{ $column['count'] }}
                         </span>
                     </div>
 
-                    <div class="ac-kanban-column__cards">
+                    <div class="ac-kanban-column__cards" data-role="dialog-kanban-column-cards">
                         @forelse ($column['cards'] as $card)
                             <article
                                 data-role="dialog-kanban-card"
                                 data-dialog-id="{{ $card['id'] }}"
+                                data-current-stage="{{ $column['stage'] }}"
+                                wire:key="dialog-kanban-card-{{ $card['id'] }}"
                                 draggable="{{ $can_manage_stages && $card['allowed_target_stages'] !== [] ? 'true' : 'false' }}"
                                 x-on:dragstart="
                                     if ($el.getAttribute('draggable') !== 'true') {

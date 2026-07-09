@@ -3104,10 +3104,10 @@ export default function App({
         setNotice(null);
 
         try {
-            const document = await exportScenarioBuilderAutoReplies(autoReplyExportUrl);
+            const document = await exportScenarioBuilderAutoReplies(autoReplyExportUrl, activeSheet.id);
 
             downloadBlobDocument(document.filename, document.blob);
-            setNotice('Автоответы экспортированы из сохранённого черновика.');
+            setNotice('Автоответы активного листа экспортированы из сохранённого черновика.');
         } catch (requestError) {
             setError(errorText(requestError));
         } finally {
@@ -3139,7 +3139,10 @@ export default function App({
 
         try {
             const json = await file.text();
-            const preview = await previewScenarioBuilderSheetImport(sheetImportPreviewUrl, csrfToken, { json });
+            const preview = await previewScenarioBuilderSheetImport(sheetImportPreviewUrl, csrfToken, {
+                json,
+                target_sheet_id: activeSheet.id,
+            });
 
             setSheetImportJson(json);
             setSheetImportPreview(preview);
@@ -3271,6 +3274,7 @@ export default function App({
                 json: sheetImportJson,
                 draft_version_id: sheetImportPreview.draft_version_id,
                 base_builder_revision: sheetImportPreview.base_builder_revision,
+                target_sheet_id: activeSheet.id,
                 selected_channels: sheetImportSelection,
                 tag_mappings: sheetImportTagPayload(sheetImportTagMappings),
             });
@@ -3347,6 +3351,7 @@ export default function App({
     ) {
         return {
             builder_state: { builder: state?.builder ?? {} },
+            target_sheet_id: activeSheet.id,
             placement_mode: placement || AUTO_REPLY_IMPORT_DEFAULT_PLACEMENT,
             import_batch_id: batchId || createAutoReplyImportBatchId(),
             channel_mappings: Object.entries(mappings.channels ?? {})

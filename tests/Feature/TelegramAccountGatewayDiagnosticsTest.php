@@ -82,6 +82,19 @@ class TelegramAccountGatewayDiagnosticsTest extends TestCase
                 'label' => 'Синхронизация Telegram account не в реальном времени',
                 'severity' => 'warning',
             ],
+            'sync_degraded' => [
+                'channel' => fn (): Channel => $this->createAccountChannelWithRuntime([
+                    'sync_status' => ChannelRuntimeState::SYNC_STATUS_DEGRADED,
+                    'runtime_payload' => [
+                        'gateway_capabilities' => [
+                            'outgoing_replies' => true,
+                        ],
+                    ],
+                ]),
+                'code' => TelegramAccountGatewayDiagnosticsData::CODE_SYNC_NOT_LIVE,
+                'label' => 'Синхронизация Telegram account не в реальном времени',
+                'severity' => 'warning',
+            ],
             'heartbeat_stale' => [
                 'channel' => fn (): Channel => $this->createAccountChannelWithRuntime([
                     'last_gateway_heartbeat_at' => now()->subMinutes(Channel::GATEWAY_HEARTBEAT_FRESH_FOR_MINUTES + 1),

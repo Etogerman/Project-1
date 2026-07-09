@@ -7,6 +7,7 @@ use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Services\Contacts\ResolveRootContactAction;
+use App\Services\Dialogs\DialogAutomationGate;
 use App\Services\Dialogs\ResolveDialogRouteSourceAction;
 use RuntimeException;
 
@@ -16,6 +17,7 @@ class ResumeContactDataCollectionAction
         protected ResolveNextDataCollectionFieldAction $resolveNextDataCollectionFieldAction,
         protected ResolveRootContactAction $resolveRootContactAction,
         protected ResolveDialogRouteSourceAction $resolveDialogRouteSourceAction,
+        protected DialogAutomationGate $dialogAutomationGate,
     ) {}
 
     public function handle(Contact $contact): ?string
@@ -40,6 +42,10 @@ class ResumeContactDataCollectionAction
 
         if (! $sourceMessage instanceof Message) {
             throw new RuntimeException('Не удалось определить сообщение для возобновления сбора данных.');
+        }
+
+        if (! $this->dialogAutomationGate->acceptsMessage($sourceMessage)) {
+            throw new RuntimeException('Сбор данных не запущен: диалог находится в ЧС-стадии.');
         }
 
         $contact->startDataCollection($nextField);

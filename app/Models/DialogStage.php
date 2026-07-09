@@ -43,6 +43,10 @@ class DialogStage extends Model
 
     public const SYSTEM_ROLE_QUESTIONNAIRE_COMPLETED = 'questionnaire_completed';
 
+    public const BEHAVIOR_POLICY_STANDARD = 'standard';
+
+    public const BEHAVIOR_POLICY_BLACKLIST = 'blacklist';
+
     /**
      * @var list<string>
      */
@@ -55,6 +59,7 @@ class DialogStage extends Model
         'sort_order',
         'system_role',
         'is_seeded',
+        'behavior_policy',
     ];
 
     /**
@@ -73,6 +78,7 @@ class DialogStage extends Model
             $stage->guardKey();
             $stage->guardColor();
             $stage->guardSystemRole();
+            $stage->guardBehaviorPolicy();
         });
 
         static::deleting(function (DialogStage $stage): void {
@@ -91,7 +97,7 @@ class DialogStage extends Model
     }
 
     /**
-     * @return array<string, array{name:string,color:string,sort_order:int,system_role:?string,is_seeded:bool}>
+     * @return array<string, array{name:string,color:string,sort_order:int,system_role:?string,is_seeded:bool,behavior_policy:string}>
      */
     public static function seededStages(): array
     {
@@ -102,6 +108,7 @@ class DialogStage extends Model
                 'sort_order' => 10,
                 'system_role' => self::SYSTEM_ROLE_NEW_DIALOG,
                 'is_seeded' => true,
+                'behavior_policy' => self::BEHAVIOR_POLICY_STANDARD,
             ],
             self::KEY_PHONE_RECEIVED => [
                 'name' => 'Телефон получен',
@@ -109,6 +116,7 @@ class DialogStage extends Model
                 'sort_order' => 20,
                 'system_role' => self::SYSTEM_ROLE_PHONE_RECEIVED,
                 'is_seeded' => true,
+                'behavior_policy' => self::BEHAVIOR_POLICY_STANDARD,
             ],
             self::KEY_QUESTIONNAIRE_COMPLETED => [
                 'name' => 'Данные собраны',
@@ -116,6 +124,7 @@ class DialogStage extends Model
                 'sort_order' => 30,
                 'system_role' => self::SYSTEM_ROLE_QUESTIONNAIRE_COMPLETED,
                 'is_seeded' => true,
+                'behavior_policy' => self::BEHAVIOR_POLICY_STANDARD,
             ],
             self::KEY_TRANSFERRED_TO_MPL => [
                 'name' => 'МПЛ взял в работу',
@@ -123,6 +132,7 @@ class DialogStage extends Model
                 'sort_order' => 40,
                 'system_role' => null,
                 'is_seeded' => true,
+                'behavior_policy' => self::BEHAVIOR_POLICY_STANDARD,
             ],
             self::KEY_TRANSFERRED_TO_MPP => [
                 'name' => 'Передан в МПП',
@@ -130,6 +140,7 @@ class DialogStage extends Model
                 'sort_order' => 50,
                 'system_role' => null,
                 'is_seeded' => true,
+                'behavior_policy' => self::BEHAVIOR_POLICY_STANDARD,
             ],
         ];
     }
@@ -200,6 +211,17 @@ class DialogStage extends Model
         ];
     }
 
+    /**
+     * @return array<string, string>
+     */
+    public static function behaviorPolicyOptions(): array
+    {
+        return [
+            self::BEHAVIOR_POLICY_STANDARD => 'Обычная',
+            self::BEHAVIOR_POLICY_BLACKLIST => 'ЧС',
+        ];
+    }
+
     public function dialogs(): HasMany
     {
         return $this->hasMany(Dialog::class, 'stage_id');
@@ -220,6 +242,16 @@ class DialogStage extends Model
     public function typeLabel(): string
     {
         return $this->isSystemDerivedStage() ? 'Автоматическая' : 'Ручная';
+    }
+
+    public function behaviorPolicyLabel(): string
+    {
+        return self::behaviorPolicyOptions()[$this->behavior_policy] ?? 'Обычная';
+    }
+
+    public function isBlacklistBehavior(): bool
+    {
+        return $this->behavior_policy === self::BEHAVIOR_POLICY_BLACKLIST;
     }
 
     protected function guardStableIdentity(): void
@@ -307,6 +339,18 @@ class DialogStage extends Model
         if ($this->system_role !== null && ! array_key_exists($this->system_role, self::systemRoleOptions())) {
             throw ValidationException::withMessages([
                 'system_role' => 'Нужно выбрать допустимую системную роль стадии.',
+            ]);
+        }
+    }
+
+    protected function guardBehaviorPolicy(): void
+    {
+        $behaviorPolicy = trim((string) $this->behavior_policy);
+        $this->behavior_policy = $behaviorPolicy !== '' ? $behaviorPolicy : self::BEHAVIOR_POLICY_STANDARD;
+
+        if (! array_key_exists($this->behavior_policy, self::behaviorPolicyOptions())) {
+            throw ValidationException::withMessages([
+                'behavior_policy' => 'Нужно выбрать допустимое поведение стадии.',
             ]);
         }
     }

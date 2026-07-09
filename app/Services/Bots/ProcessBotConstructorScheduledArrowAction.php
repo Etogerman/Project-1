@@ -11,6 +11,7 @@ use App\Models\BotConstructorExecutionBlockRun;
 use App\Models\Channel;
 use App\Models\Dialog;
 use App\Models\Message;
+use App\Services\Dialogs\DialogAutomationGate;
 use Illuminate\Support\Facades\DB;
 use Throwable;
 
@@ -20,6 +21,7 @@ class ProcessBotConstructorScheduledArrowAction
         private readonly CreateBotConstructorExecutionBlockRunAction $createExecutionBlockRunAction,
         private readonly ExecuteBotConstructorBlockAction $executeBotConstructorBlockAction,
         private readonly ProcessBotConstructorArrowsAction $processBotConstructorArrowsAction,
+        private readonly DialogAutomationGate $dialogAutomationGate,
     ) {}
 
     public function handle(int|BotConstructorArrowRun $arrowRun): void
@@ -58,8 +60,8 @@ class ProcessBotConstructorScheduledArrowAction
                 return;
             }
 
-            if (! $this->canContinueAutomation($rootMessage)) {
-                $this->cancelRun($arrowRun, 'Автоматизация контакта выключена или контакт сейчас собирает данные.');
+            if (! $this->canContinueAutomation($rootMessage, $dialog)) {
+                $this->cancelRun($arrowRun, 'Автоматизация остановлена: контакт недоступен для автоматизации, собирает данные или диалог находится в ЧС.');
 
                 return;
             }
@@ -237,9 +239,14 @@ class ProcessBotConstructorScheduledArrowAction
             || (int) $state->current_block_id !== (int) $arrowRun->source_block_id;
     }
 
-    private function canContinueAutomation(Message $message): bool
+    private function canContinueAutomation(Message $message, Dialog $dialog): bool
     {
         $message->loadMissing(['channel', 'contact']);
+        $dialog->loadMissing('dialogStage');
+
+        if (! $this->dialogAutomationGate->accepts($dialog)) {
+            return false;
+        }
 
         $contact = $message->contact;
 

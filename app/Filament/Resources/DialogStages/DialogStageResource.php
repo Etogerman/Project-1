@@ -82,6 +82,12 @@ class DialogStageResource extends Resource
                             ->label('Цвет')
                             ->default(DialogStage::COLOR_GRAY)
                             ->required(),
+                        Select::make('behavior_policy')
+                            ->label('Поведение')
+                            ->options(DialogStage::behaviorPolicyOptions())
+                            ->default(DialogStage::BEHAVIOR_POLICY_STANDARD)
+                            ->required()
+                            ->native(false),
                         TextInput::make('sort_order')
                             ->label('Порядок')
                             ->numeric()
@@ -122,6 +128,13 @@ class DialogStageResource extends Resource
                     ->state(fn (DialogStage $record): string => $record->typeLabel())
                     ->badge()
                     ->color(fn (DialogStage $record): string => $record->isSystemDerivedStage() ? 'info' : 'gray')
+                    ->sortable()
+                    ->toggleable(),
+                TextColumn::make('behavior_policy')
+                    ->label('Поведение')
+                    ->state(fn (DialogStage $record): string => $record->behaviorPolicyLabel())
+                    ->badge()
+                    ->color(fn (DialogStage $record): string => $record->isBlacklistBehavior() ? 'danger' : 'gray')
                     ->sortable()
                     ->toggleable(),
                 TextColumn::make('dialogs_count')

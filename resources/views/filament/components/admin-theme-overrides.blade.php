@@ -4212,6 +4212,27 @@
         overflow-wrap: anywhere;
     }
 
+    .ac-dialog-side-list .ac-meta__value-wrap {
+        min-width: 0;
+        text-align: right;
+    }
+
+    .ac-dialog-side-list .ac-meta__detail {
+        margin: 0.18rem 0 0;
+        color: var(--ac-text-muted);
+        font-size: 0.72rem;
+        line-height: 1.35;
+        overflow-wrap: anywhere;
+    }
+
+    .ac-dialog-side-list .ac-meta__value--warning {
+        color: var(--ac-warning);
+    }
+
+    .ac-dialog-side-list .ac-meta__value--success {
+        color: var(--ac-success);
+    }
+
     .ac-dialog-side-list .ac-meta__link {
         color: var(--ac-accent);
         font-weight: 650;
@@ -6085,18 +6106,15 @@
         transition:
             opacity 150ms ease,
             box-shadow 150ms ease,
-            border-color 150ms ease,
-            flex-basis 180ms ease,
-            width 180ms ease;
+            border-color 150ms ease;
     }
 
     .ac-kanban-column--empty {
         --ac-kanban-column-width: min(12rem, calc(100vw - 2rem));
     }
 
-    .ac-kanban-column--empty:hover,
-    .ac-kanban-column--empty.ac-kanban-column--drop-target {
-        --ac-kanban-column-width: min(18.75rem, calc(100vw - 2rem));
+    .ac-kanban-column--empty:hover {
+        border-color: #d8d4cd;
     }
 
     .ac-kanban-column__header {
@@ -6170,6 +6188,11 @@
         box-shadow: 0 0 0 2px color-mix(in srgb, var(--ac-warning) 45%, transparent);
     }
 
+    .ac-kanban-column--optimistic-target {
+        border-color: color-mix(in srgb, var(--ac-success) 56%, var(--ac-border));
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--ac-success) 35%, transparent);
+    }
+
     .ac-kanban-column--inactive {
         opacity: 0.7;
     }
@@ -6201,6 +6224,29 @@
         border-color: #d8d4cd;
         transform: translateY(-1px);
         box-shadow: 0 5px 14px rgba(15, 18, 25, 0.06);
+    }
+
+    .ac-kanban-card--optimistic-move {
+        animation: ac-kanban-card-optimistic-drop 420ms ease-out;
+        border-color: color-mix(in srgb, var(--ac-success) 58%, #ebe8e3);
+        box-shadow: 0 12px 24px rgba(22, 163, 74, 0.14);
+    }
+
+    @keyframes ac-kanban-card-optimistic-drop {
+        0% {
+            opacity: 0.72;
+            transform: scale(0.985);
+        }
+
+        60% {
+            opacity: 1;
+            transform: scale(1.01);
+        }
+
+        100% {
+            opacity: 1;
+            transform: scale(1);
+        }
     }
 
     .ac-kanban-card__header {

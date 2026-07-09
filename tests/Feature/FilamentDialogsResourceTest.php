@@ -8,6 +8,7 @@ use App\Filament\Resources\Dialogs\DialogResource;
 use App\Filament\Resources\Dialogs\Pages\ListDialogs;
 use App\Filament\Resources\Dialogs\Pages\ViewDialog;
 use App\Models\Channel;
+use App\Models\ChannelActivityLog;
 use App\Models\ChannelPeerSyncState;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
@@ -18,6 +19,7 @@ use App\Models\FieldDictionaryField;
 use App\Models\Message;
 use App\Models\MessageAttachment;
 use App\Models\Scenario;
+use App\Models\ScenarioChannelBinding;
 use App\Models\ScenarioRun;
 use App\Models\ScenarioVersion;
 use App\Models\User;
@@ -308,6 +310,252 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('data-field-key="contact_id"', false)
             ->assertSee('data-field-key="channel_id"', false)
             ->assertDontSee('Аватарка');
+    }
+
+    public function test_dialog_view_diagnostics_explains_v3_start_phone_condition_skip(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(0);
+        ContactPhoneNumber::query()
+            ->where('contact_id', $dialog->contact_id)
+            ->delete();
+
+        $publishedVersion = $this->createPublishedScenarioVersion([
+            'builder_v3_runtime' => [
+                'entrypoints' => [
+                    [
+                        'block_id' => '150',
+                        'display_id' => '141',
+                        'event' => 'message',
+                        'match' => 'exact_text_or_parameter',
+                        'values' => ['JBTLIST'],
+                        'channel_ids' => [$dialog->channel_id],
+                        'contact_phone_condition' => 'has_phone',
+                        'dialog_phone_condition' => '',
+                        'tag_condition' => [
+                            'enabled' => false,
+                            'tag_ids' => [],
+                            'mode' => 'has_all',
+                        ],
+                    ],
+                ],
+                'blocks' => [
+                    '150' => [
+                        'id' => '150',
+                        'display_number' => '141',
+                        'title' => 'JBTLIST',
+                    ],
+                ],
+            ],
+        ]);
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $dialog->channel_id,
+            'scenario_code' => $publishedVersion->scenario->code,
+            'is_active' => true,
+        ]);
+
+        $message = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => $dialog->external_chat_id,
+            'external_message_id' => '1073',
+            'provider_event_key' => '240917852',
+            'text' => 'JBTLIST',
+            'received_at' => now(),
+        ]);
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => $dialog->external_chat_id,
+            'external_message_id' => 'older-message',
+            'provider_event_key' => 'older-event',
+            'text' => 'СТАРОЕ СООБЩЕНИЕ',
+            'received_at' => now()->subHour(),
+        ]);
+        ChannelActivityLog::query()->create([
+            'channel_id' => $dialog->channel_id,
+            'level' => 'info',
+            'event' => 'bot.reply_skipped_legacy_cutover',
+            'message' => 'Legacy auto reply skipped because V3 cutover is active.',
+            'context' => [
+                'message_id' => $message->id,
+                'provider_event_key' => '240917852',
+                'external_message_id' => '1073',
+            ],
+            'created_at' => now(),
+        ]);
+
+        $response = $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', [
+                'record' => $dialog,
+                'tab' => SyncSystemDialogCardViewAction::TAB_DIAGNOSTICS,
+            ]))
+            ->assertOk()
+            ->assertSee('data-role="dialog-automation-diagnostics"', false)
+            ->assertSee('Автоответы и V3')
+            ->assertSee('V3-start отклонён условиями')
+            ->assertSee('у контакта нет телефона')
+            ->assertSee('#141 · JBTLIST')
+            ->assertSee('Событие провайдера')
+            ->assertSee('Внешнее сообщение')
+            ->assertSee('Пропущен из-за V3 cutover');
+
+        $html = $response->getContent();
+        $this->assertIsString($html);
+        $this->assertSame(
+            1,
+            preg_match('/<section\\b[^>]*data-role="dialog-automation-diagnostics"[^>]*>.*?<\\/section>/s', $html, $matches),
+            'Automation diagnostics section was not found in the dialog page.',
+        );
+
+        $diagnosticsHtml = $matches[0];
+        $this->assertStringContainsString('240917852', $diagnosticsHtml);
+        $this->assertStringContainsString('1073', $diagnosticsHtml);
+        $this->assertStringNotContainsString('provider event', $diagnosticsHtml);
+        $this->assertStringNotContainsString('external message', $diagnosticsHtml);
+        $this->assertStringNotContainsString('older-event', $diagnosticsHtml);
+        $this->assertStringNotContainsString('older-message', $diagnosticsHtml);
+    }
+
+    public function test_dialog_view_diagnostics_prefers_latest_published_v3_version_for_same_scenario(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(0);
+        ContactPhoneNumber::query()
+            ->where('contact_id', $dialog->contact_id)
+            ->delete();
+        $scenario = Scenario::query()->create([
+            'code' => 'dialog_diagnostics_latest_version',
+            'name' => 'Dialog diagnostics latest version',
+            'is_active' => true,
+            'is_archived' => false,
+        ]);
+        $runtime = static function (string $blockId, string $displayId, string $title, string $contactPhoneCondition = 'has_phone') use ($dialog): array {
+            return [
+                'builder_v3_runtime' => [
+                    'entrypoints' => [
+                        [
+                            'block_id' => $blockId,
+                            'display_id' => $displayId,
+                            'event' => 'message',
+                            'match' => 'exact_text_or_parameter',
+                            'values' => ['JBTLIST'],
+                            'channel_ids' => [$dialog->channel_id],
+                            'contact_phone_condition' => $contactPhoneCondition,
+                            'dialog_phone_condition' => '',
+                        ],
+                    ],
+                    'blocks' => [
+                        $blockId => [
+                            'id' => $blockId,
+                            'display_number' => $displayId,
+                            'title' => $title,
+                        ],
+                    ],
+                ],
+            ];
+        };
+        ScenarioVersion::query()->create([
+            'scenario_id' => $scenario->id,
+            'version_number' => 1,
+            'status' => ScenarioVersion::STATUS_PUBLISHED,
+            'schema_payload' => $runtime('101', '101', 'Старая версия', ''),
+        ]);
+        ScenarioVersion::query()->create([
+            'scenario_id' => $scenario->id,
+            'version_number' => 2,
+            'status' => ScenarioVersion::STATUS_PUBLISHED,
+            'schema_payload' => $runtime('202', '202', 'Новая версия'),
+        ]);
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $dialog->channel_id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => $dialog->external_chat_id,
+            'external_message_id' => 'latest-version-message',
+            'provider_event_key' => 'latest-version-event',
+            'text' => 'JBTLIST',
+            'received_at' => now(),
+        ]);
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', [
+                'record' => $dialog,
+                'tab' => SyncSystemDialogCardViewAction::TAB_DIAGNOSTICS,
+            ]))
+            ->assertOk()
+            ->assertSee('V3-start отклонён условиями')
+            ->assertSee('#202 · Новая версия')
+            ->assertSee('v2')
+            ->assertDontSee('#101 · Старая версия');
+    }
+
+    public function test_dialog_view_diagnostics_ignores_activity_logs_with_empty_provider_identifiers(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(0);
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => $dialog->external_chat_id,
+            'external_message_id' => null,
+            'provider_event_key' => null,
+            'text' => 'JBTLIST',
+            'received_at' => now(),
+            'created_at' => now(),
+        ]);
+        ChannelActivityLog::query()->create([
+            'channel_id' => $dialog->channel_id,
+            'level' => 'info',
+            'event' => 'bot.reply_skipped_legacy_cutover',
+            'message' => 'Unrelated empty identifiers log.',
+            'context' => [
+                'provider_event_key' => '',
+                'external_message_id' => '',
+            ],
+            'created_at' => now(),
+        ]);
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', [
+                'record' => $dialog,
+                'tab' => SyncSystemDialogCardViewAction::TAB_DIAGNOSTICS,
+            ]))
+            ->assertOk()
+            ->assertSee('Нет события пропуска')
+            ->assertDontSee('Пропущен из-за V3 cutover')
+            ->assertDontSee('Unrelated empty identifiers log.');
     }
 
     public function test_dialog_view_topbar_dialogs_breadcrumb_links_to_back_to_dialogs_list(): void
@@ -2117,6 +2365,7 @@ class FilamentDialogsResourceTest extends TestCase
             ->get(DialogResource::getUrl('view', ['record' => $dialog]))
             ->assertOk()
             ->assertSee('data-role="dialog-stage-strip"', false)
+            ->assertSee('data-role="dialog-stage-track"', false)
             ->assertSee('data-current-tone="warning"', false)
             ->assertSee('class="ac-dialog-stage-strip ac-dialog-summary__stage"', false)
             ->assertSee('data-role="dialog-stage-step"', false)
@@ -2130,6 +2379,34 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertDontSee('<p class="ac-dialog-stage-strip__label">', false)
             ->assertDontSee('class="ac-dialog-stage-strip ac-surface__divider"', false)
             ->assertDontSee('data-role="dialog-stage-select"', false);
+    }
+
+    public function test_dialog_view_stage_strip_renders_optimistic_click_contract(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages();
+
+        $dialog->contact()->update([
+            'data_collection_status' => Contact::DATA_COLLECTION_STATUS_COMPLETED,
+            'data_collection_completed_at' => now(),
+        ]);
+        $dialog->forceFill([
+            'stage' => Dialog::STAGE_TRANSFERRED_TO_MPL,
+        ])->save();
+
+        $html = $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]))
+            ->assertOk()
+            ->getContent();
+
+        $this->assertStringContainsString('optimisticStageIndex: null', $html);
+        $this->assertStringContainsString('x-on:dialog-stage-selection-settled.window="clearOptimisticStage()"', $html);
+        $this->assertStringContainsString('x-bind:data-state="stageState(', $html);
+        $this->assertStringContainsString('x-bind:style="stageStyle(', $html);
+        $this->assertStringContainsString('x-on:click="selectOptimisticStage(', $html);
     }
 
     public function test_dialog_view_keeps_clickable_previous_stage_colored_as_completed(): void
@@ -2201,7 +2478,7 @@ class FilamentDialogsResourceTest extends TestCase
             ->getContent();
 
         $this->assertSame(4, substr_count($html, 'data-stage-color="#CC0000"'));
-        $this->assertSame(4, substr_count($html, '--stage-step-bg: #CC0000'));
+        $this->assertSame(4, substr_count($html, 'style="--stage-step-bg: #CC0000'));
         $this->assertStringContainsString('--stage-step-text: #FFFFFF', $html);
 
         $this->assertMatchesRegularExpression(
@@ -3645,6 +3922,70 @@ class FilamentDialogsResourceTest extends TestCase
             route('admin.message-attachments.preview', ['attachment' => $attachment->id]),
             $messages[0]['media_items'][0]['preview_url'],
         );
+    }
+
+    public function test_dialog_view_live_refresh_shows_media_added_after_message_was_appended(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(1);
+
+        $component = Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()]);
+
+        $mediaMessage = Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'text' => null,
+            'received_at' => now()->addSecond(),
+            'external_message_id' => 'live-refresh-late-media-message-001',
+            'provider_event_key' => 'live-refresh-late-media-event-001',
+        ]);
+
+        $component
+            ->call('refreshDialogViewData')
+            ->assertDispatched('dialog-history-refreshed');
+
+        $messages = $component->get('conversationMessages');
+
+        $this->assertCount(2, $messages);
+        $this->assertSame($mediaMessage->id, $messages[1]['id']);
+        $this->assertFalse($messages[1]['has_media']);
+        $this->assertSame([], $messages[1]['media_items']);
+
+        $attachment = MessageAttachment::factory()->create([
+            'message_id' => $mediaMessage->id,
+            'channel_id' => $dialog->channel_id,
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT,
+            'provider_event_key' => $mediaMessage->provider_event_key,
+            'provider_attachment_key' => 'late-media:image:file-1',
+            'media_kind' => MessageAttachment::MEDIA_KIND_IMAGE,
+            'original_filename' => 'late-photo.jpg',
+            'mime_type' => 'image/jpeg',
+            'extension' => 'jpg',
+            'file_size_bytes' => 4096,
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+            'local_path' => MessageAttachment::LOCAL_PATH_PREFIX.'/'.$mediaMessage->id.'/late-photo.jpg',
+        ]);
+
+        $component
+            ->call('refreshDialogViewData')
+            ->assertDispatched('dialog-history-refreshed');
+
+        $messages = $component->get('conversationMessages');
+
+        $this->assertCount(2, $messages);
+        $this->assertSame($mediaMessage->id, $messages[1]['id']);
+        $this->assertTrue($messages[1]['has_media']);
+        $this->assertSame($attachment->id, $messages[1]['media_items'][0]['attachment_id']);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $messages[1]['media_items'][0]['status']);
+        $this->assertTrue($messages[1]['media_items'][0]['is_previewable']);
     }
 
     public function test_dialog_view_live_refresh_does_not_duplicate_already_loaded_messages(): void
