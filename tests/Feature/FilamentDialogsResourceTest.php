@@ -396,7 +396,7 @@ class FilamentDialogsResourceTest extends TestCase
             'created_at' => now(),
         ]);
 
-        $this->actingAs($admin)
+        $response = $this->actingAs($admin)
             ->get(DialogResource::getUrl('view', [
                 'record' => $dialog,
                 'tab' => SyncSystemDialogCardViewAction::TAB_DIAGNOSTICS,
@@ -409,13 +409,23 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('#141 · JBTLIST')
             ->assertSee('Событие провайдера')
             ->assertSee('Внешнее сообщение')
-            ->assertSee('240917852')
-            ->assertSee('1073')
-            ->assertDontSee('provider event')
-            ->assertDontSee('external message')
-            ->assertDontSee('older-event')
-            ->assertDontSee('older-message')
             ->assertSee('Пропущен из-за V3 cutover');
+
+        $html = $response->getContent();
+        $this->assertIsString($html);
+        $this->assertSame(
+            1,
+            preg_match('/<section\\b[^>]*data-role="dialog-automation-diagnostics"[^>]*>.*?<\\/section>/s', $html, $matches),
+            'Automation diagnostics section was not found in the dialog page.',
+        );
+
+        $diagnosticsHtml = $matches[0];
+        $this->assertStringContainsString('240917852', $diagnosticsHtml);
+        $this->assertStringContainsString('1073', $diagnosticsHtml);
+        $this->assertStringNotContainsString('provider event', $diagnosticsHtml);
+        $this->assertStringNotContainsString('external message', $diagnosticsHtml);
+        $this->assertStringNotContainsString('older-event', $diagnosticsHtml);
+        $this->assertStringNotContainsString('older-message', $diagnosticsHtml);
     }
 
     public function test_dialog_view_diagnostics_prefers_latest_published_v3_version_for_same_scenario(): void
