@@ -37,6 +37,7 @@ use App\Policies\GeoCountryPolicy;
 use App\Policies\GeoRegionPolicy;
 use App\Policies\ScenarioPolicy;
 use App\Policies\UserPolicy;
+use App\Services\Dialogs\DialogStageCatalog;
 use Illuminate\Auth\Events\Login;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
@@ -52,7 +53,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        $this->app->singleton(DialogStageCatalog::class);
     }
 
     /**

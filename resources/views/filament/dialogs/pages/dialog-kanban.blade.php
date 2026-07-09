@@ -46,10 +46,13 @@
                     >
                         <button
                             type="button"
-                            class="ac-button"
+                            @class([
+                                'ac-button',
+                                'ac-button--warning-soft' => $filter_state['has_active_filters'],
+                                'ac-button--secondary' => ! $filter_state['has_active_filters'],
+                            ])
                             x-on:click.prevent="open = ! open"
                             x-bind:aria-expanded="open.toString()"
-                            x-bind:class="open || @js($filter_state['has_active_filters']) ? 'ac-button--warning-soft' : 'ac-button--secondary'"
                             aria-haspopup="dialog"
                             aria-controls="dialog-kanban-filters-popover"
                         >
