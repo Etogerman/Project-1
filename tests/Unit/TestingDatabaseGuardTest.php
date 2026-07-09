@@ -54,6 +54,18 @@ class TestingDatabaseGuardTest extends TestCase
         );
     }
 
+    public function test_postgres_connect_via_database_cannot_override_safe_database_name(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('abrikosoff_connector" resolved from DB_URL');
+
+        TestingDatabaseGuard::assertSafe(
+            'pgsql',
+            'abrikosoff_connector_test',
+            'postgresql://user:password@db.example/abrikosoff_connector_test?connect_via_database=abrikosoff_connector',
+        );
+    }
+
     public function test_test_database_from_database_url_is_allowed(): void
     {
         TestingDatabaseGuard::assertSafe(
@@ -112,6 +124,46 @@ class TestingDatabaseGuardTest extends TestCase
             $this->assertStringContainsString('DB_URL is malformed', $exception->getMessage());
             $this->assertStringNotContainsString($databaseUrl, $exception->getMessage());
             $this->assertStringNotContainsString('secret', $exception->getMessage());
+        }
+    }
+
+    public function test_existing_default_configuration_cache_is_rejected(): void
+    {
+        $projectRoot = sys_get_temp_dir().'/testing-database-guard-'.bin2hex(random_bytes(8));
+        $cacheDirectory = $projectRoot.'/bootstrap/cache';
+        mkdir($cacheDirectory, 0777, true);
+        file_put_contents($cacheDirectory.'/config.php', '<?php return [];');
+
+        try {
+            $this->expectException(RuntimeException::class);
+            $this->expectExceptionMessage('Laravel configuration is cached');
+
+            TestingDatabaseGuard::assertConfigurationIsNotCached($projectRoot, null);
+        } finally {
+            unlink($cacheDirectory.'/config.php');
+            rmdir($cacheDirectory);
+            rmdir($projectRoot.'/bootstrap');
+            rmdir($projectRoot);
+        }
+    }
+
+    public function test_existing_relative_custom_configuration_cache_is_rejected(): void
+    {
+        $projectRoot = sys_get_temp_dir().'/testing-database-guard-'.bin2hex(random_bytes(8));
+        $cacheDirectory = $projectRoot.'/var/cache';
+        mkdir($cacheDirectory, 0777, true);
+        file_put_contents($cacheDirectory.'/config.php', '<?php return [];');
+
+        try {
+            $this->expectException(RuntimeException::class);
+            $this->expectExceptionMessage('Laravel configuration is cached');
+
+            TestingDatabaseGuard::assertConfigurationIsNotCached($projectRoot, 'var/cache/config.php');
+        } finally {
+            unlink($cacheDirectory.'/config.php');
+            rmdir($cacheDirectory);
+            rmdir($projectRoot.'/var');
+            rmdir($projectRoot);
         }
     }
 }
