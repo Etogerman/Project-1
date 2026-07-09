@@ -23,10 +23,14 @@
    `CACHE_STORE=array`, но эти значения сейчас не помечены `force="true"`.
 4. `.env.testing.example` содержит безопасные значения для локального тестового
    контура.
-5. `tests/bootstrap.php` подгружает `.env.testing.example`, если
-   `APP_ENV=testing` и локального `.env.testing` нет.
-6. Если в shell/container задан `DB_URL`, bootstrap разбирает его тем же Laravel
-   parser-ом и проверяет итоговое имя database до запуска тестов.
+5. `tests/bootstrap.php` подгружает `.env.testing`, если файл существует. Если
+   его нет, сначала загружается `.env.testing.example`, а затем недостающие
+   значения из `.env` — в той же последовательности, которую увидит приложение.
+6. Bootstrap разбирает effective `DB_URL` тем же Laravel parser-ом и проверяет
+   итоговое имя database до запуска тестов, включая PostgreSQL-параметр
+   `connect_via_database`.
+7. Тесты не запускаются при существующем Laravel config cache. Перед запуском
+   нужно выполнить `php artisan config:clear`.
 
 Важно: `.devcontainer/init.sql` сейчас создаёт `laravel_testing`, а `phpunit.xml`
 использует `abrikosoff_connector_test`. Это отдельный code/config follow-up, а не
@@ -42,7 +46,9 @@
    значения из `phpunit.xml`.
 4. Проверь `DB_URL` в том же shell/container. Если он задан, именно его database
    path имеет приоритет над `DB_DATABASE`.
-5. Не запускай `php artisan test`, если effective database target указывает на
+5. Выполни `php artisan config:clear`, чтобы тесты не использовали сохранённую
+   runtime-конфигурацию.
+6. Не запускай `php artisan test`, если effective database target указывает на
    `abrikosoff_connector`, recovery/restored database, staging или production.
 
 Для локального контура можно создать `.env.testing` из примера:

@@ -42,7 +42,11 @@ final class TestingDatabaseGuard
             }
 
             $connection = strtolower(trim((string) ($configuration['driver'] ?? $connection)));
-            $database = self::normalizeDatabaseName($configuration['database'] ?? null);
+            $database = self::normalizeDatabaseName(
+                $connection === 'pgsql'
+                    ? ($configuration['connect_via_database'] ?? $configuration['database'] ?? null)
+                    : ($configuration['database'] ?? null)
+            );
         }
 
         $isSqliteMemory = $connection === 'sqlite' && $database === ':memory:';
@@ -60,6 +64,21 @@ final class TestingDatabaseGuard
             $database ?? '<empty>',
             $source,
         ));
+    }
+
+    public static function assertConfigurationIsNotCached(
+        string $projectRoot,
+        ?string $configuredCachePath,
+    ): void {
+        $cachePath = self::resolveConfigCachePath($projectRoot, $configuredCachePath);
+
+        if (! is_file($cachePath)) {
+            return;
+        }
+
+        throw new RuntimeException(
+            'Refusing to run tests while Laravel configuration is cached. Run php artisan config:clear first.'
+        );
     }
 
     private static function normalizeDatabaseName(mixed $database): ?string
@@ -82,5 +101,20 @@ final class TestingDatabaseGuard
         }
 
         return false;
+    }
+
+    private static function resolveConfigCachePath(string $projectRoot, ?string $configuredCachePath): string
+    {
+        $configuredCachePath = self::normalizeDatabaseName($configuredCachePath);
+
+        if ($configuredCachePath === null) {
+            return $projectRoot.'/bootstrap/cache/config.php';
+        }
+
+        if (str_starts_with($configuredCachePath, '/') || str_starts_with($configuredCachePath, '\\')) {
+            return $configuredCachePath;
+        }
+
+        return $projectRoot.'/'.$configuredCachePath;
     }
 }
