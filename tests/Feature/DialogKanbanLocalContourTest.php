@@ -161,6 +161,39 @@ class DialogKanbanLocalContourTest extends TestCase
         $this->assertSame(0, $connectionTypeLookups, $queries->implode(PHP_EOL));
     }
 
+    public function test_kanban_reuses_dialog_stage_catalog_during_render(): void
+    {
+        $admin = $this->createAdmin();
+        $dialogs = collect(range(1, 6))
+            ->map(fn (int $index): Dialog => $this->createKanbanDialog([
+                'contactName' => 'Клиент стадий '.$index,
+                'stage' => Dialog::STAGE_NEW_DIALOG,
+                'lastMessageAt' => now()->subMinutes($index),
+            ]));
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+
+        Livewire::actingAs($admin)
+            ->test(DialogKanban::class)
+            ->assertSee($dialogs->firstOrFail()->contact->display_name)
+            ->assertSee($dialogs->last()->contact->display_name);
+
+        $queries = collect(DB::getQueryLog())->pluck('query');
+        DB::disableQueryLog();
+
+        $dialogStageCatalogLoads = $queries
+            ->filter(function (string $query): bool {
+                $query = strtolower($query);
+
+                return str_starts_with($query, 'select')
+                    && (str_contains($query, 'from "dialog_stages"') || str_contains($query, 'from `dialog_stages`'));
+            })
+            ->count();
+
+        $this->assertLessThanOrEqual(2, $dialogStageCatalogLoads, $queries->implode(PHP_EOL));
+    }
+
     public function test_kanban_inbox_status_filter_keeps_only_matching_cards(): void
     {
         $admin = $this->createAdmin();
@@ -356,6 +389,8 @@ class DialogKanbanLocalContourTest extends TestCase
             ->assertSet('selectedInboxStatus', DialogInboxStatusData::CODE_NO_NEW)
             ->assertSet('search', '@german_abrikosov')
             ->assertSet('filtersPanelOpen', true)
+            ->assertSee('class="ac-button ac-button--warning-soft"', false)
+            ->assertDontSee('hasActiveFilters', false)
             ->assertSee('German Abrikosov')
             ->assertSeeInOrder(['Поиск', 'Канал', 'Ответственный', 'Маршрут', 'Статус диалога']);
     }
@@ -515,7 +550,11 @@ class DialogKanbanLocalContourTest extends TestCase
             ->assertSet('selectedAssignedUserId', '')
             ->assertSet('selectedRouteStatus', '')
             ->assertSet('selectedInboxStatus', '')
-            ->assertSet('search', '');
+            ->assertSet('search', '')
+            ->assertSet('filtersPanelOpen', false)
+            ->assertSee('class="ac-button ac-button--secondary"', false)
+            ->assertDontSee('class="ac-button ac-button--warning-soft"', false)
+            ->assertDontSee('hasActiveFilters', false);
 
         $this->assertSame(DialogResource::getUrl('kanban'), DialogResource::getNavigationUrl());
     }
@@ -560,6 +599,10 @@ class DialogKanbanLocalContourTest extends TestCase
             ->test(DialogKanban::class)
             ->assertSet('filtersPanelOpen', false)
             ->assertSee('ac-kanban-filter-wrap', false)
+            ->assertSee('class="ac-button ac-button--secondary"', false)
+            ->assertDontSee('hasActiveFilters', false)
+            ->assertDontSee("'ac-button--warning-soft': hasActiveFilters", false)
+            ->assertDontSee('open || hasActiveFilters', false)
             ->assertSee('x-on:click.prevent="open = ! open"', false)
             ->assertSee('x-show="open"', false)
             ->assertSee('ac-kanban-filters-popover', false)
