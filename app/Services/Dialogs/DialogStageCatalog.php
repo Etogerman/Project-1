@@ -66,6 +66,11 @@ class DialogStageCatalog
             ->all();
     }
 
+    public function forgetCachedStages(): void
+    {
+        $this->stages = null;
+    }
+
     /**
      * @return array<string, string>
      */
