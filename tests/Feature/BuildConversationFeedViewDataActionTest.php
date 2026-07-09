@@ -707,6 +707,24 @@ class BuildConversationFeedViewDataActionTest extends TestCase
             route('admin.message-attachments.download', ['attachment' => $attachment->id]),
             $feed[0]['media_items'][0]['download_url'],
         );
+
+        $downloadedRenderKey = $feed[0]['media_render_key'];
+
+        $attachment->forceFill([
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
+            'local_disk' => null,
+            'local_path' => null,
+        ])->save();
+
+        $updatedFeed = app(BuildConversationFeedViewDataAction::class)->handle(
+            Message::query()
+                ->whereKey($message->id)
+                ->with(['channel', 'dialog.channel', 'sentByUser'])
+                ->get(),
+        );
+
+        $this->assertNotSame('none', $downloadedRenderKey);
+        $this->assertNotSame($downloadedRenderKey, $updatedFeed[0]['media_render_key']);
     }
 
     public function test_downloaded_browser_playable_video_attachment_exposes_operator_preview_view_data(): void

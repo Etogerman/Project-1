@@ -28,17 +28,9 @@
                 @endif
 
                 @php($isSystemMessage = $message['is_system_message'] ?? ($message['is_system_event'] ?? false))
-                @php($messageMediaItems = $message['media_items'] ?? [])
+                @php($messageMediaItems = is_array($message['media_items'] ?? null) ? $message['media_items'] : [])
                 @php($messageMediaCollection = collect($messageMediaItems))
-                @php($messageMediaRenderKey = md5(json_encode($messageMediaCollection->map(fn ($mediaItem): array => is_array($mediaItem) ? [
-                    'attachment_id' => $mediaItem['attachment_id'] ?? null,
-                    'status' => $mediaItem['status'] ?? null,
-                    'is_previewable' => ! empty($mediaItem['is_previewable']),
-                    'is_downloadable' => ! empty($mediaItem['is_downloadable']),
-                    'preview_url' => filled($mediaItem['preview_url'] ?? null),
-                    'download_url' => filled($mediaItem['download_url'] ?? null),
-                    'error_message' => $mediaItem['error_message'] ?? null,
-                ] : [])->values()->all() ?: []) ?: '[]'))
+                @php($messageMediaRenderKey = (string) ($message['media_render_key'] ?? 'none'))
                 @php($previewableMediaItems = $messageMediaCollection->filter(fn ($mediaItem): bool => ! empty($mediaItem['is_previewable']) && filled($mediaItem['preview_url'] ?? null))->values())
                 @php($previewableImageMediaItems = $previewableMediaItems->filter(fn ($mediaItem): bool => ($mediaItem['preview_kind'] ?? null) === \App\Models\MessageAttachment::PREVIEW_KIND_IMAGE)->values())
                 @php($previewableRegularVideoMediaItems = $previewableMediaItems->filter(fn ($mediaItem): bool => empty($mediaItem['is_video_note']) && ($mediaItem['preview_kind'] ?? null) === \App\Models\MessageAttachment::PREVIEW_KIND_VIDEO)->values())
