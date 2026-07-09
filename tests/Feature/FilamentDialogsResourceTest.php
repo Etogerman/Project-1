@@ -409,9 +409,12 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('#141 · JBTLIST')
             ->assertSee('Событие провайдера')
             ->assertSee('Внешнее сообщение')
+            ->assertSee('240917852')
+            ->assertSee('1073')
             ->assertDontSee('provider event')
             ->assertDontSee('external message')
-            ->assertDontSee('СТАРОЕ СООБЩЕНИЕ')
+            ->assertDontSee('older-event')
+            ->assertDontSee('older-message')
             ->assertSee('Пропущен из-за V3 cutover');
     }
 

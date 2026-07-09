@@ -18,6 +18,7 @@ use App\Models\Tag;
 use App\Models\User;
 use App\Services\AutoReplyRules\AutoReplyRuleWorkbookFormat;
 use App\Services\Scenarios\CreateScenarioAction;
+use App\Services\Scenarios\ScenarioBuilderV3SheetTransferService;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
@@ -5041,31 +5042,19 @@ class ScenarioBuilderV3StateTest extends TestCase
         }
     }
 
-    public function test_auto_reply_import_reports_missing_legacy_sheet_id_on_both_validation_keys(): void
+    public function test_sheet_import_reports_missing_legacy_sheet_id_on_both_validation_keys(): void
     {
         $admin = $this->adminUser();
         $scenario = app(CreateScenarioAction::class)->handle([
-            'code' => 'v3_auto_reply_legacy_sheet_validation',
-            'name' => 'V3 Auto Reply Legacy Sheet Validation',
+            'code' => 'v3_sheet_legacy_sheet_validation',
+            'name' => 'V3 Sheet Legacy Sheet Validation',
         ]);
-        $channel = Channel::factory()->create([
-            'platform' => Channel::PLATFORM_TELEGRAM,
-            'is_active' => true,
-        ]);
-        $state = $this->actingAs($admin)
-            ->getJson($this->stateUrl($scenario))
-            ->assertOk()
-            ->json();
+        $document = app(ScenarioBuilderV3SheetTransferService::class)->export($scenario, $admin, 'main');
 
         $this->actingAs($admin)
-            ->post($this->autoReplyImportPreviewUrl($scenario), [
-                'workbook' => $this->autoReplyWorkbookFile([
-                    $this->autoReplyWorkbookRuleRow(1001, 'Правило legacy', 'Категория', 'same', 'Ответ', $channel),
-                ]),
-                'builder_state' => json_encode(['builder' => $state['builder']], JSON_UNESCAPED_UNICODE),
-                'placement_mode' => json_encode('current_sheet'),
-                'sheet_id' => json_encode('missing-legacy-sheet'),
-                'import_batch_id' => json_encode('auto_reply_xlsx_legacy_sheet_validation'),
+            ->postJson($this->sheetImportPreviewUrl($scenario), [
+                'json' => json_encode($document, JSON_UNESCAPED_UNICODE),
+                'sheet_id' => 'missing-legacy-sheet',
             ])
             ->assertJsonValidationErrors(['target_sheet_id', 'sheet_id']);
     }
