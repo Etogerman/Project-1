@@ -13588,7 +13588,6 @@
                         <a
                             href="${dialogsKanbanUrl()}"
                             class="ac-kanban-view-switch__item"
-                            wire:navigate.hover
                             data-ac-dialogs-view-link
                         >
                             Канбан

@@ -58,7 +58,6 @@
                         <a
                             href="{{ $table_url }}"
                             class="ac-kanban-view-switch__item"
-                            wire:navigate.hover
                             data-ac-dialogs-view-link
                         >
                             Таблица
