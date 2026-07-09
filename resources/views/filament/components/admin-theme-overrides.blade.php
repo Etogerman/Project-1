@@ -5704,6 +5704,7 @@
     }
 
     .ac-kanban-hero__actions > .ac-button,
+    .ac-kanban-filter-wrap > .ac-button,
     .ac-kanban-sort-wrap > .ac-button {
         min-height: 2.3rem;
         border-color: #e5e3df;
@@ -5718,12 +5719,14 @@
     }
 
     .ac-kanban-hero__actions > .ac-button:hover:not(:disabled),
+    .ac-kanban-filter-wrap > .ac-button:hover:not(:disabled),
     .ac-kanban-sort-wrap > .ac-button:hover:not(:disabled) {
         border-color: #d6d2cb;
         background: #ffffff;
     }
 
     .ac-kanban-hero__actions > .ac-button:disabled,
+    .ac-kanban-filter-wrap > .ac-button:disabled,
     .ac-kanban-sort-wrap > .ac-button:disabled {
         cursor: not-allowed;
         opacity: 0.58;
@@ -5868,6 +5871,48 @@
     .ac-kanban-sort-wrap {
         position: relative;
         display: inline-flex;
+    }
+
+    .ac-kanban-filter-wrap {
+        position: relative;
+        display: inline-flex;
+    }
+
+    .ac-kanban-filters-popover {
+        position: absolute;
+        top: calc(100% + 0.45rem);
+        left: 0;
+        z-index: 80;
+        display: grid;
+        width: min(22rem, calc(100vw - 2rem));
+        max-height: min(72vh, calc(100dvh - 8.5rem));
+        gap: 0.85rem;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        border: 1px solid var(--ac-border);
+        border-radius: 12px;
+        background: var(--ac-surface) !important;
+        padding: 0.85rem;
+        box-shadow: var(--ac-shadow-pop);
+        scrollbar-gutter: stable;
+    }
+
+    .ac-kanban-filters-popover .ac-card-grid--kanban-filters {
+        grid-template-columns: 1fr;
+    }
+
+    .ac-kanban-filters-popover::-webkit-scrollbar {
+        width: 0.55rem;
+    }
+
+    .ac-kanban-filters-popover::-webkit-scrollbar-track {
+        background: transparent;
+    }
+
+    .ac-kanban-filters-popover::-webkit-scrollbar-thumb {
+        border: 2px solid var(--ac-surface);
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--ac-text-soft) 54%, transparent);
     }
 
     .ac-kanban-sort-popover {
@@ -6065,12 +6110,6 @@
         border-bottom: 2px solid #ffffff;
         border-left: 2px solid #ffffff;
         transform: rotate(-45deg) translate(0.02rem, -0.02rem);
-    }
-
-    .ac-kanban-filters-panel {
-        display: grid;
-        gap: 0.85rem;
-        border-radius: 0.8rem;
     }
 
     .ac-kanban-search-control {
@@ -6450,6 +6489,176 @@
         text-wrap: balance;
     }
 
+    html.dark body:has([data-role="dialog-kanban-page"]) .fi-main {
+        background: var(--ac-page-bg);
+    }
+
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-hero__actions .ac-kanban-search-control .ac-input {
+        border-color: var(--ac-border-input);
+        background: var(--ac-input-surface);
+        color: var(--ac-text);
+    }
+
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-hero__actions .ac-kanban-search-control .ac-input::placeholder {
+        color: var(--ac-text-soft);
+    }
+
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-hero__actions .ac-kanban-search-control .ac-input:hover,
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-hero__actions .ac-kanban-search-control .ac-input:focus {
+        border-color: var(--ac-border-strong);
+        background: var(--ac-input-surface-alt);
+        box-shadow: 0 0 0 3px var(--ac-primary-ring);
+    }
+
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-view-switch,
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-sort-popover,
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-fields-popover,
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-gear-button {
+        border-color: var(--ac-border);
+        background: var(--ac-surface-strong);
+        color: var(--ac-text-muted);
+    }
+
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-view-switch__item {
+        color: var(--ac-text-muted);
+    }
+
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-view-switch__item.is-active {
+        background: var(--ac-primary-soft);
+        color: var(--ac-primary-hover);
+    }
+
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-gear-button:hover,
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-gear-button.is-open {
+        border-color: color-mix(in srgb, var(--ac-primary) 46%, var(--ac-border));
+        background: color-mix(in srgb, var(--ac-primary-soft) 72%, var(--ac-surface-muted));
+        color: var(--ac-primary-hover);
+    }
+
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-sort-popover,
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-fields-popover {
+        box-shadow: 0 18px 40px rgba(0, 0, 0, 0.42);
+    }
+
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-sort-popover__head,
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-fields-popover__head {
+        border-bottom-color: var(--ac-border);
+        color: var(--ac-text);
+    }
+
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-fields-popover__head button,
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-card__open-link {
+        color: var(--ac-primary-hover);
+    }
+
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-sort-option,
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-fields-popover__row {
+        color: var(--ac-text);
+    }
+
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-sort-option:hover,
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-sort-option.is-active,
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-fields-popover__row:hover {
+        background: var(--ac-surface-muted);
+        color: var(--ac-text);
+    }
+
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-sort-option__mark,
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-fields-popover__row input:checked + .ac-kanban-fields-popover__box {
+        background: var(--ac-primary);
+        color: var(--ac-text-inverse);
+    }
+
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-fields-popover__box {
+        border-color: var(--ac-border-strong);
+        background: var(--ac-input-surface);
+    }
+
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-column {
+        border-color: var(--ac-border);
+        background: var(--ac-surface-strong);
+    }
+
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-column--empty:hover,
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-card:hover {
+        border-color: var(--ac-border-strong);
+    }
+
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-card {
+        border-color: var(--ac-border);
+        background: var(--ac-surface-muted);
+    }
+
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-card:hover {
+        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+    }
+
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-card__id,
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-card__channel,
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-card__preview {
+        color: var(--ac-text-muted);
+    }
+
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-card__title {
+        color: var(--ac-text);
+    }
+
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-card__title:hover {
+        color: var(--ac-primary-hover);
+    }
+
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-card__chip,
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-empty-column {
+        border-color: var(--ac-border);
+        background: var(--ac-surface-strong);
+        color: var(--ac-text-muted);
+    }
+
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-empty-column {
+        border-style: dashed;
+    }
+
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-hero__actions > .ac-button.ac-button--secondary,
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-filter-wrap > .ac-button.ac-button--secondary,
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-sort-wrap > .ac-button.ac-button--secondary {
+        border-color: var(--ac-border-input) !important;
+        background: var(--ac-input-surface) !important;
+        color: var(--ac-text) !important;
+    }
+
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-hero__actions > .ac-button.ac-button--secondary:hover:not(:disabled),
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-sort-wrap > .ac-button.ac-button--secondary:hover:not(:disabled),
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-hero__actions > .ac-button.ac-button--secondary:focus-visible:not(:disabled),
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-sort-wrap > .ac-button.ac-button--secondary:focus-visible:not(:disabled),
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-hero__actions > .ac-button.ac-button--secondary:active:not(:disabled),
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-sort-wrap > .ac-button.ac-button--secondary:active:not(:disabled),
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-filter-wrap > .ac-button.ac-button--secondary:hover:not(:disabled),
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-filter-wrap > .ac-button.ac-button--secondary:focus-visible:not(:disabled),
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-filter-wrap > .ac-button.ac-button--secondary:active:not(:disabled) {
+        border-color: var(--ac-border-strong) !important;
+        background: var(--ac-input-surface-alt) !important;
+        color: var(--ac-text) !important;
+        box-shadow: 0 0 0 3px var(--ac-primary-ring) !important;
+    }
+
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-hero__actions > .ac-button.ac-button--warning-soft,
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-filter-wrap > .ac-button.ac-button--warning-soft,
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-sort-wrap > .ac-button.ac-button--warning-soft,
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-hero__actions > .ac-button.ac-button--warning-soft:hover,
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-filter-wrap > .ac-button.ac-button--warning-soft:hover,
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-sort-wrap > .ac-button.ac-button--warning-soft:hover,
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-hero__actions > .ac-button.ac-button--warning-soft:focus-visible,
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-filter-wrap > .ac-button.ac-button--warning-soft:focus-visible,
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-sort-wrap > .ac-button.ac-button--warning-soft:focus-visible,
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-hero__actions > .ac-button.ac-button--warning-soft:active,
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-filter-wrap > .ac-button.ac-button--warning-soft:active,
+    .dark [data-role="dialog-kanban-page"] .ac-kanban-sort-wrap > .ac-button.ac-button--warning-soft:active {
+        border-color: color-mix(in srgb, var(--ac-warning) 54%, var(--ac-border)) !important;
+        background: color-mix(in srgb, var(--ac-warning-soft) 72%, var(--ac-surface-muted)) !important;
+        color: #fde68a !important;
+        box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.18) !important;
+    }
+
     @media (max-width: 760px) {
         .ac-kanban-toolbar {
             grid-template-columns: minmax(0, 1fr);
@@ -6695,10 +6904,13 @@
     }
 
     .ac-kanban-hero__actions > .ac-button.ac-button--secondary,
+    .ac-kanban-filter-wrap > .ac-button.ac-button--secondary,
     .ac-kanban-sort-wrap > .ac-button.ac-button--secondary,
     .ac-kanban-hero__actions > .ac-button.ac-button--secondary:disabled,
+    .ac-kanban-filter-wrap > .ac-button.ac-button--secondary:disabled,
     .ac-kanban-sort-wrap > .ac-button.ac-button--secondary:disabled,
     .ac-kanban-hero__actions > .ac-button.ac-button--secondary[disabled],
+    .ac-kanban-filter-wrap > .ac-button.ac-button--secondary[disabled],
     .ac-kanban-sort-wrap > .ac-button.ac-button--secondary[disabled] {
         border-color: #e5e3df !important;
         background: #ffffff !important;
@@ -6721,17 +6933,31 @@
         transform: none !important;
     }
 
+    .ac-kanban-filter-wrap > .ac-button.ac-button--secondary:hover:not(:disabled),
+    .ac-kanban-filter-wrap > .ac-button.ac-button--secondary:focus-visible:not(:disabled),
+    .ac-kanban-filter-wrap > .ac-button.ac-button--secondary:active:not(:disabled) {
+        border-color: #cbd5e1 !important;
+        background: #ffffff !important;
+        color: #111111 !important;
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.16) !important;
+        transform: none !important;
+    }
+
     .ac-kanban-hero__actions > .ac-button.ac-button--secondary:disabled,
+    .ac-kanban-filter-wrap > .ac-button.ac-button--secondary:disabled,
     .ac-kanban-sort-wrap > .ac-button.ac-button--secondary:disabled,
     .ac-kanban-hero__actions > .ac-button.ac-button--secondary[disabled],
+    .ac-kanban-filter-wrap > .ac-button.ac-button--secondary[disabled],
     .ac-kanban-sort-wrap > .ac-button.ac-button--secondary[disabled] {
         color: #64748b !important;
         cursor: not-allowed !important;
     }
 
     .ac-kanban-hero__actions > .ac-button.ac-button--secondary:disabled:hover,
+    .ac-kanban-filter-wrap > .ac-button.ac-button--secondary:disabled:hover,
     .ac-kanban-sort-wrap > .ac-button.ac-button--secondary:disabled:hover,
     .ac-kanban-hero__actions > .ac-button.ac-button--secondary[disabled]:hover,
+    .ac-kanban-filter-wrap > .ac-button.ac-button--secondary[disabled]:hover,
     .ac-kanban-sort-wrap > .ac-button.ac-button--secondary[disabled]:hover {
         border-color: #facc15 !important;
         background: #fff7cc !important;
@@ -6741,6 +6967,7 @@
     }
 
     .ac-kanban-hero__actions > .ac-button.ac-button--warning-soft,
+    .ac-kanban-filter-wrap > .ac-button.ac-button--warning-soft,
     .ac-kanban-sort-wrap > .ac-button.ac-button--warning-soft {
         border-color: #facc15 !important;
         background: #fff3b0 !important;
@@ -6751,10 +6978,13 @@
     }
 
     .ac-kanban-hero__actions > .ac-button.ac-button--warning-soft:hover,
+    .ac-kanban-filter-wrap > .ac-button.ac-button--warning-soft:hover,
     .ac-kanban-sort-wrap > .ac-button.ac-button--warning-soft:hover,
     .ac-kanban-hero__actions > .ac-button.ac-button--warning-soft:focus-visible,
+    .ac-kanban-filter-wrap > .ac-button.ac-button--warning-soft:focus-visible,
     .ac-kanban-sort-wrap > .ac-button.ac-button--warning-soft:focus-visible,
     .ac-kanban-hero__actions > .ac-button.ac-button--warning-soft:active,
+    .ac-kanban-filter-wrap > .ac-button.ac-button--warning-soft:active,
     .ac-kanban-sort-wrap > .ac-button.ac-button--warning-soft:active {
         border-color: #eab308 !important;
         background: #fde68a !important;
@@ -13588,7 +13818,6 @@
                         <a
                             href="${dialogsKanbanUrl()}"
                             class="ac-kanban-view-switch__item"
-                            wire:navigate.hover
                             data-ac-dialogs-view-link
                         >
                             Канбан

@@ -852,7 +852,7 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('data-ac-dialogs-tools', false)
             ->assertSee('installViewSwitchLoadingListener', false)
             ->assertSee('data-ac-dialogs-view-link', false)
-            ->assertSee('wire:navigate.hover', false)
+            ->assertDontSee('wire:navigate.hover', false)
             ->assertSee('syncSelectionIndicatorVisibility', false);
 
         $themeOverrides = file_get_contents(resource_path('views/filament/components/admin-theme-overrides.blade.php'));
@@ -1001,7 +1001,7 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('Линия связи')
             ->assertSee('МПП из справочника')
             ->assertSee('data-ac-dialogs-view-link', false)
-            ->assertSee('wire:navigate.hover', false);
+            ->assertDontSee('wire:navigate.hover', false);
     }
 
     public function test_dialogs_inbox_record_link_contains_back_to_dialogs_list(): void

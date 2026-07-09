@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Services\Colors\ColorRegistry;
+use App\Services\Dialogs\DialogStageCatalog;
 use App\Support\Colors\AbColorPalette;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -93,6 +94,14 @@ class DialogStage extends Model
                     'stage' => 'Стадию с диалогами можно удалить только через перенос диалогов в другую стадию.',
                 ]);
             }
+        });
+
+        static::saved(function (): void {
+            app(DialogStageCatalog::class)->forgetCachedStages();
+        });
+
+        static::deleted(function (): void {
+            app(DialogStageCatalog::class)->forgetCachedStages();
         });
     }
 
