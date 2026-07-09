@@ -5704,6 +5704,7 @@
     }
 
     .ac-kanban-hero__actions > .ac-button,
+    .ac-kanban-filter-wrap > .ac-button,
     .ac-kanban-sort-wrap > .ac-button {
         min-height: 2.3rem;
         border-color: #e5e3df;
@@ -5718,12 +5719,14 @@
     }
 
     .ac-kanban-hero__actions > .ac-button:hover:not(:disabled),
+    .ac-kanban-filter-wrap > .ac-button:hover:not(:disabled),
     .ac-kanban-sort-wrap > .ac-button:hover:not(:disabled) {
         border-color: #d6d2cb;
         background: #ffffff;
     }
 
     .ac-kanban-hero__actions > .ac-button:disabled,
+    .ac-kanban-filter-wrap > .ac-button:disabled,
     .ac-kanban-sort-wrap > .ac-button:disabled {
         cursor: not-allowed;
         opacity: 0.58;
@@ -5868,6 +5871,48 @@
     .ac-kanban-sort-wrap {
         position: relative;
         display: inline-flex;
+    }
+
+    .ac-kanban-filter-wrap {
+        position: relative;
+        display: inline-flex;
+    }
+
+    .ac-kanban-filters-popover {
+        position: absolute;
+        top: calc(100% + 0.45rem);
+        left: 0;
+        z-index: 80;
+        display: grid;
+        width: min(22rem, calc(100vw - 2rem));
+        max-height: min(72vh, calc(100dvh - 8.5rem));
+        gap: 0.85rem;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        border: 1px solid var(--ac-border);
+        border-radius: 12px;
+        background: var(--ac-surface) !important;
+        padding: 0.85rem;
+        box-shadow: var(--ac-shadow-pop);
+        scrollbar-gutter: stable;
+    }
+
+    .ac-kanban-filters-popover .ac-card-grid--kanban-filters {
+        grid-template-columns: 1fr;
+    }
+
+    .ac-kanban-filters-popover::-webkit-scrollbar {
+        width: 0.55rem;
+    }
+
+    .ac-kanban-filters-popover::-webkit-scrollbar-track {
+        background: transparent;
+    }
+
+    .ac-kanban-filters-popover::-webkit-scrollbar-thumb {
+        border: 2px solid var(--ac-surface);
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--ac-text-soft) 54%, transparent);
     }
 
     .ac-kanban-sort-popover {
@@ -6065,12 +6110,6 @@
         border-bottom: 2px solid #ffffff;
         border-left: 2px solid #ffffff;
         transform: rotate(-45deg) translate(0.02rem, -0.02rem);
-    }
-
-    .ac-kanban-filters-panel {
-        display: grid;
-        gap: 0.85rem;
-        border-radius: 0.8rem;
     }
 
     .ac-kanban-search-control {
