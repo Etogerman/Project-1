@@ -11,10 +11,10 @@ use App\Models\Channel;
 use App\Models\ChannelActivityLog;
 use App\Models\ChannelPeerSyncState;
 use App\Models\Contact;
-use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
 use App\Models\FieldDictionaryField;
 use App\Models\Message;
+use App\Models\Scenario;
 use App\Models\ScenarioRun;
 use App\Models\ScenarioVersion;
 use App\Models\User;
@@ -1681,32 +1681,25 @@ class ViewDialog extends ViewRecord
 
         $scenarioOrder = array_flip(array_map('strval', $scenarioCodes));
 
-        return ScenarioVersion::query()
-            ->with('scenario:id,code,name')
-            ->where('status', ScenarioVersion::STATUS_PUBLISHED)
-            ->whereHas('scenario', function ($query) use ($scenarioCodes): void {
-                $query
-                    ->whereIn('code', $scenarioCodes)
-                    ->where('is_active', true)
-                    ->where('is_archived', false);
-            })
-            ->orderByDesc('version_number')
+        return Scenario::query()
+            ->select(['id', 'code', 'name'])
+            ->with('publishedVersion')
+            ->whereIn('code', $scenarioCodes)
+            ->where('is_active', true)
+            ->where('is_archived', false)
             ->get()
-            ->filter(fn (ScenarioVersion $version): bool => is_array(data_get($version->schema_payload, 'builder_v3_runtime.entrypoints')))
-            ->sort(function (ScenarioVersion $left, ScenarioVersion $right) use ($scenarioOrder): int {
-                $leftScenarioOrder = $scenarioOrder[(string) ($left->scenario?->code ?? '')] ?? PHP_INT_MAX;
-                $rightScenarioOrder = $scenarioOrder[(string) ($right->scenario?->code ?? '')] ?? PHP_INT_MAX;
+            ->sortBy(fn (Scenario $scenario): int => $scenarioOrder[(string) $scenario->code] ?? PHP_INT_MAX)
+            ->map(function (Scenario $scenario): ?ScenarioVersion {
+                $version = $scenario->publishedVersion;
 
-                return [
-                    $leftScenarioOrder,
-                    -((int) $left->version_number),
-                    -((int) $left->id),
-                ] <=> [
-                    $rightScenarioOrder,
-                    -((int) $right->version_number),
-                    -((int) $right->id),
-                ];
+                if ($version instanceof ScenarioVersion) {
+                    $version->setRelation('scenario', $scenario);
+                }
+
+                return $version;
             })
+            ->filter(fn (?ScenarioVersion $version): bool => $version instanceof ScenarioVersion
+                && is_array(data_get($version->schema_payload, 'builder_v3_runtime.entrypoints')))
             ->values();
     }
 
@@ -1915,8 +1908,14 @@ class ViewDialog extends ViewRecord
             return null;
         }
 
-        $hasPhone = $message->contact_id !== null
-            && ContactPhoneNumber::query()->where('contact_id', $message->contact_id)->exists();
+        $contact = $message->contact;
+
+        $hasPhone = $contact instanceof Contact
+            && (
+                $contact->relationLoaded('phoneNumbers')
+                    ? $contact->phoneNumbers->isNotEmpty()
+                    : $contact->phoneNumbers()->exists()
+            );
 
         return match ($condition) {
             AutoReplyRule::CONTACT_PHONE_CONDITION_HAS_PHONE => $hasPhone ? null : 'у контакта нет телефона, а entrypoint требует телефон',
