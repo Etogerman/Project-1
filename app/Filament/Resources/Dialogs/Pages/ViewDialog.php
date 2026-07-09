@@ -1662,7 +1662,20 @@ class ViewDialog extends ViewRecord
             ->orderByDesc('version_number')
             ->get()
             ->filter(fn (ScenarioVersion $version): bool => is_array(data_get($version->schema_payload, 'builder_v3_runtime.entrypoints')))
-            ->sortBy(fn (ScenarioVersion $version): int => $scenarioOrder[(string) ($version->scenario?->code ?? '')] ?? PHP_INT_MAX)
+            ->sort(function (ScenarioVersion $left, ScenarioVersion $right) use ($scenarioOrder): int {
+                $leftScenarioOrder = $scenarioOrder[(string) ($left->scenario?->code ?? '')] ?? PHP_INT_MAX;
+                $rightScenarioOrder = $scenarioOrder[(string) ($right->scenario?->code ?? '')] ?? PHP_INT_MAX;
+
+                return [
+                    $leftScenarioOrder,
+                    -((int) $left->version_number),
+                    -((int) $left->id),
+                ] <=> [
+                    $rightScenarioOrder,
+                    -((int) $right->version_number),
+                    -((int) $right->id),
+                ];
+            })
             ->values();
     }
 

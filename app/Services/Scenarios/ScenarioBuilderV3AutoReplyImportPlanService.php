@@ -48,7 +48,9 @@ class ScenarioBuilderV3AutoReplyImportPlanService
         $excludedRows = $this->integerSet($payload['excluded_row_numbers'] ?? []);
         $overwriteRows = $this->integerSet($payload['overwrite_conflict_row_numbers'] ?? []);
         $placementMode = $this->placementMode($payload['placement_mode'] ?? null);
-        $targetSheetId = $this->targetSheetId($builder, $payload['target_sheet_id'] ?? null);
+        $targetSheetId = $placementMode === self::PLACEMENT_CURRENT_SHEET
+            ? $this->targetSheetId($builder, $payload['target_sheet_id'] ?? null)
+            : 'main';
         $importBatchId = $this->importBatchId($payload['import_batch_id'] ?? null);
         $parsed = $this->parseWorkbook($file);
         $availableChannels = $this->availableChannels($user);

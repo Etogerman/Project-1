@@ -80,7 +80,7 @@
                         aria-label="{{ $row['label'] }}"
                         title="Изменить ответственного"
                     >
-                        <span data-role="dialog-assignee-current">{{ $row['value'] }}</span>
+                        <span data-role="dialog-assignee-current">{{ $rowValue }}</span>
                     </button>
                 @endif
             @elseif ($canEdit)
@@ -109,9 +109,9 @@
                             'ac-meta__value--warning' => ($row['tone'] ?? null) === 'warning',
                             'ac-meta__value--success' => ($row['tone'] ?? null) === 'success',
                         ])
-                        title="{{ $row['value'] }}"
+                        title="{{ $rowValue }}"
                     >
-                        {{ $row['value'] }}
+                        {{ $rowValue }}
                     </p>
 
                     @if ($rowDetail !== '')

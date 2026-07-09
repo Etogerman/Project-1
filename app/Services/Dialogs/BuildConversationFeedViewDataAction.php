@@ -106,6 +106,7 @@ class BuildConversationFeedViewDataAction
                     'has_media' => $mediaBadges !== [],
                     'media_badges' => $mediaBadges,
                     'media_items' => $mediaItemViewData,
+                    'media_render_key' => $this->resolveConversationMediaRenderKey($mediaItemViewData),
                     'media_state_badges' => $mediaStateBadges,
                     'time_label' => $messageAt?->format('H:i') ?? '—',
                     'timestamp_label' => $messageAt?->format('H:i d.m.Y') ?? '—',
@@ -2032,6 +2033,50 @@ class BuildConversationFeedViewDataAction
         }
 
         return $items;
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $mediaItems
+     */
+    protected function resolveConversationMediaRenderKey(array $mediaItems): string
+    {
+        if ($mediaItems === []) {
+            return 'none';
+        }
+
+        $parts = [];
+
+        foreach ($mediaItems as $index => $mediaItem) {
+            if (! is_array($mediaItem)) {
+                continue;
+            }
+
+            $parts[] = implode(':', [
+                $index,
+                $this->conversationMediaRenderKeyValue($mediaItem['attachment_id'] ?? null),
+                $this->conversationMediaRenderKeyValue($mediaItem['status'] ?? null),
+                $this->conversationMediaRenderKeyValue(! empty($mediaItem['is_previewable'])),
+                $this->conversationMediaRenderKeyValue(! empty($mediaItem['is_downloadable'])),
+                $this->conversationMediaRenderKeyValue(filled($mediaItem['preview_url'] ?? null)),
+                $this->conversationMediaRenderKeyValue(filled($mediaItem['download_url'] ?? null)),
+                $this->conversationMediaRenderKeyValue($mediaItem['error_message'] ?? null),
+            ]);
+        }
+
+        return $parts === [] ? 'none' : substr(sha1(implode('|', $parts)), 0, 20);
+    }
+
+    protected function conversationMediaRenderKeyValue(mixed $value): string
+    {
+        if (is_bool($value)) {
+            return $value ? '1' : '0';
+        }
+
+        if (! is_scalar($value)) {
+            return '';
+        }
+
+        return trim((string) $value);
     }
 
     protected function shouldShowConversationMediaStatus(string $displayStatus): bool

@@ -5004,6 +5004,43 @@ class ScenarioBuilderV3StateTest extends TestCase
         $this->assertSame('auto_reply_xlsx_20260604_121500_cd34', data_get($updatedBlocks[0], 'settings_payload.ui.import_source.last_import_batch_id'));
     }
 
+    public function test_auto_reply_import_ignores_target_sheet_id_outside_current_sheet_mode(): void
+    {
+        $admin = $this->adminUser();
+        $scenario = app(CreateScenarioAction::class)->handle([
+            'code' => 'v3_auto_reply_non_current_sheet_import',
+            'name' => 'V3 Auto Reply Non Current Sheet Import',
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'is_active' => true,
+        ]);
+        $state = $this->actingAs($admin)
+            ->getJson($this->stateUrl($scenario))
+            ->assertOk()
+            ->json();
+        $builder = $state['builder'];
+        $builder['active_sheet_id'] = 'missing-active-sheet';
+
+        foreach (['single_sheet', 'by_category'] as $mode) {
+            $preview = $this->actingAs($admin)
+                ->post($this->autoReplyImportPreviewUrl($scenario), [
+                    'workbook' => $this->autoReplyWorkbookFile([
+                        $this->autoReplyWorkbookRuleRow(1001, 'Правило '.$mode, 'Категория', 'same', 'Ответ', $channel),
+                    ]),
+                    'builder_state' => json_encode(['builder' => $builder], JSON_UNESCAPED_UNICODE),
+                    'placement_mode' => json_encode($mode),
+                    'target_sheet_id' => json_encode('missing-target-sheet'),
+                    'import_batch_id' => json_encode('auto_reply_xlsx_'.$mode),
+                ])
+                ->assertOk()
+                ->json();
+
+            $this->assertSame(1, $preview['summary']['created']);
+            $this->assertSame(0, $preview['summary']['blocked']);
+        }
+    }
+
     public function test_auto_reply_import_current_sheet_does_not_update_same_rule_on_main_sheet(): void
     {
         $admin = $this->adminUser();

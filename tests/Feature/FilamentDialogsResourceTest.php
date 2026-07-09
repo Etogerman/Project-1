@@ -397,6 +397,91 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('Пропущен из-за V3 cutover');
     }
 
+    public function test_dialog_view_diagnostics_prefers_latest_published_v3_version_for_same_scenario(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(0);
+        ContactPhoneNumber::query()
+            ->where('contact_id', $dialog->contact_id)
+            ->delete();
+        $scenario = Scenario::query()->create([
+            'code' => 'dialog_diagnostics_latest_version',
+            'name' => 'Dialog diagnostics latest version',
+            'is_active' => true,
+            'is_archived' => false,
+        ]);
+        $runtime = static function (string $blockId, string $displayId, string $title) use ($dialog): array {
+            return [
+                'builder_v3_runtime' => [
+                    'entrypoints' => [
+                        [
+                            'block_id' => $blockId,
+                            'display_id' => $displayId,
+                            'event' => 'message',
+                            'match' => 'exact_text_or_parameter',
+                            'values' => ['JBTLIST'],
+                            'channel_ids' => [$dialog->channel_id],
+                            'contact_phone_condition' => 'has_phone',
+                            'dialog_phone_condition' => '',
+                        ],
+                    ],
+                    'blocks' => [
+                        $blockId => [
+                            'id' => $blockId,
+                            'display_number' => $displayId,
+                            'title' => $title,
+                        ],
+                    ],
+                ],
+            ];
+        };
+        ScenarioVersion::query()->create([
+            'scenario_id' => $scenario->id,
+            'version_number' => 1,
+            'status' => ScenarioVersion::STATUS_PUBLISHED,
+            'schema_payload' => $runtime('101', '101', 'Старая версия'),
+        ]);
+        ScenarioVersion::query()->create([
+            'scenario_id' => $scenario->id,
+            'version_number' => 2,
+            'status' => ScenarioVersion::STATUS_PUBLISHED,
+            'schema_payload' => $runtime('202', '202', 'Новая версия'),
+        ]);
+        ScenarioChannelBinding::query()->create([
+            'channel_id' => $dialog->channel_id,
+            'scenario_code' => $scenario->code,
+            'is_active' => true,
+        ]);
+
+        Message::factory()->create([
+            'dialog_id' => $dialog->id,
+            'contact_id' => $dialog->contact_id,
+            'contact_identity_id' => $dialog->current_contact_identity_id,
+            'channel_id' => $dialog->channel_id,
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'external_chat_id' => $dialog->external_chat_id,
+            'external_message_id' => 'latest-version-message',
+            'provider_event_key' => 'latest-version-event',
+            'text' => 'JBTLIST',
+            'received_at' => now(),
+        ]);
+
+        $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', [
+                'record' => $dialog,
+                'tab' => SyncSystemDialogCardViewAction::TAB_DIAGNOSTICS,
+            ]))
+            ->assertOk()
+            ->assertSee('V3-start отклонён условиями')
+            ->assertSee('#202 · Новая версия')
+            ->assertSee('v2')
+            ->assertDontSee('#101 · Старая версия');
+    }
+
     public function test_dialog_view_diagnostics_ignores_activity_logs_with_empty_provider_identifiers(): void
     {
         $admin = User::factory()->create([
