@@ -413,7 +413,7 @@ class FilamentDialogsResourceTest extends TestCase
             'is_active' => true,
             'is_archived' => false,
         ]);
-        $runtime = static function (string $blockId, string $displayId, string $title) use ($dialog): array {
+        $runtime = static function (string $blockId, string $displayId, string $title, string $contactPhoneCondition = 'has_phone') use ($dialog): array {
             return [
                 'builder_v3_runtime' => [
                     'entrypoints' => [
@@ -424,7 +424,7 @@ class FilamentDialogsResourceTest extends TestCase
                             'match' => 'exact_text_or_parameter',
                             'values' => ['JBTLIST'],
                             'channel_ids' => [$dialog->channel_id],
-                            'contact_phone_condition' => 'has_phone',
+                            'contact_phone_condition' => $contactPhoneCondition,
                             'dialog_phone_condition' => '',
                         ],
                     ],
@@ -442,7 +442,7 @@ class FilamentDialogsResourceTest extends TestCase
             'scenario_id' => $scenario->id,
             'version_number' => 1,
             'status' => ScenarioVersion::STATUS_PUBLISHED,
-            'schema_payload' => $runtime('101', '101', 'Старая версия'),
+            'schema_payload' => $runtime('101', '101', 'Старая версия', ''),
         ]);
         ScenarioVersion::query()->create([
             'scenario_id' => $scenario->id,
