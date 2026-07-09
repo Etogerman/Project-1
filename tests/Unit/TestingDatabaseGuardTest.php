@@ -13,8 +13,19 @@ class TestingDatabaseGuardTest extends TestCase
 {
     public function test_database_url_parameter_is_marked_as_sensitive(): void
     {
-        $parameter = (new ReflectionMethod(TestingDatabaseGuard::class, 'assertSafe'))
-            ->getParameters()[2];
+        $parameter = null;
+
+        foreach ((new ReflectionMethod(TestingDatabaseGuard::class, 'assertSafe'))->getParameters() as $candidate) {
+            if ($candidate->getName() === 'databaseUrl') {
+                $parameter = $candidate;
+
+                break;
+            }
+        }
+
+        if ($parameter === null) {
+            $this->fail('The databaseUrl parameter was not found.');
+        }
 
         $this->assertNotEmpty($parameter->getAttributes(SensitiveParameter::class));
     }
