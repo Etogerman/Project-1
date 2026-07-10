@@ -41,6 +41,24 @@
 
 \set ON_ERROR_STOP on
 
+\if :{?period_start}
+\else
+do $validation$
+begin
+    raise exception 'Не задан обязательный параметр period_start.';
+end
+$validation$;
+\endif
+
+\if :{?period_end}
+\else
+do $validation$
+begin
+    raise exception 'Не задан обязательный параметр period_end.';
+end
+$validation$;
+\endif
+
 \if :{?bitrix24_deals_sync_enabled}
 \else
 do $validation$
