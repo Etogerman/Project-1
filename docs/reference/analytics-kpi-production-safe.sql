@@ -13,6 +13,8 @@
 --     --set ON_ERROR_STOP=1 \
 --     -v period_start="2026-07-01 00:00:00" \
 --     -v period_end="2026-07-08 00:00:00" \
+--     -v bitrix24_deals_sync_enabled="${BITRIX24_DEALS_SYNC_ENABLED:?}" \
+--     -v bitrix24_timeline_history_import_enabled="${BITRIX24_TIMELINE_HISTORY_IMPORT_ENABLED:?}" \
 --     -f docs/reference/analytics-kpi-production-safe.sql
 --
 -- Ограничения для production:
@@ -24,6 +26,10 @@
 -- Параметры в часовом поясе Europe/Moscow:
 --   :period_start  Включительная нижняя граница периода.
 --   :period_end    Исключительная верхняя граница периода.
+--   :bitrix24_deals_sync_enabled
+--                  Текущее значение Laravel-конфига deals_sync_enabled.
+--   :bitrix24_timeline_history_import_enabled
+--                  Текущее значение timeline_history_import_enabled.
 --   snapshot_at    Вычисляется автоматически в начале транзакции;
 --                  SLA-граница равна ему минус один час.
 --
@@ -35,10 +41,42 @@
 
 \set ON_ERROR_STOP on
 
-set timezone = 'Europe/Moscow';
-set statement_timeout = '30s';
+\if :{?bitrix24_deals_sync_enabled}
+\else
+do $validation$
+begin
+    raise exception 'Не задан обязательный параметр bitrix24_deals_sync_enabled.';
+end
+$validation$;
+\endif
+
+\if :{?bitrix24_timeline_history_import_enabled}
+\else
+do $validation$
+begin
+    raise exception 'Не задан обязательный параметр bitrix24_timeline_history_import_enabled.';
+end
+$validation$;
+\endif
 
 begin transaction isolation level repeatable read;
+
+set local timezone = 'Europe/Moscow';
+
+-- Ограничить запросы 30 секундами, не ослабляя более строгий ненулевой лимит
+-- текущего подключения. Третьим аргументом set_config настройка ограничивается
+-- текущей транзакцией и исчезает после итогового rollback.
+select set_config(
+    'statement_timeout',
+    case
+        when current_setting('statement_timeout')::interval = interval '0 seconds' then '30s'
+        when current_setting('statement_timeout')::interval <= interval '30 seconds'
+            then current_setting('statement_timeout')
+        else '30s'
+    end,
+    true
+) as effective_statement_timeout
+\gset ab_prod_kpi_
 
 drop view if exists pg_temp.ab_prod_kpi_contact_eligibility cascade;
 drop table if exists pg_temp.ab_prod_kpi_reply_state cascade;
@@ -50,6 +88,8 @@ create temporary view ab_prod_kpi_params as
 select
     :'period_start'::timestamp as period_start,
     :'period_end'::timestamp as period_end,
+    :'bitrix24_deals_sync_enabled'::boolean as bitrix24_deals_sync_enabled,
+    :'bitrix24_timeline_history_import_enabled'::boolean as bitrix24_timeline_history_import_enabled,
     transaction_timestamp()::timestamp as snapshot_at,
     transaction_timestamp()::timestamp - interval '1 hour' as sla_cutoff;
 
@@ -184,7 +224,10 @@ select
     params.period_end,
     params.snapshot_at,
     params.sla_cutoff,
+    params.bitrix24_deals_sync_enabled,
+    params.bitrix24_timeline_history_import_enabled,
     current_setting('transaction_isolation') as transaction_isolation,
+    current_setting('statement_timeout') as effective_statement_timeout,
     (select count(*) from contacts) as all_contacts,
     (select count(*) from ab_prod_kpi_root_contacts) as root_contacts,
     (select count(*) from dialogs) as all_dialogs,
@@ -241,15 +284,27 @@ select
     'bitrix24_crm_happy_path_rate' as metric,
     count(*) filter (
         where contacts.bitrix24_sync_status = 'synced'
-          and contacts.bitrix24_deal_sync_status = 'synced'
-          and contacts.bitrix24_history_sync_status = 'synced'
+          and (
+              not params.bitrix24_deals_sync_enabled
+              or contacts.bitrix24_deal_sync_status = 'synced'
+          )
+          and (
+              not params.bitrix24_timeline_history_import_enabled
+              or contacts.bitrix24_history_sync_status = 'synced'
+          )
     ) as numerator,
     count(*) as denominator,
     round(
         100.0 * count(*) filter (
             where contacts.bitrix24_sync_status = 'synced'
-              and contacts.bitrix24_deal_sync_status = 'synced'
-              and contacts.bitrix24_history_sync_status = 'synced'
+              and (
+                  not params.bitrix24_deals_sync_enabled
+                  or contacts.bitrix24_deal_sync_status = 'synced'
+              )
+              and (
+                  not params.bitrix24_timeline_history_import_enabled
+                  or contacts.bitrix24_history_sync_status = 'synced'
+              )
         ) / nullif(count(*), 0),
         2
     ) as pct
@@ -466,9 +521,22 @@ with channel_health_source as (
                 and runtime.runtime_payload #> '{gateway_capabilities,outgoing_replies}' is distinct from 'true'::jsonb
                 then 'runtime_outgoing_replies_unconfirmed'
             when channels.connection_type = 'account' then 'ok'
+            when channels.connection_type is distinct from 'bot' then 'runtime_connection_type_unsupported'
+            when channels.platform is null or channels.platform not in ('telegram', 'max')
+                then 'runtime_bot_platform_unsupported'
+            when channels.bot_token_present is not true then 'bot_token_missing'
+            when channels.connection_checked_at is null then 'connection_check_missing'
+            when channels.connection_checked_at < params.snapshot_at - interval '10 minutes'
+                then 'connection_check_stale'
             when channels.connection_status is distinct from 'connected' then 'connection_not_connected'
-            when coalesce(channels.webhook_status, '') not in ('installed', 'unsupported') then 'webhook_not_installed'
-            else 'ok'
+            when channels.webhook_status is distinct from 'installed' then 'webhook_not_installed'
+            when channels.expected_webhook_url is not null
+              and channels.provider_webhook_url is not null
+              and rtrim(channels.expected_webhook_url, '/') <> rtrim(channels.provider_webhook_url, '/')
+                then 'webhook_url_mismatch'
+            -- SQL не может проверить расшифровку Laravel credentials и текущий
+            -- APP_URL, поэтому для bot-канала не заявляется полный статус ok.
+            else 'db_state_ready_requires_app_check'
         end as health_flag,
         runtime.last_gateway_heartbeat_at,
         channels.connection_checked_at,
@@ -505,6 +573,7 @@ from channel_health
 order by
     case health_flag
         when 'ok' then 5
+        when 'db_state_ready_requires_app_check' then 5
         when 'inactive' then 4
         else 1
     end,
