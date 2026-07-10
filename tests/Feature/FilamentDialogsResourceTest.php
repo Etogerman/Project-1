@@ -25,6 +25,7 @@ use App\Models\ScenarioVersion;
 use App\Models\User;
 use App\Services\Bots\ContactIdentityAvatarStorage;
 use App\Services\Dialogs\BuildDialogMessageSnapshotPayloadAction;
+use App\Services\Dialogs\DialogInboxStatusPolicy;
 use App\Services\Dialogs\LoadDialogMessagesPageAction;
 use App\Services\Dialogs\SyncSystemDialogCardViewAction;
 use Filament\Facades\Filament;
@@ -2190,7 +2191,7 @@ class FilamentDialogsResourceTest extends TestCase
         ]);
         $dialog = $this->createInboxDialog();
 
-        $this->actingAs($admin)
+        $response = $this->actingAs($admin)
             ->get(DialogResource::getUrl('view', ['record' => $dialog]))
             ->assertOk()
             ->assertSee('Статус')
@@ -2211,6 +2212,71 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertDontSee('<p class="ac-field-help">', escape: false)
             ->assertDontSee('Рабочее место оператора')
             ->assertDontSee('Здесь показаны только сообщения текущего диалога в хронологическом порядке.');
+
+        $this->assertDialogInboxStatusToggleDisabled($response->getContent(), false);
+    }
+
+    public function test_dialog_view_disables_reply_status_toggle_while_client_blocks_bot(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createInboxDialog();
+        $dialog->forceFill([
+            'bot_subscription_status' => Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER,
+            'bot_subscription_changed_at' => now(),
+        ])->save();
+
+        $response = $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]));
+
+        $response
+            ->assertOk()
+            ->assertSee('Не требует ответа')
+            ->assertSee(DialogInboxStatusPolicy::BLOCKED_BY_USER_MESSAGE)
+            ->assertSee('title="'.DialogInboxStatusPolicy::BLOCKED_BY_USER_MESSAGE.'"', escape: false)
+            ->assertDontSee('data-role="dialog-inbox-status-blocked-reason"', escape: false)
+            ->assertDontSee('Сменить на: Требует ответа');
+
+        $this->assertDialogInboxStatusToggleDisabled($response->getContent(), true);
+    }
+
+    public function test_dialog_view_keeps_reply_status_toggle_disabled_in_blacklist_stage_after_provider_unblock(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $blacklistStage = DialogStage::factory()->create([
+            'key' => 'blacklist_inbox_status',
+            'name' => 'ЧС',
+            'behavior_policy' => DialogStage::BEHAVIOR_POLICY_BLACKLIST,
+        ]);
+        $dialog = $this->createInboxDialog();
+        $dialog->forceFill([
+            'stage' => $blacklistStage->key,
+            'stage_id' => $blacklistStage->id,
+            'bot_subscription_status' => Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER,
+            'bot_subscription_changed_at' => now(),
+        ])->save();
+        $dialog->forceFill([
+            'bot_subscription_status' => null,
+            'bot_subscription_changed_at' => now()->addSecond(),
+        ])->save();
+
+        $response = $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]));
+
+        $response
+            ->assertOk()
+            ->assertSee('Не требует ответа')
+            ->assertSee(DialogInboxStatusPolicy::BLACKLIST_STAGE_MESSAGE)
+            ->assertSee('title="'.DialogInboxStatusPolicy::BLACKLIST_STAGE_MESSAGE.'"', escape: false)
+            ->assertDontSee(DialogInboxStatusPolicy::BLOCKED_BY_USER_MESSAGE)
+            ->assertDontSee('Сменить на: Требует ответа');
+
+        $this->assertDialogInboxStatusToggleDisabled($response->getContent(), true);
     }
 
     public function test_dialog_view_renders_assignee_toggle_in_system_fields(): void
@@ -5030,6 +5096,34 @@ class FilamentDialogsResourceTest extends TestCase
             'status' => ScenarioVersion::STATUS_PUBLISHED,
             'schema_payload' => $schemaPayload,
         ])->fresh(['scenario']);
+    }
+
+    protected function assertDialogInboxStatusToggleDisabled(string $html, bool $expected): void
+    {
+        $document = new \DOMDocument;
+        $usesInternalErrors = libxml_use_internal_errors(true);
+
+        try {
+            $this->assertTrue($document->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING));
+        } finally {
+            libxml_clear_errors();
+            libxml_use_internal_errors($usesInternalErrors);
+        }
+
+        $buttons = (new \DOMXPath($document))
+            ->query('//button[@data-role="dialog-inbox-status-toggle"]');
+
+        $this->assertNotFalse($buttons);
+        $this->assertSame(1, $buttons->length, 'Expected exactly one dialog inbox status toggle.');
+
+        $button = $buttons->item(0);
+
+        $this->assertInstanceOf(\DOMElement::class, $button);
+        $this->assertSame(
+            $expected,
+            $button->hasAttribute('disabled'),
+            'Dialog inbox status toggle disabled state does not match the expected value.',
+        );
     }
 
     /**

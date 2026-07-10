@@ -217,8 +217,8 @@ class FilamentAnalyticsOverviewPageTest extends TestCase
             ->assertSee('data-metric="bot_blocks" data-value="1"', false)
             ->assertSee('data-metric="phones_received" data-value="1"', false)
             ->assertSee('data-metric="data_collected" data-value="1"', false)
-            ->assertSee('data-metric="requires_reply" data-value="2"', false)
-            ->assertSee('data-metric="requires_reply_overdue" data-value="1"', false)
+            ->assertSee('data-metric="requires_reply" data-value="1"', false)
+            ->assertSee('data-metric="requires_reply_overdue" data-value="0"', false)
             ->assertSee('data-metric="unassigned" data-value="1"', false)
             ->assertSee('data-metric="blocked_now" data-value="1"', false)
             ->assertSee('data-stage="'.Dialog::STAGE_PHONE_RECEIVED.'" data-count="1"', false)
@@ -228,9 +228,9 @@ class FilamentAnalyticsOverviewPageTest extends TestCase
             ->assertSee('data-channel-id="'.$telegram->id.'"', false)
             ->assertSee('data-channel-id="'.$max->id.'"', false)
             ->assertSee('data-dialog-id="'.$overdueDialog->id.'"', false)
-            ->assertSee('Требует ответа больше 1 часа')
             ->assertSee('Без ответственного')
             ->assertSee('Бот заблокирован')
+            ->assertDontSee('Требует ответа больше 1 часа')
             ->assertDontSee('Слитый Клиент');
     }
 

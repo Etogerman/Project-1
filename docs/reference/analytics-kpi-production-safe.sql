@@ -36,7 +36,8 @@
 -- Примечания:
 --   - Файл создаёт временные views, таблицу и индекс в текущей DB-сессии.
 --   - В подсчётах используются только корневые контакты.
---   - Диалоговые метрики исключают стадии с behavior_policy = blacklist.
+--   - Диалоговые метрики исключают стадии с behavior_policy = blacklist;
+--     reply-based метрики также исключают bot_subscription_status = blocked_by_user.
 --   - Событийная метрика bot_blocks не зависит от текущей стадии диалога.
 
 \set ON_ERROR_STOP on
@@ -174,6 +175,7 @@ select
     latest_inbound.sort_at as latest_inbound_at,
     (
         latest_inbound.message_id is not null
+        and dialogs.bot_subscription_status is distinct from 'blocked_by_user'
         and coalesce(dialogs.manual_reply_dismissed_source_message_id, -1) <> latest_inbound.message_id
         and (
             latest_reply.message_id is null

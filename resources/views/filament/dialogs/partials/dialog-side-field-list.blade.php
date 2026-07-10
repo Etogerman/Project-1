@@ -38,21 +38,32 @@
                         ->keys()
                         ->first(fn ($statusValue) => $statusValue !== $statusSelection);
                     $nextStatusLabel = $nextStatusValue !== null ? ($statusOptions[$nextStatusValue] ?? null) : null;
+                    $statusBlockedReason = trim((string) ($dialogInboxStatus['blocked_reason'] ?? ''));
+                    $statusTitle = $statusBlockedReason !== ''
+                        ? $statusBlockedReason
+                        : ($nextStatusLabel ? 'Сменить на: '.$nextStatusLabel : $currentStatusLabel);
                 @endphp
 
-                <button
-                    type="button"
-                    class="ac-dialog-status-toggle"
-                    data-role="dialog-inbox-status-toggle"
-                    wire:click="setDialogInboxStatus(@js($nextStatusValue))"
-                    wire:loading.attr="disabled"
-                    wire:target="setDialogInboxStatus"
-                    aria-label="{{ $row['label'] }}"
-                    title="{{ $nextStatusLabel ? 'Сменить на: '.$nextStatusLabel : $currentStatusLabel }}"
-                    @disabled(! ($dialogInboxStatus['is_editable'] ?? false) || $nextStatusValue === null)
+                <div
+                    class="ac-meta__value-wrap"
+                    @if ($statusBlockedReason !== '')
+                        title="{{ $statusBlockedReason }}"
+                    @endif
                 >
-                    <span data-role="dialog-inbox-status-current">{{ $currentStatusLabel }}</span>
-                </button>
+                    <button
+                        type="button"
+                        class="ac-dialog-status-toggle"
+                        data-role="dialog-inbox-status-toggle"
+                        wire:click="setDialogInboxStatus(@js($nextStatusValue))"
+                        wire:loading.attr="disabled"
+                        wire:target="setDialogInboxStatus"
+                        aria-label="{{ $row['label'] }}"
+                        title="{{ $statusTitle }}"
+                        @disabled(! ($dialogInboxStatus['is_editable'] ?? false) || $nextStatusValue === null)
+                    >
+                        <span data-role="dialog-inbox-status-current">{{ $currentStatusLabel }}</span>
+                    </button>
+                </div>
             @elseif ($isAssigneeRow && ($dialogAssignee['can_manage'] ?? false))
                 @if ($this->isDialogAssigneeEditing)
                     <div class="ac-dialog-assignee-editor" data-role="dialog-assignee-editor">
