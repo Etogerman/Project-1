@@ -8,6 +8,7 @@ use App\Models\Contact;
 use App\Models\Dialog;
 use App\Models\Message;
 use App\Services\Contacts\ResolveContactDisplayNameAction;
+use App\Services\Dialogs\DialogInboxStatusPolicy;
 use App\Services\Dialogs\DialogStageCatalog;
 use App\Services\Dialogs\MessageChronology;
 use Illuminate\Database\Eloquent\Builder;
@@ -20,6 +21,7 @@ class BuildAnalyticsOverviewAction
     public function __construct(
         private readonly MessageChronology $messageChronology,
         private readonly DialogStageCatalog $dialogStageCatalog,
+        private readonly DialogInboxStatusPolicy $dialogInboxStatusPolicy,
     ) {}
 
     /**
@@ -365,7 +367,7 @@ class BuildAnalyticsOverviewAction
             'latestInboundAfterOutboundManualReply' => $latestInboundAfterOutboundManualReply,
         ] = $this->buildInboxStatusFilterFragments();
 
-        $this->dialogStageCatalog->applyNotBlacklistStageFilter($query);
+        $this->dialogInboxStatusPolicy->applyReplyEligibleFilter($query);
 
         return $query
             ->whereRaw(
@@ -496,7 +498,7 @@ class BuildAnalyticsOverviewAction
 
     private function isRequiresReplyOverdue(Dialog $dialog, Carbon $slaCutoff): bool
     {
-        if ($this->dialogStageCatalog->isBlacklistDialog($dialog)) {
+        if ($this->dialogInboxStatusPolicy->suppressesReplyRequirement($dialog)) {
             return false;
         }
 

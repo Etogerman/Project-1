@@ -1065,6 +1065,7 @@ class ViewDialog extends ViewRecord
      *     current_label:string,
      *     current_tone:string,
      *     is_editable:bool,
+     *     blocked_reason:?string,
      *     status_model:string,
      *     update_method:string,
      *     options:array<string, string>
@@ -1072,16 +1073,24 @@ class ViewDialog extends ViewRecord
      */
     protected function getDialogInboxStatusViewData(): array
     {
-        $status = $this->resolveDialogInboxStatus($this->getRecord());
+        $dialog = $this->getRecord();
+        $status = $this->resolveDialogInboxStatus($dialog);
+        $isBlockedByUser = $dialog->isBotBlockedByUser();
 
         return [
             'current_label' => $status->label,
             'current_tone' => $status->tone,
             'is_editable' => $this->canCurrentUserManageDialogReplies()
-                && $status->code !== DialogInboxStatusData::CODE_NO_NEW,
+                && $status->code !== DialogInboxStatusData::CODE_NO_NEW
+                && ! $isBlockedByUser,
+            'blocked_reason' => $isBlockedByUser
+                ? 'Клиент заблокировал бота. Статус «Требует ответа» станет доступен после разблокировки.'
+                : null,
             'status_model' => 'dialogInboxStatusSelection',
             'update_method' => 'updateDialogInboxStatus',
-            'options' => $this->getDialogInboxStatusOptions($status),
+            'options' => $isBlockedByUser
+                ? [DialogInboxStatusData::CODE_NOT_REQUIRED => 'Не требует ответа']
+                : $this->getDialogInboxStatusOptions($status),
         ];
     }
 

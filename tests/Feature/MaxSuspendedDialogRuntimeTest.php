@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Data\Bots\IncomingBotMessage;
+use App\Data\Dialogs\DialogInboxStatusData;
 use App\Data\Dialogs\DialogRouteStatusData;
 use App\Models\Channel;
 use App\Models\Contact;
@@ -12,6 +13,7 @@ use App\Models\Message;
 use App\Models\User;
 use App\Services\Bots\SendManualDialogReplyAction;
 use App\Services\Bots\StoreInboundMessageAction;
+use App\Services\Dialogs\ResolveDialogInboxStatusAction;
 use App\Services\Dialogs\ResolveDialogRouteStatusAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
@@ -84,6 +86,11 @@ class MaxSuspendedDialogRuntimeTest extends TestCase
             'bot_subscription_changed_at' => Carbon::parse('2026-04-15 10:00:00'),
         ]);
 
+        $this->assertSame(
+            DialogInboxStatusData::CODE_NOT_REQUIRED,
+            app(ResolveDialogInboxStatusAction::class)->handle($dialog)->code,
+        );
+
         $storedResult = app(StoreInboundMessageAction::class)->handle(
             $dialog->channel()->firstOrFail(),
             new IncomingBotMessage(
@@ -109,6 +116,10 @@ class MaxSuspendedDialogRuntimeTest extends TestCase
         $this->assertNull($dialog->bot_subscription_status);
         $this->assertSame('2026-04-15 10:01:00', $dialog->bot_subscription_changed_at?->format('Y-m-d H:i:s'));
         $this->assertSame($storedResult?->message->id, $dialog->bot_subscription_source_message_id);
+        $this->assertSame(
+            DialogInboxStatusData::CODE_REQUIRES_REPLY,
+            app(ResolveDialogInboxStatusAction::class)->handle($dialog)->code,
+        );
     }
 
     public function test_older_max_inbound_message_does_not_clear_newer_suspended_state(): void

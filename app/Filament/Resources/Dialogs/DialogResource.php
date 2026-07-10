@@ -15,6 +15,7 @@ use App\Models\Message;
 use App\Models\User;
 use App\Services\Contacts\ResolveContactDisplayNameAction;
 use App\Services\Dialogs\BuildConversationFeedViewDataAction;
+use App\Services\Dialogs\DialogInboxStatusPolicy;
 use App\Services\Dialogs\DialogStageCatalog;
 use App\Services\Dialogs\MessageChronology;
 use App\Services\Dialogs\ResolveDialogRouteStatusAction;
@@ -524,7 +525,7 @@ class DialogResource extends Resource
 
     protected static function resolveInboxStatusCode(Dialog $record): string
     {
-        if (app(DialogStageCatalog::class)->isBlacklistDialog($record)) {
+        if (app(DialogInboxStatusPolicy::class)->suppressesReplyRequirement($record)) {
             return DialogInboxStatusData::CODE_NOT_REQUIRED;
         }
 
@@ -709,7 +710,7 @@ class DialogResource extends Resource
 
     protected static function applyRequiresManualReplyFilter(Builder $query): Builder
     {
-        static::applyNotBlacklistStageFilter($query);
+        app(DialogInboxStatusPolicy::class)->applyReplyEligibleFilter($query);
 
         return $query->whereExists(function (QueryBuilder $inbound): void {
             $inbound
@@ -761,7 +762,7 @@ class DialogResource extends Resource
             ): void {
                 $query
                     ->where(function (Builder $query): void {
-                        static::applyBlacklistStageFilter($query);
+                        app(DialogInboxStatusPolicy::class)->applyReplySuppressedFilter($query);
                     })
                     ->orWhere(function (Builder $query) use (
                         $latestInboundUserMessageId,
@@ -796,7 +797,7 @@ class DialogResource extends Resource
         }
 
         if ($status === DialogInboxStatusData::CODE_NO_NEW) {
-            static::applyNotBlacklistStageFilter($query);
+            app(DialogInboxStatusPolicy::class)->applyReplyEligibleFilter($query);
 
             return $query->where(function (Builder $query) use (
                 $latestInboundUserMessageId,

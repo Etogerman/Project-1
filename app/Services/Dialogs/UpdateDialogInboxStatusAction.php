@@ -42,6 +42,15 @@ class UpdateDialogInboxStatusAction
                 ]);
             }
 
+            if (
+                $targetStatusCode === DialogInboxStatusData::CODE_REQUIRES_REPLY
+                && $dialog->isBotBlockedByUser()
+            ) {
+                throw ValidationException::withMessages([
+                    'dialogInboxStatusSelection' => 'Клиент заблокировал бота. Статус «Требует ответа» станет доступен после разблокировки.',
+                ]);
+            }
+
             if ($currentStatus->code === DialogInboxStatusData::CODE_NO_NEW) {
                 throw ValidationException::withMessages([
                     'dialogInboxStatusSelection' => 'Сейчас в диалоге нет нового входящего сообщения для ручной смены статуса.',
