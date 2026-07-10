@@ -25,12 +25,15 @@ use App\Services\Bitrix24\IsMessageReadyForBitrix24LiveExportAction;
 use App\Services\Bots\DownloadBotMessageAttachmentsAction;
 use App\Services\Dialogs\BuildDialogNotificationStateAction;
 use App\Services\Dialogs\DialogAutomationGate;
+use App\Services\Dialogs\DialogInboxStatusPolicy;
 use App\Services\Dialogs\ResolveDialogInboxStatusAction;
+use App\Services\Dialogs\UpdateDialogInboxStatusAction;
 use App\Services\Scenarios\DispatchDialogStageChangedScenarioAction;
 use App\Services\Scenarios\ScenarioRegistry;
 use App\Services\TelegramAccount\ClaimTelegramAccountMediaDownloadAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Validation\ValidationException;
 use Tests\TestCase;
 
 class DialogBlacklistStageBehaviorTest extends TestCase
@@ -69,6 +72,59 @@ class DialogBlacklistStageBehaviorTest extends TestCase
 
         $this->assertSame(1, $notificationState['count']);
         $this->assertSame($normalDialog->id, $notificationState['items'][0]['dialog_id']);
+    }
+
+    public function test_blacklist_stage_still_rejects_manual_requires_reply_after_provider_unblock(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        [$dialog] = $this->createDialogWithInbound(blacklisted: true);
+        $dialog->forceFill([
+            'bot_subscription_status' => Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER,
+            'bot_subscription_changed_at' => now(),
+        ])->save();
+
+        $this->assertSame(
+            DialogInboxStatusPolicy::BLOCKED_BY_USER_MESSAGE,
+            app(DialogInboxStatusPolicy::class)->replyRequirementSuppressionReason($dialog->fresh()),
+        );
+
+        $dialog->forceFill([
+            'bot_subscription_status' => null,
+            'bot_subscription_changed_at' => now()->addSecond(),
+        ])->save();
+        $dialog = $dialog->fresh();
+
+        $this->assertSame(
+            DialogInboxStatusPolicy::BLACKLIST_STAGE_MESSAGE,
+            app(DialogInboxStatusPolicy::class)->replyRequirementSuppressionReason($dialog),
+        );
+
+        try {
+            app(UpdateDialogInboxStatusAction::class)->handle(
+                $dialog,
+                $admin,
+                DialogInboxStatusData::CODE_REQUIRES_REPLY,
+            );
+
+            $this->fail('Blacklisted dialog accepted requires_reply status.');
+        } catch (ValidationException $exception) {
+            $this->assertSame(
+                [DialogInboxStatusPolicy::BLACKLIST_STAGE_MESSAGE],
+                $exception->errors()['dialogInboxStatusSelection'],
+            );
+        }
+
+        $this->assertDatabaseMissing('messages', [
+            'dialog_id' => $dialog->id,
+            'message_kind' => Message::KIND_OUTBOUND_DIALOG_STATUS_CHANGE,
+        ]);
+        $this->assertSame(
+            DialogInboxStatusData::CODE_NOT_REQUIRED,
+            app(ResolveDialogInboxStatusAction::class)->handle($dialog->fresh())->code,
+        );
     }
 
     public function test_blacklist_stage_dialogs_are_excluded_from_reply_analytics_and_problem_dialogs(): void

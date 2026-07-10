@@ -14,6 +14,7 @@ class UpdateDialogInboxStatusAction
 {
     public function __construct(
         private readonly ResolveDialogInboxStatusAction $resolveDialogInboxStatusAction,
+        private readonly DialogInboxStatusPolicy $dialogInboxStatusPolicy,
     ) {}
 
     public function handle(Dialog $dialog, User $employee, string $targetStatusCode): DialogInboxStatusUpdateResultData
@@ -42,12 +43,11 @@ class UpdateDialogInboxStatusAction
                 ]);
             }
 
-            if (
-                $targetStatusCode === DialogInboxStatusData::CODE_REQUIRES_REPLY
-                && $dialog->isBotBlockedByUser()
-            ) {
+            $suppressionReason = $this->dialogInboxStatusPolicy->replyRequirementSuppressionReason($dialog);
+
+            if ($targetStatusCode === DialogInboxStatusData::CODE_REQUIRES_REPLY && $suppressionReason !== null) {
                 throw ValidationException::withMessages([
-                    'dialogInboxStatusSelection' => 'Клиент заблокировал бота. Статус «Требует ответа» станет доступен после разблокировки.',
+                    'dialogInboxStatusSelection' => $suppressionReason,
                 ]);
             }
 

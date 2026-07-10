@@ -25,6 +25,7 @@ use App\Models\ScenarioVersion;
 use App\Models\User;
 use App\Services\Bots\ContactIdentityAvatarStorage;
 use App\Services\Dialogs\BuildDialogMessageSnapshotPayloadAction;
+use App\Services\Dialogs\DialogInboxStatusPolicy;
 use App\Services\Dialogs\LoadDialogMessagesPageAction;
 use App\Services\Dialogs\SyncSystemDialogCardViewAction;
 use Filament\Facades\Filament;
@@ -2231,9 +2232,49 @@ class FilamentDialogsResourceTest extends TestCase
         $response
             ->assertOk()
             ->assertSee('Не требует ответа')
-            ->assertSee('Клиент заблокировал бота. Статус «Требует ответа» станет доступен после разблокировки.')
-            ->assertSee('title="Клиент заблокировал бота. Статус «Требует ответа» станет доступен после разблокировки."', escape: false)
+            ->assertSee(DialogInboxStatusPolicy::BLOCKED_BY_USER_MESSAGE)
+            ->assertSee('title="'.DialogInboxStatusPolicy::BLOCKED_BY_USER_MESSAGE.'"', escape: false)
             ->assertDontSee('data-role="dialog-inbox-status-blocked-reason"', escape: false)
+            ->assertDontSee('Сменить на: Требует ответа');
+
+        $this->assertMatchesRegularExpression(
+            '~<button(?=[^>]*data-role="dialog-inbox-status-toggle")(?=[^>]*disabled)[^>]*>~s',
+            $response->getContent(),
+        );
+    }
+
+    public function test_dialog_view_keeps_reply_status_toggle_disabled_in_blacklist_stage_after_provider_unblock(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $blacklistStage = DialogStage::factory()->create([
+            'key' => 'blacklist_inbox_status',
+            'name' => 'ЧС',
+            'behavior_policy' => DialogStage::BEHAVIOR_POLICY_BLACKLIST,
+        ]);
+        $dialog = $this->createInboxDialog();
+        $dialog->forceFill([
+            'stage' => $blacklistStage->key,
+            'stage_id' => $blacklistStage->id,
+            'bot_subscription_status' => Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER,
+            'bot_subscription_changed_at' => now(),
+        ])->save();
+        $dialog->forceFill([
+            'bot_subscription_status' => null,
+            'bot_subscription_changed_at' => now()->addSecond(),
+        ])->save();
+
+        $response = $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]));
+
+        $response
+            ->assertOk()
+            ->assertSee('Не требует ответа')
+            ->assertSee(DialogInboxStatusPolicy::BLACKLIST_STAGE_MESSAGE)
+            ->assertSee('title="'.DialogInboxStatusPolicy::BLACKLIST_STAGE_MESSAGE.'"', escape: false)
+            ->assertDontSee(DialogInboxStatusPolicy::BLOCKED_BY_USER_MESSAGE)
             ->assertDontSee('Сменить на: Требует ответа');
 
         $this->assertMatchesRegularExpression(
