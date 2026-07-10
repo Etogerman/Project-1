@@ -33,6 +33,8 @@
 --   - Диалоговые метрики исключают стадии с behavior_policy = blacklist.
 --   - Событийная метрика bot_blocks не зависит от текущей стадии диалога.
 
+\set ON_ERROR_STOP on
+
 set timezone = 'Europe/Moscow';
 set statement_timeout = '30s';
 
@@ -50,6 +52,30 @@ select
     :'period_end'::timestamp as period_end,
     transaction_timestamp()::timestamp as snapshot_at,
     transaction_timestamp()::timestamp - interval '1 hour' as sla_cutoff;
+
+select
+    case when params.period_start < params.period_end then 'true' else 'false' end as period_order_valid,
+    case when params.period_end <= params.snapshot_at then 'true' else 'false' end as period_end_valid
+from ab_prod_kpi_params params
+\gset ab_prod_kpi_
+
+\if :ab_prod_kpi_period_order_valid
+\else
+do $validation$
+begin
+    raise exception 'period_start должен быть раньше period_end.';
+end
+$validation$;
+\endif
+
+\if :ab_prod_kpi_period_end_valid
+\else
+do $validation$
+begin
+    raise exception 'period_end не может быть позже snapshot_at.';
+end
+$validation$;
+\endif
 
 create temporary view ab_prod_kpi_root_contacts as
 select
@@ -127,6 +153,8 @@ create unique index ab_prod_kpi_reply_state_dialog_id_idx
 
 analyze ab_prod_kpi_reply_state;
 
+-- data_collection_completed_at — текущая изменяемая отметка, а не журнал
+-- первого завершения сбора данных; точная семантика зафиксирована в runbook.
 create temporary view ab_prod_kpi_contact_eligibility as
 select
     source.contact_id,
@@ -263,8 +291,8 @@ with dialog_funnel as (
     select
         coalesce(channels.platform, 'unknown') as platform,
         coalesce(channels.connection_type, 'unknown') as connection_type,
-        count(distinct dialogs.id) as new_dialogs,
-        count(distinct dialogs.id) filter (where dialogs.phone_confirmed_at is not null) as dialogs_with_phone,
+        count(*) as new_dialogs,
+        count(*) filter (where dialogs.phone_confirmed_at is not null) as dialogs_with_phone,
         count(distinct contacts.id) filter (
             where contacts.data_collection_status = 'completed'
                or contacts.data_collection_completed_at is not null
@@ -486,30 +514,59 @@ order by
 
 -- 10. Контрольные показатели ИИ и сборщика по задаче и модели.
 \echo '=== 10. Контрольные показатели ИИ и сборщика ==='
+with ai_requests_in_period as (
+    select
+        ai_requests.task_key,
+        ai_requests.provider,
+        ai_requests.model,
+        ai_requests.status,
+        ai_requests.latency_ms,
+        ai_requests.total_tokens,
+        ai_requests.estimated_cost,
+        ai_requests.cost_status
+    from ai_requests
+    cross join ab_prod_kpi_params params
+    where ai_requests.started_at >= params.period_start
+      and ai_requests.started_at < params.period_end
+
+    union all
+
+    select
+        ai_requests.task_key,
+        ai_requests.provider,
+        ai_requests.model,
+        ai_requests.status,
+        ai_requests.latency_ms,
+        ai_requests.total_tokens,
+        ai_requests.estimated_cost,
+        ai_requests.cost_status
+    from ai_requests
+    cross join ab_prod_kpi_params params
+    where ai_requests.started_at is null
+      and ai_requests.created_at >= params.period_start
+      and ai_requests.created_at < params.period_end
+)
 select
-    ai_requests.task_key,
-    coalesce(ai_requests.provider, 'unknown') as provider,
-    coalesce(ai_requests.model, 'unknown') as model,
+    request_rows.task_key,
+    coalesce(request_rows.provider, 'unknown') as provider,
+    coalesce(request_rows.model, 'unknown') as model,
     count(*) as requests,
-    count(*) filter (where ai_requests.status = 'success') as success_count,
-    count(*) filter (where ai_requests.status = 'error') as error_count,
+    count(*) filter (where request_rows.status = 'success') as success_count,
+    count(*) filter (where request_rows.status = 'error') as error_count,
     round(
-        100.0 * count(*) filter (where ai_requests.status = 'success') / nullif(count(*), 0),
+        100.0 * count(*) filter (where request_rows.status = 'success') / nullif(count(*), 0),
         2
     ) as success_rate_pct,
-    round(avg(ai_requests.latency_ms) filter (where ai_requests.latency_ms is not null), 2) as avg_latency_ms,
+    round(avg(request_rows.latency_ms) filter (where request_rows.latency_ms is not null), 2) as avg_latency_ms,
     round((
-        percentile_cont(0.95) within group (order by ai_requests.latency_ms)
-            filter (where ai_requests.latency_ms is not null)
+        percentile_cont(0.95) within group (order by request_rows.latency_ms)
+            filter (where request_rows.latency_ms is not null)
     )::numeric, 2) as p95_latency_ms,
-    sum(ai_requests.total_tokens) as total_tokens,
-    sum(ai_requests.estimated_cost) as estimated_cost,
-    count(*) filter (where ai_requests.cost_status is distinct from 'calculated') as cost_not_calculated_count
-from ai_requests
-cross join ab_prod_kpi_params params
-where coalesce(ai_requests.started_at, ai_requests.created_at) >= params.period_start
-  and coalesce(ai_requests.started_at, ai_requests.created_at) < params.period_end
-group by ai_requests.task_key, coalesce(ai_requests.provider, 'unknown'), coalesce(ai_requests.model, 'unknown')
+    sum(request_rows.total_tokens) as total_tokens,
+    sum(request_rows.estimated_cost) as estimated_cost,
+    count(*) filter (where request_rows.cost_status is distinct from 'calculated') as cost_not_calculated_count
+from ai_requests_in_period request_rows
+group by request_rows.task_key, coalesce(request_rows.provider, 'unknown'), coalesce(request_rows.model, 'unknown')
 order by requests desc, task_key, provider, model;
 
 rollback;
