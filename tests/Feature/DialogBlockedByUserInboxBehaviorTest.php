@@ -12,6 +12,7 @@ use App\Models\Message;
 use App\Models\User;
 use App\Services\Analytics\BuildAnalyticsOverviewAction;
 use App\Services\Dialogs\BuildDialogNotificationStateAction;
+use App\Services\Dialogs\DialogInboxStatusPolicy;
 use App\Services\Dialogs\ResolveDialogInboxStatusAction;
 use App\Services\Dialogs\UpdateDialogInboxStatusAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -106,7 +107,7 @@ class DialogBlockedByUserInboxBehaviorTest extends TestCase
             $this->fail('Blocked dialog accepted requires_reply status.');
         } catch (ValidationException $exception) {
             $this->assertSame(
-                ['Клиент заблокировал бота. Статус «Требует ответа» станет доступен после разблокировки.'],
+                [DialogInboxStatusPolicy::BLOCKED_BY_USER_MESSAGE],
                 $exception->errors()['dialogInboxStatusSelection'],
             );
         }

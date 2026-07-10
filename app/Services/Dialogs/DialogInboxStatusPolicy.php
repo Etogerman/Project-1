@@ -7,17 +7,30 @@ use Illuminate\Database\Eloquent\Builder;
 
 class DialogInboxStatusPolicy
 {
+    public const BLOCKED_BY_USER_MESSAGE = 'Клиент заблокировал бота. Статус «Требует ответа» станет доступен после разблокировки.';
+
+    public const BLACKLIST_STAGE_MESSAGE = 'Диалог находится в ЧС-стадии. Статус «Требует ответа» станет доступен после выхода из ЧС.';
+
     public function __construct(
         private readonly DialogStageCatalog $dialogStageCatalog,
     ) {}
 
     public function suppressesReplyRequirement(Dialog $dialog): bool
     {
+        return $this->replyRequirementSuppressionReason($dialog) !== null;
+    }
+
+    public function replyRequirementSuppressionReason(Dialog $dialog): ?string
+    {
         if ($dialog->isBotBlockedByUser()) {
-            return true;
+            return self::BLOCKED_BY_USER_MESSAGE;
         }
 
-        return $this->dialogStageCatalog->isBlacklistDialog($dialog);
+        if ($this->dialogStageCatalog->isBlacklistDialog($dialog)) {
+            return self::BLACKLIST_STAGE_MESSAGE;
+        }
+
+        return null;
     }
 
     public function applyReplyEligibleFilter(Builder $query): Builder

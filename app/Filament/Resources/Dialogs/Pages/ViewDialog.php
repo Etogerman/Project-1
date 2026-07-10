@@ -29,6 +29,7 @@ use App\Services\Contacts\SetContactAssigneeAction;
 use App\Services\Dialogs\BuildConversationFeedViewDataAction;
 use App\Services\Dialogs\BuildDialogCardViewLayoutAction;
 use App\Services\Dialogs\DialogCardViewBlockRegistry;
+use App\Services\Dialogs\DialogInboxStatusPolicy;
 use App\Services\Dialogs\DialogStageCatalog;
 use App\Services\Dialogs\LoadDialogMessagesPageAction;
 use App\Services\Dialogs\ResolveDialogInboxStatusAction;
@@ -1075,20 +1076,19 @@ class ViewDialog extends ViewRecord
     {
         $dialog = $this->getRecord();
         $status = $this->resolveDialogInboxStatus($dialog);
-        $isBlockedByUser = $dialog->isBotBlockedByUser();
+        $suppressionReason = app(DialogInboxStatusPolicy::class)->replyRequirementSuppressionReason($dialog);
+        $isReplyRequirementSuppressed = $suppressionReason !== null;
 
         return [
             'current_label' => $status->label,
             'current_tone' => $status->tone,
             'is_editable' => $this->canCurrentUserManageDialogReplies()
                 && $status->code !== DialogInboxStatusData::CODE_NO_NEW
-                && ! $isBlockedByUser,
-            'blocked_reason' => $isBlockedByUser
-                ? 'Клиент заблокировал бота. Статус «Требует ответа» станет доступен после разблокировки.'
-                : null,
+                && ! $isReplyRequirementSuppressed,
+            'blocked_reason' => $suppressionReason,
             'status_model' => 'dialogInboxStatusSelection',
             'update_method' => 'updateDialogInboxStatus',
-            'options' => $isBlockedByUser
+            'options' => $isReplyRequirementSuppressed
                 ? [DialogInboxStatusData::CODE_NOT_REQUIRED => 'Не требует ответа']
                 : $this->getDialogInboxStatusOptions($status),
         ];
