@@ -2232,7 +2232,8 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertOk()
             ->assertSee('Не требует ответа')
             ->assertSee('Клиент заблокировал бота. Статус «Требует ответа» станет доступен после разблокировки.')
-            ->assertSee('data-role="dialog-inbox-status-blocked-reason"', escape: false)
+            ->assertSee('title="Клиент заблокировал бота. Статус «Требует ответа» станет доступен после разблокировки."', escape: false)
+            ->assertDontSee('data-role="dialog-inbox-status-blocked-reason"', escape: false)
             ->assertDontSee('Сменить на: Требует ответа');
 
         $this->assertMatchesRegularExpression(
