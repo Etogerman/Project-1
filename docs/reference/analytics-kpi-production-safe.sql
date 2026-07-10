@@ -9,9 +9,10 @@
 --   PGSERVICE=ab_connector_production_readonly \
 --   PGPASSFILE="$HOME/.pgpass-ab-connector" \
 --   psql \
+--     --no-psqlrc \
+--     --set ON_ERROR_STOP=1 \
 --     -v period_start="2026-07-01 00:00:00" \
 --     -v period_end="2026-07-08 00:00:00" \
---     -v snapshot_at="2026-07-08 00:05:00" \
 --     -f docs/reference/analytics-kpi-production-safe.sql
 --
 -- Ограничения для production:
@@ -23,7 +24,8 @@
 -- Параметры в часовом поясе Europe/Moscow:
 --   :period_start  Включительная нижняя граница периода.
 --   :period_end    Исключительная верхняя граница периода.
---   :snapshot_at   Фактический момент запуска; SLA-граница равна ему минус один час.
+--   snapshot_at    Вычисляется автоматически в начале транзакции;
+--                  SLA-граница равна ему минус один час.
 --
 -- Примечания:
 --   - Файл создаёт временные views, таблицу и индекс в текущей DB-сессии.
@@ -33,6 +35,8 @@
 
 set timezone = 'Europe/Moscow';
 set statement_timeout = '30s';
+
+begin transaction isolation level repeatable read;
 
 drop view if exists pg_temp.ab_prod_kpi_contact_eligibility cascade;
 drop table if exists pg_temp.ab_prod_kpi_reply_state cascade;
@@ -44,8 +48,8 @@ create temporary view ab_prod_kpi_params as
 select
     :'period_start'::timestamp as period_start,
     :'period_end'::timestamp as period_end,
-    :'snapshot_at'::timestamp as snapshot_at,
-    :'snapshot_at'::timestamp - interval '1 hour' as sla_cutoff;
+    transaction_timestamp()::timestamp as snapshot_at,
+    transaction_timestamp()::timestamp - interval '1 hour' as sla_cutoff;
 
 create temporary view ab_prod_kpi_root_contacts as
 select
@@ -152,6 +156,7 @@ select
     params.period_end,
     params.snapshot_at,
     params.sla_cutoff,
+    current_setting('transaction_isolation') as transaction_isolation,
     (select count(*) from contacts) as all_contacts,
     (select count(*) from ab_prod_kpi_root_contacts) as root_contacts,
     (select count(*) from dialogs) as all_dialogs,
@@ -408,40 +413,57 @@ order by dialogs_with_route desc, channels.platform, routes.status;
 
 -- 9. Агрегированное состояние runtime каналов.
 \echo '=== 9. Состояние runtime каналов ==='
-with channel_health as (
+with channel_health_source as (
     select
         channels.platform,
         channels.connection_type,
+        -- Для account-каналов ok означает готовность gateway к исходящим ответам.
         case
             when channels.is_active is not true then 'inactive'
+            when channels.connection_type = 'account' and channels.platform is distinct from 'telegram'
+                then 'runtime_account_platform_unsupported'
+            when channels.connection_type = 'account' and runtime.channel_id is null
+                then 'runtime_state_missing'
+            when channels.connection_type = 'account' and runtime.auth_status <> 'authorized'
+                then 'runtime_auth_not_authorized'
+            when channels.connection_type = 'account' and runtime.authorization_state <> 'ready'
+                then 'runtime_authorization_not_ready'
+            when channels.connection_type = 'account' and runtime.sync_status <> 'live'
+                then 'runtime_not_live'
+            when channels.connection_type = 'account' and (
+                runtime.last_gateway_heartbeat_at is null
+                or runtime.last_gateway_heartbeat_at < params.snapshot_at - interval '2 minutes'
+            ) then 'runtime_heartbeat_stale'
+            when channels.connection_type = 'account'
+                and runtime.runtime_payload #> '{gateway_capabilities,outgoing_replies}' is distinct from 'true'::jsonb
+                then 'runtime_outgoing_replies_unconfirmed'
+            when channels.connection_type = 'account' then 'ok'
             when channels.connection_status is distinct from 'connected' then 'connection_not_connected'
             when coalesce(channels.webhook_status, '') not in ('installed', 'unsupported') then 'webhook_not_installed'
-            when runtime.auth_status is not null and runtime.auth_status <> 'authorized' then 'runtime_auth_not_authorized'
-            when runtime.sync_status is not null and runtime.sync_status <> 'live' then 'runtime_not_live'
             else 'ok'
         end as health_flag,
-        count(*) as channels_count,
-        count(*) filter (
-            where runtime.last_gateway_heartbeat_at is not null
-              and runtime.last_gateway_heartbeat_at >= params.snapshot_at - interval '2 minutes'
-        ) as fresh_gateway_heartbeat_count,
-        max(channels.connection_checked_at) as latest_connection_checked_at,
-        max(runtime.last_error_at) as latest_runtime_error_at
+        runtime.last_gateway_heartbeat_at,
+        channels.connection_checked_at,
+        runtime.last_error_at,
+        params.snapshot_at
     from channels
     left join channel_runtime_states runtime on runtime.channel_id = channels.id
     cross join ab_prod_kpi_params params
-    group by
-        channels.platform,
-        channels.connection_type,
-        params.snapshot_at,
-        case
-            when channels.is_active is not true then 'inactive'
-            when channels.connection_status is distinct from 'connected' then 'connection_not_connected'
-            when coalesce(channels.webhook_status, '') not in ('installed', 'unsupported') then 'webhook_not_installed'
-            when runtime.auth_status is not null and runtime.auth_status <> 'authorized' then 'runtime_auth_not_authorized'
-            when runtime.sync_status is not null and runtime.sync_status <> 'live' then 'runtime_not_live'
-            else 'ok'
-        end
+),
+channel_health as (
+    select
+        platform,
+        connection_type,
+        health_flag,
+        count(*) as channels_count,
+        count(*) filter (
+            where last_gateway_heartbeat_at is not null
+              and last_gateway_heartbeat_at >= snapshot_at - interval '2 minutes'
+        ) as fresh_gateway_heartbeat_count,
+        max(connection_checked_at) as latest_connection_checked_at,
+        max(last_error_at) as latest_runtime_error_at
+    from channel_health_source
+    group by platform, connection_type, health_flag
 )
 select
     platform,
@@ -489,3 +511,5 @@ where coalesce(ai_requests.started_at, ai_requests.created_at) >= params.period_
   and coalesce(ai_requests.started_at, ai_requests.created_at) < params.period_end
 group by ai_requests.task_key, coalesce(ai_requests.provider, 'unknown'), coalesce(ai_requests.model, 'unknown')
 order by requests desc, task_key, provider, model;
+
+rollback;
