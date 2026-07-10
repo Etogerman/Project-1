@@ -10,8 +10,8 @@
 --   PGPASSFILE="$HOME/.pgpass-ab-connector" \
 --   psql \
 --     -v period_start="2026-07-01 00:00:00" \
---     -v period_end="2026-07-07 23:59:59" \
---     -v snapshot_at="2026-07-07 23:59:59" \
+--     -v period_end="2026-07-08 00:00:00" \
+--     -v snapshot_at="2026-07-08 00:05:00" \
 --     -f docs/reference/analytics-kpi-production-safe.sql
 --
 -- Ограничения для production:
@@ -22,13 +22,14 @@
 --
 -- Параметры в часовом поясе Europe/Moscow:
 --   :period_start  Включительная нижняя граница периода.
---   :period_end    Включительная верхняя граница периода.
+--   :period_end    Исключительная верхняя граница периода.
 --   :snapshot_at   Фактический момент запуска; SLA-граница равна ему минус один час.
 --
 -- Примечания:
---   - Файл создаёт только временные views в текущей DB-сессии.
+--   - Файл создаёт временные views, таблицу и индекс в текущей DB-сессии.
 --   - В подсчётах используются только корневые контакты.
 --   - Диалоговые метрики исключают стадии с behavior_policy = blacklist.
+--   - Событийная метрика bot_blocks не зависит от текущей стадии диалога.
 
 set timezone = 'Europe/Moscow';
 set statement_timeout = '30s';
@@ -179,7 +180,8 @@ select
 from ab_prod_kpi_eligible_dialogs dialogs
 join ab_prod_kpi_root_contacts contacts on contacts.id = dialogs.contact_id
 cross join ab_prod_kpi_params params
-where dialogs.created_at between params.period_start and params.period_end
+where dialogs.created_at >= params.period_start
+  and dialogs.created_at < params.period_end
 
 union all
 
@@ -221,7 +223,8 @@ select
 from ab_prod_kpi_contact_eligibility eligibility
 join ab_prod_kpi_root_contacts contacts on contacts.id = eligibility.contact_id
 cross join ab_prod_kpi_params params
-where eligibility.eligible_at between params.period_start and params.period_end;
+where eligibility.eligible_at >= params.period_start
+  and eligibility.eligible_at < params.period_end;
 
 -- 2. Агрегированная воронка.
 \echo '=== 2. Агрегированная воронка ==='
@@ -246,36 +249,64 @@ select
 from ab_prod_kpi_eligible_dialogs dialogs
 join ab_prod_kpi_root_contacts contacts on contacts.id = dialogs.contact_id
 cross join ab_prod_kpi_params params
-where dialogs.created_at between params.period_start and params.period_end;
+where dialogs.created_at >= params.period_start
+  and dialogs.created_at < params.period_end;
 
--- 3. Воронка только по платформе и типу подключения.
+-- 3. Воронка и события блокировки по платформе и типу подключения.
 \echo '=== 3. Воронка по платформе и типу подключения ==='
+with dialog_funnel as (
+    select
+        coalesce(channels.platform, 'unknown') as platform,
+        coalesce(channels.connection_type, 'unknown') as connection_type,
+        count(distinct dialogs.id) as new_dialogs,
+        count(distinct dialogs.id) filter (where dialogs.phone_confirmed_at is not null) as dialogs_with_phone,
+        count(distinct contacts.id) filter (
+            where contacts.data_collection_status = 'completed'
+               or contacts.data_collection_completed_at is not null
+        ) as contacts_with_completed_data
+    from ab_prod_kpi_eligible_dialogs dialogs
+    join channels on channels.id = dialogs.channel_id
+    join ab_prod_kpi_root_contacts contacts on contacts.id = dialogs.contact_id
+    cross join ab_prod_kpi_params params
+    where dialogs.created_at >= params.period_start
+      and dialogs.created_at < params.period_end
+    group by
+        coalesce(channels.platform, 'unknown'),
+        coalesce(channels.connection_type, 'unknown')
+),
+bot_block_events as (
+    select
+        coalesce(channels.platform, 'unknown') as platform,
+        coalesce(channels.connection_type, 'unknown') as connection_type,
+        count(*) as bot_blocks
+    from messages
+    join channels on channels.id = messages.channel_id
+    join ab_prod_kpi_root_contacts contacts on contacts.id = messages.contact_id
+    cross join ab_prod_kpi_params params
+    where messages.system_event_code = 'bot_blocked_by_user'
+      and messages.received_at >= params.period_start
+      and messages.received_at < params.period_end
+    group by
+        coalesce(channels.platform, 'unknown'),
+        coalesce(channels.connection_type, 'unknown')
+)
 select
-    channels.platform,
-    channels.connection_type,
-    count(distinct dialogs.id) as new_dialogs,
-    count(distinct dialogs.id) filter (where dialogs.phone_confirmed_at is not null) as dialogs_with_phone,
-    count(distinct contacts.id) filter (
-        where contacts.data_collection_status = 'completed'
-           or contacts.data_collection_completed_at is not null
-    ) as contacts_with_completed_data,
-    count(messages.id) filter (where messages.system_event_code = 'bot_blocked_by_user') as bot_blocks,
+    coalesce(dialog_funnel.platform, bot_block_events.platform) as platform,
+    coalesce(dialog_funnel.connection_type, bot_block_events.connection_type) as connection_type,
+    coalesce(dialog_funnel.new_dialogs, 0) as new_dialogs,
+    coalesce(dialog_funnel.dialogs_with_phone, 0) as dialogs_with_phone,
+    coalesce(dialog_funnel.contacts_with_completed_data, 0) as contacts_with_completed_data,
+    coalesce(bot_block_events.bot_blocks, 0) as bot_blocks,
     round(
-        100.0 * count(distinct dialogs.id) filter (where dialogs.phone_confirmed_at is not null)
-            / nullif(count(distinct dialogs.id), 0),
+        100.0 * coalesce(dialog_funnel.dialogs_with_phone, 0)
+            / nullif(dialog_funnel.new_dialogs, 0),
         2
     ) as phone_capture_rate_pct
-from ab_prod_kpi_eligible_dialogs dialogs
-join channels on channels.id = dialogs.channel_id
-join ab_prod_kpi_root_contacts contacts on contacts.id = dialogs.contact_id
-cross join ab_prod_kpi_params params
-left join messages
-    on messages.dialog_id = dialogs.id
-   and messages.system_event_code = 'bot_blocked_by_user'
-   and messages.received_at between params.period_start and params.period_end
-where dialogs.created_at between params.period_start and params.period_end
-group by channels.platform, channels.connection_type
-order by new_dialogs desc, channels.platform, channels.connection_type;
+from dialog_funnel
+full outer join bot_block_events
+    on bot_block_events.platform = dialog_funnel.platform
+   and bot_block_events.connection_type = dialog_funnel.connection_type
+order by new_dialogs desc, platform, connection_type;
 
 -- 4. Агрегированная очередь оператора.
 \echo '=== 4. Агрегированная очередь оператора ==='
@@ -328,7 +359,8 @@ select
 from ab_prod_kpi_contact_eligibility eligibility
 join ab_prod_kpi_root_contacts contacts on contacts.id = eligibility.contact_id
 cross join ab_prod_kpi_params params
-where eligibility.eligible_at between params.period_start and params.period_end
+where eligibility.eligible_at >= params.period_start
+  and eligibility.eligible_at < params.period_end
 group by
     contacts.bitrix24_sync_status,
     contacts.bitrix24_deal_sync_status,
@@ -347,7 +379,8 @@ select
 from bitrix24_sync_logs logs
 cross join ab_prod_kpi_params params
 where logs.status = 'failed'
-  and logs.created_at between params.period_start and params.period_end
+  and logs.created_at >= params.period_start
+  and logs.created_at < params.period_end
 group by logs.operation, logs.entity_type, coalesce(logs.error_code, 'no_error_code'), logs.http_status
 order by failure_count desc, last_seen_at desc;
 
@@ -368,7 +401,8 @@ join channels on channels.id = dialogs.channel_id
 left join bitrix24_open_line_routes routes on routes.id = dialogs.bitrix24_open_line_route_id
 cross join ab_prod_kpi_params params
 where dialogs.bitrix24_open_line_route_id is not null
-  and dialogs.created_at between params.period_start and params.period_end
+  and dialogs.created_at >= params.period_start
+  and dialogs.created_at < params.period_end
 group by channels.platform, routes.status
 order by dialogs_with_route desc, channels.platform, routes.status;
 
@@ -451,6 +485,7 @@ select
     count(*) filter (where ai_requests.cost_status is distinct from 'calculated') as cost_not_calculated_count
 from ai_requests
 cross join ab_prod_kpi_params params
-where coalesce(ai_requests.started_at, ai_requests.created_at) between params.period_start and params.period_end
+where coalesce(ai_requests.started_at, ai_requests.created_at) >= params.period_start
+  and coalesce(ai_requests.started_at, ai_requests.created_at) < params.period_end
 group by ai_requests.task_key, coalesce(ai_requests.provider, 'unknown'), coalesce(ai_requests.model, 'unknown')
 order by requests desc, task_key, provider, model;
