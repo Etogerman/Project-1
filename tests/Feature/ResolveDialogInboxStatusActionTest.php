@@ -131,6 +131,16 @@ class ResolveDialogInboxStatusActionTest extends TestCase
                 ),
                 'expectedCode' => DialogInboxStatusData::CODE_NOT_REQUIRED,
             ],
+            'blocked dialog with unanswered inbound' => [
+                'attributes' => self::projectedAttributes(
+                    latestInboundUserMessageId: 14,
+                    latestInboundUserMessageSortAt: '2026-05-26 10:05:00',
+                    latestOutboundManualReplyMessageId: null,
+                    latestOutboundManualReplyMessageSortAt: null,
+                    botSubscriptionStatus: Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER,
+                ),
+                'expectedCode' => DialogInboxStatusData::CODE_NOT_REQUIRED,
+            ],
         ];
     }
 
@@ -143,9 +153,11 @@ class ResolveDialogInboxStatusActionTest extends TestCase
         mixed $latestOutboundManualReplyMessageId,
         mixed $latestOutboundManualReplyMessageSortAt,
         mixed $manualReplyDismissedSourceMessageId = null,
+        mixed $botSubscriptionStatus = null,
     ): array {
         return [
             'manual_reply_dismissed_source_message_id' => $manualReplyDismissedSourceMessageId,
+            'bot_subscription_status' => $botSubscriptionStatus,
             'latest_inbound_user_message_id' => $latestInboundUserMessageId,
             'latest_inbound_user_message_sort_at' => $latestInboundUserMessageSortAt,
             'latest_outbound_manual_reply_message_id' => $latestOutboundManualReplyMessageId,

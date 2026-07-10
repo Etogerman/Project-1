@@ -14,6 +14,7 @@ class UpdateDialogInboxStatusAction
 {
     public function __construct(
         private readonly ResolveDialogInboxStatusAction $resolveDialogInboxStatusAction,
+        private readonly DialogInboxStatusPolicy $dialogInboxStatusPolicy,
     ) {}
 
     public function handle(Dialog $dialog, User $employee, string $targetStatusCode): DialogInboxStatusUpdateResultData
@@ -39,6 +40,14 @@ class UpdateDialogInboxStatusAction
             ) {
                 throw ValidationException::withMessages([
                     'dialogInboxStatusSelection' => 'Недопустимое значение статуса.',
+                ]);
+            }
+
+            $suppressionReason = $this->dialogInboxStatusPolicy->replyRequirementSuppressionReason($dialog);
+
+            if ($targetStatusCode === DialogInboxStatusData::CODE_REQUIRES_REPLY && $suppressionReason !== null) {
+                throw ValidationException::withMessages([
+                    'dialogInboxStatusSelection' => $suppressionReason,
                 ]);
             }
 

@@ -312,6 +312,16 @@ class DialogKanbanLocalContourTest extends TestCase
             'withInboundUserMessage' => true,
             'lastMessageAt' => Carbon::parse('2026-05-26 10:00:00'),
         ]);
+        $blockedDialog = $this->createKanbanDialog([
+            'contactName' => 'Бот заблокирован',
+            'stage' => Dialog::STAGE_NEW_DIALOG,
+            'withInboundUserMessage' => true,
+            'lastMessageAt' => Carbon::parse('2026-05-26 13:00:00'),
+        ]);
+        $blockedDialog->forceFill([
+            'bot_subscription_status' => Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER,
+            'bot_subscription_changed_at' => Carbon::parse('2026-05-26 13:01:00'),
+        ])->save();
 
         Livewire::withQueryParams([
             'sort' => 'requires_reply_first',
@@ -321,6 +331,7 @@ class DialogKanbanLocalContourTest extends TestCase
             ->assertSet('selectedSort', 'requires_reply_first')
             ->assertSeeInOrder([
                 $requiresReplyDialog->contact->display_name,
+                $blockedDialog->contact->display_name,
                 $answeredDialog->contact->display_name,
             ]);
     }

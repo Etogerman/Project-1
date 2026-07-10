@@ -29,6 +29,7 @@ use App\Services\Contacts\SetContactAssigneeAction;
 use App\Services\Dialogs\BuildConversationFeedViewDataAction;
 use App\Services\Dialogs\BuildDialogCardViewLayoutAction;
 use App\Services\Dialogs\DialogCardViewBlockRegistry;
+use App\Services\Dialogs\DialogInboxStatusPolicy;
 use App\Services\Dialogs\DialogStageCatalog;
 use App\Services\Dialogs\LoadDialogMessagesPageAction;
 use App\Services\Dialogs\ResolveDialogInboxStatusAction;
@@ -1065,6 +1066,7 @@ class ViewDialog extends ViewRecord
      *     current_label:string,
      *     current_tone:string,
      *     is_editable:bool,
+     *     blocked_reason:?string,
      *     status_model:string,
      *     update_method:string,
      *     options:array<string, string>
@@ -1072,16 +1074,23 @@ class ViewDialog extends ViewRecord
      */
     protected function getDialogInboxStatusViewData(): array
     {
-        $status = $this->resolveDialogInboxStatus($this->getRecord());
+        $dialog = $this->getRecord();
+        $status = $this->resolveDialogInboxStatus($dialog);
+        $suppressionReason = app(DialogInboxStatusPolicy::class)->replyRequirementSuppressionReason($dialog);
+        $isReplyRequirementSuppressed = $suppressionReason !== null;
 
         return [
             'current_label' => $status->label,
             'current_tone' => $status->tone,
             'is_editable' => $this->canCurrentUserManageDialogReplies()
-                && $status->code !== DialogInboxStatusData::CODE_NO_NEW,
+                && $status->code !== DialogInboxStatusData::CODE_NO_NEW
+                && ! $isReplyRequirementSuppressed,
+            'blocked_reason' => $suppressionReason,
             'status_model' => 'dialogInboxStatusSelection',
             'update_method' => 'updateDialogInboxStatus',
-            'options' => $this->getDialogInboxStatusOptions($status),
+            'options' => $isReplyRequirementSuppressed
+                ? [DialogInboxStatusData::CODE_NOT_REQUIRED => 'Не требует ответа']
+                : $this->getDialogInboxStatusOptions($status),
         ];
     }
 
