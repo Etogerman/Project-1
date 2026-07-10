@@ -1,33 +1,34 @@
--- AB Connector production-safe KPI query pack.
+-- Безопасный набор KPI-запросов AB Connector для production.
 --
--- Purpose:
---   Run aggregate-only KPI checks against production data without exporting
---   operational record IDs, message text, phone numbers, names, raw payloads,
---   error messages, or per-dialog/per-contact rows.
+-- Назначение:
+--   Получить только агрегированные KPI по production-данным без вывода
+--   идентификаторов, текстов сообщений, телефонов, имён, raw payload,
+--   сообщений об ошибках и строк отдельных диалогов или контактов.
 --
--- Usage with psql:
+-- Запуск через psql:
 --   psql "$DATABASE_URL" \
 --     -v period_start="'2026-07-01 00:00:00'" \
---     -v period_end="'2026-07-31 23:59:59'" \
---     -v sla_cutoff="'2026-07-09 12:00:00'" \
+--     -v period_end="'2026-07-07 23:59:59'" \
+--     -v snapshot_at="'2026-07-07 23:59:59'" \
 --     -f docs/reference/analytics-kpi-production-safe.sql
 --
--- Recommended production guardrails:
---   - Run through a read-only DB role.
---   - Start with a short period, for example 7 or 30 days.
---   - Do not export full psql logs if they include connection details.
---   - Share only result tables from this script, not raw source rows.
+-- Ограничения для production:
+--   - Использовать отдельную роль только с правами SELECT и TEMP.
+--   - Начинать с короткого периода, например 7 или 30 дней.
+--   - Не передавать полные psql-логи с параметрами подключения.
+--   - Передавать только результирующие таблицы этого файла.
 --
--- Parameters:
---   :period_start  Inclusive start timestamp for period metrics.
---   :period_end    Inclusive end timestamp for period metrics.
---   :sla_cutoff    Cutoff for overdue operator replies, usually now() - interval '1 hour'.
+-- Параметры в часовом поясе Europe/Moscow:
+--   :period_start  Включительная нижняя граница периода.
+--   :period_end    Включительная верхняя граница периода.
+--   :snapshot_at   Фактический момент запуска; SLA-граница равна ему минус один час.
 --
--- Notes:
---   - This script creates temporary views only in the current DB session.
---   - Counts use root contacts only: contacts.merged_into_contact_id is null.
---   - Dialog metrics exclude stages whose behavior_policy is blacklist.
+-- Примечания:
+--   - Файл создаёт только временные views в текущей DB-сессии.
+--   - В подсчётах используются только корневые контакты.
+--   - Диалоговые метрики исключают стадии с behavior_policy = blacklist.
 
+set timezone = 'Europe/Moscow';
 set statement_timeout = '30s';
 
 drop view if exists pg_temp.ab_prod_kpi_contact_eligibility cascade;
@@ -42,7 +43,8 @@ create temporary view ab_prod_kpi_params as
 select
     :period_start::timestamp as period_start,
     :period_end::timestamp as period_end,
-    :sla_cutoff::timestamp as sla_cutoff;
+    :snapshot_at::timestamp as snapshot_at,
+    :snapshot_at::timestamp - interval '1 hour' as sla_cutoff;
 
 create temporary view ab_prod_kpi_root_contacts as
 select contacts.*
@@ -57,32 +59,6 @@ left join dialog_stages stage_by_id on stage_by_id.id = dialogs.stage_id
 left join dialog_stages stage_by_key on stage_by_key.key = dialogs.stage
 where coalesce(stage_by_id.behavior_policy, 'standard') <> 'blacklist'
   and coalesce(stage_by_key.behavior_policy, 'standard') <> 'blacklist';
-
-create temporary view ab_prod_kpi_latest_inbound as
-select distinct on (messages.dialog_id)
-    messages.dialog_id,
-    messages.id as message_id,
-    coalesce(messages.received_at, messages.created_at) as sort_at
-from messages
-where messages.dialog_id is not null
-  and messages.message_kind = 'inbound_user'
-order by
-    messages.dialog_id,
-    coalesce(messages.received_at, messages.created_at) desc,
-    messages.id desc;
-
-create temporary view ab_prod_kpi_latest_operator_reply as
-select distinct on (messages.dialog_id)
-    messages.dialog_id,
-    messages.id as message_id,
-    coalesce(messages.received_at, messages.created_at) as sort_at
-from messages
-where messages.dialog_id is not null
-  and messages.message_kind in ('outbound_manual_reply', 'outbound_external_account_message')
-order by
-    messages.dialog_id,
-    coalesce(messages.received_at, messages.created_at) desc,
-    messages.id desc;
 
 create temporary view ab_prod_kpi_reply_state as
 select
@@ -99,8 +75,30 @@ select
         )
     ) as requires_reply
 from ab_prod_kpi_eligible_dialogs dialogs
-left join ab_prod_kpi_latest_inbound latest_inbound on latest_inbound.dialog_id = dialogs.id
-left join ab_prod_kpi_latest_operator_reply latest_reply on latest_reply.dialog_id = dialogs.id;
+left join lateral (
+    select
+        messages.id as message_id,
+        coalesce(messages.received_at, messages.created_at) as sort_at
+    from messages
+    where messages.dialog_id = dialogs.id
+      and messages.message_kind = 'inbound_user'
+    order by
+        coalesce(messages.received_at, messages.created_at) desc,
+        messages.id desc
+    limit 1
+) latest_inbound on true
+left join lateral (
+    select
+        messages.id as message_id,
+        coalesce(messages.received_at, messages.created_at) as sort_at
+    from messages
+    where messages.dialog_id = dialogs.id
+      and messages.message_kind in ('outbound_manual_reply', 'outbound_external_account_message')
+    order by
+        coalesce(messages.received_at, messages.created_at) desc,
+        messages.id desc
+    limit 1
+) latest_reply on true;
 
 create temporary view ab_prod_kpi_contact_eligibility as
 select
@@ -123,11 +121,12 @@ from (
 ) source
 group by source.contact_id;
 
--- 0. Run context and aggregate scope sizes.
+-- 0. Контекст запуска и размеры агрегированной области данных.
 select
     'run_context' as section,
     params.period_start,
     params.period_end,
+    params.snapshot_at,
     params.sla_cutoff,
     (select count(*) from contacts) as all_contacts,
     (select count(*) from ab_prod_kpi_root_contacts) as root_contacts,
@@ -136,7 +135,7 @@ select
     (select count(*) from dialogs) - (select count(*) from ab_prod_kpi_eligible_dialogs) as excluded_or_non_root_dialogs
 from ab_prod_kpi_params params;
 
--- 1. Primary KPI summary.
+-- 1. Сводка основных KPI.
 select
     'dialog_to_usable_contact_rate' as metric,
     count(*) filter (
@@ -200,7 +199,7 @@ join ab_prod_kpi_root_contacts contacts on contacts.id = eligibility.contact_id
 cross join ab_prod_kpi_params params
 where eligibility.eligible_at between params.period_start and params.period_end;
 
--- 2. Funnel aggregate.
+-- 2. Агрегированная воронка.
 select
     count(*) as new_dialogs,
     count(*) filter (where dialogs.phone_confirmed_at is not null) as dialogs_with_phone,
@@ -224,7 +223,7 @@ join ab_prod_kpi_root_contacts contacts on contacts.id = dialogs.contact_id
 cross join ab_prod_kpi_params params
 where dialogs.created_at between params.period_start and params.period_end;
 
--- 3. Funnel by platform and connection type only.
+-- 3. Воронка только по платформе и типу подключения.
 select
     channels.platform,
     channels.connection_type,
@@ -252,7 +251,7 @@ where dialogs.created_at between params.period_start and params.period_end
 group by channels.platform, channels.connection_type
 order by new_dialogs desc, channels.platform, channels.connection_type;
 
--- 4. Operator backlog aggregate.
+-- 4. Агрегированная очередь оператора.
 select
     count(*) filter (where reply_state.requires_reply) as requires_reply,
     count(*) filter (
@@ -263,7 +262,7 @@ select
     count(*) filter (where dialogs.bot_subscription_status = 'blocked_by_user') as blocked_now,
     round((
         percentile_cont(0.5) within group (
-            order by extract(epoch from (now() - reply_state.latest_inbound_at)) / 60.0
+            order by extract(epoch from (params.snapshot_at - reply_state.latest_inbound_at)) / 60.0
         ) filter (where reply_state.requires_reply)
     )::numeric, 2) as median_requires_reply_age_minutes
 from ab_prod_kpi_reply_state reply_state
@@ -271,13 +270,13 @@ join ab_prod_kpi_eligible_dialogs dialogs on dialogs.id = reply_state.dialog_id
 join ab_prod_kpi_root_contacts contacts on contacts.id = reply_state.contact_id
 cross join ab_prod_kpi_params params;
 
--- 5. Operator backlog by age bucket, aggregate only.
+-- 5. Агрегированная очередь оператора по возрастным группам.
 select
     case
-        when reply_state.latest_inbound_at >= now() - interval '15 minutes' then '00_0_15m'
-        when reply_state.latest_inbound_at >= now() - interval '1 hour' then '01_15_60m'
-        when reply_state.latest_inbound_at >= now() - interval '4 hours' then '02_1_4h'
-        when reply_state.latest_inbound_at >= now() - interval '24 hours' then '03_4_24h'
+        when reply_state.latest_inbound_at >= params.snapshot_at - interval '15 minutes' then '00_0_15m'
+        when reply_state.latest_inbound_at >= params.snapshot_at - interval '1 hour' then '01_15_60m'
+        when reply_state.latest_inbound_at >= params.snapshot_at - interval '4 hours' then '02_1_4h'
+        when reply_state.latest_inbound_at >= params.snapshot_at - interval '24 hours' then '03_4_24h'
         else '04_over_24h'
     end as reply_age_bucket,
     count(*) as dialogs_count,
@@ -286,11 +285,12 @@ select
 from ab_prod_kpi_reply_state reply_state
 join ab_prod_kpi_eligible_dialogs dialogs on dialogs.id = reply_state.dialog_id
 join ab_prod_kpi_root_contacts contacts on contacts.id = reply_state.contact_id
+cross join ab_prod_kpi_params params
 where reply_state.requires_reply
 group by reply_age_bucket
 order by reply_age_bucket;
 
--- 6. Bitrix24 status distribution for eligible contacts.
+-- 6. Распределение статусов Bitrix24 для подходящих контактов.
 select
     contacts.bitrix24_sync_status,
     contacts.bitrix24_deal_sync_status,
@@ -306,7 +306,7 @@ group by
     contacts.bitrix24_history_sync_status
 order by contacts_count desc;
 
--- 7. Bitrix24 failed operations by operation and error code.
+-- 7. Ошибки Bitrix24 по операции и коду ошибки.
 select
     logs.operation,
     logs.entity_type,
@@ -321,7 +321,7 @@ where logs.status = 'failed'
 group by logs.operation, logs.entity_type, coalesce(logs.error_code, 'no_error_code'), logs.http_status
 order by failure_count desc, last_seen_at desc;
 
--- 8. Open Lines binding/live status by platform and route status.
+-- 8. Статусы привязки и live-режима Открытых линий.
 select
     channels.platform,
     routes.status as route_status,
@@ -341,7 +341,7 @@ where dialogs.bitrix24_open_line_route_id is not null
 group by channels.platform, routes.status
 order by dialogs_with_route desc, channels.platform, routes.status;
 
--- 9. Channel runtime health aggregate.
+-- 9. Агрегированное состояние runtime каналов.
 with channel_health as (
     select
         channels.platform,
@@ -357,15 +357,17 @@ with channel_health as (
         count(*) as channels_count,
         count(*) filter (
             where runtime.last_gateway_heartbeat_at is not null
-              and runtime.last_gateway_heartbeat_at >= now() - interval '2 minutes'
+              and runtime.last_gateway_heartbeat_at >= params.snapshot_at - interval '2 minutes'
         ) as fresh_gateway_heartbeat_count,
         max(channels.connection_checked_at) as latest_connection_checked_at,
         max(runtime.last_error_at) as latest_runtime_error_at
     from channels
     left join channel_runtime_states runtime on runtime.channel_id = channels.id
+    cross join ab_prod_kpi_params params
     group by
         channels.platform,
         channels.connection_type,
+        params.snapshot_at,
         case
             when channels.is_active is not true then 'inactive'
             when channels.connection_status is distinct from 'connected' then 'connection_not_connected'
@@ -394,7 +396,7 @@ order by
     connection_type,
     health_flag;
 
--- 10. AI/collector guardrails by task and model.
+-- 10. Контрольные показатели ИИ и сборщика по задаче и модели.
 select
     ai_requests.task_key,
     coalesce(ai_requests.provider, 'unknown') as provider,
