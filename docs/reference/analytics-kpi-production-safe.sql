@@ -6,10 +6,12 @@
 --   сообщений об ошибках и строк отдельных диалогов или контактов.
 --
 -- Запуск через psql:
---   psql "$DATABASE_URL" \
---     -v period_start="'2026-07-01 00:00:00'" \
---     -v period_end="'2026-07-07 23:59:59'" \
---     -v snapshot_at="'2026-07-07 23:59:59'" \
+--   PGSERVICE=ab_connector_production_readonly \
+--   PGPASSFILE="$HOME/.pgpass-ab-connector" \
+--   psql \
+--     -v period_start="2026-07-01 00:00:00" \
+--     -v period_end="2026-07-07 23:59:59" \
+--     -v snapshot_at="2026-07-07 23:59:59" \
 --     -f docs/reference/analytics-kpi-production-safe.sql
 --
 -- Ограничения для production:
@@ -32,27 +34,42 @@ set timezone = 'Europe/Moscow';
 set statement_timeout = '30s';
 
 drop view if exists pg_temp.ab_prod_kpi_contact_eligibility cascade;
-drop view if exists pg_temp.ab_prod_kpi_reply_state cascade;
-drop view if exists pg_temp.ab_prod_kpi_latest_operator_reply cascade;
-drop view if exists pg_temp.ab_prod_kpi_latest_inbound cascade;
+drop table if exists pg_temp.ab_prod_kpi_reply_state cascade;
 drop view if exists pg_temp.ab_prod_kpi_eligible_dialogs cascade;
 drop view if exists pg_temp.ab_prod_kpi_root_contacts cascade;
 drop view if exists pg_temp.ab_prod_kpi_params cascade;
 
 create temporary view ab_prod_kpi_params as
 select
-    :period_start::timestamp as period_start,
-    :period_end::timestamp as period_end,
-    :snapshot_at::timestamp as snapshot_at,
-    :snapshot_at::timestamp - interval '1 hour' as sla_cutoff;
+    :'period_start'::timestamp as period_start,
+    :'period_end'::timestamp as period_end,
+    :'snapshot_at'::timestamp as snapshot_at,
+    :'snapshot_at'::timestamp - interval '1 hour' as sla_cutoff;
 
 create temporary view ab_prod_kpi_root_contacts as
-select contacts.*
+select
+    contacts.id,
+    contacts.assigned_user_id,
+    contacts.data_collection_status,
+    contacts.data_collection_completed_at,
+    contacts.bitrix24_sync_status,
+    contacts.bitrix24_deal_sync_status,
+    contacts.bitrix24_history_sync_status
 from contacts
 where contacts.merged_into_contact_id is null;
 
 create temporary view ab_prod_kpi_eligible_dialogs as
-select dialogs.*
+select
+    dialogs.id,
+    dialogs.contact_id,
+    dialogs.channel_id,
+    dialogs.created_at,
+    dialogs.phone_confirmed_at,
+    dialogs.manual_reply_dismissed_source_message_id,
+    dialogs.bot_subscription_status,
+    dialogs.bitrix24_live_status,
+    dialogs.bitrix24_open_line_binding_verified_at,
+    dialogs.bitrix24_open_line_route_id
 from dialogs
 join ab_prod_kpi_root_contacts contacts on contacts.id = dialogs.contact_id
 left join dialog_stages stage_by_id on stage_by_id.id = dialogs.stage_id
@@ -60,7 +77,7 @@ left join dialog_stages stage_by_key on stage_by_key.key = dialogs.stage
 where coalesce(stage_by_id.behavior_policy, 'standard') <> 'blacklist'
   and coalesce(stage_by_key.behavior_policy, 'standard') <> 'blacklist';
 
-create temporary view ab_prod_kpi_reply_state as
+create temporary table ab_prod_kpi_reply_state as
 select
     dialogs.id as dialog_id,
     dialogs.contact_id,
@@ -100,6 +117,11 @@ left join lateral (
     limit 1
 ) latest_reply on true;
 
+create unique index ab_prod_kpi_reply_state_dialog_id_idx
+    on ab_prod_kpi_reply_state (dialog_id);
+
+analyze ab_prod_kpi_reply_state;
+
 create temporary view ab_prod_kpi_contact_eligibility as
 select
     source.contact_id,
@@ -122,6 +144,7 @@ from (
 group by source.contact_id;
 
 -- 0. Контекст запуска и размеры агрегированной области данных.
+\echo '=== 0. Контекст запуска и область данных ==='
 select
     'run_context' as section,
     params.period_start,
@@ -136,6 +159,7 @@ select
 from ab_prod_kpi_params params;
 
 -- 1. Сводка основных KPI.
+\echo '=== 1. Сводка основных KPI ==='
 select
     'dialog_to_usable_contact_rate' as metric,
     count(*) filter (
@@ -200,6 +224,7 @@ cross join ab_prod_kpi_params params
 where eligibility.eligible_at between params.period_start and params.period_end;
 
 -- 2. Агрегированная воронка.
+\echo '=== 2. Агрегированная воронка ==='
 select
     count(*) as new_dialogs,
     count(*) filter (where dialogs.phone_confirmed_at is not null) as dialogs_with_phone,
@@ -224,6 +249,7 @@ cross join ab_prod_kpi_params params
 where dialogs.created_at between params.period_start and params.period_end;
 
 -- 3. Воронка только по платформе и типу подключения.
+\echo '=== 3. Воронка по платформе и типу подключения ==='
 select
     channels.platform,
     channels.connection_type,
@@ -252,6 +278,7 @@ group by channels.platform, channels.connection_type
 order by new_dialogs desc, channels.platform, channels.connection_type;
 
 -- 4. Агрегированная очередь оператора.
+\echo '=== 4. Агрегированная очередь оператора ==='
 select
     count(*) filter (where reply_state.requires_reply) as requires_reply,
     count(*) filter (
@@ -271,6 +298,7 @@ join ab_prod_kpi_root_contacts contacts on contacts.id = reply_state.contact_id
 cross join ab_prod_kpi_params params;
 
 -- 5. Агрегированная очередь оператора по возрастным группам.
+\echo '=== 5. Очередь оператора по возрастным группам ==='
 select
     case
         when reply_state.latest_inbound_at >= params.snapshot_at - interval '15 minutes' then '00_0_15m'
@@ -291,6 +319,7 @@ group by reply_age_bucket
 order by reply_age_bucket;
 
 -- 6. Распределение статусов Bitrix24 для подходящих контактов.
+\echo '=== 6. Распределение статусов Bitrix24 ==='
 select
     contacts.bitrix24_sync_status,
     contacts.bitrix24_deal_sync_status,
@@ -307,6 +336,7 @@ group by
 order by contacts_count desc;
 
 -- 7. Ошибки Bitrix24 по операции и коду ошибки.
+\echo '=== 7. Ошибки Bitrix24 по операции и коду ==='
 select
     logs.operation,
     logs.entity_type,
@@ -322,6 +352,7 @@ group by logs.operation, logs.entity_type, coalesce(logs.error_code, 'no_error_c
 order by failure_count desc, last_seen_at desc;
 
 -- 8. Статусы привязки и live-режима Открытых линий.
+\echo '=== 8. Привязка и live-режим Открытых линий ==='
 select
     channels.platform,
     routes.status as route_status,
@@ -342,6 +373,7 @@ group by channels.platform, routes.status
 order by dialogs_with_route desc, channels.platform, routes.status;
 
 -- 9. Агрегированное состояние runtime каналов.
+\echo '=== 9. Состояние runtime каналов ==='
 with channel_health as (
     select
         channels.platform,
@@ -397,6 +429,7 @@ order by
     health_flag;
 
 -- 10. Контрольные показатели ИИ и сборщика по задаче и модели.
+\echo '=== 10. Контрольные показатели ИИ и сборщика ==='
 select
     ai_requests.task_key,
     coalesce(ai_requests.provider, 'unknown') as provider,
