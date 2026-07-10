@@ -2191,7 +2191,7 @@ class FilamentDialogsResourceTest extends TestCase
         ]);
         $dialog = $this->createInboxDialog();
 
-        $this->actingAs($admin)
+        $response = $this->actingAs($admin)
             ->get(DialogResource::getUrl('view', ['record' => $dialog]))
             ->assertOk()
             ->assertSee('Статус')
@@ -2212,6 +2212,8 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertDontSee('<p class="ac-field-help">', escape: false)
             ->assertDontSee('Рабочее место оператора')
             ->assertDontSee('Здесь показаны только сообщения текущего диалога в хронологическом порядке.');
+
+        $this->assertDialogInboxStatusToggleDisabled($response->getContent(), false);
     }
 
     public function test_dialog_view_disables_reply_status_toggle_while_client_blocks_bot(): void
@@ -2237,10 +2239,7 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertDontSee('data-role="dialog-inbox-status-blocked-reason"', escape: false)
             ->assertDontSee('Сменить на: Требует ответа');
 
-        $this->assertMatchesRegularExpression(
-            '~<button(?=[^>]*data-role="dialog-inbox-status-toggle")(?=[^>]*disabled)[^>]*>~s',
-            $response->getContent(),
-        );
+        $this->assertDialogInboxStatusToggleDisabled($response->getContent(), true);
     }
 
     public function test_dialog_view_keeps_reply_status_toggle_disabled_in_blacklist_stage_after_provider_unblock(): void
@@ -2277,10 +2276,7 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertDontSee(DialogInboxStatusPolicy::BLOCKED_BY_USER_MESSAGE)
             ->assertDontSee('Сменить на: Требует ответа');
 
-        $this->assertMatchesRegularExpression(
-            '~<button(?=[^>]*data-role="dialog-inbox-status-toggle")(?=[^>]*disabled)[^>]*>~s',
-            $response->getContent(),
-        );
+        $this->assertDialogInboxStatusToggleDisabled($response->getContent(), true);
     }
 
     public function test_dialog_view_renders_assignee_toggle_in_system_fields(): void
@@ -5100,6 +5096,34 @@ class FilamentDialogsResourceTest extends TestCase
             'status' => ScenarioVersion::STATUS_PUBLISHED,
             'schema_payload' => $schemaPayload,
         ])->fresh(['scenario']);
+    }
+
+    protected function assertDialogInboxStatusToggleDisabled(string $html, bool $expected): void
+    {
+        $document = new \DOMDocument;
+        $usesInternalErrors = libxml_use_internal_errors(true);
+
+        try {
+            $this->assertTrue($document->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING));
+        } finally {
+            libxml_clear_errors();
+            libxml_use_internal_errors($usesInternalErrors);
+        }
+
+        $buttons = (new \DOMXPath($document))
+            ->query('//button[@data-role="dialog-inbox-status-toggle"]');
+
+        $this->assertNotFalse($buttons);
+        $this->assertSame(1, $buttons->length, 'Expected exactly one dialog inbox status toggle.');
+
+        $button = $buttons->item(0);
+
+        $this->assertInstanceOf(\DOMElement::class, $button);
+        $this->assertSame(
+            $expected,
+            $button->hasAttribute('disabled'),
+            'Dialog inbox status toggle disabled state does not match the expected value.',
+        );
     }
 
     /**
