@@ -174,6 +174,7 @@ select
     latest_inbound.sort_at as latest_inbound_at,
     (
         latest_inbound.message_id is not null
+        and dialogs.bot_subscription_status is distinct from 'blocked_by_user'
         and coalesce(dialogs.manual_reply_dismissed_source_message_id, -1) <> latest_inbound.message_id
         and (
             latest_reply.message_id is null

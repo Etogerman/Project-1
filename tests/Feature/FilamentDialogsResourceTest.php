@@ -2213,6 +2213,34 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertDontSee('Здесь показаны только сообщения текущего диалога в хронологическом порядке.');
     }
 
+    public function test_dialog_view_disables_reply_status_toggle_while_client_blocks_bot(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createInboxDialog();
+        $dialog->forceFill([
+            'bot_subscription_status' => Dialog::BOT_SUBSCRIPTION_STATUS_BLOCKED_BY_USER,
+            'bot_subscription_changed_at' => now(),
+        ])->save();
+
+        $response = $this->actingAs($admin)
+            ->get(DialogResource::getUrl('view', ['record' => $dialog]));
+
+        $response
+            ->assertOk()
+            ->assertSee('Не требует ответа')
+            ->assertSee('Клиент заблокировал бота. Статус «Требует ответа» станет доступен после разблокировки.')
+            ->assertSee('data-role="dialog-inbox-status-blocked-reason"', escape: false)
+            ->assertDontSee('Сменить на: Требует ответа');
+
+        $this->assertMatchesRegularExpression(
+            '~<button(?=[^>]*data-role="dialog-inbox-status-toggle")(?=[^>]*disabled)[^>]*>~s',
+            $response->getContent(),
+        );
+    }
+
     public function test_dialog_view_renders_assignee_toggle_in_system_fields(): void
     {
         $admin = User::factory()->create([

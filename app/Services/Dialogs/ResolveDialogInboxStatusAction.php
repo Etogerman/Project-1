@@ -10,12 +10,12 @@ class ResolveDialogInboxStatusAction
 {
     public function __construct(
         private readonly MessageChronology $messageChronology,
-        private readonly DialogStageCatalog $dialogStageCatalog,
+        private readonly DialogInboxStatusPolicy $dialogInboxStatusPolicy,
     ) {}
 
     public function handle(Dialog $dialog): DialogInboxStatusData
     {
-        if ($this->dialogStageCatalog->isBlacklistDialog($dialog)) {
+        if ($this->dialogInboxStatusPolicy->suppressesReplyRequirement($dialog)) {
             return $this->make(DialogInboxStatusData::CODE_NOT_REQUIRED, 'Не требует ответа', 'gray');
         }
 
