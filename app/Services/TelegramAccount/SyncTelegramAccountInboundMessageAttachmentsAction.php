@@ -49,8 +49,7 @@ class SyncTelegramAccountInboundMessageAttachmentsAction
         Channel $channel,
     ): void {
         $mediaKind = $this->resolveMediaKind($item);
-        $fileSizeBytes = $this->normalizeInteger(data_get($item, 'file_size_bytes'))
-            ?? $this->normalizeInteger(data_get($item, 'file_size'));
+        $fileSizeBytes = $this->resolveFileSizeBytes($item);
         $downloadStatus = $metadataOnly
             ? MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY
             : $this->mediaDownloadPolicy->initialDownloadStatus($channel, $fileSizeBytes);
@@ -264,7 +263,7 @@ class SyncTelegramAccountInboundMessageAttachmentsAction
             'file_name' => $this->normalizeScalar(data_get($item, 'file_name')),
             'mime_type' => $this->normalizeScalar(data_get($item, 'mime_type')),
             'extension' => $this->normalizeScalar(data_get($item, 'extension')),
-            'file_size_bytes' => $this->normalizeInteger(data_get($item, 'file_size_bytes')),
+            'file_size_bytes' => $this->resolveFileSizeBytes($item),
             'download_status' => $this->normalizeScalar(data_get($item, 'download_status')),
             'is_video_note' => $this->normalizeBoolean(data_get($item, 'is_video_note')),
         ], static fn (mixed $value): bool => $value !== null);
@@ -279,6 +278,16 @@ class SyncTelegramAccountInboundMessageAttachmentsAction
         $text = trim((string) $value);
 
         return $text !== '' ? $text : null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     */
+    private function resolveFileSizeBytes(array $item): ?int
+    {
+        return $this->normalizeInteger(data_get($item, 'file_size_bytes'))
+            ?? $this->normalizeInteger(data_get($item, 'file_size'))
+            ?? $this->normalizeInteger(data_get($item, 'size'));
     }
 
     private function normalizeInteger(mixed $value): ?int

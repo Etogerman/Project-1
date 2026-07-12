@@ -1302,6 +1302,47 @@ class TelegramAccountGatewayControllerTest extends TestCase
         $this->assertSame(MessageAttachment::LOCAL_PATH_PREFIX.'/'.$message->id.'/photo.jpg', $photo->local_path);
     }
 
+    public function test_gateway_uses_size_field_for_automatic_account_media_download(): void
+    {
+        Queue::fake();
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+        config()->set('bots.telegram_account.media_download_max_bytes', 20 * 1024 * 1024);
+
+        $channel = $this->createTelegramAccountChannel([
+            'name' => 'Telegram Account Media Size Field',
+        ]);
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+            'X-AB-Media-Claim-Token' => '1',
+        ])->postJson(
+            route('internal.telegram-account.messages.handle', ['channel' => $channel]),
+            $this->payload(
+                channel: $channel,
+                externalChatId: '700015',
+                externalUserId: 'tg-account-media-user-15',
+                externalMessageId: '900015',
+                text: null,
+                media: [[
+                    'type' => 'photo',
+                    'telegram_file_id' => 'photo-size-field-id',
+                    'size' => 16805,
+                    'width' => 328,
+                    'height' => 288,
+                ]],
+                historySource: 'live',
+            ),
+        )->assertOk()
+            ->assertJsonPath('stored', true);
+
+        $attachment = MessageAttachment::query()->sole();
+
+        $this->assertSame(16805, $attachment->file_size_bytes);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD, $attachment->download_status);
+        $this->assertNull($attachment->safe_error_code);
+        $this->assertSame(16805, data_get($attachment->raw_payload_excerpt, 'file_size_bytes'));
+    }
+
     public function test_gateway_persists_rich_text_from_account_formatted_media_caption(): void
     {
         Queue::fake();
