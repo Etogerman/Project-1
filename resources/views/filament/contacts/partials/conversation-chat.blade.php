@@ -633,6 +633,31 @@
                                                     Скачать
                                                 </a>
                                             @endif
+
+                                            @if (! empty($mediaItem['can_request_manual_download']) && filled($mediaItem['attachment_id'] ?? null))
+                                                <button
+                                                    type="button"
+                                                    data-role="conversation-attachment-manual-download"
+                                                    class="ac-message-attachment__download ac-message-attachment__download--button"
+                                                    wire:click="requestManualAttachmentDownload({{ (int) $mediaItem['attachment_id'] }})"
+                                                    wire:confirm="{{ $mediaItem['manual_download_confirmation'] ?? 'Загрузить этот файл вручную?' }}"
+                                                    wire:loading.attr="disabled"
+                                                    wire:target="requestManualAttachmentDownload({{ (int) $mediaItem['attachment_id'] }})"
+                                                >
+                                                    <x-filament::icon
+                                                        icon="heroicon-m-arrow-down-tray"
+                                                        wire:loading.remove
+                                                        wire:target="requestManualAttachmentDownload({{ (int) $mediaItem['attachment_id'] }})"
+                                                    />
+                                                    <x-filament::icon
+                                                        icon="heroicon-m-arrow-path"
+                                                        class="animate-spin"
+                                                        wire:loading
+                                                        wire:target="requestManualAttachmentDownload({{ (int) $mediaItem['attachment_id'] }})"
+                                                    />
+                                                    <span>Скачать вручную</span>
+                                                </button>
+                                            @endif
                                             </div>
                                         @endif
                                     </div>

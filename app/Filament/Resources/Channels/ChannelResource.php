@@ -19,6 +19,7 @@ use App\Services\Dialogs\MessageChronology;
 use App\Services\Scenarios\ScenarioRegistry;
 use App\Services\Scenarios\SyncChannelScenarioBindingsAction;
 use App\Services\TelegramAccount\ResolveTelegramAccountGatewayDiagnosticsAction;
+use App\Services\TelegramAccount\TelegramAccountMediaDownloadPolicy;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Actions\EditAction;
@@ -171,6 +172,16 @@ class ChannelResource extends Resource
                         Toggle::make('sync_external_outgoing_enabled')
                             ->label('Синхронизация исходящих из Telegram')
                             ->default(false)
+                            ->visible(fn (?Channel $record): bool => $record?->isAccountConnection() ?? false),
+                        TextInput::make('telegram_account_media_auto_download_max_mb')
+                            ->label('Автозагрузка медиа до')
+                            ->numeric()
+                            ->minValue(0)
+                            ->maxValue(4096)
+                            ->step(1)
+                            ->suffix('МБ')
+                            ->placeholder('20')
+                            ->helperText('Более крупные файлы останутся в диалоге и будут доступны для ручной загрузки.')
                             ->visible(fn (?Channel $record): bool => $record?->isAccountConnection() ?? false),
                     ])
                     ->columnSpanFull()
@@ -870,6 +881,13 @@ class ChannelResource extends Resource
                         ],
                         'is_active' => $record->is_active ? '1' : '0',
                         'sync_external_outgoing_enabled' => (bool) $record->sync_external_outgoing_enabled,
+                        'telegram_account_media_auto_download_max_mb' => (int) round(
+                            ($record->telegram_account_media_auto_download_max_bytes
+                                ?? config(
+                                    'bots.telegram_account.media_download_max_bytes',
+                                    TelegramAccountMediaDownloadPolicy::DEFAULT_AUTO_DOWNLOAD_MAX_BYTES,
+                                )) / 1024 / 1024,
+                        ),
                     ])
                     ->using(function (array $data, Channel $record): void {
                         static::updateChannelRecord($record, static::mutateChannelData($data, $record));
@@ -1125,10 +1143,20 @@ class ChannelResource extends Resource
             ? filter_var(data_get($data, 'sync_external_outgoing_enabled'), FILTER_VALIDATE_BOOLEAN)
             : (bool) $record->sync_external_outgoing_enabled;
 
+        $autoDownloadMaxBytes = $record->telegram_account_media_auto_download_max_bytes;
+
+        if (array_key_exists('telegram_account_media_auto_download_max_mb', $data)) {
+            $autoDownloadMaxMb = data_get($data, 'telegram_account_media_auto_download_max_mb');
+            $autoDownloadMaxBytes = filled($autoDownloadMaxMb)
+                ? max(0, (int) $autoDownloadMaxMb) * 1024 * 1024
+                : null;
+        }
+
         return [
             'name' => (string) data_get($data, 'name', $record->name),
             'auto_reply_mode' => $autoReplyMode,
             'sync_external_outgoing_enabled' => $syncExternalOutgoingEnabled,
+            'telegram_account_media_auto_download_max_bytes' => $autoDownloadMaxBytes,
         ];
     }
 

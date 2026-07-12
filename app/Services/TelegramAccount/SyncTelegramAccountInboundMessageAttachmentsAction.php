@@ -3,6 +3,7 @@
 namespace App\Services\TelegramAccount;
 
 use App\Data\TelegramAccount\NormalizedInboundMessageEvent;
+use App\Models\Channel;
 use App\Models\Message;
 use App\Models\MessageAttachment;
 use App\Services\Dialogs\DialogAutomationGate;
@@ -13,6 +14,7 @@ class SyncTelegramAccountInboundMessageAttachmentsAction
 {
     public function __construct(
         private readonly DialogAutomationGate $dialogAutomationGate,
+        private readonly TelegramAccountMediaDownloadPolicy $mediaDownloadPolicy,
     ) {}
 
     public function handle(Message $message, NormalizedInboundMessageEvent $event): void
@@ -22,13 +24,14 @@ class SyncTelegramAccountInboundMessageAttachmentsAction
         }
 
         $metadataOnly = ! $this->dialogAutomationGate->acceptsMessage($message);
+        $channel = Channel::query()->findOrFail($event->channelId);
 
         foreach (array_values($event->media) as $index => $item) {
             if (! is_array($item)) {
                 continue;
             }
 
-            $this->syncAttachment($message, $event, $item, $index, $metadataOnly);
+            $this->syncAttachment($message, $event, $item, $index, $metadataOnly, $channel);
         }
 
         $message->unsetRelation('attachments');
@@ -43,8 +46,17 @@ class SyncTelegramAccountInboundMessageAttachmentsAction
         array $item,
         int $index,
         bool $metadataOnly,
+        Channel $channel,
     ): void {
         $mediaKind = $this->resolveMediaKind($item);
+        $fileSizeBytes = $this->normalizeInteger(data_get($item, 'file_size_bytes'))
+            ?? $this->normalizeInteger(data_get($item, 'file_size'));
+        $downloadStatus = $metadataOnly
+            ? MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY
+            : $this->mediaDownloadPolicy->initialDownloadStatus($channel, $fileSizeBytes);
+        $automaticMaxBytes = $metadataOnly
+            ? null
+            : $this->mediaDownloadPolicy->automaticMaxBytes($channel);
         $identity = [
             'provider' => MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT,
             'channel_id' => $event->channelId,
@@ -58,8 +70,7 @@ class SyncTelegramAccountInboundMessageAttachmentsAction
             'extension' => $this->resolveExtension($item),
             'original_filename' => $this->normalizeScalar(data_get($item, 'file_name'))
                 ?? $this->normalizeScalar(data_get($item, 'original_filename')),
-            'file_size_bytes' => $this->normalizeInteger(data_get($item, 'file_size_bytes'))
-                ?? $this->normalizeInteger(data_get($item, 'file_size')),
+            'file_size_bytes' => $fileSizeBytes,
             'provider_file_id' => $this->normalizeScalar(data_get($item, 'provider_file_id'))
                 ?? $this->normalizeScalar(data_get($item, 'telegram_file_id'))
                 ?? $this->normalizeScalar(data_get($item, 'file_id')),
@@ -73,18 +84,20 @@ class SyncTelegramAccountInboundMessageAttachmentsAction
         ];
         $createValues = [
             ...$metadataValues,
-            'download_status' => $metadataOnly
-                ? MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY
-                : $this->resolveDownloadStatus($item),
+            'download_status' => $downloadStatus,
+            'media_download_next_retry_at' => null,
+            'media_download_max_bytes' => $automaticMaxBytes,
             'send_status' => MessageAttachment::SEND_STATUS_NOT_APPLICABLE,
             'local_disk' => null,
             'local_path' => null,
-            'safe_error_code' => $metadataOnly
-                ? DialogAutomationGate::REASON_BLACKLIST_STAGE
-                : $this->normalizeScalar(data_get($item, 'download_error_code')),
-            'safe_error_message' => $metadataOnly
+            'safe_error_code' => match ($downloadStatus) {
+                MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY => DialogAutomationGate::REASON_BLACKLIST_STAGE,
+                MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND => TelegramAccountMediaDownloadPolicy::ERROR_AUTO_DOWNLOAD_LIMIT_EXCEEDED,
+                default => $this->normalizeScalar(data_get($item, 'download_error_code')),
+            },
+            'safe_error_message' => $downloadStatus === MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY
                 ? 'Media download skipped because the dialog stage is blacklisted.'
-                : $this->normalizeScalar(data_get($item, 'download_error_message')),
+                : null,
         ];
 
         $this->createOrUpdateAttachment($identity, $createValues, $metadataValues);
@@ -145,9 +158,17 @@ class SyncTelegramAccountInboundMessageAttachmentsAction
     private function shouldPreserveDownloadState(MessageAttachment $attachment): bool
     {
         return in_array($attachment->download_status, [
+            MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND,
+            MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD,
             MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
             MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            MessageAttachment::DOWNLOAD_STATUS_DOWNLOAD_FAILED,
         ], true)
+            || (
+                $attachment->download_status === MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY
+                && $attachment->safe_error_code === DialogAutomationGate::REASON_BLACKLIST_STAGE
+            )
+            || $attachment->manual_download_requested_at !== null
             || filled($attachment->local_disk)
             || filled($attachment->local_path);
     }
@@ -229,16 +250,6 @@ class SyncTelegramAccountInboundMessageAttachmentsAction
         }
 
         return $metadata !== [] ? $metadata : null;
-    }
-
-    /**
-     * @param  array<string, mixed>  $item
-     */
-    private function resolveDownloadStatus(array $item): string
-    {
-        return MessageAttachment::downloadStatusFromLegacyStatus(
-            $this->normalizeScalar(data_get($item, 'download_status'))
-        ) ?? MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD;
     }
 
     /**

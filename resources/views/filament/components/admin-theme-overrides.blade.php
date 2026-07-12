@@ -8320,6 +8320,28 @@
         color: color-mix(in srgb, var(--ac-primary) 78%, #0f172a);
     }
 
+    .ac-message-attachment__download--button {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.24rem;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        cursor: pointer;
+        font: inherit;
+    }
+
+    .ac-message-attachment__download--button svg {
+        width: 0.9rem;
+        height: 0.9rem;
+        flex: 0 0 auto;
+    }
+
+    .ac-message-attachment__download--button:disabled {
+        cursor: wait;
+        opacity: 0.55;
+    }
+
     .ac-voice-player {
         --ac-voice-progress: 0%;
         display: grid;

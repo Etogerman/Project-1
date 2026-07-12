@@ -5,10 +5,17 @@ namespace App\Services\Messages;
 use App\Models\Channel;
 use App\Models\Message;
 use App\Models\MessageAttachment;
+use App\Services\Dialogs\DialogAutomationGate;
+use App\Services\TelegramAccount\TelegramAccountMediaDownloadPolicy;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 
 class ResolveMessageMediaItemsAction
 {
+    public function __construct(
+        private readonly DialogAutomationGate $dialogAutomationGate,
+        private readonly TelegramAccountMediaDownloadPolicy $mediaDownloadPolicy,
+    ) {}
+
     /**
      * @return list<array<string, mixed>>
      */
@@ -17,8 +24,15 @@ class ResolveMessageMediaItemsAction
         $attachments = $this->resolveAttachments($message);
 
         if ($attachments->isNotEmpty()) {
+            $message->loadMissing('dialog.dialogStage');
+            $requiresBlacklistWarning = $this->dialogAutomationGate->rejectReason($message->dialog)
+                === DialogAutomationGate::REASON_BLACKLIST_STAGE;
+
             return $attachments
-                ->map(fn (MessageAttachment $attachment): array => $this->normalizeAttachment($attachment))
+                ->map(fn (MessageAttachment $attachment): array => $this->normalizeAttachment(
+                    $attachment,
+                    $requiresBlacklistWarning,
+                ))
                 ->values()
                 ->all();
         }
@@ -50,7 +64,7 @@ class ResolveMessageMediaItemsAction
     /**
      * @return array<string, mixed>
      */
-    private function normalizeAttachment(MessageAttachment $attachment): array
+    private function normalizeAttachment(MessageAttachment $attachment, bool $requiresBlacklistWarning): array
     {
         $mediaKind = MessageAttachment::normalizeMediaKind($attachment->media_kind);
 
@@ -74,6 +88,8 @@ class ResolveMessageMediaItemsAction
             'preview_kind' => $attachment->previewKind(),
             'safe_error_code' => $attachment->safe_error_code,
             'safe_error_message' => $attachment->safe_error_message,
+            'can_request_manual_download' => $this->mediaDownloadPolicy->canRequestManually($attachment),
+            'manual_download_requires_blacklist_warning' => $requiresBlacklistWarning,
         ];
     }
 
@@ -127,6 +143,8 @@ class ResolveMessageMediaItemsAction
             'preview_kind' => null,
             'safe_error_code' => $this->normalizeScalar(data_get($item, 'download_error_code')),
             'safe_error_message' => $this->normalizeScalar(data_get($item, 'download_error_message')),
+            'can_request_manual_download' => false,
+            'manual_download_requires_blacklist_warning' => false,
         ];
     }
 

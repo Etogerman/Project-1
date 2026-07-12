@@ -15,6 +15,7 @@ use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
 use App\Models\FieldDictionaryField;
 use App\Models\Message;
+use App\Models\MessageAttachment;
 use App\Models\Scenario;
 use App\Models\ScenarioRun;
 use App\Models\ScenarioVersion;
@@ -39,6 +40,7 @@ use App\Services\Dialogs\SyncSystemDialogCardViewAction;
 use App\Services\Dialogs\UpdateDialogInboxStatusAction;
 use App\Services\Dialogs\UpdateDialogStageAction;
 use App\Services\Scenarios\ScenarioEdgeExpressionCondition;
+use App\Services\TelegramAccount\RequestTelegramAccountMediaDownloadAction;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
 use Filament\Support\Enums\Width;
@@ -50,6 +52,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
+use InvalidArgumentException;
 use Livewire\Attributes\Url;
 use RuntimeException;
 use Throwable;
@@ -230,6 +233,47 @@ class ViewDialog extends ViewRecord
             appendedCount: $refreshResult['appended_count'],
             updatedCount: $refreshResult['updated_count'],
         );
+    }
+
+    public function requestManualAttachmentDownload(int $attachmentId): void
+    {
+        try {
+            $operator = $this->resolveCurrentEmployee();
+            $attachment = MessageAttachment::query()->findOrFail($attachmentId);
+
+            app(RequestTelegramAccountMediaDownloadAction::class)->handle(
+                $this->getRecord(),
+                $attachment,
+                $operator,
+            );
+
+            $this->refreshVisibleConversationMessages();
+            $this->dispatch('dialog-history-refreshed', appendedCount: 0, updatedCount: 1);
+
+            Notification::make()
+                ->success()
+                ->title('Файл поставлен в очередь')
+                ->body('Он появится в диалоге после загрузки.')
+                ->send();
+        } catch (InvalidArgumentException $exception) {
+            Notification::make()
+                ->danger()
+                ->title('Не удалось запросить файл')
+                ->body($exception->getMessage())
+                ->send();
+        } catch (Throwable $throwable) {
+            Log::warning('telegram_account_media.manual_download_request_failed', [
+                'dialog_id' => $this->getRecord()->id,
+                'attachment_id' => $attachmentId,
+                'error_type' => $throwable::class,
+            ]);
+
+            Notification::make()
+                ->danger()
+                ->title('Не удалось запросить файл')
+                ->body('Повторите попытку позже.')
+                ->send();
+        }
     }
 
     public function updateDialogInboxStatus(): void
