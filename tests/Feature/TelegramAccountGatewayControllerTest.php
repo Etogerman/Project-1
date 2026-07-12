@@ -3161,7 +3161,8 @@ class TelegramAccountGatewayControllerTest extends TestCase
         ])->postJson(route('internal.telegram-account.media-downloads.claim', ['channel' => $channel]))
             ->assertOk()
             ->assertJsonPath('media_download.upload.strategy', 'direct_put')
-            ->assertJsonPath('media_download.upload.max_chunk_bytes', 8 * 1024 * 1024);
+            ->assertJsonPath('media_download.upload.max_chunk_bytes', 8 * 1024 * 1024)
+            ->assertJsonMissingPath('media_download.upload.headers');
 
         $uploadUrl = (string) $claimResponse->json('media_download.upload.url');
         $claimToken = (string) $claimResponse->json('media_download.claim_token');

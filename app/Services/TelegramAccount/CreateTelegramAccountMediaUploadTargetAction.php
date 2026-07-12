@@ -76,7 +76,6 @@ class CreateTelegramAccountMediaUploadTargetAction
                     ],
                     absolute: false,
                 ),
-                'headers' => [],
                 'requires_gateway_auth' => true,
                 'max_chunk_bytes' => self::LOCAL_UPLOAD_CHUNK_BYTES,
             ];
