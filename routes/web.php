@@ -12,7 +12,7 @@ use App\Http\Controllers\BotWebhookController;
 use App\Http\Controllers\TelegramAccountGatewayController;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
-use Illuminate\Foundation\Http\Middleware\VerifyCsrfToken;
+use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Facades\Route;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
@@ -34,7 +34,7 @@ Route::middleware('throttle:telegram-account-gateway')
         AddQueuedCookiesToResponse::class,
         StartSession::class,
         ShareErrorsFromSession::class,
-        VerifyCsrfToken::class,
+        PreventRequestForgery::class,
     ])
     ->group(function (): void {
         Route::get('/config', [TelegramAccountGatewayController::class, 'config'])
