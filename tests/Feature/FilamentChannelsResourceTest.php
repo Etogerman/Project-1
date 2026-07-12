@@ -1171,6 +1171,7 @@ class FilamentChannelsResourceTest extends TestCase
             'bot_token_present' => false,
             'is_active' => true,
             'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+            'telegram_account_media_auto_download_max_bytes' => 32 * 1024 * 1024,
         ]);
         $originalChannelConnectionTypeId = $channel->channel_connection_type_id;
 
@@ -1203,6 +1204,7 @@ class FilamentChannelsResourceTest extends TestCase
         $this->assertFalse($channel->bot_token_present);
         $this->assertTrue($channel->is_active);
         $this->assertSame(Channel::AUTO_REPLY_MODE_RULES_ONLY, $channel->auto_reply_mode);
+        $this->assertSame(32 * 1024 * 1024, $channel->telegram_account_media_auto_download_max_bytes);
     }
 
     public function test_admin_can_edit_account_channel_external_outgoing_sync_toggle(): void
@@ -1254,6 +1256,46 @@ class FilamentChannelsResourceTest extends TestCase
             ->assertTableActionDataSet([
                 'sync_external_outgoing_enabled' => true,
             ]);
+    }
+
+    public function test_admin_can_edit_account_channel_media_auto_download_limit(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $channel = Channel::factory()->account()->create([
+            'name' => 'Local Telegram Account Gateway',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_ACCOUNT,
+            'telegram_account_media_auto_download_max_bytes' => 32 * 1024 * 1024,
+            'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->mountTableAction('edit', $channel)
+            ->assertTableActionDataSet([
+                'telegram_account_media_auto_download_max_mb' => 32,
+            ])
+            ->setTableActionData([
+                'name' => $channel->name,
+                'channel_connection_type_id' => $channel->channel_connection_type_id,
+                'platform' => Channel::PLATFORM_TELEGRAM,
+                'connection_type' => Channel::CONNECTION_TYPE_ACCOUNT,
+                'auto_reply_mode' => Channel::AUTO_REPLY_MODE_RULES_ONLY,
+                'credentials' => [
+                    'token' => null,
+                ],
+                'is_active' => false,
+                'sync_external_outgoing_enabled' => false,
+                'telegram_account_media_auto_download_max_mb' => 64,
+            ])
+            ->callMountedTableAction()
+            ->assertHasNoTableActionErrors();
+
+        $this->assertSame(64 * 1024 * 1024, $channel->fresh()->telegram_account_media_auto_download_max_bytes);
     }
 
     public function test_account_channel_table_error_columns_use_runtime_state(): void

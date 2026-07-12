@@ -27,8 +27,7 @@ Route::post('/webhooks/telegram/{channel}', [BotWebhookController::class, 'teleg
 Route::post('/webhooks/max/{channel}', [BotWebhookController::class, 'max'])
     ->name('webhooks.max.handle');
 
-Route::middleware('throttle:telegram-account-gateway')
-    ->prefix('/internal/gateway/telegram-account/{channel}')
+Route::prefix('/internal/gateway/telegram-account/{channel}')
     ->withoutMiddleware([
         EncryptCookies::class,
         AddQueuedCookiesToResponse::class,
@@ -37,33 +36,40 @@ Route::middleware('throttle:telegram-account-gateway')
         PreventRequestForgery::class,
     ])
     ->group(function (): void {
-        Route::get('/config', [TelegramAccountGatewayController::class, 'config'])
-            ->name('internal.telegram-account.config.show');
+        Route::middleware('throttle:telegram-account-gateway')->group(function (): void {
+            Route::get('/config', [TelegramAccountGatewayController::class, 'config'])
+                ->name('internal.telegram-account.config.show');
 
-        Route::post('/messages', [TelegramAccountGatewayController::class, 'inboundMessage'])
-            ->name('internal.telegram-account.messages.handle');
+            Route::post('/messages', [TelegramAccountGatewayController::class, 'inboundMessage'])
+                ->name('internal.telegram-account.messages.handle');
 
-        Route::post('/external-outgoing-messages', [TelegramAccountGatewayController::class, 'externalOutgoingMessage'])
-            ->name('internal.telegram-account.external-outgoing-messages.handle');
+            Route::post('/external-outgoing-messages', [TelegramAccountGatewayController::class, 'externalOutgoingMessage'])
+                ->name('internal.telegram-account.external-outgoing-messages.handle');
 
-        Route::post('/runtime-state', [TelegramAccountGatewayController::class, 'runtimeState'])
-            ->name('internal.telegram-account.runtime-state.handle');
+            Route::post('/runtime-state', [TelegramAccountGatewayController::class, 'runtimeState'])
+                ->name('internal.telegram-account.runtime-state.handle');
 
-        Route::post('/peer-sync-state', [TelegramAccountGatewayController::class, 'peerSyncState'])
-            ->name('internal.telegram-account.peer-sync-state.handle');
+            Route::post('/peer-sync-state', [TelegramAccountGatewayController::class, 'peerSyncState'])
+                ->name('internal.telegram-account.peer-sync-state.handle');
 
-        Route::post('/outgoing-messages/claim', [TelegramAccountGatewayController::class, 'claimOutgoingMessage'])
-            ->name('internal.telegram-account.outgoing-messages.claim');
+            Route::post('/outgoing-messages/claim', [TelegramAccountGatewayController::class, 'claimOutgoingMessage'])
+                ->name('internal.telegram-account.outgoing-messages.claim');
 
-        Route::post('/outgoing-messages/{outgoingMessage}/result', [TelegramAccountGatewayController::class, 'outgoingMessageResult'])
-            ->name('internal.telegram-account.outgoing-messages.result');
+            Route::post('/outgoing-messages/{outgoingMessage}/result', [TelegramAccountGatewayController::class, 'outgoingMessageResult'])
+                ->name('internal.telegram-account.outgoing-messages.result');
 
-        Route::post('/media-downloads/claim', [TelegramAccountGatewayController::class, 'claimMediaDownload'])
-            ->name('internal.telegram-account.media-downloads.claim');
+            Route::post('/media-downloads/claim', [TelegramAccountGatewayController::class, 'claimMediaDownload'])
+                ->name('internal.telegram-account.media-downloads.claim');
 
-        Route::post('/media-downloads/{attachment}/result', [TelegramAccountGatewayController::class, 'mediaDownloadResult'])
+            Route::post('/media-downloads/{attachment}/result', [TelegramAccountGatewayController::class, 'mediaDownloadResult'])
+                ->whereNumber('attachment')
+                ->name('internal.telegram-account.media-downloads.result');
+        });
+
+        Route::put('/media-downloads/{attachment}/upload', [TelegramAccountGatewayController::class, 'uploadMediaDownload'])
+            ->middleware('throttle:telegram-account-media-upload')
             ->whereNumber('attachment')
-            ->name('internal.telegram-account.media-downloads.result');
+            ->name('internal.telegram-account.media-downloads.upload');
     });
 
 Route::get('/admin/bitrix24/oauth/start', [Bitrix24AdminOAuthController::class, 'start'])

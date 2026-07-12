@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Data\Dialogs\DialogInboxStatusData;
+use App\Data\TelegramAccount\NormalizedInboundMessageEvent;
 use App\Filament\Resources\Dialogs\DialogResource;
 use App\Jobs\ProcessScenarioInboundJob;
 use App\Jobs\ProcessScenarioStartJob;
@@ -28,11 +29,16 @@ use App\Services\Dialogs\DialogAutomationGate;
 use App\Services\Dialogs\DialogInboxStatusPolicy;
 use App\Services\Dialogs\ResolveDialogInboxStatusAction;
 use App\Services\Dialogs\UpdateDialogInboxStatusAction;
+use App\Services\Messages\ResolveMessageMediaItemsAction;
+use App\Services\Messages\StoreMessageAttachmentLocalFileAction;
 use App\Services\Scenarios\DispatchDialogStageChangedScenarioAction;
 use App\Services\Scenarios\ScenarioRegistry;
 use App\Services\TelegramAccount\ClaimTelegramAccountMediaDownloadAction;
+use App\Services\TelegramAccount\RequestTelegramAccountMediaDownloadAction;
+use App\Services\TelegramAccount\SyncTelegramAccountInboundMessageAttachmentsAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\ValidationException;
 use Tests\TestCase;
 
@@ -230,6 +236,165 @@ class DialogBlacklistStageBehaviorTest extends TestCase
         $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY, $attachment->download_status);
         $this->assertSame(DialogAutomationGate::REASON_BLACKLIST_STAGE, $attachment->safe_error_code);
         $this->assertNull($attachment->local_path);
+    }
+
+    public function test_operator_can_explicitly_request_blacklist_media_after_warning(): void
+    {
+        [$dialog, $message] = $this->createDialogWithInbound(blacklisted: true, accountChannel: true);
+        $attachment = MessageAttachment::factory()->create([
+            'message_id' => $message->id,
+            'channel_id' => $dialog->channel_id,
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT,
+            'provider_event_key' => $message->provider_event_key,
+            'provider_attachment_key' => 'blacklist-file-manual',
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
+            'provider_file_id' => 'telegram-file-manual',
+            'media_kind' => MessageAttachment::MEDIA_KIND_DOCUMENT,
+            'safe_error_code' => DialogAutomationGate::REASON_BLACKLIST_STAGE,
+        ]);
+        $operator = User::factory()->create();
+
+        $mediaItems = app(ResolveMessageMediaItemsAction::class)->handle($message->fresh(['dialog.dialogStage']));
+
+        $this->assertTrue($mediaItems[0]['manual_download_requires_blacklist_warning']);
+
+        app(RequestTelegramAccountMediaDownloadAction::class)->handle($dialog, $attachment, $operator);
+        $claimed = app(ClaimTelegramAccountMediaDownloadAction::class)->handle($dialog->channel()->firstOrFail());
+
+        $this->assertInstanceOf(MessageAttachment::class, $claimed);
+        $this->assertSame($attachment->id, $claimed->id);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING, $claimed->download_status);
+        $this->assertNotNull($claimed->manual_download_requested_at);
+        $this->assertSame($operator->id, $claimed->manual_download_requested_by_user_id);
+    }
+
+    public function test_replayed_event_does_not_auto_download_media_received_while_dialog_was_blacklisted(): void
+    {
+        [$dialog, $message] = $this->createDialogWithInbound(blacklisted: true, accountChannel: true);
+        $attachment = MessageAttachment::factory()->create([
+            'message_id' => $message->id,
+            'channel_id' => $dialog->channel_id,
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT,
+            'provider_event_key' => $message->provider_event_key,
+            'provider_attachment_key' => 'replayed-blacklist-file',
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
+            'provider_file_id' => 'replayed-blacklist-file',
+            'file_size_bytes' => 1024,
+            'media_kind' => MessageAttachment::MEDIA_KIND_DOCUMENT,
+            'safe_error_code' => DialogAutomationGate::REASON_BLACKLIST_STAGE,
+        ]);
+        $normalStage = DialogStage::query()->where('key', Dialog::STAGE_TRANSFERRED_TO_MPL)->firstOrFail();
+        $dialog->forceFill([
+            'stage' => $normalStage->key,
+            'stage_id' => $normalStage->id,
+        ])->save();
+
+        app(SyncTelegramAccountInboundMessageAttachmentsAction::class)->handle(
+            $message->fresh(['dialog.dialogStage']),
+            new NormalizedInboundMessageEvent(
+                schemaVersion: '1',
+                gatewayEventId: 'replayed-blacklist-event',
+                channelId: (int) $dialog->channel_id,
+                platform: Channel::PLATFORM_TELEGRAM,
+                connectionType: Channel::CONNECTION_TYPE_ACCOUNT,
+                peerType: NormalizedInboundMessageEvent::PEER_TYPE_PRIVATE,
+                peerKey: 'telegram_account:replayed-peer',
+                messageKey: (string) $message->provider_event_key,
+                externalChatId: (string) $dialog->external_chat_id,
+                externalUserId: 'replayed-blacklist-user',
+                externalMessageId: (string) $message->external_message_id,
+                externalUsername: null,
+                contactName: null,
+                messageKind: 'media',
+                text: null,
+                media: [[
+                    'provider_attachment_key' => 'replayed-blacklist-file',
+                    'provider_file_id' => 'replayed-blacklist-file',
+                    'type' => 'document',
+                    'file_size_bytes' => 1024,
+                ]],
+                isArchived: false,
+                rawPayload: [],
+                occurredAt: now(),
+                historySource: NormalizedInboundMessageEvent::HISTORY_SOURCE_LIVE,
+            ),
+        );
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY, $attachment->download_status);
+        $this->assertSame(DialogAutomationGate::REASON_BLACKLIST_STAGE, $attachment->safe_error_code);
+        $this->assertNull(app(ClaimTelegramAccountMediaDownloadAction::class)->handle($dialog->channel()->firstOrFail()));
+    }
+
+    public function test_automatic_media_result_is_discarded_when_dialog_moves_to_blacklist_after_claim(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+        [$dialog, $message] = $this->createDialogWithInbound(accountChannel: true);
+        $attachment = MessageAttachment::factory()->create([
+            'message_id' => $message->id,
+            'channel_id' => $dialog->channel_id,
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT,
+            'provider_event_key' => $message->provider_event_key,
+            'provider_attachment_key' => 'inflight-blacklist-file',
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD,
+            'provider_file_id' => 'inflight-blacklist-file',
+            'file_size_bytes' => 11,
+            'media_kind' => MessageAttachment::MEDIA_KIND_DOCUMENT,
+        ]);
+        $channel = $dialog->channel()->firstOrFail();
+        $claimed = app(ClaimTelegramAccountMediaDownloadAction::class)->handle($channel);
+
+        $this->assertInstanceOf(MessageAttachment::class, $claimed);
+
+        $claimToken = (string) $claimed->media_download_claim_token;
+        $temporaryPath = app(StoreMessageAttachmentLocalFileAction::class)
+            ->buildDirectUploadPath($claimed, $claimToken);
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->put($temporaryPath, 'FILE-BINARY');
+
+        $blacklistStage = $this->blacklistStage();
+        $dialog->forceFill([
+            'stage' => $blacklistStage->key,
+            'stage_id' => $blacklistStage->id,
+        ])->save();
+
+        $resultPayload = [
+            'status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            'upload_strategy' => 'direct_put',
+            'claim_token' => $claimToken,
+            'file_size_bytes' => strlen('FILE-BINARY'),
+            'provider_file_id' => 'inflight-blacklist-file',
+            'mime_type' => 'application/pdf',
+            'original_filename' => 'blocked.pdf',
+        ];
+
+        $resultUrl = route('internal.telegram-account.media-downloads.result', [
+            'channel' => $channel,
+            'attachment' => $attachment,
+        ]);
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+            'X-AB-Media-Claim-Token' => '1',
+        ])->postJson($resultUrl, $resultPayload)
+            ->assertOk()
+            ->assertJsonPath('download_status', MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY);
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+            'X-AB-Media-Claim-Token' => '1',
+        ])->postJson($resultUrl, $resultPayload)
+            ->assertOk()
+            ->assertJsonPath('download_status', MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY);
+
+        $stored = $attachment->fresh();
+
+        $this->assertInstanceOf(MessageAttachment::class, $stored);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY, $stored->download_status);
+        $this->assertSame(DialogAutomationGate::REASON_BLACKLIST_STAGE, $stored->safe_error_code);
+        $this->assertNull($stored->local_path);
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertMissing($temporaryPath);
     }
 
     public function test_bot_media_download_marks_blacklist_media_metadata_only_with_reason(): void

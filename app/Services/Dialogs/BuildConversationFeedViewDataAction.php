@@ -8,9 +8,11 @@ use App\Models\ContactIdentity;
 use App\Models\Message;
 use App\Models\MessageAttachment;
 use App\Models\MessageRevision;
+use App\Models\User;
 use App\Services\Messages\AbRichTextHtmlRenderer;
 use App\Services\Messages\PrepareMessageContentAction;
 use App\Services\Messages\ResolveMessageMediaItemsAction;
+use App\Services\TelegramAccount\TelegramAccountMediaDownloadPolicy;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
@@ -1937,6 +1939,7 @@ class BuildConversationFeedViewDataAction
         return match ($status) {
             'unsupported' => 'Не поддерживается',
             MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY => 'Только метаданные',
+            MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND => 'Доступно для загрузки',
             MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD => 'Ожидает загрузки',
             MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING => 'Загружается',
             MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED => 'Готово',
@@ -1953,6 +1956,7 @@ class BuildConversationFeedViewDataAction
             MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED => 'success',
             MessageAttachment::DOWNLOAD_STATUS_DOWNLOAD_FAILED => 'danger',
             MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING => 'warning',
+            MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND => 'gray',
             MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD => 'gray',
             MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
             MessageAttachment::DOWNLOAD_STATUS_DELETED_LOCAL => 'gray',
@@ -1995,6 +1999,11 @@ class BuildConversationFeedViewDataAction
                 && $attachmentId !== null
                 && $previewKind !== null;
             $displayStatus = $this->resolveConversationMediaDisplayStatus($item, $status);
+            $canRequestManualDownload = (bool) data_get($item, 'can_request_manual_download', false)
+                && $attachmentId !== null
+                && auth()->user() instanceof User
+                && auth()->user()->canReplyInDialogs();
+            $requiresBlacklistWarning = (bool) data_get($item, 'manual_download_requires_blacklist_warning', false);
 
             $items[] = [
                 'source' => (string) data_get($item, 'source', 'unknown'),
@@ -2011,7 +2020,11 @@ class BuildConversationFeedViewDataAction
                 'status_label' => $this->formatConversationMediaStateLabel($displayStatus),
                 'status_tone' => $this->formatConversationMediaStateTone($displayStatus),
                 'show_status' => $this->shouldShowConversationMediaStatus($displayStatus),
-                'error_message' => $this->normalizeMediaBadgeText(data_get($item, 'safe_error_message')),
+                'error_message' => $this->formatConversationMediaErrorMessage($item, $displayStatus),
+                'can_request_manual_download' => $canRequestManualDownload,
+                'manual_download_confirmation' => $canRequestManualDownload
+                    ? $this->formatManualMediaDownloadConfirmation($fileSizeLabel, $requiresBlacklistWarning)
+                    : null,
                 'is_downloadable' => $isDownloadable,
                 'is_previewable' => $isPreviewable,
                 'preview_kind' => $isPreviewable ? $previewKind : null,
@@ -2057,6 +2070,7 @@ class BuildConversationFeedViewDataAction
                 $this->conversationMediaRenderKeyValue($mediaItem['status'] ?? null),
                 $this->conversationMediaRenderKeyValue(! empty($mediaItem['is_previewable'])),
                 $this->conversationMediaRenderKeyValue(! empty($mediaItem['is_downloadable'])),
+                $this->conversationMediaRenderKeyValue(! empty($mediaItem['can_request_manual_download'])),
                 $this->conversationMediaRenderKeyValue(filled($mediaItem['preview_url'] ?? null)),
                 $this->conversationMediaRenderKeyValue(filled($mediaItem['download_url'] ?? null)),
                 $this->conversationMediaRenderKeyValue($mediaItem['error_message'] ?? null),
@@ -2130,7 +2144,45 @@ class BuildConversationFeedViewDataAction
             return 'unsupported';
         }
 
+        if ($errorCode === 'file_too_large') {
+            return MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND;
+        }
+
         return $status;
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     */
+    protected function formatConversationMediaErrorMessage(array $item, string $displayStatus): ?string
+    {
+        if ($displayStatus === MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND) {
+            return null;
+        }
+
+        $errorCode = $this->normalizeMediaBadgeText(data_get($item, 'safe_error_code'));
+
+        return match ($errorCode) {
+            null, 'blacklist_stage' => null,
+            'missing_provider_file_id',
+            TelegramAccountMediaDownloadPolicy::ERROR_TELEGRAM_FILE_NOT_FOUND,
+            TelegramAccountMediaDownloadPolicy::ERROR_TDLIB_FILE_NOT_FOUND => 'Файл больше недоступен в Telegram.',
+            'unsupported_media_kind' => 'Этот формат пока не поддерживается.',
+            default => $displayStatus === MessageAttachment::DOWNLOAD_STATUS_DOWNLOAD_FAILED
+                ? 'Не удалось загрузить файл.'
+                : null,
+        };
+    }
+
+    protected function formatManualMediaDownloadConfirmation(?string $fileSizeLabel, bool $blacklisted): string
+    {
+        $size = $fileSizeLabel ?? 'размер неизвестен';
+
+        if ($blacklisted) {
+            return "Диалог находится в ЧС. Скачать файл вручную ({$size})? Действие может создать расходы на трафик и хранение.";
+        }
+
+        return "Скачать файл вручную ({$size})?";
     }
 
     protected function normalizeMediaAttachmentId(mixed $value): ?int
@@ -2204,7 +2256,12 @@ class BuildConversationFeedViewDataAction
 
     protected function formatMediaFileSizeNumber(float $value): string
     {
-        $formatted = number_format($value, $value >= 10 ? 0 : 1, ',', ' ');
+        $precision = $value >= 10 ? 0 : 1;
+        $formatted = number_format($value, $precision, ',', ' ');
+
+        if ($precision === 0) {
+            return $formatted;
+        }
 
         return rtrim(rtrim($formatted, '0'), ',');
     }

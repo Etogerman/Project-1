@@ -315,7 +315,9 @@ return [
     'telegram_account' => [
         'gateway_shared_secret' => env('TELEGRAM_ACCOUNT_GATEWAY_SHARED_SECRET'),
         'gateway_rate_limit_per_minute' => (int) env('TELEGRAM_ACCOUNT_GATEWAY_RATE_LIMIT_PER_MINUTE', 120),
+        'gateway_media_upload_rate_limit_per_minute' => (int) env('TELEGRAM_ACCOUNT_GATEWAY_MEDIA_UPLOAD_RATE_LIMIT_PER_MINUTE', 600),
         'media_download_max_bytes' => (int) env('TELEGRAM_ACCOUNT_MEDIA_DOWNLOAD_MAX_BYTES', 20 * 1024 * 1024),
+        'media_download_retry_delay_seconds' => (int) env('TELEGRAM_ACCOUNT_MEDIA_DOWNLOAD_RETRY_DELAY_SECONDS', 60),
         'external_outgoing_backfill_days' => (int) env('TELEGRAM_ACCOUNT_EXTERNAL_OUTGOING_BACKFILL_DAYS', 7),
         'external_outgoing_backfill_known_dialogs_only' => true,
         'external_outgoing_echo_deferral_seconds' => (int) env('TELEGRAM_ACCOUNT_EXTERNAL_OUTGOING_ECHO_DEFERRAL_SECONDS', 15),

@@ -1336,6 +1336,8 @@ class FilamentDialogsResourceTest extends TestCase
 
     public function test_dialog_view_renders_operator_attachment_list_with_download_action_only_for_downloaded_file(): void
     {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+
         $admin = User::factory()->create([
             'is_active' => true,
             'is_admin' => true,
@@ -1399,6 +1401,22 @@ class FilamentDialogsResourceTest extends TestCase
             'download_status' => MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD,
             'sort_order' => 1,
         ]);
+        $onDemandAttachment = MessageAttachment::factory()->create([
+            'message_id' => $message->id,
+            'channel_id' => $channel->id,
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT,
+            'provider_event_key' => $message->provider_event_key,
+            'provider_attachment_key' => '2:video:file-3',
+            'provider_file_id' => 'tdlib-video-file-3',
+            'media_kind' => MessageAttachment::MEDIA_KIND_VIDEO,
+            'original_filename' => 'large-video.mp4',
+            'mime_type' => 'video/mp4',
+            'file_size_bytes' => 40 * 1024 * 1024,
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOAD_FAILED,
+            'safe_error_code' => 'file_too_large',
+            'safe_error_message' => 'Telegram Account media file is larger than the local download limit.',
+            'sort_order' => 2,
+        ]);
 
         $component = Livewire::actingAs($admin)
             ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
@@ -1410,9 +1428,17 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('application/pdf · 2 КБ')
             ->assertSee('photo.jpg')
             ->assertSee('Ожидает загрузки')
+            ->assertSee('large-video.mp4')
+            ->assertSee('Доступно для загрузки')
+            ->assertSee('40 МБ')
+            ->assertSee('data-role="conversation-attachment-manual-download"', false)
+            ->assertSee('Скачать вручную')
+            ->assertDontSee('Telegram Account media file is larger than the local download limit.')
             ->assertSee(route('admin.message-attachments.download', ['attachment' => $downloadedAttachment->id]), false)
             ->assertDontSee(route('admin.message-attachments.preview', ['attachment' => $downloadedAttachment->id]), false)
-            ->assertDontSee(route('admin.message-attachments.download', ['attachment' => $pendingAttachment->id]), false);
+            ->assertDontSee(route('admin.message-attachments.download', ['attachment' => $pendingAttachment->id]), false)
+            ->call('requestManualAttachmentDownload', $onDemandAttachment->id)
+            ->assertDispatched('dialog-history-refreshed');
 
         $messages = $component->get('conversationMessages');
 
@@ -1420,6 +1446,33 @@ class FilamentDialogsResourceTest extends TestCase
         $this->assertFalse($messages[0]['media_items'][0]['is_previewable']);
         $this->assertNull($messages[0]['media_items'][0]['preview_kind']);
         $this->assertFalse($messages[0]['media_items'][1]['is_downloadable']);
+        $this->assertFalse($messages[0]['media_items'][2]['is_downloadable']);
+
+        $onDemandAttachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD, $onDemandAttachment->download_status);
+        $this->assertSame($admin->id, $onDemandAttachment->manual_download_requested_by_user_id);
+        $this->assertNotNull($onDemandAttachment->manual_download_requested_at);
+
+        $downloadedPath = MessageAttachment::LOCAL_PATH_PREFIX.'/'.$message->id.'/'.$onDemandAttachment->id.'.mp4';
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->put($downloadedPath, 'VIDEO-BINARY');
+        $onDemandAttachment->forceFill([
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+            'local_path' => $downloadedPath,
+            'extension' => 'mp4',
+            'safe_error_code' => null,
+            'safe_error_message' => null,
+        ])->save();
+
+        $component
+            ->call('refreshDialogViewData')
+            ->assertSee(route('admin.message-attachments.download', ['attachment' => $onDemandAttachment->id]), false);
+
+        $messages = $component->get('conversationMessages');
+
+        $this->assertTrue($messages[0]['media_items'][2]['is_downloadable']);
+        $this->assertFalse($messages[0]['media_items'][2]['can_request_manual_download']);
     }
 
     public function test_dialog_view_renders_previewable_video_as_inline_video_player(): void
@@ -1519,6 +1572,48 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertDontSee('video/mp4 · 0:20 · 4 КБ')
             ->assertSee(route('admin.message-attachments.preview', ['attachment' => $attachment->id]), false)
             ->assertSee(route('admin.message-attachments.download', ['attachment' => $attachment->id]), false);
+    }
+
+    public function test_read_only_employee_cannot_request_manual_media_download(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+        $dialog = $this->createDialogWithMessages();
+        $dialog->channel()->update([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_ACCOUNT,
+        ]);
+        $message = $dialog->messages()->latest('id')->firstOrFail();
+        $attachment = MessageAttachment::factory()->create([
+            'message_id' => $message->id,
+            'channel_id' => $dialog->channel_id,
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT,
+            'provider_event_key' => $message->provider_event_key,
+            'provider_attachment_key' => 'read-only-large-file',
+            'provider_file_id' => 'read-only-large-file',
+            'media_kind' => MessageAttachment::MEDIA_KIND_DOCUMENT,
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND,
+            'safe_error_code' => 'auto_download_limit_exceeded',
+        ]);
+
+        DB::table('role_permissions')
+            ->where('role', User::ROLE_EMPLOYEE)
+            ->where('permission_key', 'dialogs.edit')
+            ->update(['granted' => false]);
+
+        Livewire::actingAs($employee->fresh())
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->assertDontSee('data-role="conversation-attachment-manual-download"', false)
+            ->call('requestManualAttachmentDownload', $attachment->id);
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND, $attachment->download_status);
+        $this->assertNull($attachment->manual_download_requested_at);
+        $this->assertNull($attachment->manual_download_requested_by_user_id);
     }
 
     public function test_dialog_view_renders_previewable_voice_as_inline_audio_player(): void

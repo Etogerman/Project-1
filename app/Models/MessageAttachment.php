@@ -52,6 +52,8 @@ class MessageAttachment extends Model
 
     public const DOWNLOAD_STATUS_METADATA_ONLY = 'metadata_only';
 
+    public const DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND = 'available_on_demand';
+
     public const DOWNLOAD_STATUS_PENDING_DOWNLOAD = 'pending_download';
 
     public const DOWNLOAD_STATUS_DOWNLOADING = 'downloading';
@@ -92,6 +94,12 @@ class MessageAttachment extends Model
         'provider_file_reference',
         'provider_metadata',
         'download_status',
+        'manual_download_requested_at',
+        'manual_download_requested_by_user_id',
+        'media_download_claim_token',
+        'media_download_upload_size_bytes',
+        'media_download_next_retry_at',
+        'media_download_max_bytes',
         'send_status',
         'local_disk',
         'local_path',
@@ -109,6 +117,11 @@ class MessageAttachment extends Model
         'provider_metadata' => 'array',
         'raw_payload_excerpt' => 'array',
         'sort_order' => 'integer',
+        'manual_download_requested_at' => 'datetime',
+        'manual_download_requested_by_user_id' => 'integer',
+        'media_download_upload_size_bytes' => 'integer',
+        'media_download_next_retry_at' => 'datetime',
+        'media_download_max_bytes' => 'integer',
     ];
 
     public static function normalizeMediaKind(mixed $value): string
@@ -542,6 +555,7 @@ class MessageAttachment extends Model
     {
         return [
             self::DOWNLOAD_STATUS_METADATA_ONLY,
+            self::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND,
             self::DOWNLOAD_STATUS_PENDING_DOWNLOAD,
             self::DOWNLOAD_STATUS_DOWNLOADING,
             self::DOWNLOAD_STATUS_DOWNLOADED,
@@ -572,5 +586,10 @@ class MessageAttachment extends Model
     public function channel(): BelongsTo
     {
         return $this->belongsTo(Channel::class);
+    }
+
+    public function manualDownloadRequestedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'manual_download_requested_by_user_id');
     }
 }
