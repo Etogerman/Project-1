@@ -70,6 +70,35 @@ jobs:
           path: public/build
           if-no-files-found: error
 
+  php-minimum-platform:
+    name: php-minimum-platform
+    needs:
+      - determine-ci-scope
+    if: needs.determine-ci-scope.outputs.run_php_tests == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: none
+          tools: composer:v2
+          extensions: mbstring, dom, fileinfo, pgsql, pdo_pgsql
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --prefer-dist --optimize-autoloader
+
+      - name: Verify minimum PHP platform
+        run: composer check-platform-reqs
+
+      - name: Verify generated Filament assets
+        run: git diff --exit-code -- public/css/filament public/js/filament
+
   phpunit-shard-coverage:
     name: phpunit-shard-coverage
     needs:
@@ -215,6 +244,7 @@ jobs:
     needs:
       - determine-ci-scope
       - frontend-build
+      - php-minimum-platform
       - phpunit-shard-coverage
       - phpunit-shards
     if: always()
@@ -226,6 +256,7 @@ jobs:
         env:
           SCOPE_RESULT: ${{ needs.determine-ci-scope.result }}
           FRONTEND_RESULT: ${{ needs.frontend-build.result }}
+          MINIMUM_PLATFORM_RESULT: ${{ needs.php-minimum-platform.result }}
           COVERAGE_RESULT: ${{ needs.phpunit-shard-coverage.result }}
           SHARDS_RESULT: ${{ needs.phpunit-shards.result }}
           RUN_PHP_TESTS: ${{ needs.determine-ci-scope.outputs.run_php_tests }}
@@ -240,6 +271,11 @@ jobs:
           if [ "$RUN_PHP_TESTS" = "true" ]; then
             if [ "$FRONTEND_RESULT" != "success" ]; then
               echo "frontend-build result: $FRONTEND_RESULT"
+              exit 1
+            fi
+
+            if [ "$MINIMUM_PLATFORM_RESULT" != "success" ]; then
+              echo "php-minimum-platform result: $MINIMUM_PLATFORM_RESULT"
               exit 1
             fi
 

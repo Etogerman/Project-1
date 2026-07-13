@@ -35,10 +35,10 @@ AB Connector — операторская платформа для работы
 
 ## Стек
 
-- PHP 8.2+, Laravel 11, PostgreSQL
+- PHP 8.3+, Laravel 13, PostgreSQL
 - Filament 5
 - Tailwind 3, Vite
-- PHPUnit 11
+- PHPUnit 12
 - Playwright
 - текущий queue driver — `database`; долгие side-эффекты предпочтительно уводить из HTTP-запроса в очередь
 
