@@ -12,7 +12,7 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware) {
         $middleware->trustProxies(at: '*');
-        $middleware->validateCsrfTokens(except: [
+        $middleware->preventRequestForgery(except: [
             'webhooks/telegram/*',
             'webhooks/max/*',
             'internal/gateway/telegram-account/*',
