@@ -46,7 +46,7 @@
         type="button"
         class="ac-admin-icon-button"
         aria-label="Переключить тему"
-        onclick="document.documentElement.classList.toggle('dark')"
+        onclick="window.dispatchEvent(new CustomEvent('theme-changed', { detail: document.documentElement.classList.contains('dark') ? 'light' : 'dark' }))"
     >
         <x-filament::icon icon="heroicon-m-moon" class="h-5 w-5" />
     </button>
