@@ -147,7 +147,7 @@ composer test:ci          # CI-агрегированный прогон
 
 ## Справка по framework
 
-Проект остаётся Laravel 11 application, но источник истины по runtime,
+Проект работает на Laravel 13, но источник истины по runtime,
 workflow и integration-контрактам находится в локальных project docs, а не в
 стоковом Laravel boilerplate.
 

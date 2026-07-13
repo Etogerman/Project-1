@@ -89,7 +89,7 @@ VS Code расширения (PHP Intelephense, Laravel, GitLens и др.) ус�
 
 Нужны:
 
-1. `PHP 8.2+`
+1. `PHP 8.3+`
 2. `Composer`
 3. `Node.js` и `npm`
 4. `PostgreSQL`
