@@ -40,6 +40,26 @@ test.describe('Admin smoke', () => {
         await expect(page.getByRole('columnheader', { name: 'Контакт' })).toBeVisible();
     });
 
+    test('selected theme persists across admin navigation', async ({ page }) => {
+        await loginToAdmin(page, admin.email!, admin.password!);
+
+        await page.evaluate(() => window.localStorage.setItem('theme', 'light'));
+        await page.reload();
+
+        await expect(page.locator('html')).not.toHaveClass(/\bdark\b/);
+
+        await page.getByRole('button', { name: 'Переключить тему' }).click();
+
+        await expect.poll(() => page.evaluate(() => window.localStorage.getItem('theme'))).toBe('dark');
+        await expect(page.locator('html')).toHaveClass(/\bdark\b/);
+
+        await page.getByRole('link', { name: 'Контакты', exact: true }).click();
+
+        await expect(page).toHaveURL(/\/admin\/contacts(?:\?.*)?$/);
+        await expect(page.locator('html')).toHaveClass(/\bdark\b/);
+        await expect.poll(() => page.evaluate(() => window.localStorage.getItem('theme'))).toBe('dark');
+    });
+
     test('admin can open a dialog workspace from the dialogs list', async ({ page }) => {
         await loginToAdmin(page, admin.email!, admin.password!);
 

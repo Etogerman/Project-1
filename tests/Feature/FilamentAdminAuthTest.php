@@ -84,6 +84,21 @@ class FilamentAdminAuthTest extends TestCase
             ->assertSee($version);
     }
 
+    public function test_admin_theme_toggle_uses_filament_persistence_event(): void
+    {
+        $user = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
+
+        $this->actingAs($user)
+            ->get('/admin')
+            ->assertOk()
+            ->assertSee("window.dispatchEvent(new CustomEvent('theme-changed'", false)
+            ->assertSee("document.documentElement.classList.contains('dark') ? 'light' : 'dark'", false)
+            ->assertDontSee("classList.toggle('dark')", false);
+    }
+
     public function test_global_search_is_disabled_in_admin_panel(): void
     {
         $this->assertNull(Filament::getPanel('admin')->getGlobalSearchProvider());
