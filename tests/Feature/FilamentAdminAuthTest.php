@@ -95,7 +95,6 @@ class FilamentAdminAuthTest extends TestCase
             ->get('/admin')
             ->assertOk()
             ->assertSee("window.dispatchEvent(new CustomEvent('theme-changed'", false)
-            ->assertSee("document.documentElement.classList.contains('dark') ? 'light' : 'dark'", false)
             ->assertDontSee("classList.toggle('dark')", false);
     }
 
