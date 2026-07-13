@@ -9,10 +9,10 @@
     ],
     "license": "MIT",
     "require": {
-        "php": "^8.2",
+        "php": "^8.3",
         "filament/filament": "^5.0",
-        "laravel/framework": "^11.31",
-        "laravel/tinker": "^2.9",
+        "laravel/framework": "^13.0",
+        "laravel/tinker": "^3.0",
         "league/flysystem-aws-s3-v3": "^3.25.1",
         "phpoffice/phpspreadsheet": "^5.5"
     },
@@ -24,7 +24,7 @@
         "laravel/sail": "^1.26",
         "mockery/mockery": "^1.6",
         "nunomaduro/collision": "^8.1",
-        "phpunit/phpunit": "^11.0.1"
+        "phpunit/phpunit": "^12.0"
     },
     "autoload": {
         "psr-4": {
@@ -40,7 +40,6 @@
     },
     "scripts": {
         "post-autoload-dump": [
-            "@php scripts/fix-framework-pdo-constant.php",
             "Illuminate\\Foundation\\ComposerScripts::postAutoloadDump",
             "@php artisan package:discover --ansi",
             "@php artisan filament:upgrade"
@@ -90,7 +89,9 @@
             "pestphp/pest-plugin": true,
             "php-http/discovery": true
         },
-        "platform": {}
+        "platform": {
+            "php": "8.3.0"
+        }
     },
     "minimum-stability": "stable",
     "prefer-stable": true

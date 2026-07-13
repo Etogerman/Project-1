@@ -6,6 +6,10 @@
 *.md diff=markdown
 *.php diff=php
 
+# Filament publishes vendor-generated assets that may contain semantic trailing spaces.
+/public/css/filament/** -whitespace
+/public/js/filament/** -whitespace
+
 /.github export-ignore
 CHANGELOG.md export-ignore
 .styleci.yml export-ignore
