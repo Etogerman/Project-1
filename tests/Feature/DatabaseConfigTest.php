@@ -41,11 +41,17 @@ class DatabaseConfigTest extends TestCase
         $this->assertStringContainsString('Pdo\\\\Mysql::ATTR_SSL_CA', $configContents);
     }
 
-    public function test_phpunit_bootstrap_patches_framework_database_config_for_php_85(): void
+    public function test_framework_database_config_uses_non_deprecated_mysql_ssl_constant(): void
     {
         $frameworkConfigContents = (string) file_get_contents(base_path('vendor/laravel/framework/config/database.php'));
 
         $this->assertStringNotContainsString('PDO::MYSQL_ATTR_SSL_CA =>', $frameworkConfigContents);
-        $this->assertStringContainsString('Pdo\\Mysql::ATTR_SSL_CA', $frameworkConfigContents);
+        $this->assertTrue(
+            str_contains($frameworkConfigContents, 'Pdo\\Mysql::ATTR_SSL_CA')
+            || (
+                str_contains($frameworkConfigContents, 'use Pdo\\Mysql;')
+                && str_contains($frameworkConfigContents, 'Mysql::ATTR_SSL_CA')
+            ),
+        );
     }
 }
