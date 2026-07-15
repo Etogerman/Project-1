@@ -81,6 +81,15 @@ class RolePermissionCatalog
                         'preparatoryLabel' => null,
                         'preparatoryDescription' => null,
                     ],
+                    [
+                        'code' => 'download_media_manual',
+                        'label' => 'Ручная загрузка медиа',
+                        'description' => 'Запуск ручной загрузки входящих медиафайлов из диалога.',
+                        'isRuntimeActive' => true,
+                        'isPreparatory' => false,
+                        'preparatoryLabel' => null,
+                        'preparatoryDescription' => null,
+                    ],
                 ],
             ],
             [

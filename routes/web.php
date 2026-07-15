@@ -61,6 +61,10 @@ Route::prefix('/internal/gateway/telegram-account/{channel}')
             Route::post('/media-downloads/claim', [TelegramAccountGatewayController::class, 'claimMediaDownload'])
                 ->name('internal.telegram-account.media-downloads.claim');
 
+            Route::post('/media-downloads/{attachment}/heartbeat', [TelegramAccountGatewayController::class, 'heartbeatMediaDownload'])
+                ->whereNumber('attachment')
+                ->name('internal.telegram-account.media-downloads.heartbeat');
+
             Route::post('/media-downloads/{attachment}/result', [TelegramAccountGatewayController::class, 'mediaDownloadResult'])
                 ->whereNumber('attachment')
                 ->name('internal.telegram-account.media-downloads.result');

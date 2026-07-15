@@ -4,6 +4,8 @@ namespace App\Services\TelegramAccount;
 
 use App\Models\Channel;
 use App\Models\MessageAttachment;
+use App\Services\Messages\InboundMediaQuotaExceededException;
+use App\Services\Messages\InboundMediaQuotaLedger;
 use App\Services\Messages\StoreMessageAttachmentLocalFileAction;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
@@ -15,6 +17,7 @@ class StoreTelegramAccountMediaDirectUploadAction
 {
     public function __construct(
         private readonly StoreMessageAttachmentLocalFileAction $storeMessageAttachmentLocalFileAction,
+        private readonly InboundMediaQuotaLedger $quotaLedger,
     ) {}
 
     /**
@@ -26,6 +29,7 @@ class StoreTelegramAccountMediaDirectUploadAction
         string $claimToken,
         mixed $stream,
         ?string $contentRange = null,
+        ?int $contentLength = null,
     ): int {
         if ((int) $attachment->channel_id !== (int) $channel->id) {
             throw new InvalidArgumentException('Direct media upload is not expected for this attachment.');
@@ -45,7 +49,7 @@ class StoreTelegramAccountMediaDirectUploadAction
             ? null
             : $this->parseContentRange($contentRange);
 
-        return DB::transaction(function () use ($attachment, $claimToken, $disk, $stream, $range): int {
+        return DB::transaction(function () use ($attachment, $claimToken, $disk, $stream, $range, $contentLength): int {
             /** @var MessageAttachment $locked */
             $locked = MessageAttachment::query()
                 ->whereKey($attachment->id)
@@ -60,6 +64,13 @@ class StoreTelegramAccountMediaDirectUploadAction
                 throw new InvalidArgumentException('Direct media upload claim token is no longer current.');
             }
 
+            if (
+                $locked->media_download_attempt_deadline_at === null
+                || $locked->media_download_attempt_deadline_at->lte(now())
+            ) {
+                throw new InvalidArgumentException('Direct media upload claim has expired.');
+            }
+
             $path = $this->storeMessageAttachmentLocalFileAction->buildDirectUploadPath($locked, $claimToken);
 
             if ($range !== null) {
@@ -70,31 +81,116 @@ class StoreTelegramAccountMediaDirectUploadAction
                     throw new InvalidArgumentException('Direct media upload declared total size has changed.');
                 }
 
+                try {
+                    $this->quotaLedger->assertCanCompleteAttempt(
+                        $locked,
+                        $locked->mediaDownloadLedgerAttemptNumber(),
+                        $total,
+                    );
+                } catch (InboundMediaQuotaExceededException $exception) {
+                    throw new InboundMediaQuotaExceededException(
+                        $exception->reason,
+                        $this->storedUploadBytes($disk, $path),
+                    );
+                }
+
                 $storedSize = $this->appendChunk($disk, $path, $stream, $start, $end, $total);
 
                 $locked->forceFill([
                     'media_download_upload_size_bytes' => $total,
+                    'media_download_heartbeat_at' => now(),
                     'updated_at' => now(),
                 ])->save();
+
+                $this->quotaLedger->checkpointTraffic(
+                    $locked,
+                    $locked->mediaDownloadLedgerAttemptNumber(),
+                    $storedSize,
+                );
 
                 return $storedSize;
             }
 
-            $stored = Storage::disk($disk)->put($path, $stream);
-
-            if ($stored === false) {
-                throw new RuntimeException('Failed to store direct Telegram Account media upload.');
+            if ($contentLength === null) {
+                throw new InvalidArgumentException('Direct media upload requires Content-Length or Content-Range.');
             }
 
-            $storedSize = (int) Storage::disk($disk)->size($path);
+            if ($contentLength > CreateTelegramAccountMediaUploadTargetAction::LOCAL_UPLOAD_CHUNK_BYTES) {
+                throw new InvalidArgumentException('Direct media upload body exceeds the allowed single-chunk size.');
+            }
+
+            $this->quotaLedger->assertCanCompleteAttempt(
+                $locked,
+                $locked->mediaDownloadLedgerAttemptNumber(),
+                $contentLength,
+            );
+
+            $storedSize = $this->replaceSingleChunk($disk, $path, $stream, $contentLength);
 
             $locked->forceFill([
                 'media_download_upload_size_bytes' => $storedSize,
+                'media_download_heartbeat_at' => now(),
                 'updated_at' => now(),
             ])->save();
 
+            $this->quotaLedger->checkpointTraffic(
+                $locked,
+                $locked->mediaDownloadLedgerAttemptNumber(),
+                $storedSize,
+            );
+
             return $storedSize;
         });
+    }
+
+    /**
+     * @param  resource  $stream
+     */
+    private function replaceSingleChunk(
+        string $disk,
+        string $path,
+        mixed $stream,
+        int $contentLength,
+    ): int {
+        $absolutePath = Storage::disk($disk)->path($path);
+        File::ensureDirectoryExists(dirname($absolutePath));
+        $target = fopen($absolutePath, 'w+b');
+
+        if ($target === false) {
+            throw new RuntimeException('Failed to open direct Telegram Account media upload.');
+        }
+
+        try {
+            if (! flock($target, LOCK_EX)) {
+                throw new RuntimeException('Failed to lock direct Telegram Account media upload.');
+            }
+
+            $copied = $contentLength === 0
+                ? 0
+                : stream_copy_to_stream($stream, $target, $contentLength);
+            $extraByte = fread($stream, 1);
+
+            if ($copied !== $contentLength || $extraByte === false || $extraByte !== '') {
+                throw new InvalidArgumentException('Direct media upload body size does not match Content-Length.');
+            }
+
+            if (! fflush($target)) {
+                throw new RuntimeException('Failed to flush direct Telegram Account media upload.');
+            }
+
+            return $contentLength;
+        } catch (\Throwable $exception) {
+            ftruncate($target, 0);
+
+            throw $exception;
+        } finally {
+            flock($target, LOCK_UN);
+            fclose($target);
+
+            if (isset($exception)) {
+                Storage::disk($disk)->delete($path);
+            }
+        }
     }
 
     /**
@@ -193,5 +289,16 @@ class StoreTelegramAccountMediaDirectUploadAction
         }
 
         return [$start, $end, $total];
+    }
+
+    private function storedUploadBytes(string $disk, string $path): int
+    {
+        try {
+            $storage = Storage::disk($disk);
+
+            return $storage->exists($path) ? max(0, (int) $storage->size($path)) : 0;
+        } catch (\Throwable) {
+            return 0;
+        }
     }
 }

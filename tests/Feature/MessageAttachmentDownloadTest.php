@@ -9,18 +9,219 @@ use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\MessageAttachment;
 use App\Models\User;
+use App\Services\Messages\DeleteRolledBackInboundMediaFileAction;
+use App\Services\Messages\MediaDownloadIntegrityException;
+use App\Services\Messages\MediaDownloadLeaseLostException;
 use App\Services\Messages\StoreMessageAttachmentLocalFileAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
+use Mockery;
+use RuntimeException;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Tests\TestCase;
 
 class MessageAttachmentDownloadTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_display_filename_is_reduced_to_a_normalized_safe_basename(): void
+    {
+        $attachment = new MessageAttachment([
+            'original_filename' => "../../folder/\u{202E}e\u{0301}vil\0.pdf",
+        ]);
+
+        $this->assertSame('évil.pdf', $attachment->original_filename);
+        $this->assertSame('évil.pdf', $attachment->downloadFilename());
+    }
+
+    public function test_store_action_rolls_back_attachment_and_file_when_finalization_fails(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+
+        $attachment = $this->createAttachment([
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
+            'extension' => 'pdf',
+            'mime_type' => 'application/pdf',
+        ]);
+        $path = app(StoreMessageAttachmentLocalFileAction::class)->buildPath($attachment, 'pdf');
+        $stream = fopen('php://temp', 'w+b');
+
+        $this->assertIsResource($stream);
+        fwrite($stream, 'private-pdf-bytes');
+        rewind($stream);
+
+        try {
+            app(StoreMessageAttachmentLocalFileAction::class)->handleStream(
+                $attachment,
+                $stream,
+                strlen('private-pdf-bytes'),
+                'pdf',
+                static function (): void {
+                    throw new RuntimeException('Quota finalization failed.');
+                },
+            );
+
+            $this->fail('Expected quota finalization to fail.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame('Quota finalization failed.', $exception->getMessage());
+        } finally {
+            fclose($stream);
+        }
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING, $attachment->download_status);
+        $this->assertNull($attachment->local_disk);
+        $this->assertNull($attachment->local_path);
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertMissing($path);
+        $this->assertSame(
+            [],
+            Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)
+                ->allFiles(MessageAttachment::LOCAL_PATH_PREFIX.'/'.$attachment->message_id),
+        );
+    }
+
+    public function test_store_action_rejects_a_stream_whose_actual_size_differs_from_declared_size(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+
+        $attachment = $this->createAttachment([
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
+            'extension' => 'pdf',
+            'mime_type' => 'application/pdf',
+        ]);
+        $stream = fopen('php://temp', 'w+b');
+
+        $this->assertIsResource($stream);
+        fwrite($stream, 'private-pdf-bytes');
+        rewind($stream);
+
+        try {
+            app(StoreMessageAttachmentLocalFileAction::class)->handleStream(
+                $attachment,
+                $stream,
+                1,
+                'pdf',
+            );
+
+            $this->fail('Expected stream integrity validation to fail.');
+        } catch (MediaDownloadIntegrityException $exception) {
+            $this->assertSame(
+                'Stored media size does not match the declared file size.',
+                $exception->getMessage(),
+            );
+        } finally {
+            fclose($stream);
+        }
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING, $attachment->download_status);
+        $this->assertNull($attachment->local_disk);
+        $this->assertNull($attachment->local_path);
+        $this->assertSame(
+            [],
+            Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)
+                ->allFiles(MessageAttachment::LOCAL_PATH_PREFIX.'/'.$attachment->message_id),
+        );
+    }
+
+    public function test_store_action_schedules_durable_cleanup_for_a_failed_temporary_file(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+
+        $attachment = $this->createAttachment([
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
+            'extension' => 'pdf',
+            'mime_type' => 'application/pdf',
+        ]);
+        $cleanup = Mockery::mock(DeleteRolledBackInboundMediaFileAction::class);
+        $cleanup->shouldReceive('handle')
+            ->once()
+            ->withArgs(function (int $attachmentId, string $disk, string $path) use ($attachment): bool {
+                return $attachmentId === (int) $attachment->getKey()
+                    && $disk === MessageAttachment::LOCAL_DISK_PRIVATE
+                    && str_contains($path, '.partial.');
+            })
+            ->andReturnFalse();
+        $stream = fopen('php://temp', 'w+b');
+
+        $this->assertIsResource($stream);
+        fwrite($stream, 'private-pdf-bytes');
+        rewind($stream);
+
+        try {
+            (new StoreMessageAttachmentLocalFileAction($cleanup))->handleStream(
+                $attachment,
+                $stream,
+                1,
+                'pdf',
+            );
+
+            $this->fail('Expected stream integrity validation to fail.');
+        } catch (MediaDownloadIntegrityException) {
+            $this->assertTrue(true);
+        } finally {
+            fclose($stream);
+        }
+    }
+
+    public function test_claimed_store_rejects_an_expired_lease_at_final_publish(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+
+        $attachment = $this->createAttachment([
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
+            'extension' => 'pdf',
+            'mime_type' => 'application/pdf',
+            'media_download_claim_token' => 'expired-claim',
+            'media_download_attempt_deadline_at' => now()->subSecond(),
+        ]);
+        $stream = fopen('php://temp', 'w+b');
+
+        $this->assertIsResource($stream);
+        fwrite($stream, 'private-pdf-bytes');
+        rewind($stream);
+
+        try {
+            app(StoreMessageAttachmentLocalFileAction::class)->handleStream(
+                $attachment,
+                $stream,
+                strlen('private-pdf-bytes'),
+                'pdf',
+                expectedClaimToken: 'expired-claim',
+            );
+
+            $this->fail('Expected the expired media lease to be rejected.');
+        } catch (MediaDownloadLeaseLostException) {
+            $this->assertTrue(true);
+        } finally {
+            fclose($stream);
+        }
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING, $attachment->download_status);
+        $this->assertNull($attachment->local_path);
+    }
+
+    public function test_claimed_stable_paths_are_isolated_by_generation_and_claim(): void
+    {
+        $attachment = $this->createAttachment([
+            'media_download_generation' => 2,
+        ]);
+        $action = app(StoreMessageAttachmentLocalFileAction::class);
+
+        $firstPath = $action->buildClaimedPath($attachment, 'pdf', 'claim-one');
+        $secondPath = $action->buildClaimedPath($attachment, 'pdf', 'claim-two');
+
+        $this->assertNotSame($firstPath, $secondPath);
+        $this->assertStringContainsString('.g2.claim-one.pdf', $firstPath);
+        $this->assertStringContainsString('.g2.claim-two.pdf', $secondPath);
+    }
 
     public function test_user_with_dialog_view_permission_can_download_private_attachment(): void
     {
@@ -55,7 +256,7 @@ class MessageAttachmentDownloadTest extends TestCase
         $this->assertSame('application/pdf', $response->headers->get('Content-Type'));
         $this->assertSame('nosniff', $response->headers->get('X-Content-Type-Options'));
         $this->assertStringContainsString(
-            'report-final.pdf',
+            'final.pdf',
             (string) $response->headers->get('Content-Disposition'),
         );
     }

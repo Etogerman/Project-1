@@ -16,10 +16,10 @@ use App\Services\Bots\ResolveChannelConnectionCheckerHealthAction;
 use App\Services\Bots\SyncChannelBotMetadataAction;
 use App\Services\Dialogs\BuildConversationFeedViewDataAction;
 use App\Services\Dialogs\MessageChronology;
+use App\Services\Messages\InboundMediaDownloadPolicy;
 use App\Services\Scenarios\ScenarioRegistry;
 use App\Services\Scenarios\SyncChannelScenarioBindingsAction;
 use App\Services\TelegramAccount\ResolveTelegramAccountGatewayDiagnosticsAction;
-use App\Services\TelegramAccount\TelegramAccountMediaDownloadPolicy;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Actions\EditAction;
@@ -173,7 +173,7 @@ class ChannelResource extends Resource
                             ->label('Синхронизация исходящих из Telegram')
                             ->default(false)
                             ->visible(fn (?Channel $record): bool => $record?->isAccountConnection() ?? false),
-                        TextInput::make('telegram_account_media_auto_download_max_mb')
+                        TextInput::make('inbound_media_auto_download_max_mb')
                             ->label('Автозагрузка медиа до')
                             ->numeric()
                             ->minValue(0)
@@ -181,8 +181,13 @@ class ChannelResource extends Resource
                             ->step(1)
                             ->suffix('МБ')
                             ->placeholder('20')
-                            ->helperText('Более крупные файлы останутся в диалоге и будут доступны для ручной загрузки.')
-                            ->visible(fn (?Channel $record): bool => $record?->isAccountConnection() ?? false),
+                            ->helperText('Более крупные файлы останутся в диалоге. Ручное действие управляется переключателем ниже.')
+                            ->visible(fn (?Channel $record): bool => $record?->supportsInboundMediaOnDemand() ?? false),
+                        Toggle::make('inbound_media_on_demand_enabled')
+                            ->label('Ручная загрузка крупных медиа')
+                            ->helperText('Показывает оператору действие «Скачать вручную». Включайте после обновления Gateway.')
+                            ->default(false)
+                            ->visible(fn (?Channel $record): bool => $record?->supportsInboundMediaOnDemand() ?? false),
                     ])
                     ->columnSpanFull()
                     ->columns(2),
@@ -881,11 +886,18 @@ class ChannelResource extends Resource
                         ],
                         'is_active' => $record->is_active ? '1' : '0',
                         'sync_external_outgoing_enabled' => (bool) $record->sync_external_outgoing_enabled,
-                        'telegram_account_media_auto_download_max_mb' => (int) round(
-                            ($record->telegram_account_media_auto_download_max_bytes
+                        'inbound_media_on_demand_enabled' => $record->inbound_media_on_demand_enabled
+                            ?? ($record->isAccountConnection()
+                                ? (bool) $record->telegram_account_media_on_demand_enabled
+                                : false),
+                        'inbound_media_auto_download_max_mb' => (int) round(
+                            ($record->inbound_media_auto_download_max_bytes
+                                ?? $record->telegram_account_media_auto_download_max_bytes
                                 ?? config(
-                                    'bots.telegram_account.media_download_max_bytes',
-                                    TelegramAccountMediaDownloadPolicy::DEFAULT_AUTO_DOWNLOAD_MAX_BYTES,
+                                    $record->isAccountConnection()
+                                        ? 'bots.telegram_account.media_download_max_bytes'
+                                        : 'bots.media.download_max_bytes',
+                                    InboundMediaDownloadPolicy::DEFAULT_AUTO_DOWNLOAD_MAX_BYTES,
                                 )) / 1024 / 1024,
                         ),
                     ])
@@ -1104,6 +1116,7 @@ class ChannelResource extends Resource
         }
 
         $data = static::syncChannelConnectionTypeData($data);
+        $data = static::mutateInboundMediaSettings($data, $record);
         $token = trim((string) data_get($data, 'credentials.token', ''));
         $credentials = $record?->readableCredentials() ?? [];
 
@@ -1143,10 +1156,25 @@ class ChannelResource extends Resource
             ? filter_var(data_get($data, 'sync_external_outgoing_enabled'), FILTER_VALIDATE_BOOLEAN)
             : (bool) $record->sync_external_outgoing_enabled;
 
-        $autoDownloadMaxBytes = $record->telegram_account_media_auto_download_max_bytes;
+        $mediaOnDemandEnabled = array_key_exists('inbound_media_on_demand_enabled', $data)
+            ? filter_var(data_get($data, 'inbound_media_on_demand_enabled'), FILTER_VALIDATE_BOOLEAN)
+            : (array_key_exists('telegram_account_media_on_demand_enabled', $data)
+                ? filter_var(data_get($data, 'telegram_account_media_on_demand_enabled'), FILTER_VALIDATE_BOOLEAN)
+                : (bool) ($record->inbound_media_on_demand_enabled
+                    ?? $record->telegram_account_media_on_demand_enabled));
 
-        if (array_key_exists('telegram_account_media_auto_download_max_mb', $data)) {
-            $autoDownloadMaxMb = data_get($data, 'telegram_account_media_auto_download_max_mb');
+        $autoDownloadMaxBytes = $record->inbound_media_auto_download_max_bytes
+            ?? $record->telegram_account_media_auto_download_max_bytes;
+
+        if (
+            array_key_exists('inbound_media_auto_download_max_mb', $data)
+            || array_key_exists('telegram_account_media_auto_download_max_mb', $data)
+        ) {
+            $autoDownloadMaxMb = data_get(
+                $data,
+                'inbound_media_auto_download_max_mb',
+                data_get($data, 'telegram_account_media_auto_download_max_mb'),
+            );
             $autoDownloadMaxBytes = filled($autoDownloadMaxMb)
                 ? max(0, (int) $autoDownloadMaxMb) * 1024 * 1024
                 : null;
@@ -1156,8 +1184,53 @@ class ChannelResource extends Resource
             'name' => (string) data_get($data, 'name', $record->name),
             'auto_reply_mode' => $autoReplyMode,
             'sync_external_outgoing_enabled' => $syncExternalOutgoingEnabled,
+            'inbound_media_on_demand_enabled' => $mediaOnDemandEnabled,
+            'inbound_media_auto_download_max_bytes' => $autoDownloadMaxBytes,
+            'telegram_account_media_on_demand_enabled' => $mediaOnDemandEnabled,
             'telegram_account_media_auto_download_max_bytes' => $autoDownloadMaxBytes,
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    protected static function mutateInboundMediaSettings(array $data, ?Channel $record): array
+    {
+        $supportsInboundMedia = $record?->supportsInboundMediaOnDemand()
+            ?? (
+                in_array((string) data_get($data, 'platform'), [Channel::PLATFORM_TELEGRAM, Channel::PLATFORM_MAX], true)
+                && (string) data_get($data, 'connection_type') === Channel::CONNECTION_TYPE_BOT
+            );
+
+        $autoDownloadMaxMb = data_get($data, 'inbound_media_auto_download_max_mb');
+        $onDemandEnabled = array_key_exists('inbound_media_on_demand_enabled', $data)
+            ? filter_var(data_get($data, 'inbound_media_on_demand_enabled'), FILTER_VALIDATE_BOOLEAN)
+            : $record?->inbound_media_on_demand_enabled;
+
+        Arr::forget($data, [
+            'inbound_media_auto_download_max_mb',
+            'telegram_account_media_auto_download_max_mb',
+            'telegram_account_media_on_demand_enabled',
+        ]);
+
+        if (! $supportsInboundMedia) {
+            Arr::forget($data, 'inbound_media_on_demand_enabled');
+
+            return $data;
+        }
+
+        $data['inbound_media_on_demand_enabled'] = (bool) $onDemandEnabled;
+
+        if ($autoDownloadMaxMb !== null) {
+            $data['inbound_media_auto_download_max_bytes'] = filled($autoDownloadMaxMb)
+                ? max(0, (int) $autoDownloadMaxMb) * 1024 * 1024
+                : null;
+        } elseif ($record instanceof Channel) {
+            $data['inbound_media_auto_download_max_bytes'] = $record->inbound_media_auto_download_max_bytes;
+        }
+
+        return $data;
     }
 
     /**

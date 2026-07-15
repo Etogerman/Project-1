@@ -3,6 +3,8 @@
 namespace App\Console\Commands;
 
 use App\Models\MessageAttachment;
+use App\Services\Messages\InboundMediaQuotaLedger;
+use App\Services\Messages\ReconcileInboundMediaStorageAction;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -11,11 +13,17 @@ use Throwable;
 class AuditMessageAttachmentStorageCommand extends Command
 {
     protected $signature = 'message-attachments:audit-storage
-        {--repair : Reset missing downloaded attachments to a retryable state}
+        {--repair : Mark missing local files as deleted and release their storage quota}
         {--limit=500 : Maximum downloaded attachments to inspect}
         {--attachment=* : Limit audit to one or more attachment IDs}';
 
     protected $description = 'Audit downloaded message attachments and optionally repair stale database pointers.';
+
+    public function __construct(
+        private readonly InboundMediaQuotaLedger $quotaLedger,
+    ) {
+        parent::__construct();
+    }
 
     public function handle(): int
     {
@@ -42,9 +50,6 @@ class AuditMessageAttachmentStorageCommand extends Command
                 'download_status',
                 'local_disk',
                 'local_path',
-                'provider_file_id',
-                'provider_file_reference',
-                'provider_attachment_key',
             ]);
 
         try {
@@ -75,18 +80,14 @@ class AuditMessageAttachmentStorageCommand extends Command
         }
 
         $this->table(
-            ['ID', 'Message', 'Provider', 'Kind', 'Disk', 'Path', 'Repair target'],
+            ['ID', 'Message', 'Provider', 'Kind', 'Repair target'],
             $missing
                 ->map(fn (MessageAttachment $attachment): array => [
                     (string) $attachment->id,
                     (string) $attachment->message_id,
                     (string) $attachment->provider,
                     (string) $attachment->media_kind,
-                    (string) $attachment->local_disk,
-                    (string) $attachment->local_path,
-                    $this->canRetryDownload($attachment)
-                        ? MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD
-                        : MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
+                    MessageAttachment::DOWNLOAD_STATUS_DELETED_LOCAL,
                 ])
                 ->all(),
         );
@@ -172,74 +173,20 @@ class AuditMessageAttachmentStorageCommand extends Command
                 return null;
             }
 
-            $targetStatus = $this->canRetryDownload($attachment)
-                ? MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD
-                : MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY;
-
             $attachment->forceFill([
-                'download_status' => $targetStatus,
+                'download_status' => MessageAttachment::DOWNLOAD_STATUS_DELETED_LOCAL,
                 'local_disk' => null,
                 'local_path' => null,
-                'safe_error_code' => 'local_file_missing',
-                'safe_error_message' => $targetStatus === MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD
-                    ? 'Stored media file is missing; attachment was queued for re-download.'
-                    : 'Stored media file is missing and there is not enough provider data for automatic re-download.',
+                'safe_error_code' => ReconcileInboundMediaStorageAction::REASON_LOCAL_FILE_MISSING,
+                'safe_error_message' => 'Локальная копия файла отсутствует.',
             ])->save();
 
-            return $targetStatus;
+            $this->quotaLedger->releaseUsedStorageAfterDeletion(
+                $attachment,
+                ReconcileInboundMediaStorageAction::REASON_LOCAL_FILE_MISSING,
+            );
+
+            return MessageAttachment::DOWNLOAD_STATUS_DELETED_LOCAL;
         });
-    }
-
-    private function canRetryDownload(MessageAttachment $attachment): bool
-    {
-        return match ($attachment->provider) {
-            MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT => $this->isSupportedTelegramAccountAttachment($attachment)
-                && filled($attachment->provider_file_id),
-            MessageAttachment::PROVIDER_TELEGRAM_BOT => $this->isSupportedTelegramBotAttachment($attachment)
-                && filled($attachment->provider_file_id),
-            MessageAttachment::PROVIDER_MAX_BOT => $this->isSupportedMaxBotAttachment($attachment)
-                && (filled($attachment->provider_file_reference) || filled($attachment->provider_attachment_key)),
-            default => false,
-        };
-    }
-
-    private function isSupportedTelegramAccountAttachment(MessageAttachment $attachment): bool
-    {
-        return in_array($attachment->media_kind, [
-            MessageAttachment::MEDIA_KIND_IMAGE,
-            MessageAttachment::MEDIA_KIND_DOCUMENT,
-            MessageAttachment::MEDIA_KIND_VIDEO,
-            MessageAttachment::MEDIA_KIND_VIDEO_NOTE,
-            MessageAttachment::MEDIA_KIND_AUDIO,
-            MessageAttachment::MEDIA_KIND_VOICE,
-            MessageAttachment::MEDIA_KIND_STICKER,
-            MessageAttachment::MEDIA_KIND_ANIMATION,
-        ], true);
-    }
-
-    private function isSupportedTelegramBotAttachment(MessageAttachment $attachment): bool
-    {
-        return in_array($attachment->media_kind, [
-            MessageAttachment::MEDIA_KIND_IMAGE,
-            MessageAttachment::MEDIA_KIND_DOCUMENT,
-            MessageAttachment::MEDIA_KIND_VIDEO,
-            MessageAttachment::MEDIA_KIND_VIDEO_NOTE,
-            MessageAttachment::MEDIA_KIND_AUDIO,
-            MessageAttachment::MEDIA_KIND_VOICE,
-            MessageAttachment::MEDIA_KIND_STICKER,
-            MessageAttachment::MEDIA_KIND_ANIMATION,
-        ], true);
-    }
-
-    private function isSupportedMaxBotAttachment(MessageAttachment $attachment): bool
-    {
-        return in_array($attachment->media_kind, [
-            MessageAttachment::MEDIA_KIND_IMAGE,
-            MessageAttachment::MEDIA_KIND_DOCUMENT,
-            MessageAttachment::MEDIA_KIND_VIDEO,
-            MessageAttachment::MEDIA_KIND_VIDEO_NOTE,
-            MessageAttachment::MEDIA_KIND_AUDIO,
-            MessageAttachment::MEDIA_KIND_STICKER,
-        ], true);
     }
 }

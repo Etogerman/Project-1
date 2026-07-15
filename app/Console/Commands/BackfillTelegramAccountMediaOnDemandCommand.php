@@ -7,6 +7,7 @@ use App\Services\TelegramAccount\ClaimTelegramAccountMediaDownloadAction;
 use App\Services\TelegramAccount\TelegramAccountMediaDownloadPolicy;
 use Illuminate\Console\Command;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\DB;
 
 class BackfillTelegramAccountMediaOnDemandCommand extends Command
 {
@@ -45,14 +46,30 @@ class BackfillTelegramAccountMediaOnDemandCommand extends Command
             return self::SUCCESS;
         }
 
-        $updated = $query->update([
-            'download_status' => MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND,
-            'safe_error_code' => TelegramAccountMediaDownloadPolicy::ERROR_AUTO_DOWNLOAD_LIMIT_EXCEEDED,
-            'safe_error_message' => null,
-            'local_disk' => null,
-            'local_path' => null,
-            'updated_at' => now(),
-        ]);
+        $updated = 0;
+        $query->chunkById(200, function ($attachments) use (&$updated): void {
+            foreach ($attachments as $attachment) {
+                DB::transaction(function () use ($attachment, &$updated): void {
+                    $locked = $this->eligibleAttachmentsQuery([])
+                        ->whereKey($attachment->getKey())
+                        ->lockForUpdate()
+                        ->first();
+
+                    if (! $locked instanceof MessageAttachment) {
+                        return;
+                    }
+
+                    $locked->forceFill([
+                        'download_status' => MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND,
+                        'safe_error_code' => TelegramAccountMediaDownloadPolicy::ERROR_AUTO_DOWNLOAD_LIMIT_EXCEEDED,
+                        'safe_error_message' => null,
+                        'local_disk' => null,
+                        'local_path' => null,
+                    ])->save();
+                    $updated++;
+                });
+            }
+        });
 
         $this->info("Преобразовано вложений: {$updated}.");
 
@@ -68,6 +85,9 @@ class BackfillTelegramAccountMediaOnDemandCommand extends Command
             ->where('provider', MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT)
             ->where('download_status', MessageAttachment::DOWNLOAD_STATUS_DOWNLOAD_FAILED)
             ->where('safe_error_code', ClaimTelegramAccountMediaDownloadAction::ERROR_FILE_TOO_LARGE)
+            ->whereNull('manual_download_requested_at')
+            ->whereNull('local_disk')
+            ->whereNull('local_path')
             ->where(function (Builder $query): void {
                 $query
                     ->whereNotNull('provider_file_id')

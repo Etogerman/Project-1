@@ -634,29 +634,41 @@
                                                 </a>
                                             @endif
 
-                                            @if (! empty($mediaItem['can_request_manual_download']) && filled($mediaItem['attachment_id'] ?? null))
-                                                <button
-                                                    type="button"
-                                                    data-role="conversation-attachment-manual-download"
-                                                    class="ac-message-attachment__download ac-message-attachment__download--button"
-                                                    wire:click="requestManualAttachmentDownload({{ (int) $mediaItem['attachment_id'] }})"
-                                                    wire:confirm="{{ $mediaItem['manual_download_confirmation'] ?? 'Загрузить этот файл вручную?' }}"
-                                                    wire:loading.attr="disabled"
-                                                    wire:target="requestManualAttachmentDownload({{ (int) $mediaItem['attachment_id'] }})"
-                                                >
-                                                    <x-filament::icon
-                                                        icon="heroicon-m-arrow-down-tray"
-                                                        wire:loading.remove
+                                            @if (! empty($mediaItem['show_manual_download_action']) && filled($mediaItem['attachment_id'] ?? null))
+                                                @if (! empty($mediaItem['can_request_manual_download']))
+                                                    <button
+                                                        type="button"
+                                                        data-role="conversation-attachment-manual-download"
+                                                        class="ac-message-attachment__download ac-message-attachment__download--button"
+                                                        wire:click="requestManualAttachmentDownload({{ (int) $mediaItem['attachment_id'] }})"
+                                                        wire:loading.attr="disabled"
                                                         wire:target="requestManualAttachmentDownload({{ (int) $mediaItem['attachment_id'] }})"
-                                                    />
-                                                    <x-filament::icon
-                                                        icon="heroicon-m-arrow-path"
-                                                        class="animate-spin"
-                                                        wire:loading
-                                                        wire:target="requestManualAttachmentDownload({{ (int) $mediaItem['attachment_id'] }})"
-                                                    />
-                                                    <span>Скачать вручную</span>
-                                                </button>
+                                                    >
+                                                        <x-filament::icon
+                                                            icon="heroicon-m-arrow-down-tray"
+                                                            wire:loading.remove
+                                                            wire:target="requestManualAttachmentDownload({{ (int) $mediaItem['attachment_id'] }})"
+                                                        />
+                                                        <x-filament::icon
+                                                            icon="heroicon-m-arrow-path"
+                                                            class="animate-spin"
+                                                            wire:loading
+                                                            wire:target="requestManualAttachmentDownload({{ (int) $mediaItem['attachment_id'] }})"
+                                                        />
+                                                        <span>Скачать вручную</span>
+                                                    </button>
+                                                @else
+                                                    <button
+                                                        type="button"
+                                                        data-role="conversation-attachment-manual-download-disabled"
+                                                        class="ac-message-attachment__download ac-message-attachment__download--button"
+                                                        title="{{ $mediaItem['manual_download_unavailable_reason'] ?? 'Ручная загрузка недоступна.' }}"
+                                                        disabled
+                                                    >
+                                                        <x-filament::icon icon="heroicon-m-arrow-down-tray" />
+                                                        <span>Скачать вручную</span>
+                                                    </button>
+                                                @endif
                                             @endif
                                             </div>
                                         @endif

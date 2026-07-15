@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Data\TelegramAccount\NormalizedExternalOutgoingMessageEvent;
 use App\Data\TelegramAccount\TelegramAccountGatewayDiagnosticsData;
+use App\Http\Controllers\TelegramAccountGatewayController;
 use App\Jobs\ProcessAutoReplyJob;
 use App\Jobs\ProcessDataCollectionQuestionJob;
 use App\Jobs\ProcessDataCollectionResponseJob;
@@ -19,6 +20,7 @@ use App\Models\ChannelRuntimeState;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\Dialog;
+use App\Models\MediaDownloadTrafficLedger;
 use App\Models\Message;
 use App\Models\MessageAttachment;
 use App\Models\Scenario;
@@ -30,6 +32,8 @@ use App\Models\User;
 use App\Services\Bitrix24\IsMessageReadyForBitrix24LiveExportAction;
 use App\Services\Bots\SendManualDialogReplyAction;
 use App\Services\Messages\AbRichTextHtmlRenderer;
+use App\Services\Messages\InboundMediaDownloadPolicy;
+use App\Services\Messages\ReapStaleInboundMediaDownloadsAction;
 use App\Services\Messages\StoreMessageAttachmentLocalFileAction;
 use App\Services\Scenarios\ScenarioRegistry;
 use App\Services\TelegramAccount\NormalizeTelegramAccountExternalOutgoingMessageEventAction;
@@ -1585,7 +1589,7 @@ class TelegramAccountGatewayControllerTest extends TestCase
             ],
         );
 
-        $this->withHeaders([
+        $claimResponse = $this->withHeaders([
             'Authorization' => 'Bearer gateway-secret',
             'X-AB-Media-Claim-Token' => '1',
         ])->postJson(route('internal.telegram-account.media-downloads.claim', ['channel' => $channel]))
@@ -1599,6 +1603,11 @@ class TelegramAccountGatewayControllerTest extends TestCase
             ->assertJsonPath('media_download.attempt', 1)
             ->assertJsonPath('media_download.download_mode', 'automatic')
             ->assertJsonPath('media_download.max_bytes', 20 * 1024 * 1024);
+
+        $claimTimeoutSeconds = (int) $claimResponse->json('media_download.claim_timeout_seconds');
+
+        $this->assertGreaterThanOrEqual(129 * 60, $claimTimeoutSeconds);
+        $this->assertLessThanOrEqual(130 * 60, $claimTimeoutSeconds);
 
         $attachment->refresh();
 
@@ -1689,7 +1698,7 @@ class TelegramAccountGatewayControllerTest extends TestCase
         $this->assertNull($attachment->safe_error_message);
     }
 
-    public function test_legacy_gateway_can_complete_small_automatic_download_without_claim_token(): void
+    public function test_legacy_gateway_cannot_receive_new_claim_and_late_tokenless_result_cannot_finish_current_claim(): void
     {
         Queue::fake();
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
@@ -1714,14 +1723,26 @@ class TelegramAccountGatewayControllerTest extends TestCase
             'X-AB-Media-Claim-Token' => '0',
         ])->postJson(route('internal.telegram-account.media-downloads.claim', ['channel' => $channel]))
             ->assertOk()
-            ->assertJsonPath('has_download', true)
-            ->assertJsonMissingPath('media_download.claim_token')
-            ->assertJsonMissingPath('media_download.upload');
+            ->assertJsonPath('has_download', false)
+            ->assertJsonPath('reason', TelegramAccountGatewayController::MEDIA_CLAIM_TOKEN_REQUIRED_REASON);
 
-        $this->assertNull($attachment->fresh()->media_download_claim_token);
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD, $attachment->download_status);
+        $this->assertSame(0, $attachment->media_download_attempts);
+        $this->assertNull($attachment->media_download_claim_token);
 
         $this->withHeaders([
             'Authorization' => 'Bearer gateway-secret',
+            'X-AB-Media-Claim-Token' => '1',
+        ])->postJson(route('internal.telegram-account.media-downloads.claim', ['channel' => $channel]))
+            ->assertOk()
+            ->assertJsonPath('has_download', true)
+            ->assertJsonStructure(['media_download' => ['claim_token', 'upload']]);
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+            'Accept' => 'application/json',
         ])->post(route('internal.telegram-account.media-downloads.result', [
             'channel' => $channel,
             'attachment' => $attachment,
@@ -1730,12 +1751,13 @@ class TelegramAccountGatewayControllerTest extends TestCase
             'file' => UploadedFile::fake()->createWithContent('legacy.pdf', 'LEGACY-BINARY'),
             'mime_type' => 'application/pdf',
             'original_filename' => 'legacy.pdf',
-        ])->assertOk()
-            ->assertJsonPath('download_status', MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED);
+        ])->assertUnprocessable();
 
         $attachment->refresh();
 
-        $this->assertSame('LEGACY-BINARY', Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->get((string) $attachment->local_path));
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING, $attachment->download_status);
+        $this->assertNotNull($attachment->media_download_claim_token);
+        $this->assertNull($attachment->local_path);
     }
 
     public function test_token_aware_claim_rejects_result_without_current_claim_token(): void
@@ -1806,7 +1828,8 @@ class TelegramAccountGatewayControllerTest extends TestCase
             'X-AB-Media-Claim-Token' => '0',
         ])->postJson(route('internal.telegram-account.media-downloads.claim', ['channel' => $channel]))
             ->assertOk()
-            ->assertJsonPath('has_download', false);
+            ->assertJsonPath('has_download', false)
+            ->assertJsonPath('reason', TelegramAccountGatewayController::MEDIA_CLAIM_TOKEN_REQUIRED_REASON);
 
         $attachment->refresh();
 
@@ -1815,7 +1838,7 @@ class TelegramAccountGatewayControllerTest extends TestCase
         $this->assertNull($attachment->media_download_claim_token);
     }
 
-    public function test_legacy_automatic_claim_keeps_short_stale_recovery_window(): void
+    public function test_token_aware_gateway_recovers_stale_legacy_claim_with_new_token(): void
     {
         Queue::fake();
         config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
@@ -1832,12 +1855,15 @@ class TelegramAccountGatewayControllerTest extends TestCase
             ]],
         );
 
-        $this->withHeaders([
-            'Authorization' => 'Bearer gateway-secret',
-            'X-AB-Media-Claim-Token' => '0',
-        ])->postJson(route('internal.telegram-account.media-downloads.claim', ['channel' => $channel]))
-            ->assertOk()
-            ->assertJsonPath('has_download', true);
+        $attachment->forceFill([
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
+            'media_download_attempts' => 1,
+            'media_download_trigger' => 'auto',
+            'media_download_claim_token' => null,
+            'media_download_claimed_at' => now()->subMinutes(11),
+            'media_download_heartbeat_at' => now()->subMinutes(11),
+            'media_download_attempt_deadline_at' => now()->addHour(),
+        ])->save();
 
         DB::table('message_attachments')
             ->where('id', $attachment->id)
@@ -1845,19 +1871,68 @@ class TelegramAccountGatewayControllerTest extends TestCase
 
         $this->withHeaders([
             'Authorization' => 'Bearer gateway-secret',
-            'X-AB-Media-Claim-Token' => '0',
+            'X-AB-Media-Claim-Token' => '1',
         ])->postJson(route('internal.telegram-account.media-downloads.claim', ['channel' => $channel]))
             ->assertOk()
             ->assertJsonPath('has_download', true)
-            ->assertJsonPath('media_download.attachment_id', $attachment->id);
+            ->assertJsonPath('media_download.attachment_id', $attachment->id)
+            ->assertJsonStructure(['media_download' => ['claim_token', 'upload']]);
 
         $attachment->refresh();
 
         $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING, $attachment->download_status);
-        $this->assertNull($attachment->media_download_claim_token);
+        $this->assertNotNull($attachment->media_download_claim_token);
     }
 
     public function test_upload_target_failure_releases_token_aware_claim_for_retry(): void
+    {
+        Queue::fake();
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+        Carbon::setTestNow(Carbon::parse('2026-07-15 00:15:00', 'Europe/Moscow'));
+
+        try {
+            $channel = $this->createTelegramAccountChannel();
+            $attachment = $this->createPendingTelegramAccountMediaAttachment(
+                $channel,
+                externalChatId: '700158',
+                externalMessageId: '900158',
+                media: [[
+                    'type' => 'document',
+                    'telegram_file_id' => 'tdlib-target-doc-158',
+                    'file_size_bytes' => 12,
+                ]],
+            );
+
+            config()->set('filesystems.disks.local.driver', 'unsupported');
+
+            $this->withHeaders([
+                'Authorization' => 'Bearer gateway-secret',
+                'X-AB-Media-Claim-Token' => '1',
+            ])->postJson(route('internal.telegram-account.media-downloads.claim', ['channel' => $channel]))
+                ->assertServerError();
+
+            $attachment->refresh();
+
+            $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD, $attachment->download_status);
+            $this->assertNull($attachment->media_download_claim_token);
+            $this->assertSame(1, $attachment->media_download_attempts);
+            $this->assertNotNull($attachment->media_download_next_retry_at);
+            $this->assertTrue($attachment->media_download_next_retry_at->equalTo(now()->addMinute()));
+            $this->assertSame('upload_target_unavailable', $attachment->safe_error_code);
+
+            $this->withHeaders([
+                'Authorization' => 'Bearer gateway-secret',
+                'X-AB-Media-Claim-Token' => '1',
+            ])->postJson(route('internal.telegram-account.media-downloads.claim', ['channel' => $channel]))
+                ->assertOk()
+                ->assertJsonPath('has_download', false);
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_upload_target_failure_exhausts_final_retry_without_reclaim_loop(): void
     {
         Queue::fake();
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
@@ -1866,14 +1941,18 @@ class TelegramAccountGatewayControllerTest extends TestCase
         $channel = $this->createTelegramAccountChannel();
         $attachment = $this->createPendingTelegramAccountMediaAttachment(
             $channel,
-            externalChatId: '700158',
-            externalMessageId: '900158',
+            externalChatId: '700258',
+            externalMessageId: '900258',
             media: [[
                 'type' => 'document',
-                'telegram_file_id' => 'tdlib-target-doc-158',
+                'telegram_file_id' => 'tdlib-target-doc-258',
                 'file_size_bytes' => 12,
             ]],
         );
+        $attachment->forceFill([
+            'media_download_attempts' => 4,
+            'media_download_lease_sequence' => 4,
+        ])->save();
 
         config()->set('filesystems.disks.local.driver', 'unsupported');
 
@@ -1885,9 +1964,11 @@ class TelegramAccountGatewayControllerTest extends TestCase
 
         $attachment->refresh();
 
-        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD, $attachment->download_status);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOAD_FAILED, $attachment->download_status);
+        $this->assertSame(5, $attachment->media_download_attempts);
         $this->assertNull($attachment->media_download_claim_token);
-        $this->assertSame('upload_target_unavailable', $attachment->safe_error_code);
+        $this->assertNull($attachment->media_download_next_retry_at);
+        $this->assertSame('retries_exhausted', $attachment->safe_error_code);
     }
 
     public function test_gateway_stores_successful_media_download_result_and_keeps_repeated_result_idempotent(): void
@@ -2036,6 +2117,118 @@ class TelegramAccountGatewayControllerTest extends TestCase
         $this->assertTrue($attachment->isInlinePreviewable());
         Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
         $this->assertSame('MP4-BINARY', Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->get((string) $attachment->local_path));
+    }
+
+    public function test_gateway_retries_account_media_when_provider_size_differs_from_uploaded_file(): void
+    {
+        Queue::fake();
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel();
+        $attachment = $this->createPendingTelegramAccountMediaAttachment(
+            $channel,
+            externalChatId: '700155',
+            externalMessageId: '900155',
+            media: [[
+                'type' => 'document',
+                'telegram_file_id' => 'tdlib-document-size-mismatch-155',
+                'file_name' => 'report.pdf',
+                'mime_type' => 'application/pdf',
+                'file_size_bytes' => 100,
+            ]],
+        );
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+            'X-AB-Media-Claim-Token' => '1',
+        ])->postJson(route('internal.telegram-account.media-downloads.claim', ['channel' => $channel]))
+            ->assertOk()
+            ->assertJsonPath('has_download', true);
+
+        $contents = "%PDF-1.4\naccount-media";
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+            'X-AB-Media-Claim-Token' => '1',
+        ])->post(route('internal.telegram-account.media-downloads.result', [
+            'channel' => $channel,
+            'attachment' => $attachment,
+        ]), [
+            'claim_token' => (string) $attachment->fresh()->media_download_claim_token,
+            'status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            'file' => UploadedFile::fake()->createWithContent('report.pdf', $contents),
+            'mime_type' => 'application/pdf',
+            'original_filename' => 'report.pdf',
+            'provider_file_size_bytes' => strlen($contents) + 1,
+            'provider_file_id' => 'tdlib-document-size-mismatch-155',
+        ])->assertOk()
+            ->assertJsonPath('stored', true)
+            ->assertJsonPath('download_status', MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD);
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD, $attachment->download_status);
+        $this->assertSame('integrity_mismatch', $attachment->safe_error_code);
+        $this->assertNull($attachment->local_disk);
+        $this->assertNull($attachment->local_path);
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertDirectoryEmpty('message-attachments');
+    }
+
+    public function test_gateway_retries_html_error_page_disguised_as_account_video(): void
+    {
+        Queue::fake();
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel();
+        $attachment = $this->createPendingTelegramAccountMediaAttachment(
+            $channel,
+            externalChatId: '700156',
+            externalMessageId: '900156',
+            media: [[
+                'type' => 'video',
+                'telegram_file_id' => 'tdlib-video-html-156',
+                'file_name' => 'lesson.mp4',
+                'mime_type' => 'video/mp4',
+                'file_size_bytes' => 100,
+            ]],
+        );
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+            'X-AB-Media-Claim-Token' => '1',
+        ])->postJson(route('internal.telegram-account.media-downloads.claim', ['channel' => $channel]))
+            ->assertOk()
+            ->assertJsonPath('has_download', true);
+
+        $contents = '<!doctype html><html><body>provider error</body></html>';
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+            'X-AB-Media-Claim-Token' => '1',
+        ])->post(route('internal.telegram-account.media-downloads.result', [
+            'channel' => $channel,
+            'attachment' => $attachment,
+        ]), [
+            'claim_token' => (string) $attachment->fresh()->media_download_claim_token,
+            'status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            'file' => UploadedFile::fake()->createWithContent('lesson.mp4', $contents),
+            'mime_type' => 'video/mp4',
+            'original_filename' => 'lesson.mp4',
+            'provider_file_size_bytes' => strlen($contents),
+            'provider_file_id' => 'tdlib-video-html-156',
+        ])->assertOk()
+            ->assertJsonPath('stored', true)
+            ->assertJsonPath('download_status', MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD);
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD, $attachment->download_status);
+        $this->assertSame('integrity_mismatch', $attachment->safe_error_code);
+        $this->assertNull($attachment->local_disk);
+        $this->assertNull($attachment->local_path);
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertDirectoryEmpty('message-attachments');
     }
 
     public function test_gateway_stores_successful_video_note_media_download_result_as_previewable_round_video(): void
@@ -2260,6 +2453,14 @@ class TelegramAccountGatewayControllerTest extends TestCase
             ->assertOk()
             ->assertJsonPath('has_download', true);
 
+        $claimedAttachment = $attachment->fresh();
+        $claimToken = (string) $claimedAttachment->media_download_claim_token;
+        $expectedLocalPath = app(StoreMessageAttachmentLocalFileAction::class)->buildClaimedPath(
+            $claimedAttachment,
+            'jpg',
+            $claimToken,
+        );
+
         $this->withHeaders([
             'Authorization' => 'Bearer gateway-secret',
             'X-AB-Media-Claim-Token' => '1',
@@ -2267,7 +2468,7 @@ class TelegramAccountGatewayControllerTest extends TestCase
             'channel' => $channel,
             'attachment' => $attachment,
         ]), [
-            'claim_token' => (string) $attachment->fresh()->media_download_claim_token,
+            'claim_token' => $claimToken,
             'status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
             'file' => UploadedFile::fake()->createWithContent('attachment-53', $contents),
             'mime_type' => 'application/octet-stream',
@@ -2282,7 +2483,7 @@ class TelegramAccountGatewayControllerTest extends TestCase
         $this->assertSame('image/jpeg', $attachment->mime_type);
         $this->assertSame('jpg', $attachment->extension);
         $this->assertTrue($attachment->isInlinePreviewable());
-        $this->assertStringEndsWith('/'.$attachment->id.'.jpg', (string) $attachment->local_path);
+        $this->assertSame($expectedLocalPath, $attachment->local_path);
         $this->assertSame($contents, Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->get((string) $attachment->local_path));
     }
 
@@ -2468,6 +2669,66 @@ class TelegramAccountGatewayControllerTest extends TestCase
         }
     }
 
+    public function test_gateway_stops_after_fifth_recoverable_media_download_failure(): void
+    {
+        Queue::fake();
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel();
+        $attachment = $this->createPendingTelegramAccountMediaAttachment(
+            $channel,
+            externalChatId: '700145',
+            externalMessageId: '900145',
+            media: [[
+                'type' => 'document',
+                'telegram_file_id' => 'tdlib-document-retry-five',
+                'mime_type' => 'application/pdf',
+                'file_size_bytes' => 2048,
+            ]],
+        );
+        $attachment->forceFill(['media_download_attempts' => 4])->save();
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+            'X-AB-Media-Claim-Token' => '1',
+        ])->postJson(route('internal.telegram-account.media-downloads.claim', ['channel' => $channel]))
+            ->assertOk()
+            ->assertJsonPath('media_download.attempt', 5);
+
+        $claimToken = (string) $attachment->fresh()->media_download_claim_token;
+        $resultUrl = route('internal.telegram-account.media-downloads.result', [
+            'channel' => $channel,
+            'attachment' => $attachment,
+        ]);
+        $payload = [
+            'claim_token' => $claimToken,
+            'status' => 'failed',
+            'error_code' => 'tdlib_timeout',
+            'error_message' => 'TDLib download timed out.',
+            'retryable' => true,
+        ];
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+            'X-AB-Media-Claim-Token' => '1',
+        ])->postJson($resultUrl, $payload)
+            ->assertOk()
+            ->assertJsonPath('download_status', MessageAttachment::DOWNLOAD_STATUS_DOWNLOAD_FAILED);
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+            'X-AB-Media-Claim-Token' => '1',
+        ])->postJson($resultUrl, $payload)
+            ->assertOk()
+            ->assertJsonPath('download_status', MessageAttachment::DOWNLOAD_STATUS_DOWNLOAD_FAILED);
+
+        $attachment->refresh();
+
+        $this->assertSame('retries_exhausted', $attachment->safe_error_code);
+        $this->assertNull($attachment->media_download_next_retry_at);
+        $this->assertSame(5, $attachment->media_download_attempts);
+    }
+
     public function test_gateway_acknowledges_replayed_legacy_failure_and_redacts_local_path(): void
     {
         Queue::fake();
@@ -2486,13 +2747,15 @@ class TelegramAccountGatewayControllerTest extends TestCase
             ]],
         );
 
-        $this->withHeaders([
-            'Authorization' => 'Bearer gateway-secret',
-            'X-AB-Media-Claim-Token' => '0',
-        ])->postJson(route('internal.telegram-account.media-downloads.claim', ['channel' => $channel]))
-            ->assertOk()
-            ->assertJsonPath('has_download', true)
-            ->assertJsonPath('media_download.claim_token', null);
+        $attachment->forceFill([
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
+            'media_download_attempts' => 1,
+            'media_download_trigger' => 'auto',
+            'media_download_claim_token' => null,
+            'media_download_claimed_at' => now(),
+            'media_download_heartbeat_at' => now(),
+            'media_download_attempt_deadline_at' => now()->addHour(),
+        ])->save();
 
         $resultUrl = route('internal.telegram-account.media-downloads.result', [
             'channel' => $channel,
@@ -2572,6 +2835,8 @@ class TelegramAccountGatewayControllerTest extends TestCase
 
         $this->assertSame('auto_download_limit_exceeded', $attachment->safe_error_code);
         $this->assertNull($attachment->safe_error_message);
+        $this->assertSame(0, $attachment->media_download_attempts);
+        $this->assertSame(1, $attachment->media_download_lease_sequence);
     }
 
     public function test_gateway_claim_prioritizes_clean_pending_media_before_retry_tail(): void
@@ -3010,23 +3275,10 @@ class TelegramAccountGatewayControllerTest extends TestCase
                 'CONTENT_LENGTH' => '11',
             ],
             content: '01234567890',
-        )->assertOk();
-
-        $this->withHeaders([
-            'Authorization' => 'Bearer gateway-secret',
-            'X-AB-Media-Claim-Token' => '1',
-        ])->postJson(route('internal.telegram-account.media-downloads.result', [
-            'channel' => $channel,
-            'attachment' => $attachment,
-        ]), [
-            'claim_token' => $claimToken,
-            'status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
-            'upload_strategy' => 'direct_put',
-            'mime_type' => 'application/pdf',
-            'original_filename' => 'large.pdf',
-            'file_size_bytes' => 11,
-        ])->assertOk()
-            ->assertJsonPath('download_status', MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND);
+        )->assertStatus(409)
+            ->assertJsonPath('stored', false)
+            ->assertJsonPath('download_status', MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND)
+            ->assertJsonPath('reason', 'auto_download_limit_exceeded');
 
         $attachment->refresh();
 
@@ -3047,6 +3299,7 @@ class TelegramAccountGatewayControllerTest extends TestCase
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
         config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
         config()->set('bots.telegram_account.media_download_max_bytes', 10);
+        config()->set('inbound_media.manual_hard_limit_bytes', 100);
 
         $channel = $this->createTelegramAccountChannel();
         $attachment = $this->createPendingTelegramAccountMediaAttachment(
@@ -3076,7 +3329,7 @@ class TelegramAccountGatewayControllerTest extends TestCase
             ->assertJsonPath('has_download', true)
             ->assertJsonPath('media_download.attachment_id', $attachment->id)
             ->assertJsonPath('media_download.download_mode', 'manual')
-            ->assertJsonPath('media_download.max_bytes', null)
+            ->assertJsonPath('media_download.max_bytes', 100)
             ->assertJsonPath('media_download.upload.strategy', 'direct_put')
             ->assertJsonPath('media_download.upload.requires_gateway_auth', true);
 
@@ -3135,6 +3388,91 @@ class TelegramAccountGatewayControllerTest extends TestCase
         Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
     }
 
+    public function test_expired_media_lease_rejects_heartbeat_and_direct_upload_completion(): void
+    {
+        Queue::fake();
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel();
+        $attachment = $this->createPendingTelegramAccountMediaAttachment(
+            $channel,
+            externalChatId: '700259',
+            externalMessageId: '900259',
+            media: [[
+                'type' => 'document',
+                'telegram_file_id' => 'tdlib-expired-doc-259',
+                'file_name' => 'expired.pdf',
+                'mime_type' => 'application/pdf',
+                'file_size_bytes' => 12,
+            ]],
+        );
+
+        $claimResponse = $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+            'X-AB-Media-Claim-Token' => '1',
+        ])->postJson(route('internal.telegram-account.media-downloads.claim', ['channel' => $channel]))
+            ->assertOk()
+            ->assertJsonPath('has_download', true);
+
+        $uploadUrl = (string) $claimResponse->json('media_download.upload.url');
+        $claimToken = (string) $claimResponse->json('media_download.claim_token');
+
+        $this->call(
+            'PUT',
+            $uploadUrl,
+            server: [
+                'HTTP_AUTHORIZATION' => 'Bearer gateway-secret',
+                'CONTENT_TYPE' => 'application/octet-stream',
+                'CONTENT_LENGTH' => '12',
+            ],
+            content: 'PDF-CONTENTS',
+        )->assertOk();
+
+        $attachment->refresh();
+        $heartbeatAt = $attachment->media_download_heartbeat_at;
+        $this->assertNotNull($heartbeatAt);
+        $attachment->forceFill([
+            'media_download_attempt_deadline_at' => now()->subSecond(),
+        ])->save();
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(route('internal.telegram-account.media-downloads.heartbeat', [
+            'channel' => $channel,
+            'attachment' => $attachment,
+        ]), [
+            'claim_token' => $claimToken,
+            'received_bytes' => 12,
+        ])->assertStatus(409);
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+            'X-AB-Media-Claim-Token' => '1',
+        ])->postJson(route('internal.telegram-account.media-downloads.result', [
+            'channel' => $channel,
+            'attachment' => $attachment,
+        ]), [
+            'claim_token' => $claimToken,
+            'status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            'upload_strategy' => 'direct_put',
+            'mime_type' => 'application/pdf',
+            'original_filename' => 'expired.pdf',
+            'file_size_bytes' => 12,
+        ])->assertStatus(409);
+
+        $attachment->refresh();
+        $temporaryPath = app(StoreMessageAttachmentLocalFileAction::class)
+            ->buildDirectUploadPath($attachment, $claimToken);
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING, $attachment->download_status);
+        $this->assertSame($claimToken, $attachment->media_download_claim_token);
+        $this->assertNotNull($attachment->media_download_heartbeat_at);
+        $this->assertTrue($attachment->media_download_heartbeat_at->equalTo($heartbeatAt));
+        $this->assertNull($attachment->local_path);
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists($temporaryPath);
+    }
+
     public function test_local_direct_upload_appends_bounded_chunks_and_finalizes_complete_file(): void
     {
         Queue::fake();
@@ -3162,6 +3500,7 @@ class TelegramAccountGatewayControllerTest extends TestCase
             ->assertOk()
             ->assertJsonPath('media_download.upload.strategy', 'direct_put')
             ->assertJsonPath('media_download.upload.max_chunk_bytes', 8 * 1024 * 1024)
+            ->assertJsonPath('media_download.upload.expires_in_seconds', 24 * 60 * 60)
             ->assertJsonMissingPath('media_download.upload.headers');
 
         $uploadUrl = (string) $claimResponse->json('media_download.upload.url');
@@ -3271,13 +3610,252 @@ class TelegramAccountGatewayControllerTest extends TestCase
             ->assertJsonPath('download_status', MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED);
 
         $attachment->refresh();
+        $stablePath = app(StoreMessageAttachmentLocalFileAction::class)
+            ->buildClaimedPath($attachment, 'pdf', $claimToken);
 
         $this->assertSame(
             'FIRST-SECOND',
             Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->get((string) $attachment->local_path),
         );
-        $this->assertSame($temporaryPath, $attachment->local_path);
-        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists($temporaryPath);
+        $this->assertSame($stablePath, $attachment->local_path);
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists($stablePath);
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertMissing($temporaryPath);
+    }
+
+    public function test_local_direct_upload_rejects_unbounded_or_mismatched_single_put_without_leaving_file(): void
+    {
+        Queue::fake();
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel();
+        $attachment = $this->createPendingTelegramAccountMediaAttachment(
+            $channel,
+            externalChatId: '700260',
+            externalMessageId: '900260',
+            media: [[
+                'type' => 'document',
+                'telegram_file_id' => 'tdlib-bounded-doc-260',
+                'file_size_bytes' => 12,
+            ]],
+        );
+
+        $claimResponse = $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+            'X-AB-Media-Claim-Token' => '1',
+        ])->postJson(route('internal.telegram-account.media-downloads.claim', ['channel' => $channel]))
+            ->assertOk();
+
+        $uploadUrl = (string) $claimResponse->json('media_download.upload.url');
+        $claimToken = (string) $claimResponse->json('media_download.claim_token');
+        $temporaryPath = app(StoreMessageAttachmentLocalFileAction::class)
+            ->buildDirectUploadPath($attachment, $claimToken);
+
+        $this->call(
+            'PUT',
+            $uploadUrl,
+            server: [
+                'HTTP_AUTHORIZATION' => 'Bearer gateway-secret',
+                'CONTENT_TYPE' => 'application/octet-stream',
+            ],
+            content: 'UNBOUNDED',
+        )->assertStatus(409);
+
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertMissing($temporaryPath);
+
+        $this->call(
+            'PUT',
+            $uploadUrl,
+            server: [
+                'HTTP_AUTHORIZATION' => 'Bearer gateway-secret',
+                'CONTENT_TYPE' => 'application/octet-stream',
+                'CONTENT_LENGTH' => '4',
+            ],
+            content: 'TOO-LONG',
+        )->assertStatus(409);
+
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertMissing($temporaryPath);
+
+        $this->call(
+            'PUT',
+            $uploadUrl,
+            server: [
+                'HTTP_AUTHORIZATION' => 'Bearer gateway-secret',
+                'CONTENT_TYPE' => 'application/octet-stream',
+                'CONTENT_LENGTH' => (string) (8 * 1024 * 1024 + 1),
+            ],
+            content: 'X',
+        )->assertStatus(409);
+
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertMissing($temporaryPath);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING, $attachment->fresh()->download_status);
+    }
+
+    public function test_gateway_heartbeat_keeps_long_media_download_lease_alive_and_checkpoints_traffic(): void
+    {
+        Queue::fake();
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+        config()->set('inbound_media.lease_stale_seconds', 120);
+        Carbon::setTestNow(Carbon::parse('2026-07-14 12:00:00', 'Europe/Moscow'));
+
+        try {
+            $channel = $this->createTelegramAccountChannel();
+            $attachment = $this->createPendingTelegramAccountMediaAttachment(
+                $channel,
+                externalChatId: '700160',
+                externalMessageId: '900160',
+                media: [[
+                    'type' => 'document',
+                    'telegram_file_id' => 'tdlib-heartbeat-doc-160',
+                    'file_name' => 'long-download.pdf',
+                    'mime_type' => 'application/pdf',
+                    'file_size_bytes' => 12,
+                ]],
+            );
+
+            $claimResponse = $this->withHeaders([
+                'Authorization' => 'Bearer gateway-secret',
+                'X-AB-Media-Claim-Token' => '1',
+            ])->postJson(route('internal.telegram-account.media-downloads.claim', ['channel' => $channel]))
+                ->assertOk()
+                ->assertJsonPath('has_download', true);
+            $claimToken = (string) $claimResponse->json('media_download.claim_token');
+
+            Carbon::setTestNow(now()->addSeconds(90));
+
+            $this->withHeaders([
+                'Authorization' => 'Bearer gateway-secret',
+            ])->postJson(route('internal.telegram-account.media-downloads.heartbeat', [
+                'channel' => $channel,
+                'attachment' => $attachment,
+            ]), [
+                'claim_token' => $claimToken,
+                'received_bytes' => 7,
+            ])->assertOk()
+                ->assertJsonPath('attachment_id', $attachment->id)
+                ->assertJsonPath('received_bytes', 7);
+
+            $attachment->refresh();
+            $this->assertTrue($attachment->media_download_heartbeat_at?->equalTo(now()));
+            $this->assertSame(
+                7,
+                MediaDownloadTrafficLedger::query()->firstOrFail()->checkpoint_bytes,
+            );
+
+            Carbon::setTestNow(now()->addSeconds(90));
+
+            $stats = app(ReapStaleInboundMediaDownloadsAction::class)->handle();
+
+            $this->assertSame(0, $stats['inspected']);
+            $this->assertSame(
+                MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
+                $attachment->fresh()->download_status,
+            );
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_gateway_heartbeat_rejects_stale_media_claim_token_without_touching_lease(): void
+    {
+        Queue::fake();
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel();
+        $attachment = $this->createPendingTelegramAccountMediaAttachment(
+            $channel,
+            externalChatId: '700161',
+            externalMessageId: '900161',
+            media: [[
+                'type' => 'document',
+                'telegram_file_id' => 'tdlib-heartbeat-doc-161',
+                'file_name' => 'stale-token.pdf',
+                'mime_type' => 'application/pdf',
+                'file_size_bytes' => 12,
+            ]],
+        );
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+            'X-AB-Media-Claim-Token' => '1',
+        ])->postJson(route('internal.telegram-account.media-downloads.claim', ['channel' => $channel]))
+            ->assertOk()
+            ->assertJsonPath('has_download', true);
+        $heartbeatAt = $attachment->fresh()->media_download_heartbeat_at;
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(route('internal.telegram-account.media-downloads.heartbeat', [
+            'channel' => $channel,
+            'attachment' => $attachment,
+        ]), [
+            'claim_token' => 'stale-claim-token',
+            'received_bytes' => 7,
+        ])->assertStatus(409);
+
+        $this->assertTrue($attachment->fresh()->media_download_heartbeat_at?->equalTo($heartbeatAt));
+        $this->assertSame(
+            0,
+            MediaDownloadTrafficLedger::query()->firstOrFail()->checkpoint_bytes,
+        );
+    }
+
+    public function test_gateway_heartbeat_stops_manual_download_above_application_hard_limit(): void
+    {
+        Queue::fake();
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+        config()->set('bots.telegram_account.media_download_max_bytes', 5);
+        config()->set('inbound_media.manual_hard_limit_bytes', 10);
+
+        $channel = $this->createTelegramAccountChannel();
+        $attachment = $this->createPendingTelegramAccountMediaAttachment(
+            $channel,
+            externalChatId: '700162',
+            externalMessageId: '900162',
+            media: [[
+                'type' => 'document',
+                'telegram_file_id' => 'tdlib-heartbeat-doc-162',
+                'file_name' => 'unexpected-large.pdf',
+                'mime_type' => 'application/pdf',
+                'file_size_bytes' => 9,
+            ]],
+        );
+        $employee = User::factory()->create();
+        $dialog = $attachment->message()->firstOrFail()->dialog()->firstOrFail();
+
+        app(RequestTelegramAccountMediaDownloadAction::class)->handle($dialog, $attachment, $employee);
+
+        $claimResponse = $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+            'X-AB-Media-Claim-Token' => '1',
+        ])->postJson(route('internal.telegram-account.media-downloads.claim', ['channel' => $channel]))
+            ->assertOk()
+            ->assertJsonPath('media_download.max_bytes', 10);
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+        ])->postJson(route('internal.telegram-account.media-downloads.heartbeat', [
+            'channel' => $channel,
+            'attachment' => $attachment,
+        ]), [
+            'claim_token' => (string) $claimResponse->json('media_download.claim_token'),
+            'received_bytes' => 11,
+        ])->assertStatus(409)
+            ->assertJsonPath('download_status', MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND)
+            ->assertJsonPath('reason', InboundMediaDownloadPolicy::REASON_MANUAL_HARD_LIMIT);
+
+        $attachment->refresh();
+
+        $this->assertSame(
+            InboundMediaDownloadPolicy::REASON_MANUAL_HARD_LIMIT,
+            $attachment->safe_error_code,
+        );
+        $this->assertNull($attachment->media_download_claim_token);
+        $this->assertNull($attachment->manual_download_requested_at);
+        $this->assertSame(
+            11,
+            MediaDownloadTrafficLedger::query()->firstOrFail()->consumed_bytes,
+        );
     }
 
     public function test_late_result_from_stale_media_claim_cannot_complete_new_claim(): void
@@ -4401,6 +4979,7 @@ class TelegramAccountGatewayControllerTest extends TestCase
         return Channel::factory()->account()->create(array_merge([
             'platform' => Channel::PLATFORM_TELEGRAM,
             'is_active' => true,
+            'telegram_account_media_on_demand_enabled' => true,
         ], $attributes));
     }
 

@@ -4,6 +4,7 @@ namespace App\Services\TelegramAccount;
 
 use App\Models\Channel;
 use App\Models\MessageAttachment;
+use App\Services\Messages\InboundMediaDownloadPolicy;
 
 class TelegramAccountMediaDownloadPolicy
 {
@@ -15,23 +16,26 @@ class TelegramAccountMediaDownloadPolicy
 
     public const ERROR_TDLIB_FILE_NOT_FOUND = 'tdlib_file_not_found';
 
+    public function __construct(
+        private readonly InboundMediaDownloadPolicy $inboundMediaDownloadPolicy,
+    ) {}
+
     public function automaticMaxBytes(Channel $channel): int
     {
-        $channelValue = $channel->telegram_account_media_auto_download_max_bytes;
+        return $this->inboundMediaDownloadPolicy->automaticMaxBytes($channel);
+    }
 
-        if (is_int($channelValue) && $channelValue >= 0) {
-            return $channelValue;
-        }
-
-        return max(0, (int) config(
-            'bots.telegram_account.media_download_max_bytes',
-            self::DEFAULT_AUTO_DOWNLOAD_MAX_BYTES,
-        ));
+    public function automaticRequestMaxBytes(Channel $channel): int
+    {
+        return $this->inboundMediaDownloadPolicy->automaticRequestMaxBytes(
+            $channel,
+            MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT,
+        );
     }
 
     public function initialDownloadStatus(Channel $channel, ?int $fileSizeBytes): string
     {
-        if ($fileSizeBytes === null || $fileSizeBytes > $this->automaticMaxBytes($channel)) {
+        if ($fileSizeBytes === null || $fileSizeBytes <= 0 || $fileSizeBytes > $this->automaticRequestMaxBytes($channel)) {
             return MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND;
         }
 
@@ -40,32 +44,22 @@ class TelegramAccountMediaDownloadPolicy
 
     public function exceedsAutomaticLimit(Channel $channel, ?int $fileSizeBytes): bool
     {
-        return $fileSizeBytes === null || $fileSizeBytes > $this->automaticMaxBytes($channel);
+        return $fileSizeBytes === null || $fileSizeBytes <= 0 || $fileSizeBytes > $this->automaticRequestMaxBytes($channel);
+    }
+
+    public function onDemandEnabled(Channel $channel): bool
+    {
+        return $this->inboundMediaDownloadPolicy->onDemandEnabled($channel);
     }
 
     public function canRequestManually(MessageAttachment $attachment): bool
     {
-        if (
-            $attachment->provider !== MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT
-            || (! filled($attachment->provider_file_id) && ! filled($attachment->provider_file_reference))
-        ) {
-            return false;
-        }
+        return $attachment->provider === MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT
+            && $this->inboundMediaDownloadPolicy->manualAvailability($attachment)['allowed'];
+    }
 
-        if (! in_array($attachment->download_status, [
-            MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND,
-            MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
-            MessageAttachment::DOWNLOAD_STATUS_DOWNLOAD_FAILED,
-            MessageAttachment::DOWNLOAD_STATUS_DELETED_LOCAL,
-        ], true)) {
-            return false;
-        }
-
-        return ! in_array($attachment->safe_error_code, [
-            ClaimTelegramAccountMediaDownloadAction::ERROR_MISSING_PROVIDER_FILE_ID,
-            ClaimTelegramAccountMediaDownloadAction::ERROR_UNSUPPORTED_MEDIA_KIND,
-            self::ERROR_TELEGRAM_FILE_NOT_FOUND,
-            self::ERROR_TDLIB_FILE_NOT_FOUND,
-        ], true);
+    public function manualRequestMaxBytes(MessageAttachment $attachment): int
+    {
+        return $this->inboundMediaDownloadPolicy->manualRequestMaxBytes($attachment);
     }
 }

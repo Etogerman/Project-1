@@ -8,6 +8,7 @@
 /vendor
 .env
 /.env.ngrok
+/.env.telegram-bot-api
 /.env.testing
 .env.backup
 .env.production

@@ -6,6 +6,11 @@ use App\Models\Channel;
 use App\Models\MessageAttachment;
 use App\Services\Dialogs\DialogAutomationGate;
 use App\Services\Dialogs\DialogStageCatalog;
+use App\Services\Messages\InboundMediaAdmissionDeniedException;
+use App\Services\Messages\InboundMediaAdmissionGate;
+use App\Services\Messages\InboundMediaDownloadPolicy;
+use App\Services\Messages\InboundMediaQuotaLedger;
+use App\Services\Messages\InboundMediaRetrySchedule;
 use App\Services\Messages\StoreMessageAttachmentLocalFileAction;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
@@ -24,7 +29,7 @@ class ClaimTelegramAccountMediaDownloadAction
 
     private const LEGACY_AUTOMATIC_PROCESSING_TIMEOUT_MINUTES = 10;
 
-    private const TOKEN_AWARE_PROCESSING_TIMEOUT_MINUTES = 130;
+    public const TOKEN_AWARE_PROCESSING_TIMEOUT_MINUTES = 130;
 
     private const STALE_UPLOAD_CLEANUP_RETRY_MINUTES = 5;
 
@@ -32,6 +37,9 @@ class ClaimTelegramAccountMediaDownloadAction
         private readonly DialogStageCatalog $dialogStageCatalog,
         private readonly StoreMessageAttachmentLocalFileAction $storeMessageAttachmentLocalFileAction,
         private readonly TelegramAccountMediaDownloadPolicy $mediaDownloadPolicy,
+        private readonly InboundMediaQuotaLedger $quotaLedger,
+        private readonly InboundMediaAdmissionGate $admissionGate,
+        private readonly InboundMediaRetrySchedule $retrySchedule,
     ) {}
 
     /**
@@ -50,12 +58,18 @@ class ClaimTelegramAccountMediaDownloadAction
         ];
     }
 
-    public function handle(Channel $channel, bool $supportsClaimToken = true): ?MessageAttachment
+    public function handle(Channel $channel): ?MessageAttachment
     {
-        return DB::transaction(function () use ($channel, $supportsClaimToken): ?MessageAttachment {
+        return DB::transaction(function () use ($channel): ?MessageAttachment {
+            $onDemandEnabled = $this->mediaDownloadPolicy->onDemandEnabled($channel);
+
+            $this->admissionGate->lock();
+
             $this->releaseStaleDownloads($channel);
             $this->markBlacklistedDownloadsMetadataOnly($channel);
             $this->failNonClaimableDownloads($channel);
+
+            $preferAutomatic = $this->admissionGate->shouldPreferAutomatic($channel);
 
             $attachment = MessageAttachment::query()
                 ->where('channel_id', $channel->id)
@@ -88,10 +102,12 @@ class ClaimTelegramAccountMediaDownloadAction
                         });
                 })
                 ->when(
-                    ! $supportsClaimToken,
+                    ! $onDemandEnabled,
                     static fn (Builder $query): Builder => $query->whereNull('manual_download_requested_at'),
                 )
-                ->orderByRaw('CASE WHEN manual_download_requested_at IS NULL THEN 1 ELSE 0 END')
+                ->orderByRaw($preferAutomatic
+                    ? 'CASE WHEN manual_download_requested_at IS NULL THEN 0 ELSE 1 END'
+                    : 'CASE WHEN manual_download_requested_at IS NULL THEN 1 ELSE 0 END')
                 ->orderByRaw('CASE WHEN safe_error_code IS NULL THEN 0 ELSE 1 END')
                 ->orderBy('id')
                 ->lockForUpdate()
@@ -101,16 +117,62 @@ class ClaimTelegramAccountMediaDownloadAction
                 return null;
             }
 
+            $manual = $attachment->manual_download_requested_at !== null;
+
+            try {
+                $this->admissionGate->assertCanClaim($channel, $manual, (int) $attachment->id);
+            } catch (InboundMediaAdmissionDeniedException) {
+                return null;
+            }
+
+            $attemptNumber = max(0, (int) $attachment->media_download_attempts) + 1;
+            $leaseSequence = max(
+                0,
+                (int) $attachment->media_download_lease_sequence,
+                (int) $attachment->media_download_attempts,
+            ) + 1;
+            $quotaDecision = $this->quotaLedger->reserveForAttempt($attachment, $leaseSequence);
+
+            if (! $quotaDecision->allowed) {
+                $attachment->forceFill([
+                    'download_status' => MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND,
+                    'manual_download_requested_at' => null,
+                    'manual_download_requested_by_user_id' => null,
+                    'media_download_claim_token' => null,
+                    'media_download_claimed_at' => null,
+                    'media_download_heartbeat_at' => null,
+                    'media_download_attempt_deadline_at' => null,
+                    'safe_error_code' => $quotaDecision->reason,
+                    'safe_error_message' => $this->quotaErrorMessage($quotaDecision->reason),
+                ])->save();
+
+                return null;
+            }
+
+            $claimedAt = now();
+
             $attachment->forceFill([
                 'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
-                'media_download_claim_token' => $supportsClaimToken ? Str::uuid()->toString() : null,
+                'media_download_claim_token' => Str::uuid()->toString(),
+                'media_download_attempts' => $attemptNumber,
+                'media_download_lease_sequence' => $leaseSequence,
+                'media_download_trigger' => $manual ? 'manual' : 'auto',
+                'media_download_claimed_at' => $claimedAt,
+                'media_download_heartbeat_at' => $claimedAt,
+                'media_download_attempt_deadline_at' => $claimedAt->copy()->addSeconds(
+                    max(1, (int) config('inbound_media.attempt_deadline_seconds', 6 * 60 * 60)),
+                ),
                 'media_download_upload_size_bytes' => null,
                 'media_download_next_retry_at' => null,
-                'media_download_max_bytes' => $attachment->media_download_max_bytes
-                    ?? $this->mediaDownloadPolicy->automaticMaxBytes($channel),
+                'media_download_max_bytes' => $manual
+                    ? $this->mediaDownloadPolicy->manualRequestMaxBytes($attachment)
+                    : ($attachment->media_download_max_bytes
+                        ?? $this->mediaDownloadPolicy->automaticMaxBytes($channel)),
                 'safe_error_code' => null,
                 'safe_error_message' => null,
             ])->save();
+
+            $this->admissionGate->recordClaim($channel, $manual);
 
             return $attachment->fresh(['message']);
         });
@@ -142,13 +204,34 @@ class ClaimTelegramAccountMediaDownloadAction
                 return;
             }
 
+            $this->quotaLedger->failAttempt(
+                $locked,
+                $locked->mediaDownloadLedgerAttemptNumber(),
+                0,
+                'upload_target_unavailable',
+            );
+
+            $attemptNumber = max(1, (int) $locked->media_download_attempts);
+            $willRetry = $this->retrySchedule->willRetry($attemptNumber);
+
             $locked->forceFill([
-                'download_status' => MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD,
+                'download_status' => $willRetry
+                    ? MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD
+                    : MessageAttachment::DOWNLOAD_STATUS_DOWNLOAD_FAILED,
                 'media_download_claim_token' => null,
                 'media_download_upload_size_bytes' => null,
-                'media_download_next_retry_at' => null,
-                'safe_error_code' => 'upload_target_unavailable',
-                'safe_error_message' => 'Media upload target could not be created.',
+                'media_download_next_retry_at' => $willRetry
+                    ? $this->retrySchedule->nextRetryAt($attemptNumber)
+                    : null,
+                'media_download_claimed_at' => null,
+                'media_download_heartbeat_at' => null,
+                'media_download_attempt_deadline_at' => null,
+                'safe_error_code' => $willRetry
+                    ? 'upload_target_unavailable'
+                    : $this->retrySchedule->terminalErrorCode('upload_target_unavailable'),
+                'safe_error_message' => $willRetry
+                    ? 'Не удалось подготовить загрузку. Повторим автоматически.'
+                    : 'Не удалось подготовить загрузку после нескольких попыток.',
                 'updated_at' => now(),
             ])->save();
         });
@@ -210,10 +293,20 @@ class ClaimTelegramAccountMediaDownloadAction
                 'media_download_claim_token' => null,
                 'media_download_upload_size_bytes' => null,
                 'media_download_next_retry_at' => null,
+                'media_download_claimed_at' => null,
+                'media_download_heartbeat_at' => null,
+                'media_download_attempt_deadline_at' => null,
                 'safe_error_code' => 'download_claim_timeout',
                 'safe_error_message' => 'Gateway did not report media download result before processing timeout.',
                 'updated_at' => now(),
             ])->save();
+
+            $this->quotaLedger->failAttempt(
+                $attachment,
+                $attachment->mediaDownloadLedgerAttemptNumber(),
+                0,
+                'download_claim_timeout',
+            );
         }
     }
 
@@ -253,67 +346,89 @@ class ClaimTelegramAccountMediaDownloadAction
 
     private function markBlacklistedDownloadsMetadataOnly(Channel $channel): void
     {
-        MessageAttachment::query()
-            ->where('channel_id', $channel->id)
-            ->where('provider', MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT)
-            ->where('download_status', MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD)
-            ->whereNull('manual_download_requested_at')
-            ->whereHas('message.dialog', function (Builder $query): void {
-                $this->dialogStageCatalog->applyBlacklistStageFilter($query);
-            })
-            ->lockForUpdate()
-            ->update([
+        $this->updateLockedAttachments(
+            MessageAttachment::query()
+                ->where('channel_id', $channel->id)
+                ->where('provider', MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT)
+                ->where('download_status', MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD)
+                ->whereNull('manual_download_requested_at')
+                ->whereHas('message.dialog', function (Builder $query): void {
+                    $this->dialogStageCatalog->applyBlacklistStageFilter($query);
+                }),
+            [
                 'download_status' => MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
                 'media_download_upload_size_bytes' => null,
                 'media_download_next_retry_at' => null,
                 'safe_error_code' => DialogAutomationGate::REASON_BLACKLIST_STAGE,
                 'safe_error_message' => 'Media download skipped because the dialog stage is blacklisted.',
                 'updated_at' => now(),
-            ]);
+            ],
+        );
     }
 
     private function failNonClaimableDownloads(Channel $channel): void
     {
-        MessageAttachment::query()
-            ->where('channel_id', $channel->id)
-            ->where('provider', MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT)
-            ->where('download_status', MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD)
-            ->whereNotIn('media_kind', self::supportedMediaKinds())
-            ->lockForUpdate()
-            ->update([
+        $this->updateLockedAttachments(
+            MessageAttachment::query()
+                ->where('channel_id', $channel->id)
+                ->where('provider', MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT)
+                ->where('download_status', MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD)
+                ->whereNotIn('media_kind', self::supportedMediaKinds()),
+            [
                 'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOAD_FAILED,
                 'media_download_upload_size_bytes' => null,
                 'media_download_next_retry_at' => null,
                 'safe_error_code' => self::ERROR_UNSUPPORTED_MEDIA_KIND,
                 'safe_error_message' => 'Media kind is not supported by Telegram Account media download.',
                 'updated_at' => now(),
-            ]);
+            ],
+        );
 
-        MessageAttachment::query()
-            ->where('channel_id', $channel->id)
-            ->where('provider', MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT)
-            ->where('download_status', MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD)
-            ->where(function (Builder $query): void {
-                $query
-                    ->where(function (Builder $fileIdQuery): void {
-                        $fileIdQuery
-                            ->whereNull('provider_file_id')
-                            ->orWhere('provider_file_id', '');
-                    })
-                    ->where(function (Builder $referenceQuery): void {
-                        $referenceQuery
-                            ->whereNull('provider_file_reference')
-                            ->orWhere('provider_file_reference', '');
-                    });
-            })
-            ->lockForUpdate()
-            ->update([
+        $this->updateLockedAttachments(
+            MessageAttachment::query()
+                ->where('channel_id', $channel->id)
+                ->where('provider', MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT)
+                ->where('download_status', MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD)
+                ->where(function (Builder $query): void {
+                    $query
+                        ->where(function (Builder $fileIdQuery): void {
+                            $fileIdQuery
+                                ->whereNull('provider_file_id')
+                                ->orWhere('provider_file_id', '');
+                        })
+                        ->where(function (Builder $referenceQuery): void {
+                            $referenceQuery
+                                ->whereNull('provider_file_reference')
+                                ->orWhere('provider_file_reference', '');
+                        });
+                }),
+            [
                 'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOAD_FAILED,
                 'media_download_upload_size_bytes' => null,
                 'media_download_next_retry_at' => null,
                 'safe_error_code' => self::ERROR_MISSING_PROVIDER_FILE_ID,
                 'safe_error_message' => 'Telegram Account media download requires provider_file_id.',
                 'updated_at' => now(),
-            ]);
+            ],
+        );
+    }
+
+    /**
+     * @param  Builder<MessageAttachment>  $query
+     * @param  array<string, mixed>  $attributes
+     */
+    private function updateLockedAttachments(Builder $query, array $attributes): void
+    {
+        foreach ($query->lockForUpdate()->get() as $attachment) {
+            $attachment->forceFill($attributes)->save();
+        }
+    }
+
+    private function quotaErrorMessage(?string $reason): string
+    {
+        return match ($reason) {
+            InboundMediaDownloadPolicy::REASON_TRAFFIC_QUOTA_EXCEEDED => 'Дневной лимит загрузки медиа для канала исчерпан.',
+            default => 'Недостаточно доступного места для загрузки медиа.',
+        };
     }
 }

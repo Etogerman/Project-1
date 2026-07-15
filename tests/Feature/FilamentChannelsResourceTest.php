@@ -1258,7 +1258,7 @@ class FilamentChannelsResourceTest extends TestCase
             ]);
     }
 
-    public function test_admin_can_edit_account_channel_media_auto_download_limit(): void
+    public function test_admin_can_edit_account_channel_unified_media_settings(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -1277,7 +1277,8 @@ class FilamentChannelsResourceTest extends TestCase
             ->test(ManageChannels::class)
             ->mountTableAction('edit', $channel)
             ->assertTableActionDataSet([
-                'telegram_account_media_auto_download_max_mb' => 32,
+                'inbound_media_auto_download_max_mb' => 32,
+                'inbound_media_on_demand_enabled' => false,
             ])
             ->setTableActionData([
                 'name' => $channel->name,
@@ -1290,12 +1291,18 @@ class FilamentChannelsResourceTest extends TestCase
                 ],
                 'is_active' => false,
                 'sync_external_outgoing_enabled' => false,
-                'telegram_account_media_auto_download_max_mb' => 64,
+                'inbound_media_auto_download_max_mb' => 64,
+                'inbound_media_on_demand_enabled' => true,
             ])
             ->callMountedTableAction()
             ->assertHasNoTableActionErrors();
 
-        $this->assertSame(64 * 1024 * 1024, $channel->fresh()->telegram_account_media_auto_download_max_bytes);
+        $channel->refresh();
+
+        $this->assertSame(64 * 1024 * 1024, $channel->inbound_media_auto_download_max_bytes);
+        $this->assertTrue($channel->inbound_media_on_demand_enabled);
+        $this->assertSame(64 * 1024 * 1024, $channel->telegram_account_media_auto_download_max_bytes);
+        $this->assertTrue($channel->telegram_account_media_on_demand_enabled);
     }
 
     public function test_account_channel_table_error_columns_use_runtime_state(): void

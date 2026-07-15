@@ -13,6 +13,7 @@ use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\Dialog;
 use App\Models\DialogStage;
+use App\Models\MediaDownloadTrafficLedger;
 use App\Models\Message;
 use App\Models\MessageAttachment;
 use App\Models\Scenario;
@@ -37,6 +38,7 @@ use App\Services\TelegramAccount\ClaimTelegramAccountMediaDownloadAction;
 use App\Services\TelegramAccount\RequestTelegramAccountMediaDownloadAction;
 use App\Services\TelegramAccount\SyncTelegramAccountInboundMessageAttachmentsAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\ValidationException;
@@ -238,7 +240,7 @@ class DialogBlacklistStageBehaviorTest extends TestCase
         $this->assertNull($attachment->local_path);
     }
 
-    public function test_operator_can_explicitly_request_blacklist_media_after_warning(): void
+    public function test_operator_can_explicitly_request_blacklist_media_without_separate_warning(): void
     {
         [$dialog, $message] = $this->createDialogWithInbound(blacklisted: true, accountChannel: true);
         $attachment = MessageAttachment::factory()->create([
@@ -256,7 +258,8 @@ class DialogBlacklistStageBehaviorTest extends TestCase
 
         $mediaItems = app(ResolveMessageMediaItemsAction::class)->handle($message->fresh(['dialog.dialogStage']));
 
-        $this->assertTrue($mediaItems[0]['manual_download_requires_blacklist_warning']);
+        $this->assertTrue($mediaItems[0]['can_request_manual_download']);
+        $this->assertArrayNotHasKey('manual_download_requires_blacklist_warning', $mediaItems[0]);
 
         app(RequestTelegramAccountMediaDownloadAction::class)->handle($dialog, $attachment, $operator);
         $claimed = app(ClaimTelegramAccountMediaDownloadAction::class)->handle($dialog->channel()->firstOrFail());
@@ -420,6 +423,66 @@ class DialogBlacklistStageBehaviorTest extends TestCase
         $this->assertNull($attachment->local_path);
     }
 
+    public function test_automatic_bot_media_result_is_discarded_when_dialog_moves_to_blacklist_during_download(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        [$dialog, $message] = $this->createDialogWithInbound();
+        $body = str_repeat('B', 2 * 1024 * 1024);
+        $attachment = MessageAttachment::factory()->create([
+            'message_id' => $message->id,
+            'channel_id' => $dialog->channel_id,
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_BOT,
+            'provider_event_key' => $message->provider_event_key,
+            'provider_attachment_key' => 'inflight-blacklist-bot-file',
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD,
+            'provider_file_id' => 'inflight-blacklist-bot-file',
+            'file_size_bytes' => strlen($body),
+            'media_kind' => MessageAttachment::MEDIA_KIND_DOCUMENT,
+        ]);
+        $blacklistStage = $this->blacklistStage();
+
+        Http::fake(function ($request) use ($body, $dialog, $blacklistStage) {
+            if (str_contains($request->url(), '/getFile')) {
+                return Http::response([
+                    'ok' => true,
+                    'result' => [
+                        'file_path' => 'documents/inflight-blacklist.pdf',
+                        'file_size' => strlen($body),
+                    ],
+                ]);
+            }
+
+            $dialog->forceFill([
+                'stage' => $blacklistStage->key,
+                'stage_id' => $blacklistStage->id,
+            ])->save();
+
+            return Http::response($body, 200, [
+                'Content-Type' => 'application/pdf',
+                'Content-Length' => (string) strlen($body),
+            ]);
+        });
+
+        app(DownloadBotMessageAttachmentsAction::class)->handle($message->fresh());
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY, $attachment->download_status);
+        $this->assertSame(DialogAutomationGate::REASON_BLACKLIST_STAGE, $attachment->safe_error_code);
+        $this->assertNull($attachment->local_disk);
+        $this->assertNull($attachment->local_path);
+        $this->assertNull($attachment->media_download_claim_token);
+        $this->assertSame(
+            1024 * 1024,
+            MediaDownloadTrafficLedger::query()->firstOrFail()->consumed_bytes,
+        );
+        $this->assertSame(
+            [],
+            Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)
+                ->allFiles(MessageAttachment::LOCAL_PATH_PREFIX.'/'.$message->id),
+        );
+    }
+
     public function test_bitrix24_live_export_readiness_is_blocked_before_bridge_check_for_blacklist_dialog(): void
     {
         [$dialog, $message] = $this->createDialogWithInbound(blacklisted: true);
@@ -449,6 +512,7 @@ class DialogBlacklistStageBehaviorTest extends TestCase
     ): array {
         $channel = ($accountChannel ? Channel::factory()->account() : Channel::factory())->create([
             'platform' => Channel::PLATFORM_TELEGRAM,
+            'telegram_account_media_on_demand_enabled' => $accountChannel,
         ]);
         $contact = Contact::factory()->create();
         $identity = ContactIdentity::factory()->create([

@@ -6,11 +6,18 @@ use App\Data\Bots\IncomingBotMessage;
 use App\Models\Channel;
 use App\Models\Message;
 use App\Models\MessageAttachment;
+use App\Services\Dialogs\DialogAutomationGate;
+use App\Services\Messages\InboundMediaDownloadPolicy;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 
 class SyncBotInboundMessageAttachmentsAction
 {
+    public function __construct(
+        private readonly InboundMediaDownloadPolicy $mediaDownloadPolicy,
+        private readonly DialogAutomationGate $dialogAutomationGate,
+    ) {}
+
     public function handle(Channel $channel, Message $message, IncomingBotMessage $incomingMessage): void
     {
         if ($incomingMessage->media === [] || ! filled($incomingMessage->providerEventKey)) {
@@ -23,12 +30,23 @@ class SyncBotInboundMessageAttachmentsAction
             return;
         }
 
+        $message->loadMissing('dialog.dialogStage');
+        $automaticDownloadAllowed = $this->dialogAutomationGate->acceptsMessage($message);
+
         foreach (array_values($incomingMessage->media) as $index => $item) {
             if (! is_array($item)) {
                 continue;
             }
 
-            $this->syncAttachment($provider, $message, $incomingMessage, $item, $index);
+            $this->syncAttachment(
+                $channel,
+                $provider,
+                $message,
+                $incomingMessage,
+                $item,
+                $index,
+                $automaticDownloadAllowed,
+            );
         }
 
         $message->unsetRelation('attachments');
@@ -38,11 +56,13 @@ class SyncBotInboundMessageAttachmentsAction
      * @param  array<string, mixed>  $item
      */
     private function syncAttachment(
+        Channel $channel,
         string $provider,
         Message $message,
         IncomingBotMessage $incomingMessage,
         array $item,
         int $fallbackSortOrder,
+        bool $automaticDownloadAllowed,
     ): void {
         $providerEventKey = $this->normalizeScalar($incomingMessage->providerEventKey);
         $providerAttachmentKey = $this->normalizeScalar(data_get($item, 'provider_attachment_key'));
@@ -54,6 +74,15 @@ class SyncBotInboundMessageAttachmentsAction
         $mediaKind = MessageAttachment::mediaKindFromLegacyType(
             $this->normalizeScalar(data_get($item, 'media_kind'))
                 ?? $this->normalizeScalar(data_get($item, 'type'))
+        );
+        $fileSizeBytes = $this->normalizeInteger(data_get($item, 'file_size_bytes'))
+            ?? $this->normalizeInteger(data_get($item, 'file_size'));
+        $downloadDecision = $this->mediaDownloadPolicy->initialDecision(
+            $channel,
+            $provider,
+            $mediaKind,
+            $fileSizeBytes,
+            $automaticDownloadAllowed,
         );
 
         $identity = [
@@ -69,8 +98,7 @@ class SyncBotInboundMessageAttachmentsAction
             'extension' => $this->normalizeScalar(data_get($item, 'extension')),
             'original_filename' => $this->normalizeScalar(data_get($item, 'file_name'))
                 ?? $this->normalizeScalar(data_get($item, 'original_filename')),
-            'file_size_bytes' => $this->normalizeInteger(data_get($item, 'file_size_bytes'))
-                ?? $this->normalizeInteger(data_get($item, 'file_size')),
+            'file_size_bytes' => $fileSizeBytes,
             'provider_file_id' => $this->normalizeScalar(data_get($item, 'provider_file_id')),
             'provider_file_unique_id' => $this->normalizeScalar(data_get($item, 'provider_file_unique_id')),
             'provider_file_reference' => $this->normalizeScalar(data_get($item, 'provider_file_reference')),
@@ -80,12 +108,13 @@ class SyncBotInboundMessageAttachmentsAction
         ];
         $createValues = [
             ...$metadataValues,
-            'download_status' => MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
+            'download_status' => $downloadDecision['status'],
+            'media_download_max_bytes' => $this->mediaDownloadPolicy->automaticRequestMaxBytes($channel, $provider),
             'send_status' => MessageAttachment::SEND_STATUS_NOT_APPLICABLE,
             'local_disk' => null,
             'local_path' => null,
-            'safe_error_code' => null,
-            'safe_error_message' => null,
+            'safe_error_code' => $downloadDecision['reason'],
+            'safe_error_message' => $downloadDecision['message'],
         ];
 
         $this->createOrUpdateAttachment($identity, $createValues, $metadataValues);
@@ -145,10 +174,9 @@ class SyncBotInboundMessageAttachmentsAction
 
     private function shouldPreserveDownloadState(MessageAttachment $attachment): bool
     {
-        return in_array($attachment->download_status, [
-            MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
-            MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
-        ], true)
+        return $attachment->download_status !== MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY
+            || $attachment->manual_download_requested_at !== null
+            || filled($attachment->safe_error_code)
             || filled($attachment->local_disk)
             || filled($attachment->local_path);
     }

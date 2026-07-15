@@ -104,7 +104,7 @@ class StoreInboundMessageActionTest extends TestCase
             'provider_file_id' => 'telegram-photo-file-1',
             'provider_file_unique_id' => 'telegram-photo-unique-1',
             'file_size_bytes' => 4096,
-            'download_status' => MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD,
             'send_status' => MessageAttachment::SEND_STATUS_NOT_APPLICABLE,
             'local_disk' => null,
             'local_path' => null,
@@ -164,7 +164,7 @@ class StoreInboundMessageActionTest extends TestCase
             'mime_type' => 'audio/ogg',
             'extension' => 'ogg',
             'file_size_bytes' => 151_664,
-            'download_status' => MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD,
             'send_status' => MessageAttachment::SEND_STATUS_NOT_APPLICABLE,
             'local_disk' => null,
             'local_path' => null,
@@ -372,7 +372,7 @@ class StoreInboundMessageActionTest extends TestCase
         $this->assertSame('max-media-message-1', $attachment->provider_event_key);
         $this->assertSame('25852958504', $attachment->provider_attachment_key);
         $this->assertSame('25852958504', $attachment->provider_file_reference);
-        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY, $attachment->download_status);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND, $attachment->download_status);
         $this->assertSame(['width' => 538, 'height' => 1280], $attachment->provider_metadata);
         $this->assertSame(['type' => 'image', 'photo_id' => '25852958504'], $attachment->raw_payload_excerpt);
         $this->assertStringNotContainsString('url', json_encode($attachment->provider_metadata, JSON_THROW_ON_ERROR));
@@ -424,7 +424,7 @@ class StoreInboundMessageActionTest extends TestCase
         $this->assertSame('429b5', $attachment->provider_attachment_key);
         $this->assertSame('429b5', $attachment->provider_file_reference);
         $this->assertSame(MessageAttachment::MEDIA_KIND_STICKER, $attachment->media_kind);
-        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY, $attachment->download_status);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND, $attachment->download_status);
         $this->assertSame(['width' => 144, 'height' => 144], $attachment->provider_metadata);
         $this->assertSame([
             'type' => 'sticker',

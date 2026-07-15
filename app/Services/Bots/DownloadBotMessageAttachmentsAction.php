@@ -2,16 +2,30 @@
 
 namespace App\Services\Bots;
 
-use App\Data\Bots\DownloadedAvatarData;
 use App\Data\Bots\MaxVideoAttachmentDownloadData;
+use App\Data\Messages\DownloadedMediaStreamData;
+use App\Data\Messages\InboundMediaDownloadFailureDecision;
+use App\Jobs\DownloadBotMessageAttachmentJob;
 use App\Models\Channel;
+use App\Models\Dialog;
 use App\Models\Message;
 use App\Models\MessageAttachment;
 use App\Services\Dialogs\DialogAutomationGate;
+use App\Services\Messages\InboundMediaAdmissionDeniedException;
+use App\Services\Messages\InboundMediaAdmissionGate;
+use App\Services\Messages\InboundMediaDownloadFailureClassifier;
+use App\Services\Messages\InboundMediaDownloadPolicy;
+use App\Services\Messages\InboundMediaQuotaExceededException;
+use App\Services\Messages\InboundMediaQuotaLedger;
+use App\Services\Messages\InboundMediaRetrySchedule;
+use App\Services\Messages\MediaDownloadLeaseLostException;
+use App\Services\Messages\ResolvePinnedHttpsUrlAction;
 use App\Services\Messages\StoreMessageAttachmentLocalFileAction;
-use Illuminate\Http\Client\Response as HttpResponse;
+use App\Services\Messages\StreamHttpResponseToTemporaryFileAction;
+use App\Services\Messages\ValidateInboundMediaIntegrityAction;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 use InvalidArgumentException;
 use Throwable;
 
@@ -22,13 +36,24 @@ class DownloadBotMessageAttachmentsAction
         private readonly MaxBotApiService $maxBotApiService,
         private readonly StoreMessageAttachmentLocalFileAction $storeMessageAttachmentLocalFileAction,
         private readonly DialogAutomationGate $dialogAutomationGate,
+        private readonly InboundMediaDownloadPolicy $mediaDownloadPolicy,
+        private readonly InboundMediaDownloadFailureClassifier $failureClassifier,
+        private readonly InboundMediaQuotaLedger $quotaLedger,
+        private readonly InboundMediaRetrySchedule $retrySchedule,
+        private readonly InboundMediaAdmissionGate $admissionGate,
+        private readonly ResolvePinnedHttpsUrlAction $resolvePinnedHttpsUrlAction,
+        private readonly StreamHttpResponseToTemporaryFileAction $streamHttpResponseToTemporaryFileAction,
+        private readonly ValidateInboundMediaIntegrityAction $validateInboundMediaIntegrityAction,
     ) {}
 
-    public function handle(Message $message): void
+    /**
+     * @param  list<int>|null  $attachmentIds
+     */
+    public function handle(Message $message, ?array $attachmentIds = null, bool $manual = false): void
     {
-        $message->loadMissing(['channel', 'attachments', 'dialog.dialogStage']);
+        $message->load(['channel', 'attachments', 'dialog.dialogStage']);
 
-        if (! $this->dialogAutomationGate->acceptsMessage($message)) {
+        if (! $manual && ! $this->dialogAutomationGate->acceptsMessage($message)) {
             $this->markBlacklistedAttachmentsMetadataOnly($message);
 
             return;
@@ -40,12 +65,20 @@ class DownloadBotMessageAttachmentsAction
             return;
         }
 
+        $attachmentIds = $attachmentIds === null
+            ? null
+            : array_values(array_unique(array_map('intval', $attachmentIds)));
+
         foreach ($message->attachments as $attachment) {
-            if (! $attachment instanceof MessageAttachment || ! $this->shouldDownload($attachment)) {
+            if (
+                ! $attachment instanceof MessageAttachment
+                || ($attachmentIds !== null && ! in_array((int) $attachment->id, $attachmentIds, true))
+                || ! $this->shouldDownload($attachment, $manual)
+            ) {
                 continue;
             }
 
-            $this->download($channel, $message, $attachment);
+            $this->download($channel, $message, $attachment, $manual);
         }
 
         $message->unsetRelation('attachments');
@@ -53,82 +86,84 @@ class DownloadBotMessageAttachmentsAction
 
     private function markBlacklistedAttachmentsMetadataOnly(Message $message): void
     {
-        MessageAttachment::query()
-            ->where('message_id', $message->id)
-            ->whereIn('provider', [
-                MessageAttachment::PROVIDER_TELEGRAM_BOT,
-                MessageAttachment::PROVIDER_MAX_BOT,
-            ])
-            ->whereIn('download_status', [
-                MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
-                MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD,
-            ])
-            ->update([
-                'download_status' => MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
-                'local_disk' => null,
-                'local_path' => null,
-                'safe_error_code' => DialogAutomationGate::REASON_BLACKLIST_STAGE,
-                'safe_error_message' => 'Media download skipped because the dialog stage is blacklisted.',
-                'updated_at' => now(),
-            ]);
+        DB::transaction(function () use ($message): void {
+            $attachments = MessageAttachment::query()
+                ->where('message_id', $message->id)
+                ->whereIn('provider', [
+                    MessageAttachment::PROVIDER_TELEGRAM_BOT,
+                    MessageAttachment::PROVIDER_MAX_BOT,
+                ])
+                ->whereIn('download_status', [
+                    MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
+                    MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD,
+                ])
+                ->whereNull('manual_download_requested_at')
+                ->lockForUpdate()
+                ->get();
+
+            foreach ($attachments as $attachment) {
+                $attachment->forceFill([
+                    'download_status' => MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
+                    'local_disk' => null,
+                    'local_path' => null,
+                    'safe_error_code' => InboundMediaDownloadPolicy::REASON_BLACKLIST_STAGE,
+                    'safe_error_message' => 'Media download skipped because the dialog stage is blacklisted.',
+                ])->save();
+            }
+        });
 
         $message->unsetRelation('attachments');
     }
 
-    private function shouldDownload(MessageAttachment $attachment): bool
+    private function shouldDownload(MessageAttachment $attachment, bool $manual): bool
     {
-        if (
-            $attachment->provider === MessageAttachment::PROVIDER_TELEGRAM_BOT
-            && ! in_array($attachment->media_kind, [
-                MessageAttachment::MEDIA_KIND_IMAGE,
-                MessageAttachment::MEDIA_KIND_DOCUMENT,
-                MessageAttachment::MEDIA_KIND_VIDEO,
-                MessageAttachment::MEDIA_KIND_VIDEO_NOTE,
-                MessageAttachment::MEDIA_KIND_AUDIO,
-                MessageAttachment::MEDIA_KIND_VOICE,
-                MessageAttachment::MEDIA_KIND_STICKER,
-                MessageAttachment::MEDIA_KIND_ANIMATION,
-            ], true)
-        ) {
+        if (! $this->mediaDownloadPolicy->supports(
+            (string) $attachment->provider,
+            (string) $attachment->media_kind,
+        )) {
+            return false;
+        }
+
+        if ($attachment->download_status !== MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD) {
             return false;
         }
 
         if (
-            $attachment->provider === MessageAttachment::PROVIDER_MAX_BOT
-            && ! in_array($attachment->media_kind, [
-                MessageAttachment::MEDIA_KIND_IMAGE,
-                MessageAttachment::MEDIA_KIND_DOCUMENT,
-                MessageAttachment::MEDIA_KIND_VIDEO,
-                MessageAttachment::MEDIA_KIND_VIDEO_NOTE,
-                MessageAttachment::MEDIA_KIND_AUDIO,
-                MessageAttachment::MEDIA_KIND_STICKER,
-            ], true)
+            $attachment->media_download_next_retry_at !== null
+            && $attachment->media_download_next_retry_at->isFuture()
         ) {
             return false;
         }
 
-        if (! in_array($attachment->provider, [
-            MessageAttachment::PROVIDER_TELEGRAM_BOT,
-            MessageAttachment::PROVIDER_MAX_BOT,
-        ], true)) {
-            return false;
-        }
-
-        return in_array($attachment->download_status, [
-            MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
-            MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD,
-        ], true);
+        return $manual
+            ? $attachment->manual_download_requested_at !== null
+            : $attachment->manual_download_requested_at === null;
     }
 
-    private function download(Channel $channel, Message $message, MessageAttachment $attachment): ?MessageAttachment
-    {
-        $claimedAttachment = $this->claimDownload($attachment);
+    private function download(
+        Channel $channel,
+        Message $message,
+        MessageAttachment $attachment,
+        bool $manual,
+    ): ?MessageAttachment {
+        $previousFailureReason = $attachment->safe_error_code;
+
+        try {
+            $claimedAttachment = $this->claimDownload($channel, $attachment, $manual);
+        } catch (InboundMediaAdmissionDeniedException $exception) {
+            DownloadBotMessageAttachmentJob::dispatch((int) $attachment->id, $manual)
+                ->delay(now()->addSeconds($exception->retryAfterSeconds));
+
+            return $attachment->fresh();
+        }
 
         if (! $claimedAttachment instanceof MessageAttachment) {
             return $attachment->fresh();
         }
 
         $attachment = $claimedAttachment;
+
+        $downloaded = null;
 
         try {
             $downloaded = match ($attachment->provider) {
@@ -137,62 +172,73 @@ class DownloadBotMessageAttachmentsAction
                 default => null,
             };
 
-            if (! $downloaded instanceof DownloadedAvatarData) {
+            if (! $downloaded instanceof DownloadedMediaStreamData) {
                 return $this->markFailed(
                     $attachment,
-                    'bot_media_download_unsupported_provider',
-                    'Media download is not supported for this provider.',
+                    new InboundMediaDownloadFailureDecision(
+                        reason: 'bot_media_download_unsupported_provider',
+                        retryable: false,
+                    ),
                 );
             }
 
-            return $this->storeDownloadedAttachment($attachment, $downloaded);
+            return $this->storeDownloadedAttachment($message, $attachment, $downloaded);
+        } catch (MediaDownloadLeaseLostException) {
+            return $attachment->fresh();
+        } catch (InboundMediaQuotaExceededException $exception) {
+            return $this->markQuotaBlocked($attachment, $exception);
         } catch (Throwable $throwable) {
             return $this->markFailed(
                 $attachment,
-                $this->resolveSafeErrorCode($throwable),
-                $this->resolveSafeErrorMessage($attachment),
+                $this->failureClassifier->classify(
+                    $throwable,
+                    $previousFailureReason,
+                ),
             );
+        } finally {
+            if ($downloaded instanceof DownloadedMediaStreamData) {
+                $downloaded->close();
+            }
         }
     }
 
-    private function downloadTelegramBotFile(Channel $channel, Message $message, MessageAttachment $attachment): DownloadedAvatarData
-    {
+    private function downloadTelegramBotFile(
+        Channel $channel,
+        Message $message,
+        MessageAttachment $attachment,
+    ): DownloadedMediaStreamData {
         $fileId = $this->resolveTelegramBotDownloadFileId($message, $attachment);
 
         if (! filled($fileId)) {
             throw new InvalidArgumentException('Telegram Bot media download requires provider_file_id.');
         }
 
-        $downloaded = $this->telegramBotApiService->downloadFile(
+        $downloaded = $this->telegramBotApiService->downloadFileToStream(
             $channel,
             (string) $fileId,
-            $this->maxBytes(),
+            $this->maxBytes($attachment),
+            fn (int $receivedBytes) => $this->checkpointDownloadProgress($attachment, $receivedBytes),
         );
 
         if ($fileId === $this->normalizeScalar($attachment->provider_file_id)) {
             return $downloaded;
         }
 
-        return new DownloadedAvatarData(
-            contents: $downloaded->contents,
-            contentType: $downloaded->contentType,
-            filenameHint: $downloaded->filenameHint,
-            metadata: [
-                ...$downloaded->metadata,
-                'telegram_preview_source' => 'thumbnail',
-                'telegram_preview_file_id' => $fileId,
-                'telegram_original_file_id' => $this->normalizeScalar($attachment->provider_file_id),
-                'width' => $this->normalizeNonNegativeInteger(data_get($attachment->raw_payload_excerpt, 'thumbnail_width')),
-                'height' => $this->normalizeNonNegativeInteger(data_get($attachment->raw_payload_excerpt, 'thumbnail_height')),
-            ],
-        );
+        return $downloaded->withMetadata([
+            ...$downloaded->metadata,
+            'telegram_preview_source' => 'thumbnail',
+            'telegram_preview_file_id' => $fileId,
+            'telegram_original_file_id' => $this->normalizeScalar($attachment->provider_file_id),
+            'width' => $this->normalizeNonNegativeInteger(data_get($attachment->raw_payload_excerpt, 'thumbnail_width')),
+            'height' => $this->normalizeNonNegativeInteger(data_get($attachment->raw_payload_excerpt, 'thumbnail_height')),
+        ]);
     }
 
     private function downloadMaxBotMedia(
         Channel $channel,
         Message $message,
         MessageAttachment $attachment,
-    ): DownloadedAvatarData {
+    ): DownloadedMediaStreamData {
         $downloadData = $this->resolveMaxMediaDownloadData($channel, $message, $attachment);
         $url = $downloadData?->downloadUrl;
 
@@ -200,97 +246,123 @@ class DownloadBotMessageAttachmentsAction
             throw new InvalidArgumentException('MAX media URL is missing from raw payload.');
         }
 
-        $trustedUrl = $this->validateTrustedMaxMediaUrl($url);
+        $trustedHosts = array_values(array_filter(
+            (array) config('bots.max.trusted_media_hosts', config('bots.max.trusted_avatar_hosts', ['max.ru'])),
+            static fn (mixed $value): bool => is_string($value) && trim($value) !== '',
+        ));
+        $pinnedUrl = $this->resolvePinnedHttpsUrlAction->handle(
+            $url,
+            $trustedHosts,
+            (array) config('bots.max.pinned_media_ips', []),
+        );
 
-        $response = Http::withOptions(['stream' => true])
+        $response = Http::withOptions([
+            'stream' => true,
+            'allow_redirects' => false,
+            'connect_timeout' => 10,
+            'read_timeout' => $this->streamReadTimeoutSeconds(),
+            'timeout' => max(30, (int) config('inbound_media.attempt_deadline_seconds', 6 * 60 * 60)),
+            'curl' => $pinnedUrl->curlOptions,
+        ])
             ->withoutRedirecting()
-            ->timeout(30)
-            ->get($trustedUrl)
+            ->get($pinnedUrl->url)
             ->throw();
 
-        $this->assertContentLengthWithinLimit($response->header('Content-Length'));
-
-        $contents = $this->readResponseBodyWithinLimit($response);
-
-        if ($contents === '') {
-            throw new InvalidArgumentException('MAX media download returned an empty body.');
-        }
-
-        if (strlen($contents) > $this->maxBytes()) {
-            throw new InvalidArgumentException('MAX media file is larger than the local download limit.');
-        }
-
-        return new DownloadedAvatarData(
-            contents: $contents,
-            contentType: $response->header('Content-Type'),
-            filenameHint: $this->filenameHintFromUrl($trustedUrl),
+        return $this->streamHttpResponseToTemporaryFileAction->handle(
+            response: $response,
+            maxBytes: $this->maxBytes($attachment),
+            filenameHint: $this->filenameHintFromUrl($pinnedUrl->url),
             metadata: $downloadData->metadata(),
+            onProgress: fn (int $receivedBytes) => $this->checkpointDownloadProgress($attachment, $receivedBytes),
+            tooLargeMessage: 'MAX media file is larger than the local download limit.',
+            emptyMessage: 'MAX media download returned an empty body.',
         );
     }
 
-    private function assertContentLengthWithinLimit(?string $contentLength): void
-    {
-        if ($contentLength === null) {
-            return;
-        }
-
-        $normalized = trim(strtok($contentLength, ',') ?: '');
-
-        if ($normalized === '' || ! ctype_digit($normalized)) {
-            return;
-        }
-
-        if ((int) $normalized > $this->maxBytes()) {
-            throw new InvalidArgumentException('MAX media file is larger than the local download limit.');
-        }
-    }
-
-    private function readResponseBodyWithinLimit(HttpResponse $response): string
-    {
-        $body = $response->toPsrResponse()->getBody();
-        $maxBytes = $this->maxBytes();
-        $expectedLength = $this->normalizeNonNegativeInteger($response->header('Content-Length'));
-        $contents = '';
-
-        while (! $body->eof()) {
-            $remainingBytes = $maxBytes - strlen($contents) + 1;
-
-            try {
-                $chunk = $body->read(min(8192, $remainingBytes));
-            } catch (\RuntimeException $exception) {
-                // CDN MAX (okcdn) закрывает соединение без EOF-сигнала: psr7 кидает
-                // «Unable to read from stream» УЖЕ ПОСЛЕ полного тела. Если получено
-                // ровно столько, сколько обещал Content-Length — тело полное.
-                if ($expectedLength !== null && strlen($contents) >= $expectedLength) {
-                    break;
-                }
-
-                throw $exception;
-            }
-
-            if ($chunk === '') {
-                break;
-            }
-
-            $contents .= $chunk;
-
-            if (strlen($contents) > $maxBytes) {
-                throw new InvalidArgumentException('MAX media file is larger than the local download limit.');
-            }
-        }
-
-        return $contents;
-    }
-
     private function storeDownloadedAttachment(
+        Message $message,
         MessageAttachment $attachment,
-        DownloadedAvatarData $downloaded,
+        DownloadedMediaStreamData $downloaded,
     ): MessageAttachment {
+        $this->checkpointDownloadProgress($attachment, $downloaded->sizeBytes);
+
+        return DB::transaction(function () use ($message, $attachment, $downloaded): MessageAttachment {
+            $dialogId = Message::query()
+                ->whereKey($message->id)
+                ->value('dialog_id');
+            $lockedDialog = $dialogId === null
+                ? null
+                : Dialog::query()
+                    ->with('dialogStage')
+                    ->whereKey($dialogId)
+                    ->lockForUpdate()
+                    ->first();
+            $lockedMessage = Message::query()
+                ->whereKey($message->id)
+                ->lockForUpdate()
+                ->first();
+            $lockedAttachment = MessageAttachment::query()
+                ->whereKey($attachment->id)
+                ->lockForUpdate()
+                ->first();
+
+            if (
+                ($dialogId !== null && ! $lockedDialog instanceof Dialog)
+                || ! $lockedMessage instanceof Message
+                || ! $lockedAttachment instanceof MessageAttachment
+                || (int) $lockedMessage->dialog_id !== (int) $dialogId
+                || (int) $lockedAttachment->message_id !== (int) $lockedMessage->id
+                || $lockedAttachment->download_status !== MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING
+                || blank($attachment->media_download_claim_token)
+                || blank($lockedAttachment->media_download_claim_token)
+                || ! hash_equals(
+                    (string) $lockedAttachment->media_download_claim_token,
+                    (string) $attachment->media_download_claim_token,
+                )
+            ) {
+                throw new MediaDownloadLeaseLostException;
+            }
+
+            if (
+                $lockedAttachment->manual_download_requested_at === null
+                && ! $this->dialogAutomationGate->accepts($lockedDialog)
+            ) {
+                return $this->markLockedMetadataOnlyBecauseBlacklisted(
+                    $lockedAttachment,
+                    $downloaded->sizeBytes,
+                );
+            }
+
+            return $this->storeDownloadedAttachmentUnderLock($lockedAttachment, $downloaded);
+        }, 3);
+    }
+
+    private function storeDownloadedAttachmentUnderLock(
+        MessageAttachment $attachment,
+        DownloadedMediaStreamData $downloaded,
+    ): MessageAttachment {
+        $attemptNumber = $attachment->mediaDownloadLedgerAttemptNumber();
+        $this->quotaLedger->assertCanCompleteAttempt(
+            $attachment,
+            $attemptNumber,
+            $downloaded->sizeBytes,
+        );
+
         $filename = $this->filenameFromHint($downloaded->filenameHint);
         $headerMimeType = $this->normalizeMimeType($downloaded->contentType);
         $attachmentExtension = MessageAttachment::sanitizeExtension($attachment->extension);
         $providerMetadata = $this->mergedProviderMetadata($attachment, $downloaded->metadata);
         $isTelegramStickerThumbnail = $this->isTelegramStickerThumbnailDownload($attachment, $providerMetadata);
+        $providerSizeBytes = $isTelegramStickerThumbnail
+            ? null
+            : $this->normalizeNonNegativeInteger(data_get($downloaded->metadata, 'provider_declared_size_bytes'));
+        $detectedMimeType = $this->validateInboundMediaIntegrityAction->inspectStream(
+            attachment: $attachment,
+            stream: $downloaded->stream,
+            actualSizeBytes: $downloaded->sizeBytes,
+            providerSizeBytes: $providerSizeBytes,
+            declaredMimeType: $headerMimeType ?? $attachment->mime_type,
+        );
         $extension = $this->extensionFromMimeType($headerMimeType)
             ?? ($isTelegramStickerThumbnail ? $this->extensionFromFilename($filename) : null)
             ?? ($attachmentExtension !== '' ? $attachmentExtension : null)
@@ -299,10 +371,7 @@ class DownloadBotMessageAttachmentsAction
             ?? ($isTelegramStickerThumbnail ? $this->mimeTypeFromExtension($extension) : null)
             ?? $attachment->mime_type
             ?? $this->mimeTypeFromExtension($extension)
-            // CDN MAX может не прислать Content-Type, а payload — mime/extension:
-            // последний рубеж — определить тип по первым байтам самого файла
-            // (без типа previewKind пуст, и вместо плеера оператор видит карточку).
-            ?? $this->mimeTypeFromContents($downloaded->contents);
+            ?? $detectedMimeType;
 
         if ($extension === null && $mimeType !== null) {
             $extension = $this->extensionFromMimeType($mimeType);
@@ -314,7 +383,7 @@ class DownloadBotMessageAttachmentsAction
             'original_filename' => $isTelegramStickerThumbnail
                 ? 'sticker-preview.'.($extension ?: 'bin')
                 : ($attachment->original_filename ?? $filename),
-            'file_size_bytes' => strlen($downloaded->contents),
+            'file_size_bytes' => $downloaded->sizeBytes,
         ];
 
         $isMaxVideoNote = $this->shouldTreatMaxVideoAsVideoNote($attachment, $providerMetadata);
@@ -334,13 +403,155 @@ class DownloadBotMessageAttachmentsAction
             $values['raw_payload_excerpt'] = $rawPayloadExcerpt;
         }
 
-        $attachment->forceFill($values)->save();
+        rewind($downloaded->stream);
 
-        return $this->storeMessageAttachmentLocalFileAction->handle(
+        $stored = $this->storeMessageAttachmentLocalFileAction->handleStream(
             $attachment,
-            $downloaded->contents,
+            $downloaded->stream,
+            $downloaded->sizeBytes,
             $extension,
+            function (MessageAttachment $storedAttachment) use ($attemptNumber, $downloaded): void {
+                $this->quotaLedger->completeAttempt(
+                    $storedAttachment,
+                    $attemptNumber,
+                    $downloaded->sizeBytes,
+                );
+            },
+            expectedClaimToken: (string) $attachment->media_download_claim_token,
+            attachmentValues: $values,
         );
+
+        return $stored;
+    }
+
+    private function markLockedMetadataOnlyBecauseBlacklisted(
+        MessageAttachment $attachment,
+        int $transferredBytes,
+    ): MessageAttachment {
+        $this->quotaLedger->failAttempt(
+            $attachment,
+            $attachment->mediaDownloadLedgerAttemptNumber(),
+            $transferredBytes,
+            InboundMediaDownloadPolicy::REASON_BLACKLIST_STAGE,
+        );
+
+        $attachment->forceFill([
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
+            'local_disk' => null,
+            'local_path' => null,
+            'manual_download_requested_at' => null,
+            'manual_download_requested_by_user_id' => null,
+            'media_download_claim_token' => null,
+            'media_download_attempts' => max(0, (int) $attachment->media_download_attempts - 1),
+            'media_download_upload_size_bytes' => null,
+            'media_download_next_retry_at' => null,
+            'media_download_claimed_at' => null,
+            'media_download_heartbeat_at' => null,
+            'media_download_attempt_deadline_at' => null,
+            'safe_error_code' => InboundMediaDownloadPolicy::REASON_BLACKLIST_STAGE,
+            'safe_error_message' => 'Media download skipped because the dialog stage is blacklisted.',
+        ])->save();
+
+        return $attachment->refresh();
+    }
+
+    private function checkpointDownloadProgress(MessageAttachment $attachment, int $receivedBytes): void
+    {
+        $active = DB::transaction(function () use ($attachment, $receivedBytes): bool {
+            $dialogId = MessageAttachment::query()
+                ->whereKey($attachment->id)
+                ->join('messages', 'messages.id', '=', 'message_attachments.message_id')
+                ->value('messages.dialog_id');
+            $lockedDialog = $dialogId === null
+                ? null
+                : Dialog::query()
+                    ->with('dialogStage')
+                    ->whereKey($dialogId)
+                    ->lockForUpdate()
+                    ->first();
+            $lockedMessage = Message::query()
+                ->whereKey($attachment->message_id)
+                ->lockForUpdate()
+                ->first();
+            $lockedAttachment = MessageAttachment::query()
+                ->whereKey($attachment->id)
+                ->lockForUpdate()
+                ->first();
+
+            if (
+                ! $lockedMessage instanceof Message
+                || ! $lockedAttachment instanceof MessageAttachment
+                || (int) $lockedAttachment->message_id !== (int) $lockedMessage->id
+                || $lockedAttachment->download_status !== MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING
+                || blank($attachment->media_download_claim_token)
+                || blank($lockedAttachment->media_download_claim_token)
+                || ! hash_equals(
+                    (string) $lockedAttachment->media_download_claim_token,
+                    (string) $attachment->media_download_claim_token,
+                )
+                || $lockedAttachment->media_download_attempt_deadline_at === null
+                || $lockedAttachment->media_download_attempt_deadline_at->isPast()
+            ) {
+                return false;
+            }
+
+            if ($lockedMessage->removed_at !== null) {
+                $this->markLockedSourceUnavailable($lockedAttachment, $receivedBytes);
+
+                return false;
+            }
+
+            if (
+                $lockedAttachment->manual_download_requested_at === null
+                && ! $this->dialogAutomationGate->accepts($lockedDialog)
+            ) {
+                $this->markLockedMetadataOnlyBecauseBlacklisted($lockedAttachment, $receivedBytes);
+
+                return false;
+            }
+
+            $lockedAttachment->forceFill([
+                'media_download_heartbeat_at' => now(),
+            ])->save();
+
+            $this->quotaLedger->checkpointTraffic(
+                $lockedAttachment,
+                $lockedAttachment->mediaDownloadLedgerAttemptNumber(),
+                $receivedBytes,
+            );
+
+            return true;
+        }, 3);
+
+        if (! $active) {
+            throw new MediaDownloadLeaseLostException;
+        }
+    }
+
+    private function markLockedSourceUnavailable(
+        MessageAttachment $attachment,
+        int $transferredBytes,
+    ): void {
+        $this->quotaLedger->failAttempt(
+            $attachment,
+            $attachment->mediaDownloadLedgerAttemptNumber(),
+            $transferredBytes,
+            InboundMediaDownloadPolicy::REASON_SOURCE_UNAVAILABLE,
+        );
+
+        $attachment->forceFill([
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOAD_FAILED,
+            'manual_download_requested_at' => null,
+            'manual_download_requested_by_user_id' => null,
+            'media_download_claim_token' => null,
+            'media_download_upload_size_bytes' => null,
+            'media_download_next_retry_at' => null,
+            'media_download_claimed_at' => null,
+            'media_download_heartbeat_at' => null,
+            'media_download_attempt_deadline_at' => null,
+            'safe_error_code' => InboundMediaDownloadPolicy::REASON_SOURCE_UNAVAILABLE,
+            'safe_error_message' => 'Источник больше недоступен.',
+        ])->save();
     }
 
     private function resolveTelegramBotDownloadFileId(Message $message, MessageAttachment $attachment): ?string
@@ -404,31 +615,81 @@ class DownloadBotMessageAttachmentsAction
             && data_get($providerMetadata, 'telegram_preview_source') === 'thumbnail';
     }
 
-    private function claimDownload(MessageAttachment $attachment): ?MessageAttachment
-    {
-        return DB::transaction(function () use ($attachment): ?MessageAttachment {
+    private function claimDownload(
+        Channel $channel,
+        MessageAttachment $attachment,
+        bool $manual,
+    ): ?MessageAttachment {
+        return DB::transaction(function () use ($channel, $attachment, $manual): ?MessageAttachment {
+            $this->admissionGate->lock();
+
             $locked = MessageAttachment::query()
                 ->whereKey($attachment->id)
                 ->lockForUpdate()
                 ->first();
 
-            if (! $locked instanceof MessageAttachment || ! $this->shouldDownload($locked) || $this->hasLocalFile($locked)) {
+            if (
+                ! $locked instanceof MessageAttachment
+                || ! $this->shouldDownload($locked, $manual)
+                || $this->hasLocalFile($locked)
+            ) {
                 return null;
             }
 
+            $this->admissionGate->assertCanClaim($channel, $manual, (int) $locked->id);
+
+            $attemptNumber = max(0, (int) $locked->media_download_attempts) + 1;
+            $leaseSequence = max(
+                0,
+                (int) $locked->media_download_lease_sequence,
+                (int) $locked->media_download_attempts,
+            ) + 1;
+            $quotaDecision = $this->quotaLedger->reserveForAttempt($locked, $leaseSequence);
+
+            if (! $quotaDecision->allowed) {
+                $locked->forceFill([
+                    'download_status' => MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND,
+                    'manual_download_requested_at' => null,
+                    'manual_download_requested_by_user_id' => null,
+                    'media_download_claim_token' => null,
+                    'media_download_claimed_at' => null,
+                    'media_download_heartbeat_at' => null,
+                    'media_download_attempt_deadline_at' => null,
+                    'safe_error_code' => $quotaDecision->reason,
+                    'safe_error_message' => $this->quotaErrorMessage($quotaDecision->reason),
+                ])->save();
+
+                return null;
+            }
+
+            $claimedAt = now();
+
             $locked->forceFill([
                 'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
+                'media_download_claim_token' => Str::uuid()->toString(),
+                'media_download_attempts' => $attemptNumber,
+                'media_download_lease_sequence' => $leaseSequence,
+                'media_download_trigger' => $manual ? 'manual' : 'auto',
+                'media_download_claimed_at' => $claimedAt,
+                'media_download_heartbeat_at' => $claimedAt,
+                'media_download_attempt_deadline_at' => $claimedAt->copy()->addSeconds(
+                    max(1, (int) config('inbound_media.attempt_deadline_seconds', 6 * 60 * 60)),
+                ),
                 'safe_error_code' => null,
                 'safe_error_message' => null,
             ])->save();
+
+            $this->admissionGate->recordClaim($channel, $manual);
 
             return $locked->fresh();
         });
     }
 
-    private function markFailed(MessageAttachment $attachment, string $errorCode, string $errorMessage): MessageAttachment
-    {
-        return DB::transaction(function () use ($attachment, $errorCode, $errorMessage): MessageAttachment {
+    private function markFailed(
+        MessageAttachment $attachment,
+        InboundMediaDownloadFailureDecision $decision,
+    ): MessageAttachment {
+        $failedAttachment = DB::transaction(function () use ($attachment, $decision): MessageAttachment {
             $locked = MessageAttachment::query()
                 ->whereKey($attachment->id)
                 ->lockForUpdate()
@@ -442,25 +703,137 @@ class DownloadBotMessageAttachmentsAction
                 $locked->download_status === MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED
                 || $this->hasLocalFile($locked)
                 || $locked->download_status !== MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING
+                || blank($attachment->media_download_claim_token)
+                || blank($locked->media_download_claim_token)
+                || ! hash_equals(
+                    (string) $locked->media_download_claim_token,
+                    (string) $attachment->media_download_claim_token,
+                )
             ) {
                 return $locked;
             }
 
+            $attemptNumber = max(1, (int) $locked->media_download_attempts);
+            $willRetry = $decision->retryable && $this->retrySchedule->willRetry($attemptNumber);
+            $errorCode = $willRetry || ! $decision->retryable
+                ? $decision->reason
+                : $this->retrySchedule->terminalErrorCode($decision->reason);
+            $nextRetryAt = $willRetry
+                ? $this->retrySchedule->nextRetryAt($attemptNumber, $decision->retryAfterSeconds)
+                : null;
+
+            $this->quotaLedger->failAttempt(
+                $locked,
+                $locked->mediaDownloadLedgerAttemptNumber(),
+                0,
+                $this->normalizeErrorCode($errorCode),
+            );
+
             $locked->forceFill([
-                'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOAD_FAILED,
+                'download_status' => $willRetry
+                    ? MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD
+                    : MessageAttachment::DOWNLOAD_STATUS_DOWNLOAD_FAILED,
                 'local_disk' => null,
                 'local_path' => null,
+                'media_download_claim_token' => null,
+                'media_download_next_retry_at' => $nextRetryAt,
+                'media_download_claimed_at' => null,
+                'media_download_heartbeat_at' => null,
+                'media_download_attempt_deadline_at' => null,
                 'safe_error_code' => $this->normalizeErrorCode($errorCode),
-                'safe_error_message' => $errorMessage,
+                'safe_error_message' => $this->resolveSafeErrorMessage($locked, $willRetry),
             ])->save();
 
             return $locked->refresh();
         });
+
+        if (
+            $failedAttachment->download_status === MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD
+            && $failedAttachment->manual_download_requested_at !== null
+            && $failedAttachment->media_download_next_retry_at !== null
+        ) {
+            DownloadBotMessageAttachmentJob::dispatch((int) $failedAttachment->id)
+                ->delay($failedAttachment->media_download_next_retry_at);
+        }
+
+        return $failedAttachment;
+    }
+
+    private function markQuotaBlocked(
+        MessageAttachment $attachment,
+        InboundMediaQuotaExceededException $exception,
+    ): MessageAttachment {
+        return DB::transaction(function () use ($attachment, $exception): MessageAttachment {
+            /** @var MessageAttachment $locked */
+            $locked = MessageAttachment::query()
+                ->whereKey($attachment->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            if (
+                $locked->download_status !== MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING
+                || blank($attachment->media_download_claim_token)
+                || blank($locked->media_download_claim_token)
+                || ! hash_equals(
+                    (string) $locked->media_download_claim_token,
+                    (string) $attachment->media_download_claim_token,
+                )
+            ) {
+                return $locked;
+            }
+
+            $this->quotaLedger->failAttempt(
+                $locked,
+                $locked->mediaDownloadLedgerAttemptNumber(),
+                $exception->transferredBytes,
+                $exception->reason,
+            );
+
+            $locked->forceFill([
+                'download_status' => MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND,
+                'manual_download_requested_at' => null,
+                'manual_download_requested_by_user_id' => null,
+                'local_disk' => null,
+                'local_path' => null,
+                'media_download_claim_token' => null,
+                'media_download_attempts' => $exception->reason === InboundMediaDownloadPolicy::REASON_MANUAL_HARD_LIMIT
+                    ? (int) $locked->media_download_attempts
+                    : max(0, (int) $locked->media_download_attempts - 1),
+                'media_download_next_retry_at' => null,
+                'media_download_claimed_at' => null,
+                'media_download_heartbeat_at' => null,
+                'media_download_attempt_deadline_at' => null,
+                'safe_error_code' => $exception->reason,
+                'safe_error_message' => $this->quotaErrorMessage($exception->reason),
+            ])->save();
+
+            return $locked->fresh();
+        }, 3);
     }
 
     private function hasLocalFile(MessageAttachment $attachment): bool
     {
         return filled($attachment->local_disk) && filled($attachment->local_path);
+    }
+
+    private function quotaErrorMessage(?string $reason): ?string
+    {
+        return match ($reason) {
+            InboundMediaDownloadPolicy::REASON_SIZE_ABOVE_AUTO_LIMIT => null,
+            InboundMediaDownloadPolicy::REASON_TRAFFIC_QUOTA_EXCEEDED => 'Дневной лимит загрузки медиа для канала исчерпан.',
+            default => 'Недостаточно доступного места для загрузки медиа.',
+        };
+    }
+
+    private function streamReadTimeoutSeconds(): int
+    {
+        return max(
+            1,
+            min(
+                90,
+                max(1, (int) config('inbound_media.lease_stale_seconds', 120)) - 30,
+            ),
+        );
     }
 
     private function resolveMaxMediaDownloadData(
@@ -802,41 +1175,6 @@ class DownloadBotMessageAttachmentsAction
             && str_contains($path, '/static/messages/res/images/stub/sticker_');
     }
 
-    private function validateTrustedMaxMediaUrl(string $url): string
-    {
-        $parts = parse_url($url);
-
-        if (! is_array($parts)) {
-            throw new InvalidArgumentException('MAX media URL is malformed.');
-        }
-
-        $scheme = strtolower((string) ($parts['scheme'] ?? ''));
-        $host = strtolower((string) ($parts['host'] ?? ''));
-
-        if ($scheme !== 'https' || $host === '') {
-            throw new InvalidArgumentException('MAX media URL must use HTTPS and a trusted host.');
-        }
-
-        if (array_key_exists('port', $parts) || array_key_exists('user', $parts) || array_key_exists('pass', $parts)) {
-            throw new InvalidArgumentException('MAX media URL contains unsupported connection parts.');
-        }
-
-        $trustedHosts = array_values(array_filter(
-            (array) config('bots.max.trusted_media_hosts', config('bots.max.trusted_avatar_hosts', ['max.ru'])),
-            static fn (mixed $value): bool => is_string($value) && trim($value) !== '',
-        ));
-
-        foreach ($trustedHosts as $trustedHost) {
-            $normalizedTrustedHost = strtolower(trim($trustedHost));
-
-            if ($host === $normalizedTrustedHost || str_ends_with($host, '.'.$normalizedTrustedHost)) {
-                return $url;
-            }
-        }
-
-        throw new InvalidArgumentException('MAX media URL host is not trusted.');
-    }
-
     private function filenameHintFromUrl(string $url): ?string
     {
         $path = parse_url($url, PHP_URL_PATH);
@@ -865,6 +1203,22 @@ class DownloadBotMessageAttachmentsAction
         $extension = MessageAttachment::sanitizeExtension(pathinfo((string) $filename, PATHINFO_EXTENSION));
 
         return $extension !== '' ? $extension : null;
+    }
+
+    /**
+     * @param  resource  $stream
+     */
+    private function mimeTypeFromStream(mixed $stream): ?string
+    {
+        if (! is_resource($stream)) {
+            return null;
+        }
+
+        rewind($stream);
+        $sample = fread($stream, 64 * 1024);
+        rewind($stream);
+
+        return is_string($sample) ? $this->mimeTypeFromContents($sample) : null;
     }
 
     private function mimeTypeFromContents(string $contents): ?string
@@ -1030,17 +1384,12 @@ class DownloadBotMessageAttachmentsAction
         return $normalized !== '' ? mb_substr($normalized, 0, 64) : 'bot_media_download_failed';
     }
 
-    private function resolveSafeErrorCode(Throwable $throwable): string
+    private function resolveSafeErrorMessage(MessageAttachment $attachment, bool $willRetry): string
     {
-        if ($throwable instanceof InvalidArgumentException) {
-            return 'bot_media_download_invalid_payload';
+        if ($willRetry) {
+            return 'Временная ошибка загрузки. Повторим автоматически.';
         }
 
-        return 'bot_media_download_failed';
-    }
-
-    private function resolveSafeErrorMessage(MessageAttachment $attachment): string
-    {
         return match ($attachment->provider) {
             MessageAttachment::PROVIDER_TELEGRAM_BOT => 'Не удалось скачать медиафайл из Telegram Bot.',
             MessageAttachment::PROVIDER_MAX_BOT => 'Не удалось скачать медиафайл из MAX.',
@@ -1048,8 +1397,17 @@ class DownloadBotMessageAttachmentsAction
         };
     }
 
-    private function maxBytes(): int
+    private function maxBytes(MessageAttachment $attachment): int
     {
-        return max(1, (int) config('bots.media.download_max_bytes', 20 * 1024 * 1024));
+        $attachmentLimit = $attachment->media_download_max_bytes;
+
+        if (is_int($attachmentLimit) && $attachmentLimit > 0) {
+            return $attachmentLimit;
+        }
+
+        return max(1, (int) config(
+            'bots.media.download_max_bytes',
+            InboundMediaDownloadPolicy::DEFAULT_AUTO_DOWNLOAD_MAX_BYTES,
+        ));
     }
 }
