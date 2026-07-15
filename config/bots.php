@@ -299,11 +299,23 @@ return [
 
     'media' => [
         'download_max_bytes' => (int) env('BOT_MEDIA_DOWNLOAD_MAX_BYTES', 20 * 1024 * 1024),
+        'max_streaming_download_enabled' => (bool) env('BOT_MAX_STREAMING_MEDIA_DOWNLOAD_ENABLED', false),
     ],
 
     'telegram' => [
         'webhook_secret_header' => 'X-Telegram-Bot-Api-Secret-Token',
         'webhook_ip_address' => env('TELEGRAM_WEBHOOK_IP_ADDRESS'),
+        'cloud_api_base_url' => 'https://api.telegram.org',
+        'local_api_media_download_enabled' => (bool) env('TELEGRAM_LOCAL_BOT_API_MEDIA_DOWNLOAD_ENABLED', false),
+        'local_api_base_url' => env('TELEGRAM_LOCAL_BOT_API_BASE_URL'),
+        'local_api_trusted_hosts' => array_values(array_filter(array_map(
+            static fn (string $host): string => trim(mb_strtolower($host)),
+            explode(',', (string) env(
+                'TELEGRAM_LOCAL_BOT_API_TRUSTED_HOSTS',
+                'telegram-bot-api,localhost,127.0.0.1,::1',
+            )),
+        ), static fn (string $host): bool => $host !== '')),
+        'local_api_files_root' => env('TELEGRAM_LOCAL_BOT_API_FILES_ROOT'),
         'allowed_updates' => [
             'message',
             'edited_message',
@@ -338,6 +350,7 @@ return [
             'mycdn.me',
             'okcdn.ru',
         ],
+        'pinned_media_ips' => [],
         'update_types' => [
             'message_created',
             'bot_started',

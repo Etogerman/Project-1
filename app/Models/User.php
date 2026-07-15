@@ -174,6 +174,11 @@ class User extends Authenticatable implements FilamentUser, HasName
         return $this->hasRolePermission('dialogs.edit');
     }
 
+    public function canDownloadMediaManually(): bool
+    {
+        return $this->hasRolePermission('download_media_manual');
+    }
+
     public function canViewAnalytics(): bool
     {
         return $this->hasRolePermission('analytics.view');

@@ -39,8 +39,8 @@ use App\Services\Dialogs\ResolveDialogStageAction;
 use App\Services\Dialogs\SyncSystemDialogCardViewAction;
 use App\Services\Dialogs\UpdateDialogInboxStatusAction;
 use App\Services\Dialogs\UpdateDialogStageAction;
+use App\Services\Messages\RequestInboundMediaDownloadAction;
 use App\Services\Scenarios\ScenarioEdgeExpressionCondition;
-use App\Services\TelegramAccount\RequestTelegramAccountMediaDownloadAction;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
 use Filament\Support\Enums\Width;
@@ -241,13 +241,13 @@ class ViewDialog extends ViewRecord
             $operator = $this->resolveCurrentEmployee();
             $attachment = MessageAttachment::query()->findOrFail($attachmentId);
 
-            app(RequestTelegramAccountMediaDownloadAction::class)->handle(
+            app(RequestInboundMediaDownloadAction::class)->handle(
                 $this->getRecord(),
                 $attachment,
                 $operator,
             );
 
-            $this->refreshVisibleConversationMessages();
+            $this->refreshVisibleConversationMessages([(int) $attachment->message_id]);
             $this->dispatch('dialog-history-refreshed', appendedCount: 0, updatedCount: 1);
 
             Notification::make()
@@ -262,7 +262,7 @@ class ViewDialog extends ViewRecord
                 ->body($exception->getMessage())
                 ->send();
         } catch (Throwable $throwable) {
-            Log::warning('telegram_account_media.manual_download_request_failed', [
+            Log::warning('inbound_media.manual_download_request_failed', [
                 'dialog_id' => $this->getRecord()->id,
                 'attachment_id' => $attachmentId,
                 'error_type' => $throwable::class,
@@ -2799,7 +2799,10 @@ class ViewDialog extends ViewRecord
         ];
     }
 
-    protected function refreshVisibleConversationMessages(): int
+    /**
+     * @param  list<int>  $additionalMessageIds
+     */
+    protected function refreshVisibleConversationMessages(array $additionalMessageIds = []): int
     {
         $messageIds = collect($this->conversationMessages)
             ->flatMap(fn (array $message): array => $this->conversationItemMessageIds($message))
@@ -2815,6 +2818,11 @@ class ViewDialog extends ViewRecord
             ->reverse()
             ->take(self::LIVE_REFRESH_MESSAGE_LIMIT)
             ->reverse()
+            ->merge($this->activeMediaRefreshMessageIds())
+            ->merge($additionalMessageIds)
+            ->filter(static fn (mixed $messageId): bool => is_numeric($messageId) && (int) $messageId > 0)
+            ->map(static fn (mixed $messageId): int => (int) $messageId)
+            ->unique()
             ->values();
 
         $messages = Message::query()
@@ -2843,6 +2851,33 @@ class ViewDialog extends ViewRecord
         $this->conversationMessages = $nextConversationMessages;
 
         return count($refreshedViewData);
+    }
+
+    /**
+     * @return list<int>
+     */
+    protected function activeMediaRefreshMessageIds(): array
+    {
+        return collect($this->conversationMessages)
+            ->filter(function (array $message): bool {
+                return collect($message['media_items'] ?? [])->contains(
+                    static fn (mixed $mediaItem): bool => is_array($mediaItem)
+                        && in_array(
+                            MessageAttachment::normalizeDownloadStatus($mediaItem['status'] ?? null),
+                            [
+                                MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD,
+                                MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
+                            ],
+                            true,
+                        ),
+                );
+            })
+            ->flatMap(fn (array $message): array => $this->conversationItemMessageIds($message))
+            ->filter(static fn (mixed $messageId): bool => is_numeric($messageId) && (int) $messageId > 0)
+            ->map(static fn (mixed $messageId): int => (int) $messageId)
+            ->unique()
+            ->values()
+            ->all();
     }
 
     /**

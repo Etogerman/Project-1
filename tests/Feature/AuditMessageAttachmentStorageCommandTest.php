@@ -6,8 +6,10 @@ use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\Dialog;
+use App\Models\MediaDownloadStorageLedger;
 use App\Models\Message;
 use App\Models\MessageAttachment;
+use App\Services\Messages\InboundMediaQuotaLedger;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
@@ -36,7 +38,7 @@ class AuditMessageAttachmentStorageCommandTest extends TestCase
         $this->assertSame(MessageAttachment::LOCAL_PATH_PREFIX.'/missing/account.jpg', $attachment->local_path);
     }
 
-    public function test_command_repair_resets_retryable_missing_attachment_to_pending_download(): void
+    public function test_command_repair_marks_retryable_missing_attachment_as_deleted_local(): void
     {
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
 
@@ -52,13 +54,13 @@ class AuditMessageAttachmentStorageCommandTest extends TestCase
 
         $attachment->refresh();
 
-        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD, $attachment->download_status);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DELETED_LOCAL, $attachment->download_status);
         $this->assertNull($attachment->local_disk);
         $this->assertNull($attachment->local_path);
         $this->assertSame('local_file_missing', $attachment->safe_error_code);
     }
 
-    public function test_command_repair_resets_retryable_missing_telegram_bot_animation_to_pending_download(): void
+    public function test_command_repair_marks_retryable_missing_telegram_bot_animation_as_deleted_local(): void
     {
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
 
@@ -78,7 +80,7 @@ class AuditMessageAttachmentStorageCommandTest extends TestCase
 
         $attachment->refresh();
 
-        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD, $attachment->download_status);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DELETED_LOCAL, $attachment->download_status);
         $this->assertNull($attachment->local_disk);
         $this->assertNull($attachment->local_path);
         $this->assertSame('local_file_missing', $attachment->safe_error_code);
@@ -108,7 +110,7 @@ class AuditMessageAttachmentStorageCommandTest extends TestCase
         $this->assertNull($attachment->safe_error_code);
     }
 
-    public function test_command_repair_marks_non_retryable_missing_attachment_as_metadata_only(): void
+    public function test_command_repair_marks_non_retryable_missing_attachment_as_deleted_local(): void
     {
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
 
@@ -124,7 +126,7 @@ class AuditMessageAttachmentStorageCommandTest extends TestCase
 
         $attachment->refresh();
 
-        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY, $attachment->download_status);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DELETED_LOCAL, $attachment->download_status);
         $this->assertNull($attachment->local_disk);
         $this->assertNull($attachment->local_path);
         $this->assertSame('local_file_missing', $attachment->safe_error_code);
@@ -148,9 +150,48 @@ class AuditMessageAttachmentStorageCommandTest extends TestCase
 
         $attachment->refresh();
 
-        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD, $attachment->download_status);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DELETED_LOCAL, $attachment->download_status);
         $this->assertNull($attachment->local_disk);
         $this->assertNull($attachment->local_path);
+    }
+
+    public function test_command_repair_releases_used_storage_quota_after_missing_file_is_confirmed(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+
+        $attachment = $this->createDownloadedAttachment([
+            'provider_file_id' => 'telegram-account-file-id',
+            'file_size_bytes' => 17,
+            'local_path' => MessageAttachment::LOCAL_PATH_PREFIX.'/missing/quota.jpg',
+        ]);
+        $ledger = app(InboundMediaQuotaLedger::class);
+        $ledger->reserveForAttempt($attachment, 1);
+        $ledger->completeAttempt($attachment, 1, 17);
+
+        $this->artisan('message-attachments:audit-storage', [
+            '--repair' => true,
+            '--attachment' => [$attachment->id],
+        ])->assertExitCode(0);
+
+        $this->assertDatabaseHas('media_download_storage_ledgers', [
+            'message_attachment_id' => $attachment->id,
+            'generation' => 1,
+            'status' => MediaDownloadStorageLedger::STATUS_RELEASED,
+            'used_bytes' => 17,
+            'release_reason' => 'local_file_missing',
+        ]);
+        $this->assertDatabaseHas('media_download_storage_budgets', [
+            'scope_type' => 'global',
+            'scope_id' => 0,
+            'reserved_bytes' => 0,
+            'used_bytes' => 0,
+        ]);
+        $this->assertDatabaseHas('media_download_storage_budgets', [
+            'scope_type' => 'channel',
+            'scope_id' => $attachment->channel_id,
+            'reserved_bytes' => 0,
+            'used_bytes' => 0,
+        ]);
     }
 
     public function test_configured_message_attachment_disk_must_exist(): void

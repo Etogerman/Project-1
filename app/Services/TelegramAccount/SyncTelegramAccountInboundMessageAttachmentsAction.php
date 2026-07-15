@@ -55,7 +55,7 @@ class SyncTelegramAccountInboundMessageAttachmentsAction
             : $this->mediaDownloadPolicy->initialDownloadStatus($channel, $fileSizeBytes);
         $automaticMaxBytes = $metadataOnly
             ? null
-            : $this->mediaDownloadPolicy->automaticMaxBytes($channel);
+            : $this->mediaDownloadPolicy->automaticRequestMaxBytes($channel);
         $identity = [
             'provider' => MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT,
             'channel_id' => $event->channelId,
@@ -162,6 +162,7 @@ class SyncTelegramAccountInboundMessageAttachmentsAction
             MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
             MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
             MessageAttachment::DOWNLOAD_STATUS_DOWNLOAD_FAILED,
+            MessageAttachment::DOWNLOAD_STATUS_DELETED_LOCAL,
         ], true)
             || (
                 $attachment->download_status === MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY
@@ -293,14 +294,16 @@ class SyncTelegramAccountInboundMessageAttachmentsAction
     private function normalizeInteger(mixed $value): ?int
     {
         if (is_int($value)) {
-            return $value >= 0 ? $value : null;
+            return $value > 0 ? $value : null;
         }
 
         if (! is_string($value) || ! ctype_digit($value)) {
             return null;
         }
 
-        return (int) $value;
+        $normalized = (int) $value;
+
+        return $normalized > 0 ? $normalized : null;
     }
 
     private function normalizeBoolean(mixed $value): ?bool

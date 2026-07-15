@@ -1345,6 +1345,7 @@ class FilamentDialogsResourceTest extends TestCase
         $channel = Channel::factory()->account()->create([
             'name' => 'Telegram Account Attachment List',
             'platform' => Channel::PLATFORM_TELEGRAM,
+            'telegram_account_media_on_demand_enabled' => true,
         ]);
         $contact = Contact::factory()->create([
             'name' => 'Account attachment contact',
@@ -1433,6 +1434,7 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertSee('40 МБ')
             ->assertSee('data-role="conversation-attachment-manual-download"', false)
             ->assertSee('Скачать вручную')
+            ->assertDontSee('wire:confirm=', false)
             ->assertDontSee('Telegram Account media file is larger than the local download limit.')
             ->assertSee(route('admin.message-attachments.download', ['attachment' => $downloadedAttachment->id]), false)
             ->assertDontSee(route('admin.message-attachments.preview', ['attachment' => $downloadedAttachment->id]), false)
@@ -1585,6 +1587,7 @@ class FilamentDialogsResourceTest extends TestCase
         $dialog->channel()->update([
             'platform' => Channel::PLATFORM_TELEGRAM,
             'connection_type' => Channel::CONNECTION_TYPE_ACCOUNT,
+            'telegram_account_media_on_demand_enabled' => true,
         ]);
         $message = $dialog->messages()->latest('id')->firstOrFail();
         $attachment = MessageAttachment::factory()->create([
@@ -1601,16 +1604,27 @@ class FilamentDialogsResourceTest extends TestCase
 
         DB::table('role_permissions')
             ->where('role', User::ROLE_EMPLOYEE)
-            ->where('permission_key', 'dialogs.edit')
+            ->where('permission_key', 'download_media_manual')
             ->update(['granted' => false]);
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
 
         Livewire::actingAs($employee->fresh())
             ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
             ->assertDontSee('data-role="conversation-attachment-manual-download"', false)
             ->call('requestManualAttachmentDownload', $attachment->id);
 
+        $quotaQueries = array_filter(
+            DB::getQueryLog(),
+            static fn (array $query): bool => str_contains($query['query'], 'media_download_storage_budgets')
+                || str_contains($query['query'], 'media_download_traffic_budgets'),
+        );
+        DB::disableQueryLog();
+
         $attachment->refresh();
 
+        $this->assertCount(0, $quotaQueries);
         $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND, $attachment->download_status);
         $this->assertNull($attachment->manual_download_requested_at);
         $this->assertNull($attachment->manual_download_requested_by_user_id);
@@ -2271,6 +2285,8 @@ class FilamentDialogsResourceTest extends TestCase
             ->assertOk()
             ->assertSee('data-poll-interval-ms="5000"', escape: false)
             ->assertSee('refreshDialogViewData', escape: false)
+            ->assertSee('await this.$wire.refreshDialogViewData()', escape: false)
+            ->assertSee('finally {', escape: false)
             ->assertSee('hasActiveReplyComposer()', escape: false)
             ->assertSee("textarea.dataset.manualResized === '1'", escape: false)
             ->assertSee("querySelector('[data-role=conversation-thread]')", escape: false)
@@ -4087,6 +4103,65 @@ class FilamentDialogsResourceTest extends TestCase
             route('admin.message-attachments.preview', ['attachment' => $attachment->id]),
             $messages[0]['media_items'][0]['preview_url'],
         );
+    }
+
+    public function test_dialog_view_keeps_manually_requested_old_media_in_live_refresh_window(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $dialog = $this->createDialogWithMessages(70);
+        $dialog->channel()->update([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_ACCOUNT,
+            'telegram_account_media_on_demand_enabled' => true,
+        ]);
+        $oldMessage = Message::query()
+            ->where('dialog_id', $dialog->id)
+            ->oldest('id')
+            ->firstOrFail();
+        $oldMessage->forceFill([
+            'text' => null,
+            'message_kind' => Message::KIND_INBOUND_USER,
+        ])->save();
+        $attachment = MessageAttachment::factory()->create([
+            'message_id' => $oldMessage->id,
+            'channel_id' => $dialog->channel_id,
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT,
+            'provider_event_key' => $oldMessage->provider_event_key,
+            'provider_attachment_key' => 'old-manual-document',
+            'provider_file_id' => 'old-manual-document',
+            'media_kind' => MessageAttachment::MEDIA_KIND_DOCUMENT,
+            'original_filename' => 'old.pdf',
+            'mime_type' => 'application/pdf',
+            'extension' => 'pdf',
+            'file_size_bytes' => 40 * 1024 * 1024,
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND,
+            'safe_error_code' => 'auto_download_limit_exceeded',
+        ]);
+
+        $component = Livewire::actingAs($admin)
+            ->test(ViewDialog::class, ['record' => $dialog->getRouteKey()])
+            ->call('loadOlderMessages')
+            ->call('requestManualAttachmentDownload', $attachment->id);
+
+        $attachment->forceFill([
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+            'local_path' => MessageAttachment::LOCAL_PATH_PREFIX.'/'.$oldMessage->id.'/'.$attachment->id.'.pdf',
+            'safe_error_code' => null,
+            'safe_error_message' => null,
+        ])->save();
+
+        $component->call('refreshDialogViewData');
+
+        $refreshedMessage = collect($component->get('conversationMessages'))
+            ->firstWhere('id', $oldMessage->id);
+
+        $this->assertIsArray($refreshedMessage);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $refreshedMessage['media_items'][0]['status']);
+        $this->assertTrue($refreshedMessage['media_items'][0]['is_downloadable']);
     }
 
     public function test_dialog_view_live_refresh_shows_media_added_after_message_was_appended(): void

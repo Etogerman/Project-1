@@ -27,7 +27,7 @@ class CreateTelegramAccountMediaUploadTargetAction
     ) {}
 
     /**
-     * @return array{strategy:string,url?:string,headers?:array<string,string>,requires_gateway_auth?:bool,max_chunk_bytes?:int}
+     * @return array{strategy:string,url?:string,headers?:array<string,string>,requires_gateway_auth?:bool,max_chunk_bytes?:int,expires_in_seconds?:int}
      */
     public function handle(Channel $channel, MessageAttachment $attachment): array
     {
@@ -60,6 +60,7 @@ class CreateTelegramAccountMediaUploadTargetAction
                 'url' => (string) $target['url'],
                 'headers' => $this->normalizeHeaders($target['headers'] ?? []),
                 'requires_gateway_auth' => false,
+                'expires_in_seconds' => self::S3_UPLOAD_TARGET_TTL_MINUTES * 60,
             ];
         }
 
@@ -78,6 +79,7 @@ class CreateTelegramAccountMediaUploadTargetAction
                 ),
                 'requires_gateway_auth' => true,
                 'max_chunk_bytes' => self::LOCAL_UPLOAD_CHUNK_BYTES,
+                'expires_in_seconds' => self::LOCAL_UPLOAD_TARGET_TTL_MINUTES * 60,
             ];
         }
 

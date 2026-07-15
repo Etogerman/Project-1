@@ -10,6 +10,7 @@ use App\Models\MessageAttachment;
 use App\Models\MessageRevision;
 use App\Models\User;
 use App\Services\Messages\AbRichTextHtmlRenderer;
+use App\Services\Messages\InboundMediaDownloadPolicy;
 use App\Services\Messages\PrepareMessageContentAction;
 use App\Services\Messages\ResolveMessageMediaItemsAction;
 use App\Services\TelegramAccount\TelegramAccountMediaDownloadPolicy;
@@ -32,6 +33,20 @@ class BuildConversationFeedViewDataAction
      */
     public function handle(Collection $messages): array
     {
+        $resolveManualAvailability = auth()->user() instanceof User
+            && auth()->user()->canDownloadMediaManually();
+
+        return $this->resolveMessageMediaItemsAction->withManualAvailabilitySnapshot(
+            fn (): array => $this->build($messages, $resolveManualAvailability),
+        );
+    }
+
+    /**
+     * @param  Collection<int, Message>  $messages
+     * @return list<array<string, mixed>>
+     */
+    private function build(Collection $messages, bool $resolveManualAvailability): array
+    {
         $this->loadConversationMediaRelations($messages);
         $messages = $this->loadConversationGroupSiblingMessages($messages);
         $forwardedIdentityIndex = $this->resolveConversationForwardedIdentityIndex($messages);
@@ -41,7 +56,7 @@ class BuildConversationFeedViewDataAction
         return $messages
             ->sort(fn (Message $left, Message $right): int => $this->compareConversationMessages($left, $right))
             ->groupBy(fn (Message $message): string => $this->resolveConversationItemKey($message))
-            ->map(function (Collection $groupMessages, string $itemKey) use ($forwardedIdentityIndex, $contactShareIdentityIndex, $replyMessageIndex): array {
+            ->map(function (Collection $groupMessages, string $itemKey) use ($forwardedIdentityIndex, $contactShareIdentityIndex, $replyMessageIndex, $resolveManualAvailability): array {
                 /** @var Collection<int, Message> $groupMessages */
                 $groupMessages = $groupMessages
                     ->sort(fn (Message $left, Message $right): int => $this->compareConversationMessages($left, $right))
@@ -50,7 +65,10 @@ class BuildConversationFeedViewDataAction
                 /** @var Message $message */
                 $message = $groupMessages->first();
                 $messageAt = $this->resolveMessageSortAt($message);
-                $mediaItems = $this->resolveConversationGroupMediaItems($groupMessages);
+                $mediaItems = $this->resolveConversationGroupMediaItems(
+                    $groupMessages,
+                    $resolveManualAvailability,
+                );
                 $mediaItemViewData = $this->resolveConversationMediaItemViewData($message, $mediaItems);
                 $mediaBadges = $this->resolveConversationMediaBadges($message, $mediaItems);
                 $mediaStateBadges = $this->resolveConversationMediaStateBadges($message, $mediaItems);
@@ -160,7 +178,7 @@ class BuildConversationFeedViewDataAction
                     });
                 }
             })
-            ->with(['channel', 'dialog.channel', 'sentByUser', 'attachments', 'revisions'])
+            ->with(['channel', 'dialog.channel', 'sentByUser', 'attachments.channel', 'revisions'])
             ->get();
 
         return $messages
@@ -223,7 +241,7 @@ class BuildConversationFeedViewDataAction
             return;
         }
 
-        $messages->loadMissing(['attachments', 'revisions']);
+        $messages->loadMissing(['attachments.channel', 'revisions']);
     }
 
     /**
@@ -1843,21 +1861,25 @@ class BuildConversationFeedViewDataAction
     /**
      * @return list<array<string, mixed>>
      */
-    protected function resolveConversationMediaItems(Message $message): array
-    {
-        return $this->resolveMessageMediaItemsAction->handle($message);
+    protected function resolveConversationMediaItems(
+        Message $message,
+        bool $resolveManualAvailability = true,
+    ): array {
+        return $this->resolveMessageMediaItemsAction->handle($message, $resolveManualAvailability);
     }
 
     /**
      * @param  Collection<int, Message>  $messages
      * @return list<array<string, mixed>>
      */
-    protected function resolveConversationGroupMediaItems(Collection $messages): array
-    {
+    protected function resolveConversationGroupMediaItems(
+        Collection $messages,
+        bool $resolveManualAvailability = true,
+    ): array {
         $items = [];
 
         foreach ($messages as $message) {
-            foreach ($this->resolveConversationMediaItems($message) as $item) {
+            foreach ($this->resolveConversationMediaItems($message, $resolveManualAvailability) as $item) {
                 if (! is_array($item)) {
                     continue;
                 }
@@ -1999,12 +2021,16 @@ class BuildConversationFeedViewDataAction
                 && $attachmentId !== null
                 && $previewKind !== null;
             $displayStatus = $this->resolveConversationMediaDisplayStatus($item, $status);
-            $canRequestManualDownload = (bool) data_get($item, 'can_request_manual_download', false)
+            $canDownloadMediaManually = auth()->user() instanceof User
+                && auth()->user()->canDownloadMediaManually();
+            $showManualDownloadAction = (bool) data_get($item, 'show_manual_download_action', false)
                 && $attachmentId !== null
-                && auth()->user() instanceof User
-                && auth()->user()->canReplyInDialogs();
-            $requiresBlacklistWarning = (bool) data_get($item, 'manual_download_requires_blacklist_warning', false);
-
+                && $canDownloadMediaManually;
+            $canRequestManualDownload = $showManualDownloadAction
+                && (bool) data_get($item, 'can_request_manual_download', false);
+            $manualDownloadUnavailableReason = $showManualDownloadAction && ! $canRequestManualDownload
+                ? $this->normalizeMediaBadgeText(data_get($item, 'manual_download_unavailable_reason'))
+                : null;
             $items[] = [
                 'source' => (string) data_get($item, 'source', 'unknown'),
                 'attachment_id' => $attachmentId,
@@ -2021,10 +2047,9 @@ class BuildConversationFeedViewDataAction
                 'status_tone' => $this->formatConversationMediaStateTone($displayStatus),
                 'show_status' => $this->shouldShowConversationMediaStatus($displayStatus),
                 'error_message' => $this->formatConversationMediaErrorMessage($item, $displayStatus),
+                'show_manual_download_action' => $showManualDownloadAction,
                 'can_request_manual_download' => $canRequestManualDownload,
-                'manual_download_confirmation' => $canRequestManualDownload
-                    ? $this->formatManualMediaDownloadConfirmation($fileSizeLabel, $requiresBlacklistWarning)
-                    : null,
+                'manual_download_unavailable_reason' => $manualDownloadUnavailableReason,
                 'is_downloadable' => $isDownloadable,
                 'is_previewable' => $isPreviewable,
                 'preview_kind' => $isPreviewable ? $previewKind : null,
@@ -2070,7 +2095,9 @@ class BuildConversationFeedViewDataAction
                 $this->conversationMediaRenderKeyValue($mediaItem['status'] ?? null),
                 $this->conversationMediaRenderKeyValue(! empty($mediaItem['is_previewable'])),
                 $this->conversationMediaRenderKeyValue(! empty($mediaItem['is_downloadable'])),
+                $this->conversationMediaRenderKeyValue(! empty($mediaItem['show_manual_download_action'])),
                 $this->conversationMediaRenderKeyValue(! empty($mediaItem['can_request_manual_download'])),
+                $this->conversationMediaRenderKeyValue($mediaItem['manual_download_unavailable_reason'] ?? null),
                 $this->conversationMediaRenderKeyValue(filled($mediaItem['preview_url'] ?? null)),
                 $this->conversationMediaRenderKeyValue(filled($mediaItem['download_url'] ?? null)),
                 $this->conversationMediaRenderKeyValue($mediaItem['error_message'] ?? null),
@@ -2163,7 +2190,12 @@ class BuildConversationFeedViewDataAction
         $errorCode = $this->normalizeMediaBadgeText(data_get($item, 'safe_error_code'));
 
         return match ($errorCode) {
-            null, 'blacklist_stage' => null,
+            null,
+            'blacklist_stage',
+            DialogAutomationGate::REASON_BLACKLIST_STAGE,
+            InboundMediaDownloadPolicy::REASON_SIZE_ABOVE_AUTO_LIMIT,
+            InboundMediaDownloadPolicy::REASON_SIZE_UNKNOWN,
+            InboundMediaDownloadPolicy::REASON_TRANSPORT_UNAVAILABLE => null,
             'missing_provider_file_id',
             TelegramAccountMediaDownloadPolicy::ERROR_TELEGRAM_FILE_NOT_FOUND,
             TelegramAccountMediaDownloadPolicy::ERROR_TDLIB_FILE_NOT_FOUND => 'Файл больше недоступен в Telegram.',
@@ -2172,17 +2204,6 @@ class BuildConversationFeedViewDataAction
                 ? 'Не удалось загрузить файл.'
                 : null,
         };
-    }
-
-    protected function formatManualMediaDownloadConfirmation(?string $fileSizeLabel, bool $blacklisted): string
-    {
-        $size = $fileSizeLabel ?? 'размер неизвестен';
-
-        if ($blacklisted) {
-            return "Диалог находится в ЧС. Скачать файл вручную ({$size})? Действие может создать расходы на трафик и хранение.";
-        }
-
-        return "Скачать файл вручную ({$size})?";
     }
 
     protected function normalizeMediaAttachmentId(mixed $value): ?int

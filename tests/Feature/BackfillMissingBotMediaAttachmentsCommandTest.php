@@ -45,7 +45,7 @@ class BackfillMissingBotMediaAttachmentsCommandTest extends TestCase
             'provider_file_unique_id' => 'large-photo-unique',
             'media_kind' => MessageAttachment::MEDIA_KIND_IMAGE,
             'file_size_bytes' => 5000,
-            'download_status' => MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD,
         ]);
 
         $this->artisan('bot-media:backfill-missing-attachments', [

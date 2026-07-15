@@ -2,9 +2,12 @@
 
 namespace App\Models;
 
+use App\Services\Messages\RecordInboundMediaStateTransitionAction;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Facades\Storage;
 use RuntimeException;
 
@@ -100,6 +103,13 @@ class MessageAttachment extends Model
         'media_download_upload_size_bytes',
         'media_download_next_retry_at',
         'media_download_max_bytes',
+        'media_download_generation',
+        'media_download_attempts',
+        'media_download_lease_sequence',
+        'media_download_trigger',
+        'media_download_claimed_at',
+        'media_download_heartbeat_at',
+        'media_download_attempt_deadline_at',
         'send_status',
         'local_disk',
         'local_path',
@@ -122,7 +132,55 @@ class MessageAttachment extends Model
         'media_download_upload_size_bytes' => 'integer',
         'media_download_next_retry_at' => 'datetime',
         'media_download_max_bytes' => 'integer',
+        'media_download_generation' => 'integer',
+        'media_download_attempts' => 'integer',
+        'media_download_lease_sequence' => 'integer',
+        'media_download_claimed_at' => 'datetime',
+        'media_download_heartbeat_at' => 'datetime',
+        'media_download_attempt_deadline_at' => 'datetime',
     ];
+
+    protected static function booted(): void
+    {
+        static::created(static function (MessageAttachment $attachment): void {
+            app(RecordInboundMediaStateTransitionAction::class)->handle(
+                $attachment,
+                null,
+                null,
+            );
+        });
+
+        static::updated(static function (MessageAttachment $attachment): void {
+            if (! $attachment->wasChanged(['download_status', 'media_download_generation'])) {
+                return;
+            }
+
+            app(RecordInboundMediaStateTransitionAction::class)->handle(
+                $attachment,
+                is_string($attachment->getRawOriginal('download_status'))
+                    ? $attachment->getRawOriginal('download_status')
+                    : null,
+                is_numeric($attachment->getRawOriginal('media_download_generation'))
+                    ? (int) $attachment->getRawOriginal('media_download_generation')
+                    : null,
+            );
+        });
+    }
+
+    public function mediaDownloadLedgerAttemptNumber(): int
+    {
+        return max(
+            1,
+            (int) $this->media_download_lease_sequence,
+            (int) $this->media_download_attempts,
+        );
+    }
+
+    /** @return HasMany<MediaDownloadStateTransition, $this> */
+    public function stateTransitions(): HasMany
+    {
+        return $this->hasMany(MediaDownloadStateTransition::class, 'message_attachment_id');
+    }
 
     public static function normalizeMediaKind(mixed $value): string
     {
@@ -209,6 +267,52 @@ class MessageAttachment extends Model
         return preg_match('/^[a-z0-9]{1,16}$/', $extension) === 1
             ? $extension
             : '';
+    }
+
+    public static function sanitizeDisplayFilename(mixed $value): ?string
+    {
+        if (! is_string($value)) {
+            return null;
+        }
+
+        $filename = trim($value);
+
+        if ($filename === '') {
+            return null;
+        }
+
+        if (class_exists(\Normalizer::class)) {
+            $normalized = \Normalizer::normalize($filename, \Normalizer::FORM_C);
+
+            if (is_string($normalized)) {
+                $filename = $normalized;
+            }
+        }
+
+        $filename = str_replace('\\', '/', $filename);
+        $lastSeparator = strrpos($filename, '/');
+
+        if ($lastSeparator !== false) {
+            $filename = substr($filename, $lastSeparator + 1);
+        }
+
+        $filename = preg_replace('/[\t\n\r\f\v]+/u', ' ', $filename) ?? '';
+        $filename = preg_replace(
+            '/[\p{Cc}\x{061C}\x{200E}\x{200F}\x{202A}-\x{202E}\x{2066}-\x{2069}]+/u',
+            '',
+            $filename,
+        ) ?? '';
+        $filename = trim($filename, " \t\n\r\0\x0B.");
+
+        return $filename !== '' ? mb_substr($filename, 0, 180) : null;
+    }
+
+    protected function originalFilename(): Attribute
+    {
+        return Attribute::make(
+            get: fn (mixed $value): ?string => self::sanitizeDisplayFilename($value),
+            set: fn (mixed $value): ?string => self::sanitizeDisplayFilename($value),
+        );
     }
 
     public static function isSafeLocalPath(mixed $value): bool
@@ -498,18 +602,10 @@ class MessageAttachment extends Model
 
     public function downloadFilename(): string
     {
-        $filename = is_string($this->original_filename)
-            ? trim($this->original_filename)
-            : '';
+        $filename = self::sanitizeDisplayFilename($this->original_filename) ?? '';
 
         if ($filename !== '') {
-            $filename = str_replace(['/', '\\', "\0"], '-', $filename);
-            $filename = preg_replace('/[\x00-\x1F\x7F]+/', ' ', $filename) ?? '';
-            $filename = trim($filename, " \t\n\r\0\x0B.");
-        }
-
-        if ($filename !== '') {
-            return mb_substr($filename, 0, 180);
+            return $filename;
         }
 
         $extension = self::sanitizeExtension($this->extension);
