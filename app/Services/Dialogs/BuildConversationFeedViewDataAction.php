@@ -2008,6 +2008,10 @@ class BuildConversationFeedViewDataAction
                 : ($fileName ?? $mediaKindLabel);
             $mimeType = $this->normalizeMediaBadgeText(data_get($item, 'mime_type'));
             $fileSizeLabel = $this->formatMediaFileSizeLabel(data_get($item, 'file_size_bytes'));
+            $fileSizeLabel ??= $status === MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND
+                && data_get($item, 'safe_error_code') === InboundMediaDownloadPolicy::REASON_SIZE_UNKNOWN
+                    ? 'Размер неизвестен'
+                    : null;
             $durationLabel = $this->formatMediaDurationLabel(data_get($item, 'duration'));
             $attachmentId = $this->normalizeMediaAttachmentId(data_get($item, 'attachment_id'));
             $isVideoNote = MessageAttachment::normalizeMediaKind($mediaKind) === MessageAttachment::MEDIA_KIND_VIDEO_NOTE
@@ -2098,6 +2102,8 @@ class BuildConversationFeedViewDataAction
                 $this->conversationMediaRenderKeyValue(! empty($mediaItem['show_manual_download_action'])),
                 $this->conversationMediaRenderKeyValue(! empty($mediaItem['can_request_manual_download'])),
                 $this->conversationMediaRenderKeyValue($mediaItem['manual_download_unavailable_reason'] ?? null),
+                $this->conversationMediaRenderKeyValue($mediaItem['file_size_label'] ?? null),
+                $this->conversationMediaRenderKeyValue($mediaItem['duration_label'] ?? null),
                 $this->conversationMediaRenderKeyValue(filled($mediaItem['preview_url'] ?? null)),
                 $this->conversationMediaRenderKeyValue(filled($mediaItem['download_url'] ?? null)),
                 $this->conversationMediaRenderKeyValue($mediaItem['error_message'] ?? null),

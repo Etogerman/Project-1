@@ -165,11 +165,56 @@ class SyncBotInboundMessageAttachmentsAction
      */
     private function updateExistingAttachment(MessageAttachment $attachment, array $createValues, array $metadataValues): void
     {
+        $metadataValues = $this->mergeExistingMetadataValues($attachment, $metadataValues);
         $values = $this->shouldPreserveDownloadState($attachment)
             ? $metadataValues
-            : $createValues;
+            : [...$createValues, ...$metadataValues];
 
         $attachment->forceFill($values)->save();
+    }
+
+    /**
+     * Provider replays often omit optional metadata. They must not erase values
+     * that were resolved later by a metadata probe or a completed download.
+     *
+     * @param  array<string, mixed>  $metadataValues
+     * @return array<string, mixed>
+     */
+    private function mergeExistingMetadataValues(
+        MessageAttachment $attachment,
+        array $metadataValues,
+    ): array {
+        foreach ($metadataValues as $key => $value) {
+            if (
+                $value === null
+                || ($key === 'file_size_bytes' && is_int($value) && $value <= 0)
+            ) {
+                $metadataValues[$key] = $attachment->getAttribute($key);
+            }
+        }
+
+        $metadataValues['provider_metadata'] = $this->mergeMetadataArray(
+            $attachment->provider_metadata,
+            $metadataValues['provider_metadata'] ?? null,
+        );
+        $metadataValues['raw_payload_excerpt'] = $this->mergeMetadataArray(
+            $attachment->raw_payload_excerpt,
+            $metadataValues['raw_payload_excerpt'] ?? null,
+        ) ?? [];
+
+        return $metadataValues;
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function mergeMetadataArray(mixed $existing, mixed $incoming): ?array
+    {
+        $existing = is_array($existing) ? $existing : [];
+        $incoming = is_array($incoming) ? $incoming : [];
+        $merged = [...$existing, ...$incoming];
+
+        return $merged !== [] ? $merged : null;
     }
 
     private function shouldPreserveDownloadState(MessageAttachment $attachment): bool

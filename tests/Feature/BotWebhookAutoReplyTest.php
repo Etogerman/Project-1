@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Data\Bots\StoredInboundMessageResult;
 use App\Jobs\DownloadBotMessageAttachmentJob;
 use App\Jobs\ExportMessageToBitrix24OpenLinesJob;
+use App\Jobs\ProbeMaxBotMediaMetadataJob;
 use App\Jobs\ProcessAutoReplyJob;
 use App\Jobs\ProcessDataCollectionQuestionJob;
 use App\Jobs\ProcessDataCollectionResponseJob;
@@ -1834,6 +1835,48 @@ class BotWebhookAutoReplyTest extends TestCase
         Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
         Http::assertSent(fn ($request): bool => $request->url() === 'https://platform-api.max.ru/videos/max-video-token');
         Http::assertSent(fn ($request): bool => str_starts_with($request->url(), 'https://max.example/private/video-720.mp4?'));
+    }
+
+    public function test_max_video_without_size_queues_metadata_probe_after_storing_duration(): void
+    {
+        Queue::fake();
+        Http::fake();
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'inbound_media_on_demand_enabled' => true,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+        $payload = $this->maxPayload(
+            messageId: 'max-video-probe-103',
+            text: null,
+        );
+        $payload['message']['body']['attachments'] = [[
+            'type' => 'video',
+            'payload' => [
+                'token' => 'max-video-probe-token',
+                'url' => 'https://max.example/private/video.mp4?access_token=secret-token',
+            ],
+            'duration' => 341,
+        ]];
+
+        $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $payload)->assertOk();
+
+        $attachment = MessageAttachment::query()->firstOrFail();
+
+        $this->assertNull($attachment->file_size_bytes);
+        $this->assertSame(341, data_get($attachment->provider_metadata, 'duration'));
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND, $attachment->download_status);
+        $this->assertSame(InboundMediaDownloadPolicy::REASON_SIZE_UNKNOWN, $attachment->safe_error_code);
+        Queue::assertPushed(ProbeMaxBotMediaMetadataJob::class, function (ProbeMaxBotMediaMetadataJob $job) use ($attachment): bool {
+            return $job->attachmentId === $attachment->id
+                && $job->allowAutomaticDownload;
+        });
+        Http::assertNothingSent();
     }
 
     public function test_max_forwarded_video_webhook_downloads_link_message_attachment_as_video_note(): void
