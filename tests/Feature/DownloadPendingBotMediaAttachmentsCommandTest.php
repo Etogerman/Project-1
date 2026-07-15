@@ -899,6 +899,128 @@ class DownloadPendingBotMediaAttachmentsCommandTest extends TestCase
         Http::assertSent(fn ($request): bool => str_starts_with($request->url(), 'https://max.example/private/command-video-720.mp4?'));
     }
 
+    public function test_command_falls_back_to_matching_max_webhook_url_while_video_api_is_not_ready(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        config()->set('bots.max.trusted_media_hosts', ['max.example']);
+        Http::fake([
+            'https://platform-api.max.ru/videos/max-command-video-token' => Http::response([
+                'token' => 'max-command-video-token',
+                'urls' => [],
+                'width' => 1280,
+                'height' => 720,
+                'duration' => 14,
+            ]),
+            'https://max.example/private/payload-video.mp4*' => Http::response(
+                'max-webhook-video-bytes',
+                200,
+                ['Content-Type' => 'video/mp4'],
+            ),
+        ]);
+
+        $attachment = $this->createPendingMaxBotVideoAttachment();
+
+        $this->artisan('bot-media:download-pending-images', [
+            '--force' => true,
+            '--limit' => 10,
+        ])->assertExitCode(0);
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $attachment->download_status);
+        $this->assertSame(1280, data_get($attachment->provider_metadata, 'width'));
+        $this->assertSame(720, data_get($attachment->provider_metadata, 'height'));
+        $this->assertSame(14, data_get($attachment->provider_metadata, 'duration'));
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://platform-api.max.ru/videos/max-command-video-token');
+        Http::assertSent(fn ($request): bool => str_starts_with($request->url(), 'https://max.example/private/payload-video.mp4?'));
+    }
+
+    public function test_command_rejects_untrusted_max_webhook_fallback_url_before_downloading_media(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        config()->set('bots.max.trusted_media_hosts', ['max.example']);
+        Http::fake([
+            'https://platform-api.max.ru/videos/max-command-video-token' => Http::response([
+                'token' => 'max-command-video-token',
+                'urls' => [],
+            ]),
+        ]);
+
+        $attachment = $this->createPendingMaxBotVideoAttachment(
+            payloadUrl: 'https://evil.example/private/payload-video.mp4?access_token=secret-token',
+        );
+
+        $this->artisan('bot-media:download-pending-images', [
+            '--force' => true,
+            '--limit' => 10,
+        ])->assertExitCode(1);
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOAD_FAILED, $attachment->download_status);
+        $this->assertSame('bot_media_download_invalid_payload', $attachment->safe_error_code);
+        $this->assertNull($attachment->local_disk);
+        $this->assertNull($attachment->local_path);
+        Http::assertSentCount(1);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://platform-api.max.ru/videos/max-command-video-token');
+        Http::assertNotSent(fn ($request): bool => str_contains($request->url(), 'evil.example'));
+    }
+
+    public function test_command_retries_max_video_while_provider_url_is_not_ready(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        Http::fake([
+            'https://platform-api.max.ru/videos/max-command-video-token' => Http::response([
+                'token' => 'max-command-video-token',
+                'urls' => [],
+            ]),
+        ]);
+
+        $attachment = $this->createPendingMaxBotVideoAttachment(payloadUrl: null);
+
+        $this->artisan('bot-media:download-pending-images', [
+            '--force' => true,
+            '--limit' => 10,
+        ])->assertExitCode(0);
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD, $attachment->download_status);
+        $this->assertSame(1, $attachment->media_download_attempts);
+        $this->assertSame('temporary_failure', $attachment->safe_error_code);
+        $this->assertNotNull($attachment->media_download_next_retry_at);
+        Http::assertSentCount(1);
+    }
+
+    public function test_exhausted_max_video_processing_failure_remains_available_for_manual_retry(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        Http::fake([
+            'https://platform-api.max.ru/videos/max-command-video-token' => Http::response([
+                'token' => 'max-command-video-token',
+                'urls' => [],
+            ]),
+        ]);
+
+        $attachment = $this->createPendingMaxBotVideoAttachment(payloadUrl: null);
+        $attachment->forceFill(['media_download_attempts' => 4])->save();
+
+        $this->artisan('bot-media:download-pending-images', [
+            '--force' => true,
+            '--limit' => 10,
+        ])->assertExitCode(1);
+
+        $attachment->refresh();
+        $availability = app(InboundMediaDownloadPolicy::class)->manualAvailability($attachment);
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOAD_FAILED, $attachment->download_status);
+        $this->assertSame(5, $attachment->media_download_attempts);
+        $this->assertSame('retries_exhausted', $attachment->safe_error_code);
+        $this->assertTrue($availability['visible']);
+        $this->assertTrue($availability['allowed']);
+    }
+
     public function test_command_downloads_forwarded_max_bot_image_from_nested_body_attachments(): void
     {
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
@@ -1213,10 +1335,13 @@ class DownloadPendingBotMediaAttachmentsCommandTest extends TestCase
         ]);
     }
 
-    private function createPendingMaxBotVideoAttachment(string $videoToken = 'max-command-video-token'): MessageAttachment
-    {
+    private function createPendingMaxBotVideoAttachment(
+        string $videoToken = 'max-command-video-token',
+        ?string $payloadUrl = 'https://max.example/private/payload-video.mp4?access_token=secret-token',
+    ): MessageAttachment {
         $channel = Channel::factory()->create([
             'platform' => Channel::PLATFORM_MAX,
+            'inbound_media_on_demand_enabled' => true,
             'credentials' => [
                 'token' => 'max-token',
             ],
@@ -1239,10 +1364,10 @@ class DownloadPendingBotMediaAttachmentsCommandTest extends TestCase
                         'attachments' => [
                             [
                                 'type' => 'video',
-                                'payload' => [
+                                'payload' => array_filter([
                                     'token' => $videoToken,
-                                    'url' => 'https://max.example/private/payload-video.mp4?access_token=secret-token',
-                                ],
+                                    'url' => $payloadUrl,
+                                ], static fn (mixed $value): bool => $value !== null),
                             ],
                         ],
                     ],
