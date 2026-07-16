@@ -8,10 +8,15 @@ use App\Models\Message;
 use App\Models\MessageAttachment;
 use App\Services\Messages\InboundMediaQuotaLedger;
 use App\Services\Messages\ReconcileInboundMediaStorageAction;
+use Illuminate\Filesystem\FilesystemAdapter as LaravelFilesystemAdapter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use League\Flysystem\FileAttributes;
+use League\Flysystem\Filesystem;
+use League\Flysystem\Local\LocalFilesystemAdapter;
+use RuntimeException;
 use Tests\TestCase;
 
 class InboundMediaStorageReconcilerTest extends TestCase
@@ -250,6 +255,128 @@ class InboundMediaStorageReconcilerTest extends TestCase
         $storage->assertExists($freshPath);
         $this->assertSame(1, $secondRun['orphan_files_deleted']);
         $storage->assertMissing($stalePath);
+    }
+
+    public function test_orphan_scan_uses_driver_listing_and_preserves_cursor_order_for_unsorted_results(): void
+    {
+        $root = Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->path('');
+        $paths = [
+            MessageAttachment::LOCAL_PATH_PREFIX.'/orphans/a.bin',
+            MessageAttachment::LOCAL_PATH_PREFIX.'/orphans/b.bin',
+            MessageAttachment::LOCAL_PATH_PREFIX.'/orphans/c.bin',
+        ];
+        $adapter = new class($root, $paths) extends LocalFilesystemAdapter
+        {
+            /**
+             * @param  list<string>  $paths
+             */
+            public function __construct(string $root, private readonly array $paths)
+            {
+                parent::__construct($root);
+            }
+
+            public function listContents(string $path, bool $deep): iterable
+            {
+                foreach ($this->paths as $listedPath) {
+                    yield new FileAttributes($listedPath);
+                }
+            }
+        };
+        $filesystem = new class(new Filesystem($adapter), $adapter, ['root' => $root]) extends LaravelFilesystemAdapter
+        {
+            /** @var list<string> */
+            public array $lastModifiedPaths = [];
+
+            public function allFiles($directory = null)
+            {
+                throw new RuntimeException('The orphan scan must not materialize the full file listing.');
+            }
+
+            public function lastModified($path)
+            {
+                $this->lastModifiedPaths[] = $path;
+
+                return parent::lastModified($path);
+            }
+        };
+        Storage::getFacadeRoot()->set(MessageAttachment::LOCAL_DISK_PRIVATE, $filesystem);
+
+        foreach ($paths as $path) {
+            $filesystem->put($path, 'fresh');
+        }
+
+        Cache::forever(
+            ReconcileInboundMediaStorageAction::ORPHAN_CURSOR_CACHE_KEY,
+            MessageAttachment::LOCAL_DISK_PRIVATE."\0".$paths[1],
+        );
+
+        $stats = app(ReconcileInboundMediaStorageAction::class)->handle(
+            attachmentLimit: 1,
+            orphanLimit: 2,
+        );
+
+        $this->assertSame(0, $stats['failures']);
+        $this->assertSame(2, $stats['orphan_files']);
+        $this->assertSame(1, $stats['orphan_scan_truncated']);
+        $this->assertSame([$paths[2], $paths[0]], $filesystem->lastModifiedPaths);
+        $this->assertSame(
+            MessageAttachment::LOCAL_DISK_PRIVATE."\0".$paths[0],
+            Cache::get(ReconcileInboundMediaStorageAction::ORPHAN_CURSOR_CACHE_KEY),
+        );
+    }
+
+    public function test_orphan_reference_lookup_finds_reference_after_multiple_database_chunks(): void
+    {
+        $channel = Channel::factory()->create();
+        $message = Message::factory()->create(['channel_id' => $channel->id]);
+        $now = now();
+        $rows = [];
+
+        for ($index = 0; $index < 501; $index++) {
+            $rows[] = [
+                'message_id' => $message->id,
+                'channel_id' => $channel->id,
+                'media_kind' => MessageAttachment::MEDIA_KIND_DOCUMENT,
+                'download_status' => MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
+                'send_status' => MessageAttachment::SEND_STATUS_NOT_APPLICABLE,
+                'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+                'local_path' => MessageAttachment::LOCAL_PATH_PREFIX.'/other/'.$index.'.bin',
+                'sort_order' => 0,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+        }
+
+        foreach (array_chunk($rows, 250) as $chunk) {
+            DB::table('message_attachments')->insert($chunk);
+        }
+
+        $referencedPath = MessageAttachment::LOCAL_PATH_PREFIX.'/orphans/referenced.bin';
+        DB::table('message_attachments')->insert([
+            'message_id' => $message->id,
+            'channel_id' => $channel->id,
+            'media_kind' => MessageAttachment::MEDIA_KIND_DOCUMENT,
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
+            'send_status' => MessageAttachment::SEND_STATUS_NOT_APPLICABLE,
+            'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+            'local_path' => $referencedPath,
+            'sort_order' => 0,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $storage = Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE);
+        $storage->put($referencedPath, 'referenced');
+        touch($storage->path($referencedPath), now()->subMinutes(2)->timestamp);
+
+        $stats = app(ReconcileInboundMediaStorageAction::class)->handle(
+            repair: true,
+            attachmentLimit: 1,
+            orphanLimit: 1,
+        );
+
+        $this->assertSame(0, $stats['orphan_files']);
+        $this->assertSame(0, $stats['orphan_files_deleted']);
+        $storage->assertExists($referencedPath);
     }
 
     private function createDownloadedAttachment(string $filename, ?string $contents = null): MessageAttachment

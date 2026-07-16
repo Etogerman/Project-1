@@ -1775,7 +1775,7 @@ class BotWebhookAutoReplyTest extends TestCase
                 ],
                 'width' => 1280,
                 'height' => 720,
-                'duration' => 14,
+                'duration' => 14000,
             ]),
             'https://max.example/private/video-720.mp4*' => Http::response(
                 'max-video-bytes',
@@ -1859,7 +1859,7 @@ class BotWebhookAutoReplyTest extends TestCase
                 'token' => 'max-video-probe-token',
                 'url' => 'https://max.example/private/video.mp4?access_token=secret-token',
             ],
-            'duration' => 341,
+            'duration' => 1651,
         ]];
 
         $this->withHeaders([
@@ -1869,7 +1869,7 @@ class BotWebhookAutoReplyTest extends TestCase
         $attachment = MessageAttachment::query()->firstOrFail();
 
         $this->assertNull($attachment->file_size_bytes);
-        $this->assertSame(341, data_get($attachment->provider_metadata, 'duration'));
+        $this->assertSame(1651, data_get($attachment->provider_metadata, 'duration'));
         $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND, $attachment->download_status);
         $this->assertSame(InboundMediaDownloadPolicy::REASON_SIZE_UNKNOWN, $attachment->safe_error_code);
         Queue::assertPushed(ProbeMaxBotMediaMetadataJob::class, function (ProbeMaxBotMediaMetadataJob $job) use ($attachment): bool {
@@ -2107,7 +2107,7 @@ class BotWebhookAutoReplyTest extends TestCase
                 'urls' => [
                     'mp4_720' => 'https://maxvd369.okcdn.ru/?expires=1782842206501&srcIp=0.0.0.0&type=2&sig=signed&ct=0',
                 ],
-                'duration' => 21,
+                'duration' => 21000,
             ]),
             'https://maxvd369.okcdn.ru/*' => Http::response(
                 'max-okcdn-video-bytes',

@@ -69,6 +69,29 @@ class ProbeMaxBotMediaMetadataActionTest extends TestCase
             && str_starts_with($request->url(), 'https://max.example/private/probe-video.mp4?'));
     }
 
+    public function test_probe_normalizes_one_second_legacy_provider_duration_before_storing_metadata(): void
+    {
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://platform-api.max.ru/videos/max-probe-video-token' => Http::response([
+                'urls' => [
+                    'mp4_720' => 'https://max.example/private/probe-video.mp4?access_token=secret',
+                ],
+                'duration' => 1000,
+            ]),
+            'https://max.example/private/probe-video.mp4*' => Http::response('', 200, [
+                'Content-Length' => '25165824',
+            ]),
+        ]);
+        $attachment = $this->createMaxVideoAttachment();
+
+        $result = app(ProbeMaxBotMediaMetadataAction::class)->handle($attachment->id);
+
+        $this->assertInstanceOf(MessageAttachment::class, $result);
+        $this->assertSame(1, data_get($result->provider_metadata, 'duration'));
+        $this->assertNull($result->local_path);
+    }
+
     public function test_probe_preserves_provider_duration_when_head_temporarily_fails(): void
     {
         Http::preventStrayRequests();

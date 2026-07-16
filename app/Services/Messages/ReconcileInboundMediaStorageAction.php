@@ -8,6 +8,8 @@ use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use League\Flysystem\StorageAttributes;
+use SplPriorityQueue;
 use Throwable;
 
 class ReconcileInboundMediaStorageAction
@@ -302,25 +304,19 @@ class ReconcileInboundMediaStorageAction
      */
     private function reconcileOrphans(bool $repair, int $limit, array &$stats): void
     {
-        $referenced = MessageAttachment::query()
-            ->whereNotNull('local_disk')
-            ->whereNotNull('local_path')
-            ->get(['local_disk', 'local_path'])
-            ->filter(fn (MessageAttachment $attachment): bool => $this->hasSafeStableReference($attachment))
-            ->mapWithKeys(fn (MessageAttachment $attachment): array => [
-                $this->storageKey((string) $attachment->local_disk, (string) $attachment->local_path) => true,
-            ]);
+        $window = $this->orphanScanWindow($limit, $stats);
+        $referenced = $this->referencedStorageKeys($window);
         $graceSeconds = max(
             (int) config('inbound_media.orphan_grace_seconds', 0),
             (int) config('inbound_media.attempt_deadline_seconds', 6 * 60 * 60)
                 + (int) config('inbound_media.reservation_ttl_buffer_seconds', 15 * 60),
         );
 
-        foreach ($this->orphanScanWindow($limit, $stats) as [$disk, $path]) {
+        foreach ($window as [$disk, $path]) {
             try {
                 if (
                     ! MessageAttachment::isSafeLocalPath($path)
-                    || $referenced->has($this->storageKey($disk, $path))
+                    || isset($referenced[$this->storageKey($disk, $path)])
                 ) {
                     continue;
                 }
@@ -360,17 +356,85 @@ class ReconcileInboundMediaStorageAction
     }
 
     /**
+     * @param  list<array{0: string, 1: string}>  $window
+     * @return array<string, true>
+     */
+    private function referencedStorageKeys(array $window): array
+    {
+        $candidates = [];
+
+        foreach ($window as [$disk, $path]) {
+            if (MessageAttachment::isSafeLocalPath($path)) {
+                $candidates[$this->storageKey($disk, $path)] = true;
+            }
+        }
+
+        if ($candidates === []) {
+            return [];
+        }
+
+        $referenced = [];
+        $attachments = MessageAttachment::query()
+            ->whereNotNull('local_disk')
+            ->whereNotNull('local_path')
+            ->select(['id', 'local_disk', 'local_path'])
+            ->lazyById(500);
+
+        foreach ($attachments as $attachment) {
+            if (! $this->hasSafeStableReference($attachment)) {
+                continue;
+            }
+
+            $key = $this->storageKey(
+                (string) $attachment->local_disk,
+                (string) $attachment->local_path,
+            );
+
+            if (! isset($candidates[$key])) {
+                continue;
+            }
+
+            $referenced[$key] = true;
+
+            if (count($referenced) === count($candidates)) {
+                break;
+            }
+        }
+
+        return $referenced;
+    }
+
+    /**
      * @param  array<string, int>  $stats
      * @return list<array{0: string, 1: string}>
      */
     private function orphanScanWindow(int $limit, array &$stats): array
     {
-        $keys = [];
+        $cursor = Cache::get(self::ORPHAN_CURSOR_CACHE_KEY);
+        $cursor = is_string($cursor) ? $cursor : '';
+        $keys = new SplPriorityQueue;
+        $keys->setExtractFlags(SplPriorityQueue::EXTR_BOTH);
+        $total = 0;
 
         foreach (MessageAttachment::readableStorageDiskNames() as $disk) {
             try {
-                foreach (Storage::disk($disk)->allFiles(MessageAttachment::LOCAL_PATH_PREFIX) as $path) {
-                    $keys[] = $this->storageKey($disk, $path);
+                $listing = Storage::disk($disk)
+                    ->getDriver()
+                    ->listContents(MessageAttachment::LOCAL_PATH_PREFIX, true);
+
+                foreach ($listing as $attributes) {
+                    if (! $attributes instanceof StorageAttributes || ! $attributes->isFile()) {
+                        continue;
+                    }
+
+                    $key = $this->storageKey($disk, $attributes->path());
+                    $segment = $cursor !== '' && strcmp($key, $cursor) <= 0 ? 1 : 0;
+                    $keys->insert($key, $segment."\0".$key);
+                    $total++;
+
+                    if ($keys->count() > $limit) {
+                        $keys->extract();
+                    }
                 }
             } catch (Throwable $exception) {
                 report($exception);
@@ -378,25 +442,25 @@ class ReconcileInboundMediaStorageAction
             }
         }
 
-        if ($keys === []) {
+        if ($total === 0) {
             Cache::forget(self::ORPHAN_CURSOR_CACHE_KEY);
 
             return [];
         }
 
-        sort($keys, SORT_STRING);
-        $cursor = Cache::get(self::ORPHAN_CURSOR_CACHE_KEY);
-        $cursor = is_string($cursor) ? $cursor : '';
-        $afterCursor = $cursor === ''
-            ? $keys
-            : array_values(array_filter($keys, fn (string $key): bool => strcmp($key, $cursor) > 0));
-        $beforeCursor = $cursor === ''
-            ? []
-            : array_values(array_filter($keys, fn (string $key): bool => strcmp($key, $cursor) <= 0));
-        $ordered = array_merge($afterCursor, $beforeCursor);
-        $window = array_slice($ordered, 0, $limit);
+        $window = [];
 
-        if (count($ordered) > count($window)) {
+        while (! $keys->isEmpty()) {
+            $entry = $keys->extract();
+            $window[] = $entry['data'];
+        }
+
+        usort(
+            $window,
+            fn (string $left, string $right): int => $this->compareOrphanStorageKeys($left, $right, $cursor),
+        );
+
+        if ($total > count($window)) {
             $stats['orphan_scan_truncated'] = 1;
         }
 
@@ -407,6 +471,14 @@ class ReconcileInboundMediaStorageAction
 
             return [$disk, $path];
         }, $window);
+    }
+
+    private function compareOrphanStorageKeys(string $left, string $right, string $cursor): int
+    {
+        $leftSegment = $cursor !== '' && strcmp($left, $cursor) <= 0 ? 1 : 0;
+        $rightSegment = $cursor !== '' && strcmp($right, $cursor) <= 0 ? 1 : 0;
+
+        return ($leftSegment <=> $rightSegment) ?: strcmp($left, $right);
     }
 
     private function hasSafeStableReference(MessageAttachment $attachment): bool

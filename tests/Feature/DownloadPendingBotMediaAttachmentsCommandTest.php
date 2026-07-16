@@ -865,7 +865,7 @@ class DownloadPendingBotMediaAttachmentsCommandTest extends TestCase
                 ],
                 'width' => 1280,
                 'height' => 720,
-                'duration' => 14,
+                'duration' => 14000,
             ]),
             'https://max.example/private/command-video-720.mp4*' => Http::response(
                 'max-command-video-bytes',
@@ -909,7 +909,7 @@ class DownloadPendingBotMediaAttachmentsCommandTest extends TestCase
                 'urls' => [],
                 'width' => 1280,
                 'height' => 720,
-                'duration' => 14,
+                'duration' => 14000,
             ]),
             'https://max.example/private/payload-video.mp4*' => Http::response(
                 'max-webhook-video-bytes',
@@ -1111,7 +1111,7 @@ class DownloadPendingBotMediaAttachmentsCommandTest extends TestCase
                 ],
                 'width' => 1280,
                 'height' => 720,
-                'duration' => 14,
+                'duration' => 14000,
             ]),
             'https://max.example/private/command-video-720.mp4*' => Http::response(
                 'too-large-body',

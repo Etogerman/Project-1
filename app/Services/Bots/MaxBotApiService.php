@@ -377,13 +377,15 @@ class MaxBotApiService
 
     protected function normalizeMaxVideoDurationSeconds(mixed $value): ?int
     {
-        $duration = $this->normalizeOptionalInteger($value);
+        $durationMilliseconds = $this->normalizeOptionalInteger($value);
 
-        if ($duration === null) {
+        if ($durationMilliseconds === null) {
             return null;
         }
 
-        return $duration > 1000 ? (int) ceil($duration / 1000) : $duration;
+        // Legacy platform-api.max.ru/videos returns duration in milliseconds.
+        // Webhook duration is normalized separately and is already in seconds.
+        return (int) ceil($durationMilliseconds / 1000);
     }
 
     /**
