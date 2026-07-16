@@ -545,7 +545,7 @@ class ChannelResource extends Resource
                     ->toggleable(),
                 TextColumn::make('connection_error_message')
                     ->label('Ошибка')
-                    ->state(fn (Channel $record): ?string => static::resolveConnectionErrorDisplay($record, static::resolveConnectionState($record)))
+                    ->state(fn (Channel $record): ?string => static::resolveChannelTableErrorDisplay($record, static::resolveConnectionState($record)))
                     ->limit(60)
                     ->wrap()
                     ->toggleable(),
@@ -1836,9 +1836,7 @@ SQL;
     protected static function resolveConnectionErrorDisplay(Channel $record, array $connectionState): ?string
     {
         if ($record->isAccountConnection()) {
-            $diagnostics = static::resolveTelegramAccountGatewayDiagnostics($record);
-
-            return $diagnostics->isOutgoingReplyReady ? null : $diagnostics->description;
+            return null;
         }
 
         if (static::resolveStaleConnectionSchedulerHealth($connectionState) !== null) {
@@ -1846,6 +1844,20 @@ SQL;
         }
 
         return $connectionState['connection_error_message'];
+    }
+
+    /**
+     * @param  array{connection_status: string, webhook_status: string, connection_error_message: ?string, provider_webhook_url: ?string, expected_webhook_url: ?string, connection_checked_at: mixed}  $connectionState
+     */
+    protected static function resolveChannelTableErrorDisplay(Channel $record, array $connectionState): ?string
+    {
+        if ($record->isAccountConnection()) {
+            $diagnostics = static::resolveTelegramAccountGatewayDiagnostics($record);
+
+            return $diagnostics->isOutgoingReplyReady ? null : $diagnostics->description;
+        }
+
+        return static::resolveConnectionErrorDisplay($record, $connectionState);
     }
 
     /**

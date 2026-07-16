@@ -761,7 +761,8 @@ class FilamentChannelsResourceTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(ManageChannels::class)
-            ->assertTableColumnStateSet('health_status', 'Исходящие ответы готовы', $channel);
+            ->assertTableColumnStateSet('health_status', 'Исходящие ответы готовы', $channel)
+            ->assertTableColumnStateSet('connection_error_message', null, $channel);
 
         $this->assertSame('success', $statusColorResolver->invoke(null, $channel, $connectionState));
         $this->assertNull($errorResolver->invoke(null, $channel, $connectionState));
