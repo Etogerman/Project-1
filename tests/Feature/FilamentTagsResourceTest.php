@@ -18,9 +18,9 @@ use App\Models\User;
 use Filament\Facades\Filament;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
-use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -180,6 +180,42 @@ class FilamentTagsResourceTest extends TestCase
             ->assertMountedActionModalSee('Жёлтый')
             ->assertMountedActionModalSee('Красный')
             ->assertMountedActionModalSee('Тег активный');
+    }
+
+    public function test_admin_can_save_tag_name_from_edit_modal_with_entangled_color_picker_state(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+        $tag = Tag::factory()->create([
+            'name' => '🚢 Ибица',
+            'color' => 'ab_blue',
+            'is_active' => true,
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(ManageTags::class)
+            ->mountTableAction('edit', $tag)
+            ->assertMountedActionModalSee('Название')
+            ->assertMountedActionModalSeeHtml('$entangle')
+            ->assertMountedActionModalSeeHtml('.color')
+            ->assertMountedActionModalDontSeeHtml('x-ref="stateInput"')
+            ->setTableActionData([
+                'name' => '🚢 Ибица тест',
+                'color' => 'ab_blue',
+                'is_active' => true,
+            ])
+            ->callMountedTableAction()
+            ->assertHasNoTableActionErrors();
+
+        $tag->refresh();
+
+        $this->assertSame('🚢 Ибица тест', $tag->name);
+        $this->assertSame('ibitsa-test', $tag->slug);
+        $this->assertSame('primary', $tag->color);
+        $this->assertSame('ab_blue', $tag->color_value);
+        $this->assertTrue($tag->is_active);
     }
 
     public function test_tags_table_uses_inline_list_page_standard(): void
