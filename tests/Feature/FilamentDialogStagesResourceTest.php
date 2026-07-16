@@ -158,7 +158,7 @@ class FilamentDialogStagesResourceTest extends TestCase
             ->assertMountedActionModalSeeHtml('#0099FF');
     }
 
-    public function test_color_picker_uses_single_hidden_form_state_input(): void
+    public function test_color_picker_uses_entangled_form_state_for_modal_actions(): void
     {
         $admin = User::factory()->create([
             'is_active' => true,
@@ -169,8 +169,9 @@ class FilamentDialogStagesResourceTest extends TestCase
         Livewire::actingAs($admin)
             ->test(ManageDialogStages::class)
             ->mountTableAction('edit', $stage)
-            ->assertMountedActionModalSeeHtml('x-ref="stateInput"')
-            ->assertMountedActionModalSeeHtml('type="hidden"')
+            ->assertMountedActionModalSeeHtml('$entangle')
+            ->assertMountedActionModalSeeHtml('.color')
+            ->assertMountedActionModalDontSeeHtml('x-ref="stateInput"')
             ->assertMountedActionModalDontSeeHtml('pattern="#?[0-9A-Fa-f]{6}"');
     }
 

@@ -727,6 +727,80 @@ class FilamentChannelsResourceTest extends TestCase
         $this->assertSame('Работает', $channel->getHealthStatusLabel());
     }
 
+    public function test_account_channel_table_status_uses_gateway_diagnostics_when_ready(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $channel = Channel::factory()->account()->create([
+            'name' => 'Telegram Account',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        ChannelRuntimeState::query()->create([
+            'channel_id' => $channel->id,
+            'auth_status' => ChannelRuntimeState::AUTH_STATUS_AUTHORIZED,
+            'authorization_state' => ChannelRuntimeState::AUTHORIZATION_STATE_READY,
+            'sync_status' => ChannelRuntimeState::SYNC_STATUS_LIVE,
+            'last_gateway_heartbeat_at' => now(),
+            'runtime_payload' => [
+                'gateway_capabilities' => [
+                    'outgoing_replies' => true,
+                ],
+            ],
+        ]);
+
+        $channel = $channel->fresh('runtimeState');
+        $connectionState = app(CheckChannelConnectionAction::class)->resolveEffectiveState($channel);
+        $statusColorResolver = new ReflectionMethod(ChannelResource::class, 'resolveConnectionStatusColor');
+        $statusColorResolver->setAccessible(true);
+        $errorResolver = new ReflectionMethod(ChannelResource::class, 'resolveConnectionErrorDisplay');
+        $errorResolver->setAccessible(true);
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->assertTableColumnStateSet('health_status', 'Исходящие ответы готовы', $channel)
+            ->assertTableColumnStateSet('connection_error_message', null, $channel);
+
+        $this->assertSame('success', $statusColorResolver->invoke(null, $channel, $connectionState));
+        $this->assertNull($errorResolver->invoke(null, $channel, $connectionState));
+    }
+
+    public function test_account_channel_table_status_shows_gateway_diagnostic_reason_when_blocked(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $channel = Channel::factory()->account()->create([
+            'name' => 'Telegram Account',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        ChannelRuntimeState::query()->create([
+            'channel_id' => $channel->id,
+            'auth_status' => ChannelRuntimeState::AUTH_STATUS_PENDING,
+            'authorization_state' => ChannelRuntimeState::AUTHORIZATION_STATE_AWAITING_QR,
+            'sync_status' => ChannelRuntimeState::SYNC_STATUS_IDLE,
+            'last_gateway_heartbeat_at' => null,
+            'runtime_payload' => [],
+        ]);
+
+        $channel = $channel->fresh('runtimeState');
+
+        Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->assertTableColumnStateSet('health_status', 'Telegram account не авторизован', $channel)
+            ->assertTableColumnStateSet(
+                'connection_error_message',
+                'Telegram account не авторизован, поэтому gateway не может отправлять исходящие ответы.',
+                $channel,
+            );
+    }
+
     public function test_bot_channel_table_summary_does_not_duplicate_username_column(): void
     {
         $summaryBuilder = new ReflectionMethod(ChannelResource::class, 'buildChannelTableSummary');
