@@ -6,9 +6,8 @@
     $isDisabled = $isDisabled();
     $state = $getState();
     $statePath = $getStatePath();
-    $wireModelAttribute = $applyStateBindingModifiers('wire:model');
+    $stateEntangle = $applyStateBindingModifiers("\$entangle('{$statePath}')");
     $defaultValue = AbColorPalette::DEFAULT_PRESET_KEY;
-    $inputState = (string) ($state ?: $defaultValue);
     $allColors = collect($recommendedColors)->merge($webSafeColors);
     $defaultColor = $allColors->firstWhere('value', $defaultValue) ?? $recommendedColors[0];
     $selectedColor = $allColors->firstWhere('value', $state);
@@ -304,31 +303,61 @@
             selectedName: {{ \Illuminate\Support\Js::from($isDefaultSelected ? 'По умолчанию' : (string) $selectedColor['name']) }},
             selectedHex: {{ \Illuminate\Support\Js::from((string) $selectedColor['hex']) }},
             customHexInput: {{ \Illuminate\Support\Js::from(str_starts_with((string) $state, '#') ? (string) $state : '') }},
+            state: $wire.{{ $stateEntangle }},
+            init() {
+                this.syncFormState(this.state || this.defaultValue);
+                this.applySelectedValue(this.state);
+
+                this.$watch('state', (value) => {
+                    this.applySelectedValue(value || this.defaultValue);
+                });
+            },
             normalizeHex(value) {
                 const color = String(value || '').trim();
                 const withHash = color.startsWith('#') ? color : `#${color}`;
 
                 return /^#[0-9A-Fa-f]{6}$/.test(withHash) ? withHash.toUpperCase() : null;
             },
-            syncFormState(value) {
-                if (! this.$refs.stateInput) {
+            applySelectedValue(value) {
+                const normalizedValue = value || this.defaultValue;
+
+                this.selectedValue = normalizedValue;
+
+                const color = this.colors[normalizedValue] || null;
+
+                if (color) {
+                    this.selectedName = normalizedValue === this.defaultValue ? 'По умолчанию' : color.name;
+                    this.selectedHex = color.hex;
+
                     return;
                 }
 
-                this.$refs.stateInput.value = value;
-                this.$refs.stateInput.dispatchEvent(new Event('input', { bubbles: true }));
-                this.$refs.stateInput.dispatchEvent(new Event('change', { bubbles: true }));
-            },
-            select(value, close = true) {
-                this.selectedValue = value;
+                const customHex = this.normalizeHex(normalizedValue);
 
-                const color = this.colors[value] || null;
+                if (customHex) {
+                    this.selectedValue = customHex;
+                    this.selectedName = 'Свой цвет';
+                    this.selectedHex = customHex;
+                    this.customHexInput = customHex;
 
-                if (color) {
-                    this.selectedName = value === this.defaultValue ? 'По умолчанию' : color.name;
-                    this.selectedHex = color.hex;
+                    return;
                 }
 
+                const fallback = this.colors[this.defaultValue] || null;
+
+                if (fallback) {
+                    this.selectedValue = this.defaultValue;
+                    this.selectedName = 'По умолчанию';
+                    this.selectedHex = fallback.hex;
+                }
+            },
+            syncFormState(value) {
+                const normalizedValue = value || this.defaultValue;
+
+                this.state = normalizedValue;
+                this.applySelectedValue(normalizedValue);
+            },
+            select(value, close = true) {
                 this.syncFormState(value);
 
                 if (close) {
@@ -338,8 +367,6 @@
             chooseRadio(value, input) {
                 if (input) {
                     input.checked = true;
-                    input.dispatchEvent(new Event('input', { bubbles: true }));
-                    input.dispatchEvent(new Event('change', { bubbles: true }));
                 }
 
                 this.select(value);
@@ -361,14 +388,6 @@
         }"
         x-on:keydown.escape.window="open = false"
     >
-        <input
-            @disabled($isDisabled)
-            x-ref="stateInput"
-            type="hidden"
-            value="{{ $inputState }}"
-            {{ $wireModelAttribute }}="{{ $statePath }}"
-        />
-
         <button
             @disabled($isDisabled)
             class="ac-color-picker__trigger"

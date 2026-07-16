@@ -1698,7 +1698,7 @@ SQL;
     protected static function resolveConnectionStatusLabel(Channel $record, array $connectionState): string
     {
         if ($record->isAccountConnection()) {
-            return $record->getHealthStatusLabel();
+            return static::resolveTelegramAccountGatewayDiagnostics($record)->label;
         }
 
         $schedulerHealth = static::resolveStaleConnectionSchedulerHealth($connectionState);
@@ -1720,7 +1720,7 @@ SQL;
     protected static function resolveConnectionStatusColor(Channel $record, array $connectionState): string
     {
         if ($record->isAccountConnection()) {
-            return $record->getHealthStatusColor();
+            return static::resolveTelegramAccountGatewayDiagnostics($record)->severity;
         }
 
         $schedulerHealth = static::resolveStaleConnectionSchedulerHealth($connectionState);
@@ -1836,7 +1836,9 @@ SQL;
     protected static function resolveConnectionErrorDisplay(Channel $record, array $connectionState): ?string
     {
         if ($record->isAccountConnection()) {
-            return null;
+            $diagnostics = static::resolveTelegramAccountGatewayDiagnostics($record);
+
+            return $diagnostics->isOutgoingReplyReady ? null : $diagnostics->description;
         }
 
         if (static::resolveStaleConnectionSchedulerHealth($connectionState) !== null) {
