@@ -19,6 +19,7 @@ use App\Services\Bots\StoreInboundMessageAction;
 use App\Services\Contacts\ContactMergeException;
 use App\Services\Contacts\MergeContactsAction;
 use App\Services\Dialogs\DialogConsolidationException;
+use App\Services\Messages\InboundMediaDownloadPolicy;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Queue;
@@ -104,7 +105,7 @@ class StoreInboundMessageActionTest extends TestCase
             'provider_file_id' => 'telegram-photo-file-1',
             'provider_file_unique_id' => 'telegram-photo-unique-1',
             'file_size_bytes' => 4096,
-            'download_status' => MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD,
             'send_status' => MessageAttachment::SEND_STATUS_NOT_APPLICABLE,
             'local_disk' => null,
             'local_path' => null,
@@ -164,7 +165,7 @@ class StoreInboundMessageActionTest extends TestCase
             'mime_type' => 'audio/ogg',
             'extension' => 'ogg',
             'file_size_bytes' => 151_664,
-            'download_status' => MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD,
             'send_status' => MessageAttachment::SEND_STATUS_NOT_APPLICABLE,
             'local_disk' => null,
             'local_path' => null,
@@ -328,6 +329,54 @@ class StoreInboundMessageActionTest extends TestCase
         $this->assertSame(8192, $attachment->file_size_bytes);
     }
 
+    public function test_store_inbound_message_replay_preserves_probed_max_metadata_omitted_by_provider(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $message = $this->makeInboundUserMessage(
+            channel: $channel,
+            providerEventKey: 'max-video-probed-replay',
+            externalMessageId: 'max-video-probed-replay',
+            text: null,
+            messageParameter: null,
+            receivedAt: Carbon::parse('2026-04-17 09:30:00'),
+            media: [[
+                'media_kind' => MessageAttachment::MEDIA_KIND_VIDEO,
+                'type' => 'video',
+                'provider_attachment_key' => 'token:max-video-probed-replay',
+                'provider_file_reference' => 'token:max-video-probed-replay',
+                'duration' => 341,
+            ]],
+        );
+
+        $storedResult = app(StoreInboundMessageAction::class)->handle($channel, $message);
+        $attachment = MessageAttachment::query()
+            ->where('message_id', $storedResult->message->id)
+            ->firstOrFail();
+        $attachment->forceFill([
+            'file_size_bytes' => 24_195_606,
+            'provider_metadata' => [
+                'duration' => 341,
+                'width' => 1280,
+                'height' => 720,
+            ],
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND,
+            'safe_error_code' => InboundMediaDownloadPolicy::REASON_SIZE_ABOVE_AUTO_LIMIT,
+        ])->save();
+
+        app(StoreInboundMessageAction::class)->handle($channel, $message);
+
+        $attachment->refresh();
+
+        $this->assertSame(24_195_606, $attachment->file_size_bytes);
+        $this->assertSame(341, data_get($attachment->provider_metadata, 'duration'));
+        $this->assertSame(1280, data_get($attachment->provider_metadata, 'width'));
+        $this->assertSame(720, data_get($attachment->provider_metadata, 'height'));
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND, $attachment->download_status);
+        $this->assertSame(InboundMediaDownloadPolicy::REASON_SIZE_ABOVE_AUTO_LIMIT, $attachment->safe_error_code);
+    }
+
     public function test_store_inbound_message_creates_max_image_attachment_without_secret_metadata(): void
     {
         $channel = Channel::factory()->create([
@@ -372,7 +421,7 @@ class StoreInboundMessageActionTest extends TestCase
         $this->assertSame('max-media-message-1', $attachment->provider_event_key);
         $this->assertSame('25852958504', $attachment->provider_attachment_key);
         $this->assertSame('25852958504', $attachment->provider_file_reference);
-        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY, $attachment->download_status);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND, $attachment->download_status);
         $this->assertSame(['width' => 538, 'height' => 1280], $attachment->provider_metadata);
         $this->assertSame(['type' => 'image', 'photo_id' => '25852958504'], $attachment->raw_payload_excerpt);
         $this->assertStringNotContainsString('url', json_encode($attachment->provider_metadata, JSON_THROW_ON_ERROR));
@@ -424,7 +473,7 @@ class StoreInboundMessageActionTest extends TestCase
         $this->assertSame('429b5', $attachment->provider_attachment_key);
         $this->assertSame('429b5', $attachment->provider_file_reference);
         $this->assertSame(MessageAttachment::MEDIA_KIND_STICKER, $attachment->media_kind);
-        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY, $attachment->download_status);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND, $attachment->download_status);
         $this->assertSame(['width' => 144, 'height' => 144], $attachment->provider_metadata);
         $this->assertSame([
             'type' => 'sticker',

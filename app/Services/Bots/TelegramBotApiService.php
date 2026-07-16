@@ -7,14 +7,22 @@ use App\Data\Bots\BotMetadata;
 use App\Data\Bots\DownloadedAvatarData;
 use App\Data\Bots\IncomingBotMessage;
 use App\Data\Bots\TelegramChatAvatarFetchResult;
+use App\Data\Messages\DownloadedMediaStreamData;
 use App\Models\Channel;
 use App\Models\Message;
+use App\Services\Messages\StreamHttpResponseToTemporaryFileAction;
+use Closure;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
+use RuntimeException;
 
 class TelegramBotApiService
 {
+    public function __construct(
+        private readonly StreamHttpResponseToTemporaryFileAction $streamHttpResponseToTemporaryFileAction,
+    ) {}
+
     public function sendAutoReply(Channel $channel, IncomingBotMessage $message, string $text): AutoReplyDeliveryResult
     {
         return $this->sendTextMessage($channel, $message->externalChatId, $message->externalUserId, $text);
@@ -55,7 +63,7 @@ class TelegramBotApiService
 
         $response = Http::asJson()
             ->post(
-                sprintf('https://api.telegram.org/bot%s/sendMessage', $this->token($channel)),
+                $this->apiMethodUrl($channel, 'sendMessage'),
                 $payload,
             )
             ->throw()
@@ -82,7 +90,7 @@ class TelegramBotApiService
 
         Http::asJson()
             ->post(
-                sprintf('https://api.telegram.org/bot%s/deleteMessage', $this->token($channel)),
+                $this->apiMethodUrl($channel, 'deleteMessage'),
                 [
                     'chat_id' => $externalChatId,
                     'message_id' => $messageId,
@@ -107,7 +115,7 @@ class TelegramBotApiService
 
         Http::asJson()
             ->post(
-                sprintf('https://api.telegram.org/bot%s/setWebhook', $this->token($channel)),
+                $this->apiMethodUrl($channel, 'setWebhook'),
                 $payload,
             )
             ->throw();
@@ -120,7 +128,7 @@ class TelegramBotApiService
     {
         $response = Http::timeout(10)
             ->asJson()
-            ->get(sprintf('https://api.telegram.org/bot%s/getWebhookInfo', $this->token($channel)))
+            ->get($this->apiMethodUrl($channel, 'getWebhookInfo'))
             ->throw()
             ->json();
 
@@ -145,7 +153,7 @@ class TelegramBotApiService
 
         Http::asJson()
             ->post(
-                sprintf('https://api.telegram.org/bot%s/answerCallbackQuery', $this->token($channel)),
+                $this->apiMethodUrl($channel, 'answerCallbackQuery'),
                 $payload,
             )
             ->throw();
@@ -167,7 +175,7 @@ class TelegramBotApiService
 
         Http::asJson()
             ->post(
-                sprintf('https://api.telegram.org/bot%s/editMessageReplyMarkup', $this->token($channel)),
+                $this->apiMethodUrl($channel, 'editMessageReplyMarkup'),
                 $payload,
             )
             ->throw();
@@ -176,7 +184,7 @@ class TelegramBotApiService
     public function fetchBotMetadata(Channel $channel): BotMetadata
     {
         $response = Http::asJson()
-            ->get(sprintf('https://api.telegram.org/bot%s/getMe', $this->token($channel)))
+            ->get($this->apiMethodUrl($channel, 'getMe'))
             ->throw()
             ->json();
 
@@ -202,9 +210,11 @@ class TelegramBotApiService
 
     public function downloadChatAvatar(Channel $channel, string $chatId): TelegramChatAvatarFetchResult
     {
+        $usesLocalApi = $this->usesLocalApi();
+        $apiBaseUrl = $this->apiBaseUrl($usesLocalApi);
         $chatResponse = Http::asJson()
             ->get(
-                sprintf('https://api.telegram.org/bot%s/getChat', $this->token($channel)),
+                sprintf('%s/bot%s/getChat', $apiBaseUrl, $this->token($channel)),
                 ['chat_id' => $chatId],
             )
             ->throw()
@@ -219,7 +229,7 @@ class TelegramBotApiService
 
         $fileResponse = Http::asJson()
             ->get(
-                sprintf('https://api.telegram.org/bot%s/getFile', $this->token($channel)),
+                sprintf('%s/bot%s/getFile', $apiBaseUrl, $this->token($channel)),
                 ['file_id' => (string) $fileId],
             )
             ->throw()
@@ -231,8 +241,24 @@ class TelegramBotApiService
             throw new InvalidArgumentException("Telegram API did not return avatar file path for channel [{$channel->id}] and chat [{$chatId}].");
         }
 
+        if ($usesLocalApi) {
+            $localPath = $this->resolveLocalApiFilePath((string) $filePath);
+            $contents = file_get_contents($localPath);
+
+            if (! is_string($contents) || $contents === '') {
+                throw new InvalidArgumentException("Telegram API returned an empty avatar file for channel [{$channel->id}] and chat [{$chatId}].");
+            }
+
+            return TelegramChatAvatarFetchResult::avatar(
+                new DownloadedAvatarData(
+                    contents: $contents,
+                    filenameHint: basename($localPath),
+                ),
+            );
+        }
+
         $downloadResponse = Http::timeout(15)
-            ->get(sprintf('https://api.telegram.org/file/bot%s/%s', $this->token($channel), ltrim((string) $filePath, '/')))
+            ->get(sprintf('%s/file/bot%s/%s', $apiBaseUrl, $this->token($channel), ltrim((string) $filePath, '/')))
             ->throw();
 
         if ($downloadResponse->body() === '') {
@@ -248,15 +274,24 @@ class TelegramBotApiService
         );
     }
 
-    public function downloadFile(Channel $channel, string $fileId, int $maxBytes): DownloadedAvatarData
-    {
+    /**
+     * @param  Closure(int): void|null  $onProgress
+     */
+    public function downloadFileToStream(
+        Channel $channel,
+        string $fileId,
+        int $maxBytes,
+        ?Closure $onProgress = null,
+    ): DownloadedMediaStreamData {
         if (! filled($fileId)) {
             throw new InvalidArgumentException("Telegram file id is required for channel [{$channel->id}].");
         }
 
+        $usesLocalApi = $this->usesLocalApi();
+        $apiBaseUrl = $this->apiBaseUrl($usesLocalApi);
         $fileResponse = Http::asJson()
             ->get(
-                sprintf('https://api.telegram.org/bot%s/getFile', $this->token($channel)),
+                sprintf('%s/bot%s/getFile', $apiBaseUrl, $this->token($channel)),
                 ['file_id' => $fileId],
             )
             ->throw()
@@ -264,6 +299,9 @@ class TelegramBotApiService
 
         $filePath = data_get($fileResponse, 'result.file_path');
         $fileSize = data_get($fileResponse, 'result.file_size');
+        $providerDeclaredSizeBytes = is_numeric($fileSize) && (int) $fileSize >= 0
+            ? (int) $fileSize
+            : null;
 
         if (is_numeric($fileSize) && (int) $fileSize > $maxBytes) {
             throw new InvalidArgumentException('Telegram Bot media file is larger than the local download limit.');
@@ -273,25 +311,159 @@ class TelegramBotApiService
             throw new InvalidArgumentException("Telegram API did not return file path for channel [{$channel->id}].");
         }
 
-        $downloadResponse = Http::timeout(30)
-            ->get(sprintf('https://api.telegram.org/file/bot%s/%s', $this->token($channel), ltrim((string) $filePath, '/')))
+        if ($usesLocalApi) {
+            return $this->streamLocalApiFile(
+                (string) $filePath,
+                $maxBytes,
+                $onProgress,
+            )->withMetadata([
+                'provider_declared_size_bytes' => $providerDeclaredSizeBytes,
+            ]);
+        }
+
+        $downloadResponse = Http::withOptions([
+            'stream' => true,
+            'allow_redirects' => false,
+            'connect_timeout' => 10,
+            'read_timeout' => max(
+                1,
+                min(
+                    90,
+                    max(1, (int) config('inbound_media.lease_stale_seconds', 120)) - 30,
+                ),
+            ),
+            'timeout' => max(30, (int) config('inbound_media.attempt_deadline_seconds', 6 * 60 * 60)),
+        ])
+            ->get(sprintf('%s/file/bot%s/%s', $apiBaseUrl, $this->token($channel), ltrim((string) $filePath, '/')))
             ->throw();
 
-        $contents = $downloadResponse->body();
-
-        if ($contents === '') {
-            throw new InvalidArgumentException("Telegram API returned an empty file for channel [{$channel->id}].");
-        }
-
-        if (strlen($contents) > $maxBytes) {
-            throw new InvalidArgumentException('Telegram Bot media file is larger than the local download limit.');
-        }
-
-        return new DownloadedAvatarData(
-            contents: $contents,
-            contentType: $downloadResponse->header('Content-Type'),
+        return $this->streamHttpResponseToTemporaryFileAction->handle(
+            response: $downloadResponse,
+            maxBytes: $maxBytes,
             filenameHint: (string) $filePath,
+            metadata: [
+                'provider_declared_size_bytes' => $providerDeclaredSizeBytes,
+            ],
+            onProgress: $onProgress,
+            tooLargeMessage: 'Telegram Bot media file is larger than the local download limit.',
+            emptyMessage: "Telegram API returned an empty file for channel [{$channel->id}].",
         );
+    }
+
+    private function apiMethodUrl(Channel $channel, string $method): string
+    {
+        return sprintf(
+            '%s/bot%s/%s',
+            $this->apiBaseUrl($this->usesLocalApi()),
+            $this->token($channel),
+            $method,
+        );
+    }
+
+    private function usesLocalApi(): bool
+    {
+        return (bool) config('bots.telegram.local_api_media_download_enabled', false);
+    }
+
+    private function apiBaseUrl(bool $usesLocalApi): string
+    {
+        $configured = $usesLocalApi
+            ? config('bots.telegram.local_api_base_url')
+            : config('bots.telegram.cloud_api_base_url', 'https://api.telegram.org');
+        $baseUrl = rtrim(trim(is_string($configured) ? $configured : ''), '/');
+
+        if ($baseUrl === '') {
+            throw new InvalidArgumentException('Telegram Local Bot API base URL is not configured.');
+        }
+
+        $parts = parse_url($baseUrl);
+
+        if (! is_array($parts)) {
+            throw new InvalidArgumentException('Telegram Bot API base URL is invalid.');
+        }
+
+        $scheme = strtolower((string) ($parts['scheme'] ?? ''));
+
+        if (
+            ! in_array($scheme, ['http', 'https'], true)
+            || blank($parts['host'] ?? null)
+            || array_key_exists('user', $parts)
+            || array_key_exists('pass', $parts)
+            || array_key_exists('query', $parts)
+            || array_key_exists('fragment', $parts)
+        ) {
+            throw new InvalidArgumentException('Telegram Bot API base URL is invalid.');
+        }
+
+        if ($usesLocalApi) {
+            $host = mb_strtolower(rtrim((string) $parts['host'], '.'));
+            $trustedHosts = array_values(array_filter(
+                (array) config('bots.telegram.local_api_trusted_hosts', []),
+                static fn (mixed $value): bool => is_string($value) && trim($value) !== '',
+            ));
+            $trustedHosts = array_map(
+                static fn (string $value): string => mb_strtolower(rtrim(trim($value), '.')),
+                $trustedHosts,
+            );
+
+            if (! in_array($host, $trustedHosts, true)) {
+                throw new InvalidArgumentException('Telegram Local Bot API host is not trusted.');
+            }
+        }
+
+        return $baseUrl;
+    }
+
+    /**
+     * @param  Closure(int): void|null  $onProgress
+     */
+    private function streamLocalApiFile(
+        string $filePath,
+        int $maxBytes,
+        ?Closure $onProgress,
+    ): DownloadedMediaStreamData {
+        $path = $this->resolveLocalApiFilePath($filePath);
+
+        $source = fopen($path, 'rb');
+
+        if ($source === false) {
+            throw new RuntimeException('Failed to open Telegram Local Bot API media stream.');
+        }
+
+        try {
+            $fileSize = filesize($path);
+
+            return $this->streamHttpResponseToTemporaryFileAction->handleStream(
+                source: $source,
+                maxBytes: $maxBytes,
+                expectedLength: is_int($fileSize) ? $fileSize : null,
+                filenameHint: basename($path),
+                onProgress: $onProgress,
+                tooLargeMessage: 'Telegram Bot media file is larger than the local download limit.',
+                emptyMessage: 'Telegram Local Bot API returned an empty file.',
+            );
+        } finally {
+            fclose($source);
+        }
+    }
+
+    private function resolveLocalApiFilePath(string $filePath): string
+    {
+        $configuredRoot = config('bots.telegram.local_api_files_root');
+        $root = realpath(is_string($configuredRoot) ? $configuredRoot : '');
+        $path = realpath($filePath);
+
+        if ($root === false || $path === false || ! is_file($path) || ! is_readable($path)) {
+            throw new InvalidArgumentException('Telegram Local Bot API media path is unavailable.');
+        }
+
+        $rootPrefix = rtrim($root, DIRECTORY_SEPARATOR).DIRECTORY_SEPARATOR;
+
+        if ($path !== $root && ! str_starts_with($path, $rootPrefix)) {
+            throw new InvalidArgumentException('Telegram Local Bot API media path is outside the configured root.');
+        }
+
+        return $path;
     }
 
     protected function token(Channel $channel): string

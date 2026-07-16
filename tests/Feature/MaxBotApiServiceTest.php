@@ -9,6 +9,7 @@ use App\Services\Bots\MaxBotApiService;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use InvalidArgumentException;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 class MaxBotApiServiceTest extends TestCase
@@ -180,5 +181,40 @@ class MaxBotApiServiceTest extends TestCase
             'height' => 480,
             'duration' => 21,
         ], $result->metadata());
+    }
+
+    #[DataProvider('legacyMaxVideoDurationProvider')]
+    public function test_fetch_video_attachment_download_data_normalizes_legacy_duration_milliseconds(
+        int $durationMilliseconds,
+        int $expectedDurationSeconds,
+    ): void {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'credentials' => ['token' => 'max-token'],
+        ]);
+
+        Http::fake([
+            'https://platform-api.max.ru/videos/video-token' => Http::response([
+                'duration' => $durationMilliseconds,
+            ]),
+        ]);
+
+        $result = app(MaxBotApiService::class)->fetchVideoAttachmentDownloadData($channel, 'video-token');
+
+        $this->assertSame($expectedDurationSeconds, $result->duration);
+    }
+
+    /**
+     * @return array<string, array{0: int, 1: int}>
+     */
+    public static function legacyMaxVideoDurationProvider(): array
+    {
+        return [
+            'one millisecond rounds up to one second' => [1, 1],
+            'sub-second duration rounds up' => [999, 1],
+            'one second boundary' => [1000, 1],
+            'milliseconds above boundary round up' => [1001, 2],
+            'long video is not confused with seconds' => [1_651_000, 1651],
+        ];
     }
 }

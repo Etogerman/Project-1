@@ -12,6 +12,7 @@ use App\Models\MessageAttachment;
 use App\Models\MessageRevision;
 use App\Models\User;
 use App\Services\Dialogs\BuildConversationFeedViewDataAction;
+use App\Services\Messages\InboundMediaDownloadPolicy;
 use App\Services\Messages\ResolveMessageMediaItemsAction;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -725,6 +726,79 @@ class BuildConversationFeedViewDataActionTest extends TestCase
 
         $this->assertNotSame('none', $downloadedRenderKey);
         $this->assertNotSame($downloadedRenderKey, $updatedFeed[0]['media_render_key']);
+    }
+
+    public function test_max_size_and_duration_update_before_download_changes_conversation_render_key(): void
+    {
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'inbound_media_on_demand_enabled' => true,
+        ]);
+        $identity = ContactIdentity::factory()->create([
+            'channel_id' => $channel->id,
+            'platform' => Channel::PLATFORM_MAX,
+        ]);
+        $message = Message::factory()->create([
+            'contact_id' => $identity->contact_id,
+            'contact_identity_id' => $identity->id,
+            'channel_id' => $channel->id,
+            'provider_event_key' => 'max-bot:metadata-probe:message-1',
+            'text' => null,
+        ]);
+        $attachment = MessageAttachment::factory()->create([
+            'message_id' => $message->id,
+            'channel_id' => $channel->id,
+            'provider' => MessageAttachment::PROVIDER_MAX_BOT,
+            'provider_event_key' => $message->provider_event_key,
+            'provider_attachment_key' => 'token:metadata-probe',
+            'provider_file_reference' => 'token:metadata-probe',
+            'media_kind' => MessageAttachment::MEDIA_KIND_VIDEO,
+            'mime_type' => 'video/mp4',
+            'file_size_bytes' => null,
+            'provider_metadata' => [],
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND,
+            'safe_error_code' => InboundMediaDownloadPolicy::REASON_SIZE_UNKNOWN,
+            'local_disk' => null,
+            'local_path' => null,
+        ]);
+
+        $initialFeed = app(BuildConversationFeedViewDataAction::class)->handle(
+            Message::query()
+                ->whereKey($message->id)
+                ->with(['channel', 'dialog.channel', 'sentByUser'])
+                ->get(),
+        );
+
+        $this->assertSame('Размер неизвестен', $initialFeed[0]['media_items'][0]['file_size_label']);
+        $this->assertNull($initialFeed[0]['media_items'][0]['duration_label']);
+        $this->assertSame(
+            ['video/mp4', 'Размер неизвестен'],
+            $initialFeed[0]['media_items'][0]['meta'],
+        );
+        $initialRenderKey = $initialFeed[0]['media_render_key'];
+
+        $attachment->forceFill([
+            'file_size_bytes' => 25_165_824,
+            'provider_metadata' => ['duration' => 341],
+            'safe_error_code' => InboundMediaDownloadPolicy::REASON_SIZE_ABOVE_AUTO_LIMIT,
+        ])->save();
+
+        $updatedFeed = app(BuildConversationFeedViewDataAction::class)->handle(
+            Message::query()
+                ->whereKey($message->id)
+                ->with(['channel', 'dialog.channel', 'sentByUser'])
+                ->get(),
+        );
+
+        $this->assertSame('24 МБ', $updatedFeed[0]['media_items'][0]['file_size_label']);
+        $this->assertSame('5:41', $updatedFeed[0]['media_items'][0]['duration_label']);
+        $this->assertSame(
+            ['video/mp4', '5:41', '24 МБ'],
+            $updatedFeed[0]['media_items'][0]['meta'],
+        );
+        $this->assertFalse($updatedFeed[0]['media_items'][0]['is_downloadable']);
+        $this->assertFalse($updatedFeed[0]['media_items'][0]['is_previewable']);
+        $this->assertNotSame($initialRenderKey, $updatedFeed[0]['media_render_key']);
     }
 
     public function test_downloaded_browser_playable_video_attachment_exposes_operator_preview_view_data(): void

@@ -10,8 +10,9 @@ use App\Services\Bots\BotIncomingMessageNormalizer;
 use App\Services\Bots\BotWebhookRateLimiter;
 use App\Services\Bots\ChannelActivityLogger;
 use App\Services\Bots\ChannelWebhookUrlGenerator;
+use App\Services\Bots\DispatchMaxBotMediaMetadataProbesAction;
+use App\Services\Bots\DispatchPendingBotMediaDownloadsAction;
 use App\Services\Bots\DispatchStoredInboundBotMessageAction;
-use App\Services\Bots\DownloadBotMessageAttachmentsAction;
 use App\Services\Bots\StoreInboundMessageAction;
 use App\Services\Bots\StoreInboundMessageEditAction;
 use App\Services\Bots\StoreInboundMessageRemovalAction;
@@ -30,7 +31,7 @@ class BotWebhookController extends Controller
         BotIncomingMessageNormalizer $botIncomingMessageNormalizer,
         StoreInboundMessageAction $storeInboundMessageAction,
         DispatchStoredInboundBotMessageAction $dispatchStoredInboundBotMessageAction,
-        DownloadBotMessageAttachmentsAction $downloadBotMessageAttachmentsAction,
+        DispatchPendingBotMediaDownloadsAction $dispatchPendingBotMediaDownloadsAction,
         StoreInboundMessageEditAction $storeInboundMessageEditAction,
         StoreInboundMessageRemovalAction $storeInboundMessageRemovalAction,
         ChannelActivityLogger $channelActivityLogger,
@@ -45,7 +46,7 @@ class BotWebhookController extends Controller
             botIncomingMessageNormalizer: $botIncomingMessageNormalizer,
             storeInboundMessageAction: $storeInboundMessageAction,
             dispatchStoredInboundBotMessageAction: $dispatchStoredInboundBotMessageAction,
-            downloadBotMessageAttachmentsAction: $downloadBotMessageAttachmentsAction,
+            dispatchPendingBotMediaDownloadsAction: $dispatchPendingBotMediaDownloadsAction,
             storeInboundMessageEditAction: $storeInboundMessageEditAction,
             storeInboundMessageRemovalAction: $storeInboundMessageRemovalAction,
             channelActivityLogger: $channelActivityLogger,
@@ -61,12 +62,13 @@ class BotWebhookController extends Controller
         BotIncomingMessageNormalizer $botIncomingMessageNormalizer,
         StoreInboundMessageAction $storeInboundMessageAction,
         DispatchStoredInboundBotMessageAction $dispatchStoredInboundBotMessageAction,
-        DownloadBotMessageAttachmentsAction $downloadBotMessageAttachmentsAction,
+        DispatchPendingBotMediaDownloadsAction $dispatchPendingBotMediaDownloadsAction,
         StoreInboundMessageEditAction $storeInboundMessageEditAction,
         StoreInboundMessageRemovalAction $storeInboundMessageRemovalAction,
         ChannelActivityLogger $channelActivityLogger,
         BotWebhookRateLimiter $botWebhookRateLimiter,
         ChannelWebhookUrlGenerator $channelWebhookUrlGenerator,
+        DispatchMaxBotMediaMetadataProbesAction $dispatchMaxBotMediaMetadataProbesAction,
     ): JsonResponse {
         return $this->handle(
             request: $request,
@@ -75,12 +77,13 @@ class BotWebhookController extends Controller
             botIncomingMessageNormalizer: $botIncomingMessageNormalizer,
             storeInboundMessageAction: $storeInboundMessageAction,
             dispatchStoredInboundBotMessageAction: $dispatchStoredInboundBotMessageAction,
-            downloadBotMessageAttachmentsAction: $downloadBotMessageAttachmentsAction,
+            dispatchPendingBotMediaDownloadsAction: $dispatchPendingBotMediaDownloadsAction,
             storeInboundMessageEditAction: $storeInboundMessageEditAction,
             storeInboundMessageRemovalAction: $storeInboundMessageRemovalAction,
             channelActivityLogger: $channelActivityLogger,
             botWebhookRateLimiter: $botWebhookRateLimiter,
             channelWebhookUrlGenerator: $channelWebhookUrlGenerator,
+            dispatchMaxBotMediaMetadataProbesAction: $dispatchMaxBotMediaMetadataProbesAction,
         );
     }
 
@@ -91,13 +94,14 @@ class BotWebhookController extends Controller
         BotIncomingMessageNormalizer $botIncomingMessageNormalizer,
         StoreInboundMessageAction $storeInboundMessageAction,
         DispatchStoredInboundBotMessageAction $dispatchStoredInboundBotMessageAction,
-        DownloadBotMessageAttachmentsAction $downloadBotMessageAttachmentsAction,
+        DispatchPendingBotMediaDownloadsAction $dispatchPendingBotMediaDownloadsAction,
         StoreInboundMessageEditAction $storeInboundMessageEditAction,
         StoreInboundMessageRemovalAction $storeInboundMessageRemovalAction,
         ChannelActivityLogger $channelActivityLogger,
         BotWebhookRateLimiter $botWebhookRateLimiter,
         ChannelWebhookUrlGenerator $channelWebhookUrlGenerator,
         ?TelegramBotApiService $telegramBotApiService = null,
+        ?DispatchMaxBotMediaMetadataProbesAction $dispatchMaxBotMediaMetadataProbesAction = null,
     ): JsonResponse {
         abort_unless(
             $channel->is_active
@@ -226,7 +230,8 @@ class BotWebhookController extends Controller
             $storedResult = $storeInboundMessageAction->handle($channel, $message);
 
             if ($storedResult !== null) {
-                $downloadBotMessageAttachmentsAction->handle($storedResult->message);
+                $dispatchMaxBotMediaMetadataProbesAction?->handle($storedResult->message);
+                $dispatchPendingBotMediaDownloadsAction->handle($storedResult->message);
                 $dispatchStoredInboundBotMessageAction->handle($channel, $storedResult, $deliveryLagSeconds);
             }
         }

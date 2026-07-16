@@ -5,8 +5,8 @@ namespace App\Console\Commands;
 use App\Models\Message;
 use App\Models\MessageAttachment;
 use App\Services\Bots\DownloadBotMessageAttachmentsAction;
-use App\Services\Dialogs\DialogAutomationGate;
 use Illuminate\Console\Command;
+use Illuminate\Database\Eloquent\Builder;
 
 class DownloadPendingBotMediaAttachmentsCommand extends Command
 {
@@ -59,14 +59,12 @@ class DownloadPendingBotMediaAttachmentsCommand extends Command
                             ]);
                     });
             })
-            ->whereIn('download_status', [
-                MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
-                MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD,
-            ])
-            ->where(function ($query): void {
+            ->where('download_status', MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD)
+            ->whereNull('manual_download_requested_at')
+            ->where(function (Builder $query): void {
                 $query
-                    ->whereNull('safe_error_code')
-                    ->orWhere('safe_error_code', '!=', DialogAutomationGate::REASON_BLACKLIST_STAGE);
+                    ->whereNull('media_download_next_retry_at')
+                    ->orWhere('media_download_next_retry_at', '<=', now());
             })
             ->when(filled($channelId), fn ($builder) => $builder->where('channel_id', (int) $channelId))
             ->orderBy('id');
@@ -97,11 +95,22 @@ class DownloadPendingBotMediaAttachmentsCommand extends Command
             ->where('download_status', MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED)
             ->count();
 
+        $candidateIdsByMessage = $candidateAttachments
+            ->groupBy('message_id')
+            ->map(fn ($attachments): array => $attachments
+                ->pluck('id')
+                ->map(static fn (mixed $id): int => (int) $id)
+                ->values()
+                ->all());
+
         Message::query()
             ->whereKey($candidateAttachments->pluck('message_id')->unique()->values())
             ->with(['channel', 'attachments'])
             ->get()
-            ->each(fn (Message $message) => $this->downloadBotMessageAttachmentsAction->handle($message));
+            ->each(fn (Message $message) => $this->downloadBotMessageAttachmentsAction->handle(
+                $message,
+                attachmentIds: $candidateIdsByMessage->get($message->id, []),
+            ));
 
         $processedAttachments = MessageAttachment::query()
             ->whereIn('id', $candidateAttachments->pluck('id'))
