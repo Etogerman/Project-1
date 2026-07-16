@@ -33,6 +33,7 @@ use App\Services\Bitrix24\IsMessageReadyForBitrix24LiveExportAction;
 use App\Services\Bots\SendManualDialogReplyAction;
 use App\Services\Messages\AbRichTextHtmlRenderer;
 use App\Services\Messages\InboundMediaDownloadPolicy;
+use App\Services\Messages\InboundMediaStorageCapacity;
 use App\Services\Messages\ReapStaleInboundMediaDownloadsAction;
 use App\Services\Messages\StoreMessageAttachmentLocalFileAction;
 use App\Services\Scenarios\ScenarioRegistry;
@@ -48,6 +49,8 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
+use Mockery;
+use Mockery\MockInterface;
 use ReflectionMethod;
 use Tests\TestCase;
 
@@ -340,7 +343,7 @@ class TelegramAccountGatewayControllerTest extends TestCase
             ->once()
             ->with(
                 'telegram_account_gateway.external_outgoing_invalid_payload',
-                \Mockery::on(fn (array $context): bool => ($context['channel_id'] ?? null) === $channel->id
+                Mockery::on(fn (array $context): bool => ($context['channel_id'] ?? null) === $channel->id
                     && ($context['gateway_event_id'] ?? null) === $payload['gateway_event_id']
                     && ($context['peer_key'] ?? null) === $payload['peer_key']
                     && ($context['message_key'] ?? null) === 'telegram_account:invalid'
@@ -3024,6 +3027,127 @@ class TelegramAccountGatewayControllerTest extends TestCase
             ->assertJsonPath('has_download', true)
             ->assertJsonPath('media_download.attachment_id', $attachment->id)
             ->assertJsonPath('media_download.provider_file_id', '4242');
+    }
+
+    public function test_s3_claim_omits_empty_upload_headers_after_host_is_removed(): void
+    {
+        Queue::fake();
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel();
+        $attachment = $this->createPendingTelegramAccountMediaAttachment(
+            $channel,
+            externalChatId: '700160',
+            externalMessageId: '900160',
+            media: [[
+                'type' => 'document',
+                'telegram_file_id' => 'tdlib-s3-doc-160',
+                'file_name' => 's3.pdf',
+                'mime_type' => 'application/pdf',
+                'file_size_bytes' => 1000,
+            ]],
+        );
+
+        config()->set('filesystems.message_attachments_disk', 'message_attachments');
+        config()->set('filesystems.disks.message_attachments.driver', 's3');
+
+        $this->mock(InboundMediaStorageCapacity::class, function (MockInterface $mock): void {
+            $mock->shouldReceive('availableBytes')
+                ->once()
+                ->andReturn(PHP_INT_MAX);
+        });
+
+        $disk = Mockery::mock();
+        $disk->shouldReceive('temporaryUploadUrl')
+            ->once()
+            ->with(Mockery::type('string'), Mockery::type(\DateTimeInterface::class))
+            ->andReturn([
+                'url' => 'https://private-storage.example.test/signed-object',
+                'headers' => [
+                    'Host' => ['private-storage.example.test'],
+                ],
+            ]);
+        Storage::shouldReceive('disk')
+            ->once()
+            ->with('message_attachments')
+            ->andReturn($disk);
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+            'X-AB-Media-Claim-Token' => '1',
+        ])->postJson(route('internal.telegram-account.media-downloads.claim', ['channel' => $channel]))
+            ->assertOk()
+            ->assertJsonPath('has_download', true)
+            ->assertJsonPath('media_download.attachment_id', $attachment->id)
+            ->assertJsonPath('media_download.upload.strategy', 'direct_put')
+            ->assertJsonPath('media_download.upload.url', 'https://private-storage.example.test/signed-object')
+            ->assertJsonPath('media_download.upload.requires_gateway_auth', false)
+            ->assertJsonMissingPath('media_download.upload.headers');
+    }
+
+    public function test_s3_claim_keeps_non_host_upload_headers_as_json_object(): void
+    {
+        Queue::fake();
+        config()->set('bots.telegram_account.gateway_shared_secret', 'gateway-secret');
+
+        $channel = $this->createTelegramAccountChannel();
+        $attachment = $this->createPendingTelegramAccountMediaAttachment(
+            $channel,
+            externalChatId: '700161',
+            externalMessageId: '900161',
+            media: [[
+                'type' => 'document',
+                'telegram_file_id' => 'tdlib-s3-doc-161',
+                'file_name' => 's3-with-headers.pdf',
+                'mime_type' => 'application/pdf',
+                'file_size_bytes' => 1000,
+            ]],
+        );
+
+        config()->set('filesystems.message_attachments_disk', 'message_attachments');
+        config()->set('filesystems.disks.message_attachments.driver', 's3');
+
+        $this->mock(InboundMediaStorageCapacity::class, function (MockInterface $mock): void {
+            $mock->shouldReceive('availableBytes')
+                ->once()
+                ->andReturn(PHP_INT_MAX);
+        });
+
+        $disk = Mockery::mock();
+        $disk->shouldReceive('temporaryUploadUrl')
+            ->once()
+            ->with(Mockery::type('string'), Mockery::type(\DateTimeInterface::class))
+            ->andReturn([
+                'url' => 'https://private-storage.example.test/signed-object-with-headers',
+                'headers' => [
+                    'Host' => ['private-storage.example.test'],
+                    'x-amz-security-token' => ['temporary-token'],
+                ],
+            ]);
+        Storage::shouldReceive('disk')
+            ->once()
+            ->with('message_attachments')
+            ->andReturn($disk);
+
+        $response = $this->withHeaders([
+            'Authorization' => 'Bearer gateway-secret',
+            'X-AB-Media-Claim-Token' => '1',
+        ])->postJson(route('internal.telegram-account.media-downloads.claim', ['channel' => $channel]));
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('has_download', true)
+            ->assertJsonPath('media_download.attachment_id', $attachment->id)
+            ->assertJsonPath('media_download.upload.strategy', 'direct_put')
+            ->assertJsonPath(
+                'media_download.upload.headers.x-amz-security-token',
+                'temporary-token',
+            )
+            ->assertJsonMissingPath('media_download.upload.headers.Host');
+
+        $payload = json_decode($response->getContent(), false, 512, JSON_THROW_ON_ERROR);
+
+        $this->assertIsObject($payload->media_download->upload->headers);
     }
 
     public function test_gateway_defers_oversized_media_download_for_manual_request_before_claim(): void
