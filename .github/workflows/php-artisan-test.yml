@@ -224,6 +224,7 @@ jobs:
           coverage: none
           tools: composer:v2
           extensions: mbstring, dom, fileinfo, pgsql, pdo_pgsql
+          ini-values: post_max_size=32M, upload_max_filesize=32M
 
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist --optimize-autoloader
