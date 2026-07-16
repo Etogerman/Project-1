@@ -49,6 +49,17 @@ return [
         (6 * 60 * 60) + (15 * 60),
     ),
 
+    'observability' => [
+        'attachment_scan_limit' => (int) env(
+            'INBOUND_MEDIA_OBSERVABILITY_ATTACHMENT_SCAN_LIMIT',
+            5000,
+        ),
+        'orphan_scan_limit' => (int) env(
+            'INBOUND_MEDIA_OBSERVABILITY_ORPHAN_SCAN_LIMIT',
+            5000,
+        ),
+    ],
+
     'admission' => [
         'channel_max_active' => (int) env('INBOUND_MEDIA_CHANNEL_MAX_ACTIVE', 2),
         'identity_max_active' => (int) env('INBOUND_MEDIA_IDENTITY_MAX_ACTIVE', 2),
