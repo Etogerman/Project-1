@@ -54,14 +54,20 @@ class CreateTelegramAccountMediaUploadTargetAction
                 $path,
                 now()->addMinutes(self::S3_UPLOAD_TARGET_TTL_MINUTES),
             );
+            $headers = $this->normalizeHeaders($target['headers'] ?? []);
 
-            return [
+            $upload = [
                 'strategy' => self::STRATEGY_DIRECT_PUT,
                 'url' => (string) $target['url'],
-                'headers' => $this->normalizeHeaders($target['headers'] ?? []),
                 'requires_gateway_auth' => false,
                 'expires_in_seconds' => self::S3_UPLOAD_TARGET_TTL_MINUTES * 60,
             ];
+
+            if ($headers !== []) {
+                $upload['headers'] = $headers;
+            }
+
+            return $upload;
         }
 
         if ($driver === 'local') {
