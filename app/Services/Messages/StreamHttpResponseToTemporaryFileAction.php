@@ -23,12 +23,159 @@ class StreamHttpResponseToTemporaryFileAction
     ) {}
 
     /**
+     * @return array{stream:resource,directory:string}
+     */
+    public function openTemporaryDownloadSink(?int $expectedLength = null): array
+    {
+        if ($expectedLength !== null && $expectedLength < 0) {
+            throw new InvalidArgumentException('Downloaded media expected length must not be negative.');
+        }
+
+        [$stream, $directory] = $this->openTemporaryStream();
+
+        try {
+            if ($expectedLength !== null && $expectedLength > 0) {
+                $this->assertTemporaryStorageCapacity(
+                    $directory,
+                    $expectedLength,
+                    0,
+                );
+            }
+
+            return [
+                'stream' => $stream,
+                'directory' => $directory,
+            ];
+        } catch (Throwable $throwable) {
+            fclose($stream);
+
+            throw $throwable;
+        }
+    }
+
+    public function assertTemporaryDownloadSinkCapacity(
+        string $directory,
+        int $requiredBytes,
+        int $transferredBytes,
+    ): void {
+        $availableBytes = $this->storageCapacity->availableBytesForPath($directory);
+
+        if ($availableBytes === null || $availableBytes < max(0, $requiredBytes)) {
+            throw new InboundMediaQuotaExceededException(
+                InboundMediaDownloadPolicy::REASON_STORAGE_QUOTA_EXCEEDED,
+                $transferredBytes,
+            );
+        }
+    }
+
+    /**
+     * @param  resource  $sink
+     * @param  array<string, mixed>  $metadata
+     * @param  Closure(int): void|null  $onProgress
+     */
+    public function finalizeTemporaryDownloadSink(
+        HttpResponse $response,
+        mixed $sink,
+        int $maxBytes,
+        ?int $expectedLengthFallback = null,
+        ?string $filenameHint = null,
+        array $metadata = [],
+        ?Closure $onProgress = null,
+        string $tooLargeMessage = 'Downloaded media is larger than the configured limit.',
+        string $emptyMessage = 'Downloaded media response is empty.',
+    ): DownloadedMediaStreamData {
+        if (! is_resource($sink)) {
+            throw new InvalidArgumentException('Downloaded media sink must be a writable stream.');
+        }
+
+        try {
+            if ($maxBytes < 1) {
+                throw new InvalidArgumentException('Downloaded media limit must be positive.');
+            }
+
+            if (! $response->successful()) {
+                throw new RuntimeException('Media download response must have a successful HTTP status.');
+            }
+
+            $expectedLength = $this->expectedLength($response, $expectedLengthFallback);
+
+            if ($expectedLength !== null && $expectedLength > $maxBytes) {
+                throw new InvalidArgumentException($tooLargeMessage);
+            }
+
+            $statistics = fstat($sink);
+            $receivedBytes = is_array($statistics) && is_int($statistics['size'] ?? null)
+                ? $statistics['size']
+                : null;
+
+            if ($receivedBytes === null) {
+                throw new RuntimeException('Failed to determine downloaded media sink size.');
+            }
+
+            // Laravel HTTP fakes do not write into Guzzle's sink option. A
+            // real sink-backed response is detached before this action takes
+            // ownership, so only read a still-readable fake response body.
+            $responseBody = '';
+
+            if (
+                $receivedBytes === 0
+                && $response->toPsrResponse()->getBody()->isReadable()
+            ) {
+                $responseBody = $response->body();
+            }
+
+            if ($receivedBytes === 0 && $responseBody !== '') {
+                $body = $responseBody;
+
+                if (strlen($body) > $maxBytes) {
+                    throw new InvalidArgumentException($tooLargeMessage);
+                }
+
+                $this->writeAll($sink, $body);
+                $receivedBytes = strlen($body);
+            }
+
+            if ($receivedBytes === 0) {
+                throw new InvalidArgumentException($emptyMessage);
+            }
+
+            if ($receivedBytes > $maxBytes) {
+                throw new InvalidArgumentException($tooLargeMessage);
+            }
+
+            if ($expectedLength !== null && $receivedBytes !== $expectedLength) {
+                throw new MediaDownloadIntegrityException('Downloaded media size does not match the declared length.');
+            }
+
+            if ($onProgress instanceof Closure) {
+                $onProgress($receivedBytes);
+            }
+
+            rewind($sink);
+
+            return new DownloadedMediaStreamData(
+                stream: $sink,
+                sizeBytes: $receivedBytes,
+                contentType: $response->header('Content-Type'),
+                filenameHint: $filenameHint,
+                metadata: $metadata,
+                expectedLengthBytes: $expectedLength,
+            );
+        } catch (Throwable $throwable) {
+            fclose($sink);
+
+            throw $throwable;
+        }
+    }
+
+    /**
      * @param  array<string, mixed>  $metadata
      * @param  Closure(int): void|null  $onProgress
      */
     public function handle(
         HttpResponse $response,
         int $maxBytes,
+        ?int $expectedLengthFallback = null,
         ?string $filenameHint = null,
         array $metadata = [],
         ?Closure $onProgress = null,
@@ -43,7 +190,7 @@ class StreamHttpResponseToTemporaryFileAction
             throw new RuntimeException('Media download response must have a successful HTTP status.');
         }
 
-        $expectedLength = $this->contentLength($response);
+        $expectedLength = $this->expectedLength($response, $expectedLengthFallback);
 
         if ($expectedLength !== null && $expectedLength > $maxBytes) {
             throw new InvalidArgumentException($tooLargeMessage);
@@ -98,11 +245,21 @@ class StreamHttpResponseToTemporaryFileAction
 
         try {
             while (! $this->sourceAtEnd($source)) {
+                $readLength = min(
+                    self::READ_CHUNK_BYTES,
+                    $maxBytes - $receivedBytes + 1,
+                );
+
+                if ($expectedLength !== null) {
+                    $remainingExpectedBytes = max(0, $expectedLength - $receivedBytes);
+
+                    $readLength = $remainingExpectedBytes <= self::READ_CHUNK_BYTES
+                        ? min($maxBytes - $receivedBytes + 1, $remainingExpectedBytes + 1)
+                        : $readLength;
+                }
+
                 try {
-                    $chunk = $this->readSource($source, min(
-                        self::READ_CHUNK_BYTES,
-                        $maxBytes - $receivedBytes + 1,
-                    ));
+                    $chunk = $this->readSource($source, $readLength);
                 } catch (RuntimeException $exception) {
                     if ($expectedLength !== null && $receivedBytes >= $expectedLength) {
                         break;
@@ -139,6 +296,10 @@ class StreamHttpResponseToTemporaryFileAction
                     $checkpointAt = microtime(true);
                     $onProgress($receivedBytes);
                 }
+
+                if ($expectedLength !== null && $receivedBytes >= $expectedLength) {
+                    break;
+                }
             }
 
             if ($receivedBytes === 0) {
@@ -162,6 +323,7 @@ class StreamHttpResponseToTemporaryFileAction
                 contentType: $contentType,
                 filenameHint: $filenameHint,
                 metadata: $metadata,
+                expectedLengthBytes: $expectedLength,
             );
         } catch (Throwable $throwable) {
             if ($onProgress instanceof Closure && $checkpointBytes !== $receivedBytes) {
@@ -306,5 +468,22 @@ class StreamHttpResponseToTemporaryFileAction
         }
 
         return (int) $normalized;
+    }
+
+    private function expectedLength(HttpResponse $response, ?int $fallback): ?int
+    {
+        if ($fallback !== null && $fallback < 0) {
+            throw new InvalidArgumentException('Downloaded media expected length must not be negative.');
+        }
+
+        $responseLength = $this->contentLength($response);
+
+        if ($responseLength !== null && $fallback !== null && $responseLength !== $fallback) {
+            throw new MediaDownloadIntegrityException(
+                'Downloaded media HTTP length does not match the provider-declared length.',
+            );
+        }
+
+        return $responseLength ?? $fallback;
     }
 }
