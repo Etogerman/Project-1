@@ -14,7 +14,7 @@ class InboundMediaGlobalStorageBudgetMigrationTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_backfill_restores_missing_global_budget_from_ledgers_idempotently(): void
+    public function test_backfill_restores_missing_global_budget_and_preserves_existing_singleton(): void
     {
         $channel = Channel::factory()->create();
         $message = Message::factory()->create(['channel_id' => $channel->id]);
@@ -66,6 +66,28 @@ class InboundMediaGlobalStorageBudgetMigrationTest extends TestCase
         );
 
         $migration->up();
+
+        $createdGlobalBudget = DB::table('media_download_storage_budgets')
+            ->where('scope_type', 'global')
+            ->where('scope_id', 0)
+            ->first();
+
+        $this->assertNotNull($createdGlobalBudget);
+        $this->assertSame(10, (int) $createdGlobalBudget->reserved_bytes);
+        $this->assertSame(20, (int) $createdGlobalBudget->used_bytes);
+
+        $existingCreatedAt = now()->subDay()->startOfSecond();
+
+        DB::table('media_download_storage_budgets')
+            ->where('scope_type', 'global')
+            ->where('scope_id', 0)
+            ->update([
+                'reserved_bytes' => 999,
+                'used_bytes' => 999,
+                'created_at' => $existingCreatedAt,
+                'updated_at' => $existingCreatedAt,
+            ]);
+
         $migration->up();
 
         $globalBudgets = DB::table('media_download_storage_budgets')
@@ -74,7 +96,9 @@ class InboundMediaGlobalStorageBudgetMigrationTest extends TestCase
             ->get();
 
         $this->assertCount(1, $globalBudgets);
-        $this->assertSame(10, (int) $globalBudgets->first()->reserved_bytes);
-        $this->assertSame(20, (int) $globalBudgets->first()->used_bytes);
+        $this->assertSame(999, (int) $globalBudgets->first()->reserved_bytes);
+        $this->assertSame(999, (int) $globalBudgets->first()->used_bytes);
+        $this->assertSame($existingCreatedAt->toDateTimeString(), (string) $globalBudgets->first()->created_at);
+        $this->assertSame($existingCreatedAt->toDateTimeString(), (string) $globalBudgets->first()->updated_at);
     }
 }
