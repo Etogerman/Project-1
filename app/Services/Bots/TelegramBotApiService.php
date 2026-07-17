@@ -11,6 +11,7 @@ use App\Data\Messages\DownloadedMediaStreamData;
 use App\Models\Channel;
 use App\Models\Message;
 use App\Services\Messages\StreamHttpResponseToTemporaryFileAction;
+use App\Support\TelegramLocalApiConfiguration;
 use Closure;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
@@ -251,18 +252,22 @@ class TelegramBotApiService
 
         $filePath = data_get($fileResponse, 'result.file_path');
         $fileSize = data_get($fileResponse, 'result.file_size');
-        $providerDeclaredSizeBytes = is_numeric($fileSize) && (int) $fileSize >= 0
-            ? (int) $fileSize
-            : null;
+        $providerDeclaredSizeBytes = $this->providerDeclaredSizeBytes($fileSize);
 
         if (! filled($filePath)) {
             throw new InvalidArgumentException("Telegram API did not return avatar file path for channel [{$channel->id}] and chat [{$chatId}].");
         }
 
         if ($usesLocalApi) {
+            $maxBytes = max(1, (int) config('bots.media.download_max_bytes', 20 * 1024 * 1024));
+
+            if ($providerDeclaredSizeBytes !== null && $providerDeclaredSizeBytes > $maxBytes) {
+                throw new InvalidArgumentException('Telegram Bot media file is larger than the local download limit.');
+            }
+
             $downloaded = $this->streamLocalApiFile(
                 (string) $filePath,
-                max(1, (int) config('bots.media.download_max_bytes', 20 * 1024 * 1024)),
+                $maxBytes,
                 null,
                 $providerDeclaredSizeBytes,
                 self::AVATAR_FILE_DOWNLOAD_TIMEOUT_SECONDS,
@@ -346,9 +351,7 @@ class TelegramBotApiService
 
         $filePath = data_get($fileResponse, 'result.file_path');
         $fileSize = data_get($fileResponse, 'result.file_size');
-        $providerDeclaredSizeBytes = is_numeric($fileSize) && (int) $fileSize >= 0
-            ? (int) $fileSize
-            : null;
+        $providerDeclaredSizeBytes = $this->providerDeclaredSizeBytes($fileSize);
 
         if (is_numeric($fileSize) && (int) $fileSize > $maxBytes) {
             throw new InvalidArgumentException('Telegram Bot media file is larger than the local download limit.');
@@ -516,17 +519,12 @@ class TelegramBotApiService
         }
 
         if ($usesLocalApi) {
-            $host = mb_strtolower(rtrim((string) $parts['host'], '.'));
-            $trustedHosts = array_values(array_filter(
-                (array) config('bots.telegram.local_api_trusted_hosts', []),
-                static fn (mixed $value): bool => is_string($value) && trim($value) !== '',
-            ));
-            $trustedHosts = array_map(
-                static fn (string $value): string => mb_strtolower(rtrim(trim($value), '.')),
-                $trustedHosts,
+            $host = TelegramLocalApiConfiguration::normalizedHost($parts['host'] ?? null);
+            $trustedHosts = TelegramLocalApiConfiguration::normalizedTrustedHosts(
+                config('bots.telegram.local_api_trusted_hosts', []),
             );
 
-            if (! in_array($host, $trustedHosts, true)) {
+            if ($host === null || ! in_array($host, $trustedHosts, true)) {
                 throw new InvalidArgumentException('Telegram Local Bot API host is not trusted.');
             }
         }
@@ -568,7 +566,8 @@ class TelegramBotApiService
             return $this->streamHttpResponseToTemporaryFileAction->handleStream(
                 source: $source,
                 maxBytes: $maxBytes,
-                expectedLength: is_int($fileSize) ? $fileSize : null,
+                expectedLength: $providerDeclaredSizeBytes
+                    ?? (is_int($fileSize) ? $fileSize : null),
                 filenameHint: basename($path),
                 onProgress: $onProgress,
                 tooLargeMessage: 'Telegram Bot media file is larger than the local download limit.',
@@ -894,18 +893,14 @@ class TelegramBotApiService
         }
 
         $scheme = mb_strtolower((string) ($parts['scheme'] ?? ''));
-        $host = mb_strtolower(rtrim((string) ($parts['host'] ?? ''), '.'));
-        $trustedHosts = array_map(
-            static fn (string $value): string => mb_strtolower(rtrim(trim($value), '.')),
-            array_values(array_filter(
-                (array) config('bots.telegram.local_api_file_bridge_trusted_hosts', []),
-                static fn (mixed $value): bool => is_string($value) && trim($value) !== '',
-            )),
+        $host = TelegramLocalApiConfiguration::normalizedHost($parts['host'] ?? null);
+        $trustedHosts = TelegramLocalApiConfiguration::normalizedTrustedHosts(
+            config('bots.telegram.local_api_file_bridge_trusted_hosts', []),
         );
 
         if (
             ! in_array($scheme, ['http', 'https'], true)
-            || $host === ''
+            || $host === null
             || ! in_array($host, $trustedHosts, true)
             || array_key_exists('user', $parts)
             || array_key_exists('pass', $parts)
@@ -946,25 +941,10 @@ class TelegramBotApiService
 
     private function resolveLocalApiFileRelativePath(string $filePath): string
     {
-        $root = rtrim(str_replace('\\', '/', trim((string) config('bots.telegram.local_api_files_root', ''))), '/');
-        $path = str_replace('\\', '/', trim($filePath));
-
-        if ($root === '' || ! str_starts_with($root, '/') || ! str_starts_with($path, $root.'/')) {
-            throw new InvalidArgumentException('Telegram Local Bot API media path is outside the configured root.');
-        }
-
-        $relativePath = substr($path, strlen($root) + 1);
-        $segments = explode('/', $relativePath);
-
-        if (
-            $relativePath === ''
-            || str_contains($relativePath, "\0")
-            || collect($segments)->contains(static fn (string $segment): bool => $segment === '' || $segment === '.' || $segment === '..')
-        ) {
-            throw new InvalidArgumentException('Telegram Local Bot API media path is invalid.');
-        }
-
-        return $relativePath;
+        return TelegramLocalApiConfiguration::relativeFilePath(
+            $filePath,
+            config('bots.telegram.local_api_files_root', ''),
+        );
     }
 
     private function resolveLocalApiFilePath(string $filePath): string
@@ -984,6 +964,13 @@ class TelegramBotApiService
         }
 
         return $path;
+    }
+
+    private function providerDeclaredSizeBytes(mixed $fileSize): ?int
+    {
+        return is_numeric($fileSize) && (int) $fileSize >= 0
+            ? (int) $fileSize
+            : null;
     }
 
     protected function token(Channel $channel): string

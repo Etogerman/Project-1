@@ -334,6 +334,88 @@ class TelegramBotApiServiceEndpointTest extends TestCase
         }
     }
 
+    public function test_local_api_and_file_bridge_accept_allowlisted_ipv6_loopback(): void
+    {
+        config([
+            'bots.telegram.local_api_base_url' => 'http://[::1]:8081/api',
+            'bots.telegram.local_api_allow_insecure_http' => true,
+            'bots.telegram.local_api_trusted_hosts' => ['[::1]'],
+            'bots.telegram.local_api_files_root' => '/var/lib/telegram-bot-api',
+            'bots.telegram.local_api_file_bridge_base_url' => 'http://[::1]:8082/files',
+            'bots.telegram.local_api_file_bridge_trusted_hosts' => ['::1'],
+        ]);
+
+        $service = app(TelegramBotApiService::class);
+        $apiBaseUrl = new ReflectionMethod(TelegramBotApiService::class, 'apiBaseUrl');
+        $fileBridgeUrl = new ReflectionMethod(TelegramBotApiService::class, 'localApiFileBridgeUrl');
+
+        $this->assertSame('http://[::1]:8081/api', $apiBaseUrl->invoke($service, true));
+        $this->assertSame(
+            'http://[::1]:8082/files/videos/large.mp4',
+            $fileBridgeUrl->invoke($service, '/var/lib/telegram-bot-api/videos/large.mp4'),
+        );
+    }
+
+    public function test_local_api_and_file_bridge_reject_malformed_bracketed_ipv6_hosts(): void
+    {
+        config([
+            'bots.telegram.local_api_base_url' => 'http://[::1].:8081/api',
+            'bots.telegram.local_api_allow_insecure_http' => true,
+            'bots.telegram.local_api_trusted_hosts' => ['::1'],
+            'bots.telegram.local_api_files_root' => '/var/lib/telegram-bot-api',
+            'bots.telegram.local_api_file_bridge_base_url' => 'http://[::1].:8082/files',
+            'bots.telegram.local_api_file_bridge_trusted_hosts' => ['::1'],
+        ]);
+
+        $service = app(TelegramBotApiService::class);
+        $apiBaseUrl = new ReflectionMethod(TelegramBotApiService::class, 'apiBaseUrl');
+        $fileBridgeUrl = new ReflectionMethod(TelegramBotApiService::class, 'localApiFileBridgeUrl');
+
+        try {
+            $apiBaseUrl->invoke($service, true);
+            $this->fail('Malformed bracketed IPv6 Local API host was accepted.');
+        } catch (InvalidArgumentException $exception) {
+            $this->assertSame('Telegram Local Bot API host is not trusted.', $exception->getMessage());
+        }
+
+        try {
+            $fileBridgeUrl->invoke($service, '/var/lib/telegram-bot-api/videos/large.mp4');
+            $this->fail('Malformed bracketed IPv6 file bridge host was accepted.');
+        } catch (InvalidArgumentException $exception) {
+            $this->assertSame('Telegram Local Bot API file bridge URL is not trusted.', $exception->getMessage());
+        }
+    }
+
+    public function test_local_api_and_file_bridge_reject_bracketed_ipv6_hosts_with_trailing_whitespace(): void
+    {
+        config([
+            'bots.telegram.local_api_base_url' => 'http://[::1] :8081/api',
+            'bots.telegram.local_api_allow_insecure_http' => true,
+            'bots.telegram.local_api_trusted_hosts' => ['::1'],
+            'bots.telegram.local_api_files_root' => '/var/lib/telegram-bot-api',
+            'bots.telegram.local_api_file_bridge_base_url' => 'http://[::1] :8082/files',
+            'bots.telegram.local_api_file_bridge_trusted_hosts' => ['::1'],
+        ]);
+
+        $service = app(TelegramBotApiService::class);
+        $apiBaseUrl = new ReflectionMethod(TelegramBotApiService::class, 'apiBaseUrl');
+        $fileBridgeUrl = new ReflectionMethod(TelegramBotApiService::class, 'localApiFileBridgeUrl');
+
+        try {
+            $apiBaseUrl->invoke($service, true);
+            $this->fail('Whitespace-tainted bracketed IPv6 Local API host was accepted.');
+        } catch (InvalidArgumentException $exception) {
+            $this->assertSame('Telegram Local Bot API host is not trusted.', $exception->getMessage());
+        }
+
+        try {
+            $fileBridgeUrl->invoke($service, '/var/lib/telegram-bot-api/videos/large.mp4');
+            $this->fail('Whitespace-tainted bracketed IPv6 file bridge host was accepted.');
+        } catch (InvalidArgumentException $exception) {
+            $this->assertSame('Telegram Local Bot API file bridge URL is not trusted.', $exception->getMessage());
+        }
+    }
+
     public function test_local_bot_api_mode_routes_control_plane_and_outgoing_calls_to_local_server(): void
     {
         config([
@@ -446,6 +528,109 @@ class TelegramBotApiServiceEndpointTest extends TestCase
         } finally {
             File::deleteDirectory($root);
         }
+    }
+
+    public function test_local_bot_api_rejects_truncated_shared_avatar_when_telegram_declares_larger_size(): void
+    {
+        $root = storage_path('framework/testing/telegram-local-bot-api-avatar-truncated');
+        $filePath = $root.'/photos/avatar.jpg';
+        $payload = 'truncated-avatar';
+        File::deleteDirectory($root);
+        File::ensureDirectoryExists(dirname($filePath));
+        file_put_contents($filePath, $payload);
+
+        config([
+            'bots.telegram.local_api_media_download_enabled' => true,
+            'bots.telegram.local_api_base_url' => 'http://telegram-bot-api:8081',
+            'bots.telegram.local_api_allow_insecure_http' => true,
+            'bots.telegram.local_api_trusted_hosts' => ['telegram-bot-api'],
+            'bots.telegram.local_api_files_root' => $root,
+        ]);
+
+        Http::fake([
+            'http://telegram-bot-api:8081/bottelegram-token/getChat*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'photo' => ['big_file_id' => 'avatar-file-id'],
+                ],
+            ]),
+            'http://telegram-bot-api:8081/bottelegram-token/getFile*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_path' => $filePath,
+                    'file_size' => strlen($payload) + 1,
+                ],
+            ]),
+        ]);
+
+        try {
+            $channel = Channel::factory()->create([
+                'platform' => Channel::PLATFORM_TELEGRAM,
+                'connection_type' => Channel::CONNECTION_TYPE_BOT,
+                'credentials' => ['token' => 'telegram-token'],
+            ]);
+
+            app(TelegramBotApiService::class)->downloadChatAvatar($channel, 'chat-1');
+
+            $this->fail('Expected mismatched Telegram avatar size to be rejected.');
+        } catch (MediaDownloadIntegrityException $exception) {
+            $this->assertSame('Downloaded media size does not match the declared length.', $exception->getMessage());
+        } finally {
+            File::deleteDirectory($root);
+        }
+    }
+
+    public function test_local_bot_api_rejects_avatar_larger_than_download_limit_before_file_request(): void
+    {
+        config([
+            'bots.media.download_max_bytes' => 1024,
+            'bots.telegram.local_api_media_download_enabled' => true,
+            'bots.telegram.local_api_base_url' => 'https://telegram-gateway.example/api',
+            'bots.telegram.local_api_username' => 'media-reader',
+            'bots.telegram.local_api_password' => 'gateway-secret',
+            'bots.telegram.local_api_trusted_hosts' => ['telegram-gateway.example'],
+            'bots.telegram.local_api_file_transport' => 'http_bridge',
+            'bots.telegram.local_api_files_root' => '/var/lib/telegram-bot-api',
+            'bots.telegram.local_api_file_bridge_base_url' => 'https://telegram-gateway.example/files',
+            'bots.telegram.local_api_file_bridge_trusted_hosts' => ['telegram-gateway.example'],
+            'bots.telegram.local_api_file_bridge_username' => 'file-reader',
+            'bots.telegram.local_api_file_bridge_password' => 'file-secret',
+        ]);
+
+        Http::fake([
+            'https://telegram-gateway.example/api/bottelegram-token/getChat*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'photo' => ['big_file_id' => 'avatar-file-id'],
+                ],
+            ]),
+            'https://telegram-gateway.example/api/bottelegram-token/getFile*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_path' => '/var/lib/telegram-bot-api/photos/avatar.jpg',
+                    'file_size' => 1025,
+                ],
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'telegram-token'],
+        ]);
+
+        try {
+            app(TelegramBotApiService::class)->downloadChatAvatar($channel, 'chat-1');
+            $this->fail('Expected oversized Telegram avatar to be rejected.');
+        } catch (InvalidArgumentException $exception) {
+            $this->assertSame('Telegram Bot media file is larger than the local download limit.', $exception->getMessage());
+        }
+
+        Http::assertSentCount(2);
+        Http::assertNotSent(fn (Request $request): bool => str_starts_with(
+            $request->url(),
+            'https://telegram-gateway.example/files/',
+        ));
     }
 
     public function test_local_bot_api_mode_reads_telegram_avatar_through_authenticated_file_bridge(): void

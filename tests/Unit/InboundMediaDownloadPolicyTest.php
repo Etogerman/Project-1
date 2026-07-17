@@ -175,6 +175,106 @@ class InboundMediaDownloadPolicyTest extends TestCase
         $this->assertSame(InboundMediaDownloadPolicy::REASON_TRANSPORT_UNAVAILABLE, $decision['reason']);
     }
 
+    public function test_relative_http_bridge_files_root_keeps_large_telegram_file_unavailable(): void
+    {
+        config([
+            'bots.media.download_max_bytes' => 20 * 1024 * 1024,
+            'bots.telegram.local_api_media_download_enabled' => true,
+            'bots.telegram.local_api_base_url' => 'https://telegram-gateway.example/api',
+            'bots.telegram.local_api_trusted_hosts' => ['telegram-gateway.example'],
+            'bots.telegram.local_api_username' => 'media-reader',
+            'bots.telegram.local_api_password' => 'gateway-secret',
+            'bots.telegram.local_api_file_transport' => 'http_bridge',
+            'bots.telegram.local_api_files_root' => 'telegram-bot-api',
+            'bots.telegram.local_api_file_bridge_base_url' => 'https://telegram-gateway.example/files',
+            'bots.telegram.local_api_file_bridge_trusted_hosts' => ['telegram-gateway.example'],
+            'bots.telegram.local_api_file_bridge_username' => 'file-reader',
+            'bots.telegram.local_api_file_bridge_password' => 'bridge-secret',
+        ]);
+
+        $fileSize = 51 * 1024 * 1024;
+        $channel = (new Channel)->forceFill([
+            'inbound_media_on_demand_enabled' => true,
+        ]);
+        $policy = app(InboundMediaDownloadPolicy::class);
+        $decision = $policy->initialDecision(
+            $channel,
+            MessageAttachment::PROVIDER_TELEGRAM_BOT,
+            MessageAttachment::MEDIA_KIND_VIDEO,
+            $fileSize,
+        );
+        $attachment = (new MessageAttachment)->forceFill([
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_BOT,
+            'media_kind' => MessageAttachment::MEDIA_KIND_VIDEO,
+            'provider_file_id' => 'telegram-large-file',
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
+            'file_size_bytes' => $fileSize,
+        ]);
+        $attachment->setRelation('channel', $channel);
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY, $decision['status']);
+        $this->assertSame(InboundMediaDownloadPolicy::REASON_TRANSPORT_UNAVAILABLE, $decision['reason']);
+        $this->assertFalse($policy->manualAvailability($attachment)['allowed']);
+    }
+
+    public function test_ipv6_loopback_http_bridge_allows_large_telegram_file_when_allowlisted(): void
+    {
+        config([
+            'bots.media.download_max_bytes' => 20 * 1024 * 1024,
+            'bots.telegram.local_api_media_download_enabled' => true,
+            'bots.telegram.local_api_base_url' => 'http://[::1]:8081/api',
+            'bots.telegram.local_api_allow_insecure_http' => true,
+            'bots.telegram.local_api_trusted_hosts' => ['::1'],
+            'bots.telegram.local_api_username' => 'media-reader',
+            'bots.telegram.local_api_password' => 'gateway-secret',
+            'bots.telegram.local_api_file_transport' => 'http_bridge',
+            'bots.telegram.local_api_files_root' => '/var/lib/telegram-bot-api',
+            'bots.telegram.local_api_file_bridge_base_url' => 'http://[::1]:8082/files',
+            'bots.telegram.local_api_file_bridge_trusted_hosts' => ['::1'],
+            'bots.telegram.local_api_file_bridge_username' => 'file-reader',
+            'bots.telegram.local_api_file_bridge_password' => 'bridge-secret',
+        ]);
+
+        $decision = app(InboundMediaDownloadPolicy::class)->initialDecision(
+            (new Channel)->forceFill(['inbound_media_on_demand_enabled' => true]),
+            MessageAttachment::PROVIDER_TELEGRAM_BOT,
+            MessageAttachment::MEDIA_KIND_VIDEO,
+            51 * 1024 * 1024,
+        );
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND, $decision['status']);
+        $this->assertSame(InboundMediaDownloadPolicy::REASON_SIZE_ABOVE_AUTO_LIMIT, $decision['reason']);
+    }
+
+    public function test_malformed_bracketed_ipv6_http_bridge_does_not_mark_large_telegram_file_available(): void
+    {
+        config([
+            'bots.media.download_max_bytes' => 20 * 1024 * 1024,
+            'bots.telegram.local_api_media_download_enabled' => true,
+            'bots.telegram.local_api_base_url' => 'http://[::1] :8081/api',
+            'bots.telegram.local_api_allow_insecure_http' => true,
+            'bots.telegram.local_api_trusted_hosts' => ['::1'],
+            'bots.telegram.local_api_username' => 'media-reader',
+            'bots.telegram.local_api_password' => 'gateway-secret',
+            'bots.telegram.local_api_file_transport' => 'http_bridge',
+            'bots.telegram.local_api_files_root' => '/var/lib/telegram-bot-api',
+            'bots.telegram.local_api_file_bridge_base_url' => 'http://[::1] :8082/files',
+            'bots.telegram.local_api_file_bridge_trusted_hosts' => ['::1'],
+            'bots.telegram.local_api_file_bridge_username' => 'file-reader',
+            'bots.telegram.local_api_file_bridge_password' => 'bridge-secret',
+        ]);
+
+        $decision = app(InboundMediaDownloadPolicy::class)->initialDecision(
+            (new Channel)->forceFill(['inbound_media_on_demand_enabled' => true]),
+            MessageAttachment::PROVIDER_TELEGRAM_BOT,
+            MessageAttachment::MEDIA_KIND_VIDEO,
+            51 * 1024 * 1024,
+        );
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY, $decision['status']);
+        $this->assertSame(InboundMediaDownloadPolicy::REASON_TRANSPORT_UNAVAILABLE, $decision['reason']);
+    }
+
     public function test_complete_http_bridge_allows_51_mib_telegram_file_on_demand(): void
     {
         config([
