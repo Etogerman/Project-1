@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\DownloadBotMessageAttachmentJob;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
@@ -12,9 +13,11 @@ use App\Models\MessageAttachment;
 use App\Services\Bots\DownloadBotMessageAttachmentsAction;
 use App\Services\Messages\InboundMediaDownloadPolicy;
 use App\Services\Messages\StoreMessageAttachmentLocalFileAction;
+use Illuminate\Console\Command;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
@@ -37,6 +40,39 @@ class DownloadPendingBotMediaAttachmentsCommandTest extends TestCase
 
         $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD, $attachment->download_status);
         $this->assertNull($attachment->local_path);
+    }
+
+    public function test_command_dispatches_pending_bot_media_without_network_io(): void
+    {
+        Queue::fake();
+        Http::fake();
+
+        $attachment = $this->createPendingTelegramBotImageAttachment();
+
+        $this->artisan('bot-media:download-pending-images', [
+            '--dispatch' => true,
+            '--limit' => 10,
+        ])->assertExitCode(0);
+
+        Queue::assertPushed(
+            DownloadBotMessageAttachmentJob::class,
+            fn (DownloadBotMessageAttachmentJob $job): bool => $job->attachmentId === $attachment->id
+                && $job->manual === false,
+        );
+        Http::assertNothingSent();
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD, $attachment->download_status);
+        $this->assertNull($attachment->local_path);
+    }
+
+    public function test_command_rejects_force_and_dispatch_together(): void
+    {
+        $this->artisan('bot-media:download-pending-images', [
+            '--force' => true,
+            '--dispatch' => true,
+        ])->assertExitCode(Command::INVALID);
     }
 
     public function test_command_downloads_pending_bot_image_when_forced(): void

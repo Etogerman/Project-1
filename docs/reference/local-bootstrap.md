@@ -155,7 +155,7 @@ composer dev
 1. проверку актуальности Node-зависимостей
 2. `php artisan serve --host=0.0.0.0`
 3. `php artisan schedule:work`
-4. queue workers для `bot-replies`, `bitrix-live` и `default`
+4. queue workers для `bot-replies`, `bitrix-live`, `default` и отдельного connection `inbound-media`
 5. `php artisan pail --timeout=0`
 6. `npm run build -- --watch`
 
@@ -177,7 +177,7 @@ composer docker:dev
 
 1. web-server;
 2. `php artisan schedule:work`;
-3. queue workers для `bot-replies`, `bitrix-live` и `default`.
+3. queue workers для `bot-replies`, `bitrix-live`, `default` и отдельного connection `inbound-media`.
 
 Если scheduler не запущен, `channels:check-connections` не выполняется каждую
 минуту, и bot-каналы со статусом `connected/installed` переходят в
@@ -248,6 +248,7 @@ php artisan schedule:work
 sh scripts/dev-queue-worker.sh bot-replies 0
 sh scripts/dev-queue-worker.sh bitrix-live 1
 sh scripts/dev-queue-worker.sh default 1
+sh scripts/dev-queue-worker.sh inbound-media 1 1 inbound-media
 php artisan pail --timeout=0
 npm run build -- --watch
 ```
