@@ -402,7 +402,9 @@ class InboundMediaDownloadPolicy
         )));
 
         if ($transport === 'filesystem') {
-            return true;
+            return TelegramLocalApiConfiguration::readableFilesRoot(
+                config('bots.telegram.local_api_files_root'),
+            ) !== null;
         }
 
         return $transport === 'http_bridge'

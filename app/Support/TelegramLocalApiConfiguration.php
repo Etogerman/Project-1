@@ -80,6 +80,25 @@ final class TelegramLocalApiConfiguration
         return $root;
     }
 
+    public static function readableFilesRoot(mixed $configuredRoot): ?string
+    {
+        if (
+            ! is_string($configuredRoot)
+            || $configuredRoot === ''
+            || str_contains($configuredRoot, "\0")
+        ) {
+            return null;
+        }
+
+        $root = realpath($configuredRoot);
+
+        if (! is_string($root) || ! is_dir($root) || ! is_readable($root)) {
+            return null;
+        }
+
+        return $root;
+    }
+
     public static function relativeFilePath(string $filePath, mixed $configuredRoot): string
     {
         $root = self::absoluteFilesRoot($configuredRoot);

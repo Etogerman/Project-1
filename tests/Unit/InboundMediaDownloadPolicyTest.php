@@ -64,7 +64,7 @@ class InboundMediaDownloadPolicyTest extends TestCase
             'bots.telegram.local_api_allow_insecure_http' => true,
             'bots.telegram.local_api_trusted_hosts' => ['telegram-bot-api'],
             'bots.telegram.local_api_file_transport' => 'filesystem',
-            'bots.telegram.local_api_files_root' => '/var/lib/telegram-bot-api',
+            'bots.telegram.local_api_files_root' => storage_path('framework/testing'),
         ]);
 
         $channel = (new Channel)->forceFill([
@@ -92,6 +92,29 @@ class InboundMediaDownloadPolicyTest extends TestCase
         $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND, $decision['status']);
         $this->assertSame(InboundMediaDownloadPolicy::REASON_SIZE_ABOVE_AUTO_LIMIT, $decision['reason']);
         $this->assertTrue($policy->manualAvailability($attachment)['allowed']);
+    }
+
+    public function test_missing_filesystem_files_root_keeps_large_telegram_file_unavailable(): void
+    {
+        config([
+            'bots.media.download_max_bytes' => 20 * 1024 * 1024,
+            'bots.telegram.local_api_media_download_enabled' => true,
+            'bots.telegram.local_api_base_url' => 'http://telegram-bot-api:8081',
+            'bots.telegram.local_api_allow_insecure_http' => true,
+            'bots.telegram.local_api_trusted_hosts' => ['telegram-bot-api'],
+            'bots.telegram.local_api_file_transport' => 'filesystem',
+            'bots.telegram.local_api_files_root' => storage_path('framework/testing/missing-telegram-files-root-'.uniqid('', true)),
+        ]);
+
+        $decision = app(InboundMediaDownloadPolicy::class)->initialDecision(
+            new Channel,
+            MessageAttachment::PROVIDER_TELEGRAM_BOT,
+            MessageAttachment::MEDIA_KIND_VIDEO,
+            20 * 1024 * 1024 + 1,
+        );
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY, $decision['status']);
+        $this->assertSame(InboundMediaDownloadPolicy::REASON_TRANSPORT_UNAVAILABLE, $decision['reason']);
     }
 
     public function test_incomplete_http_bridge_keeps_large_telegram_file_unavailable(): void
