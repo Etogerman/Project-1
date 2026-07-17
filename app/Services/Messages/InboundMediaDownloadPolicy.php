@@ -5,6 +5,7 @@ namespace App\Services\Messages;
 use App\Models\Channel;
 use App\Models\MessageAttachment;
 use App\Services\Dialogs\DialogAutomationGate;
+use App\Support\TelegramLocalApiConfiguration;
 
 class InboundMediaDownloadPolicy
 {
@@ -405,6 +406,9 @@ class InboundMediaDownloadPolicy
         }
 
         return $transport === 'http_bridge'
+            && TelegramLocalApiConfiguration::absoluteFilesRoot(
+                config('bots.telegram.local_api_files_root'),
+            ) !== null
             && $this->credentialsPairIsConfigured(
                 config('bots.telegram.local_api_username'),
                 config('bots.telegram.local_api_password'),
@@ -486,18 +490,12 @@ class InboundMediaDownloadPolicy
         }
 
         $scheme = mb_strtolower((string) ($parts['scheme'] ?? ''));
-        $host = mb_strtolower(rtrim((string) ($parts['host'] ?? ''), '.'));
-        $hosts = array_map(
-            static fn (string $value): string => mb_strtolower(rtrim(trim($value), '.')),
-            array_values(array_filter(
-                (array) $trustedHosts,
-                static fn (mixed $value): bool => is_string($value) && trim($value) !== '',
-            )),
-        );
+        $host = TelegramLocalApiConfiguration::normalizedHost($parts['host'] ?? null);
+        $hosts = TelegramLocalApiConfiguration::normalizedTrustedHosts($trustedHosts);
 
         return in_array($scheme, ['http', 'https'], true)
             && ($scheme === 'https' || (bool) config('bots.telegram.local_api_allow_insecure_http', false))
-            && $host !== ''
+            && $host !== null
             && in_array($host, $hosts, true)
             && ! array_key_exists('user', $parts)
             && ! array_key_exists('pass', $parts)
