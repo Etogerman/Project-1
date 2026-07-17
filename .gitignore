@@ -9,6 +9,7 @@
 .env
 /.env.ngrok
 /.env.telegram-bot-api
+/.env.telegram-bot-api-file-bridge
 /.env.testing
 .env.backup
 .env.production

@@ -10,6 +10,8 @@ class InboundMediaDownloadPolicy
 {
     public const DEFAULT_AUTO_DOWNLOAD_MAX_BYTES = 20 * 1024 * 1024;
 
+    public const TELEGRAM_CLOUD_DOWNLOAD_MAX_BYTES = 20 * 1024 * 1024;
+
     public const MANUAL_HARD_LIMIT_BYTES = 4 * 1024 * 1024 * 1024;
 
     public const REASON_BLACKLIST_STAGE = DialogAutomationGate::REASON_BLACKLIST_STAGE;
@@ -72,6 +74,19 @@ class InboundMediaDownloadPolicy
                 MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND,
                 self::REASON_SIZE_UNKNOWN,
                 null,
+            );
+        }
+
+        $manualTransportMaxBytes = $this->manualTransportMaxBytes($provider);
+
+        if (
+            $provider === MessageAttachment::PROVIDER_TELEGRAM_BOT
+            && $fileSizeBytes > $manualTransportMaxBytes
+        ) {
+            return $this->decision(
+                MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
+                self::REASON_TRANSPORT_UNAVAILABLE,
+                $this->transportUnavailableMessage($provider, $manualTransportMaxBytes),
             );
         }
 
@@ -169,7 +184,7 @@ class InboundMediaDownloadPolicy
             return $this->manualDecision(
                 true,
                 false,
-                'Транспорт этого канала пока не поддерживает ручную загрузку файла такого размера.',
+                $this->transportUnavailableMessage((string) $attachment->provider, $transportLimit),
             );
         }
 
@@ -256,9 +271,9 @@ class InboundMediaDownloadPolicy
 
         if (
             $provider === MessageAttachment::PROVIDER_TELEGRAM_BOT
-            && (bool) config('bots.telegram.local_api_media_download_enabled', false)
+            && $this->telegramLocalApiMediaDownloadReady()
         ) {
-            return $this->manualHardLimitBytes();
+            return $this->telegramLocalApiTransportMaxBytes();
         }
 
         if (
@@ -268,7 +283,7 @@ class InboundMediaDownloadPolicy
             return $this->manualHardLimitBytes();
         }
 
-        return max(1, (int) config('bots.media.download_max_bytes', self::DEFAULT_AUTO_DOWNLOAD_MAX_BYTES));
+        return $this->providerDefaultTransportMaxBytes($provider);
     }
 
     private function automaticTransportMaxBytes(string $provider): int
@@ -279,9 +294,9 @@ class InboundMediaDownloadPolicy
 
         if (
             $provider === MessageAttachment::PROVIDER_TELEGRAM_BOT
-            && (bool) config('bots.telegram.local_api_media_download_enabled', false)
+            && $this->telegramLocalApiMediaDownloadReady()
         ) {
-            return $this->manualHardLimitBytes();
+            return $this->telegramLocalApiTransportMaxBytes();
         }
 
         if (
@@ -291,7 +306,7 @@ class InboundMediaDownloadPolicy
             return $this->manualHardLimitBytes();
         }
 
-        return max(1, (int) config('bots.media.download_max_bytes', self::DEFAULT_AUTO_DOWNLOAD_MAX_BYTES));
+        return $this->providerDefaultTransportMaxBytes($provider);
     }
 
     private function hasProviderReference(MessageAttachment $attachment): bool
@@ -333,6 +348,161 @@ class InboundMediaDownloadPolicy
             self::REASON_TRAFFIC_QUOTA_EXCEEDED => 'Дневной лимит загрузки медиа для канала исчерпан.',
             default => 'Загрузка временно недоступна из-за ограничения хранения.',
         };
+    }
+
+    private function transportUnavailableMessage(string $provider, int $limitBytes): string
+    {
+        $limit = $this->formatByteLimit($limitBytes);
+
+        return match ($provider) {
+            MessageAttachment::PROVIDER_TELEGRAM_BOT => $this->telegramLocalApiMediaDownloadReady()
+                ? "Текущий Telegram Local Bot API gateway загружает файлы только до {$limit}."
+                : "Облачный Telegram Bot API загружает файлы только до {$limit}. Для большего файла нужен Local Bot API.",
+            default => "Транспорт этого канала пока загружает файлы только до {$limit}.",
+        };
+    }
+
+    private function formatByteLimit(int $bytes): string
+    {
+        if ($bytes >= 1024 * 1024 && $bytes % (1024 * 1024) === 0) {
+            return (int) ($bytes / (1024 * 1024)).' МБ';
+        }
+
+        if ($bytes >= 1024 && $bytes % 1024 === 0) {
+            return (int) ($bytes / 1024).' КБ';
+        }
+
+        return max(1, $bytes).' Б';
+    }
+
+    private function telegramLocalApiMediaDownloadReady(): bool
+    {
+        if (
+            ! (bool) config('bots.telegram.local_api_media_download_enabled', false)
+            || blank(config('bots.telegram.local_api_files_root'))
+            || ! $this->configuredUrlUsesTrustedHost(
+                config('bots.telegram.local_api_base_url'),
+                config('bots.telegram.local_api_trusted_hosts', []),
+            )
+        ) {
+            return false;
+        }
+
+        if (! $this->credentialsPairIsValid(
+            config('bots.telegram.local_api_username'),
+            config('bots.telegram.local_api_password'),
+        )) {
+            return false;
+        }
+
+        $transport = mb_strtolower(trim((string) config(
+            'bots.telegram.local_api_file_transport',
+            'filesystem',
+        )));
+
+        if ($transport === 'filesystem') {
+            return true;
+        }
+
+        return $transport === 'http_bridge'
+            && $this->credentialsPairIsConfigured(
+                config('bots.telegram.local_api_username'),
+                config('bots.telegram.local_api_password'),
+            )
+            && $this->credentialsPairIsConfigured(
+                config('bots.telegram.local_api_file_bridge_username'),
+                config('bots.telegram.local_api_file_bridge_password'),
+            )
+            && $this->configuredUrlUsesTrustedHost(
+                config('bots.telegram.local_api_file_bridge_base_url'),
+                config('bots.telegram.local_api_file_bridge_trusted_hosts', []),
+            );
+    }
+
+    private function telegramLocalApiTransportMaxBytes(): int
+    {
+        $transport = mb_strtolower(trim((string) config(
+            'bots.telegram.local_api_file_transport',
+            'filesystem',
+        )));
+
+        if ($transport !== 'http_bridge') {
+            return $this->manualHardLimitBytes();
+        }
+
+        return min(
+            $this->manualHardLimitBytes(),
+            max(1, (int) config(
+                'bots.telegram.local_api_file_bridge_max_bytes',
+                64 * 1024 * 1024,
+            )),
+        );
+    }
+
+    private function providerDefaultTransportMaxBytes(string $provider): int
+    {
+        $configured = max(1, (int) config(
+            'bots.media.download_max_bytes',
+            self::DEFAULT_AUTO_DOWNLOAD_MAX_BYTES,
+        ));
+
+        return $provider === MessageAttachment::PROVIDER_TELEGRAM_BOT
+            ? min($configured, self::TELEGRAM_CLOUD_DOWNLOAD_MAX_BYTES)
+            : $configured;
+    }
+
+    private function credentialsPairIsValid(mixed $username, mixed $password): bool
+    {
+        return ! $this->credentialsPairIsConfigured($username, $password)
+            ? $this->credentialUsernameIsEmpty($username) && $this->credentialPasswordIsEmpty($password)
+            : true;
+    }
+
+    private function credentialsPairIsConfigured(mixed $username, mixed $password): bool
+    {
+        return ! $this->credentialUsernameIsEmpty($username) && ! $this->credentialPasswordIsEmpty($password);
+    }
+
+    private function credentialUsernameIsEmpty(mixed $value): bool
+    {
+        return ! is_string($value) || trim($value) === '';
+    }
+
+    private function credentialPasswordIsEmpty(mixed $value): bool
+    {
+        return ! is_string($value) || $value === '';
+    }
+
+    private function configuredUrlUsesTrustedHost(mixed $url, mixed $trustedHosts): bool
+    {
+        if (! is_string($url) || trim($url) === '') {
+            return false;
+        }
+
+        $parts = parse_url(trim($url));
+
+        if (! is_array($parts)) {
+            return false;
+        }
+
+        $scheme = mb_strtolower((string) ($parts['scheme'] ?? ''));
+        $host = mb_strtolower(rtrim((string) ($parts['host'] ?? ''), '.'));
+        $hosts = array_map(
+            static fn (string $value): string => mb_strtolower(rtrim(trim($value), '.')),
+            array_values(array_filter(
+                (array) $trustedHosts,
+                static fn (mixed $value): bool => is_string($value) && trim($value) !== '',
+            )),
+        );
+
+        return in_array($scheme, ['http', 'https'], true)
+            && ($scheme === 'https' || (bool) config('bots.telegram.local_api_allow_insecure_http', false))
+            && $host !== ''
+            && in_array($host, $hosts, true)
+            && ! array_key_exists('user', $parts)
+            && ! array_key_exists('pass', $parts)
+            && ! array_key_exists('query', $parts)
+            && ! array_key_exists('fragment', $parts);
     }
 
     /**

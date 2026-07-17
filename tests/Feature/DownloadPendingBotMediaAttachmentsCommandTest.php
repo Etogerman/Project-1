@@ -120,6 +120,7 @@ class DownloadPendingBotMediaAttachmentsCommandTest extends TestCase
         config([
             'bots.telegram.local_api_media_download_enabled' => true,
             'bots.telegram.local_api_base_url' => 'http://telegram-bot-api:8081',
+            'bots.telegram.local_api_allow_insecure_http' => true,
             'bots.telegram.local_api_files_root' => $root,
         ]);
         Http::fake([
@@ -153,6 +154,157 @@ class DownloadPendingBotMediaAttachmentsCommandTest extends TestCase
         }
     }
 
+    public function test_command_streams_telegram_bot_media_through_authenticated_local_api_file_bridge(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        $payload = 'telegram-file-bridge-video-bytes';
+        $remoteRoot = '/var/lib/telegram-bot-api';
+        $remotePath = $remoteRoot.'/bot-1/videos/local-large-video.mp4';
+
+        config([
+            'bots.telegram.local_api_media_download_enabled' => true,
+            'bots.telegram.local_api_base_url' => 'https://telegram-gateway.example/api',
+            'bots.telegram.local_api_username' => 'media-reader',
+            'bots.telegram.local_api_password' => 'bridge-secret',
+            'bots.telegram.local_api_trusted_hosts' => ['telegram-gateway.example'],
+            'bots.telegram.local_api_file_transport' => 'http_bridge',
+            'bots.telegram.local_api_files_root' => $remoteRoot,
+            'bots.telegram.local_api_file_bridge_base_url' => 'https://telegram-gateway.example/files',
+            'bots.telegram.local_api_file_bridge_trusted_hosts' => ['telegram-gateway.example'],
+            'bots.telegram.local_api_file_bridge_username' => 'media-reader',
+            'bots.telegram.local_api_file_bridge_password' => 'bridge-secret',
+        ]);
+        Http::fake([
+            'https://telegram-gateway.example/api/bottelegram-token/getFile*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_path' => $remotePath,
+                    'file_size' => strlen($payload),
+                ],
+            ]),
+            'https://telegram-gateway.example/files/bot-1/videos/local-large-video.mp4' => Http::response(
+                $payload,
+                200,
+                [
+                    'Content-Type' => 'video/mp4',
+                    'Content-Length' => (string) strlen($payload),
+                ],
+            ),
+        ]);
+
+        $attachment = $this->createPendingTelegramBotVideoAttachment();
+
+        $this->artisan('bot-media:download-pending-images', [
+            '--force' => true,
+            '--limit' => 10,
+        ])->assertExitCode(0);
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $attachment->download_status);
+        $this->assertSame(strlen($payload), $attachment->file_size_bytes);
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://telegram-gateway.example/api/bottelegram-token/getFile?file_id=telegram-video-file-id'
+            && $request->hasHeader('Authorization', 'Basic '.base64_encode('media-reader:bridge-secret')));
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://telegram-gateway.example/files/bot-1/videos/local-large-video.mp4'
+            && $request->hasHeader('Authorization', 'Basic '.base64_encode('media-reader:bridge-secret')));
+    }
+
+    public function test_command_rejects_file_bridge_length_that_differs_from_telegram_size(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        $telegramSize = 51 * 1024 * 1024;
+        $truncatedPayload = 'truncated-file';
+
+        config([
+            'bots.media.download_max_bytes' => 64 * 1024 * 1024,
+            'bots.telegram.local_api_media_download_enabled' => true,
+            'bots.telegram.local_api_base_url' => 'https://telegram-gateway.example/api',
+            'bots.telegram.local_api_username' => 'media-reader',
+            'bots.telegram.local_api_password' => 'bridge-secret',
+            'bots.telegram.local_api_trusted_hosts' => ['telegram-gateway.example'],
+            'bots.telegram.local_api_file_transport' => 'http_bridge',
+            'bots.telegram.local_api_files_root' => '/var/lib/telegram-bot-api',
+            'bots.telegram.local_api_file_bridge_base_url' => 'https://telegram-gateway.example/files',
+            'bots.telegram.local_api_file_bridge_trusted_hosts' => ['telegram-gateway.example'],
+            'bots.telegram.local_api_file_bridge_username' => 'media-reader',
+            'bots.telegram.local_api_file_bridge_password' => 'bridge-secret',
+            'bots.telegram.local_api_file_bridge_max_bytes' => 64 * 1024 * 1024,
+        ]);
+        Http::fake([
+            'https://telegram-gateway.example/api/bottelegram-token/getFile*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_path' => '/var/lib/telegram-bot-api/videos/large.mp4',
+                    'file_size' => $telegramSize,
+                ],
+            ]),
+            'https://telegram-gateway.example/files/videos/large.mp4' => Http::response(
+                $truncatedPayload,
+                200,
+                ['Content-Length' => (string) strlen($truncatedPayload)],
+            ),
+        ]);
+
+        $attachment = $this->createPendingTelegramBotVideoAttachment();
+
+        $this->artisan('bot-media:download-pending-images', [
+            '--force' => true,
+            '--limit' => 10,
+        ])->assertExitCode(0);
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD, $attachment->download_status);
+        $this->assertSame('integrity_mismatch', $attachment->safe_error_code);
+        $this->assertNotNull($attachment->media_download_next_retry_at);
+        $this->assertTrue($attachment->media_download_next_retry_at->isFuture());
+        $this->assertNull($attachment->local_path);
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertMissing(
+            MessageAttachment::LOCAL_PATH_PREFIX.'/'.$attachment->message_id.'/'.$attachment->id.'.mp4',
+        );
+    }
+
+    public function test_command_rejects_local_api_file_bridge_path_outside_configured_root(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        config([
+            'bots.telegram.local_api_media_download_enabled' => true,
+            'bots.telegram.local_api_base_url' => 'https://telegram-gateway.example/api',
+            'bots.telegram.local_api_username' => 'media-reader',
+            'bots.telegram.local_api_password' => 'bridge-secret',
+            'bots.telegram.local_api_trusted_hosts' => ['telegram-gateway.example'],
+            'bots.telegram.local_api_file_transport' => 'http_bridge',
+            'bots.telegram.local_api_files_root' => '/var/lib/telegram-bot-api',
+            'bots.telegram.local_api_file_bridge_base_url' => 'https://telegram-gateway.example/files',
+            'bots.telegram.local_api_file_bridge_trusted_hosts' => ['telegram-gateway.example'],
+            'bots.telegram.local_api_file_bridge_username' => 'media-reader',
+            'bots.telegram.local_api_file_bridge_password' => 'bridge-secret',
+        ]);
+        Http::fake([
+            'https://telegram-gateway.example/api/bottelegram-token/getFile*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_path' => '/var/lib/telegram-bot-api/../private/secret.mp4',
+                    'file_size' => 10,
+                ],
+            ]),
+        ]);
+
+        $attachment = $this->createPendingTelegramBotVideoAttachment();
+
+        $this->artisan('bot-media:download-pending-images', [
+            '--force' => true,
+            '--limit' => 10,
+        ])->assertExitCode(1);
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOAD_FAILED, $attachment->download_status);
+        $this->assertSame('bot_media_download_invalid_payload', $attachment->safe_error_code);
+        Http::assertSentCount(1);
+    }
+
     public function test_command_rejects_telegram_local_api_file_outside_configured_root(): void
     {
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
@@ -167,6 +319,7 @@ class DownloadPendingBotMediaAttachmentsCommandTest extends TestCase
         config([
             'bots.telegram.local_api_media_download_enabled' => true,
             'bots.telegram.local_api_base_url' => 'http://telegram-bot-api:8081',
+            'bots.telegram.local_api_allow_insecure_http' => true,
             'bots.telegram.local_api_files_root' => $root,
         ]);
         Http::fake([
@@ -205,6 +358,7 @@ class DownloadPendingBotMediaAttachmentsCommandTest extends TestCase
         config([
             'bots.telegram.local_api_media_download_enabled' => true,
             'bots.telegram.local_api_base_url' => 'http://untrusted.example:8081',
+            'bots.telegram.local_api_allow_insecure_http' => true,
             'bots.telegram.local_api_trusted_hosts' => ['telegram-bot-api'],
         ]);
         Http::fake();

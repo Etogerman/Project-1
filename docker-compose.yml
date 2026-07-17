@@ -129,6 +129,31 @@ services:
       retries: 20
       start_period: 10s
 
+  telegram-bot-api-file-bridge:
+    profiles:
+      - telegram-local-bot-api
+    build:
+      context: .devcontainer/telegram-bot-api-file-bridge
+    env_file:
+      - path: .env.telegram-bot-api-file-bridge
+        required: true
+    volumes:
+      - ./storage/app/telegram-bot-api:/var/lib/telegram-bot-api:ro
+    expose:
+      - "8082"
+    networks:
+      - web
+    restart: unless-stopped
+    depends_on:
+      telegram-bot-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:8082/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
 networks:
   web:
     driver: bridge
