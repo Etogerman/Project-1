@@ -16,6 +16,7 @@ final readonly class DownloadedMediaStreamData
         public ?string $contentType = null,
         public ?string $filenameHint = null,
         public array $metadata = [],
+        public ?int $expectedLengthBytes = null,
     ) {
         if (! is_resource($stream)) {
             throw new LogicException('Downloaded media stream must be a resource.');
@@ -37,6 +38,7 @@ final readonly class DownloadedMediaStreamData
             contentType: $this->contentType,
             filenameHint: $this->filenameHint,
             metadata: $metadata,
+            expectedLengthBytes: $this->expectedLengthBytes,
         );
     }
 
