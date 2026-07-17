@@ -127,7 +127,7 @@ Schedule::command('bot-constructor:cleanup-processing-runs')
     ->everyFiveMinutes()
     ->withoutOverlapping();
 
-Schedule::command('bot-media:download-pending-images --force --limit=25')
+Schedule::command('bot-media:download-pending-images --dispatch --limit=25')
     ->everyMinute()
     ->withoutOverlapping();
 

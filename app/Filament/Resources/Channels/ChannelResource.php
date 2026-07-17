@@ -34,6 +34,7 @@ use Filament\Infolists\Components\TextEntry;
 use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Section;
+use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Schema;
 use Filament\Support\Enums\Alignment;
@@ -132,6 +133,7 @@ class ChannelResource extends Resource
                             ->required()
                             ->selectablePlaceholder(false)
                             ->native(false)
+                            ->live()
                             ->hidden(fn (?Channel $record): bool => $record?->isAccountConnection() ?? false),
                         Select::make('connection_type')
                             ->label('Тип')
@@ -141,6 +143,7 @@ class ChannelResource extends Resource
                             ->required()
                             ->selectablePlaceholder(false)
                             ->native(false)
+                            ->live()
                             ->hidden(fn (?Channel $record): bool => $record?->isAccountConnection() ?? false),
                     ])
                     ->columnSpanFull()
@@ -182,12 +185,20 @@ class ChannelResource extends Resource
                             ->suffix('МБ')
                             ->placeholder('20')
                             ->helperText('Более крупные файлы останутся в диалоге. Ручное действие управляется переключателем ниже.')
-                            ->visible(fn (?Channel $record): bool => $record?->supportsInboundMediaOnDemand() ?? false),
+                            ->visible(fn (Get $get, ?Channel $record): bool => static::supportsInboundMediaSettings(
+                                $record,
+                                (string) $get('platform'),
+                                (string) $get('connection_type'),
+                            )),
                         Toggle::make('inbound_media_on_demand_enabled')
                             ->label('Ручная загрузка крупных медиа')
                             ->helperText('Показывает оператору действие «Скачать вручную». Включайте после обновления Gateway.')
                             ->default(false)
-                            ->visible(fn (?Channel $record): bool => $record?->supportsInboundMediaOnDemand() ?? false),
+                            ->visible(fn (Get $get, ?Channel $record): bool => static::supportsInboundMediaSettings(
+                                $record,
+                                (string) $get('platform'),
+                                (string) $get('connection_type'),
+                            )),
                     ])
                     ->columnSpanFull()
                     ->columns(2),
@@ -1191,17 +1202,29 @@ class ChannelResource extends Resource
         ];
     }
 
+    protected static function supportsInboundMediaSettings(
+        ?Channel $record,
+        string $platform,
+        string $connectionType,
+    ): bool {
+        return $record?->supportsInboundMediaOnDemand()
+            ?? (
+                in_array($platform, [Channel::PLATFORM_TELEGRAM, Channel::PLATFORM_MAX], true)
+                && $connectionType === Channel::CONNECTION_TYPE_BOT
+            );
+    }
+
     /**
      * @param  array<string, mixed>  $data
      * @return array<string, mixed>
      */
     protected static function mutateInboundMediaSettings(array $data, ?Channel $record): array
     {
-        $supportsInboundMedia = $record?->supportsInboundMediaOnDemand()
-            ?? (
-                in_array((string) data_get($data, 'platform'), [Channel::PLATFORM_TELEGRAM, Channel::PLATFORM_MAX], true)
-                && (string) data_get($data, 'connection_type') === Channel::CONNECTION_TYPE_BOT
-            );
+        $supportsInboundMedia = static::supportsInboundMediaSettings(
+            $record,
+            (string) data_get($data, 'platform'),
+            (string) data_get($data, 'connection_type'),
+        );
 
         $autoDownloadMaxMb = data_get($data, 'inbound_media_auto_download_max_mb');
         $onDemandEnabled = array_key_exists('inbound_media_on_demand_enabled', $data)

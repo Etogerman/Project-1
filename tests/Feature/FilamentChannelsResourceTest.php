@@ -23,6 +23,7 @@ use App\Services\Scenarios\CreateScenarioAction;
 use App\Services\Scenarios\PublishScenarioVersionAction;
 use App\Services\Scenarios\WarmupScenario;
 use Filament\Facades\Filament;
+use Filament\Forms\Components\Select;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
@@ -420,6 +421,42 @@ class FilamentChannelsResourceTest extends TestCase
         $this->assertSame(Channel::AUTO_REPLY_MODE_RULES_ONLY, $channel->auto_reply_mode);
         $this->assertTrue($channel->is_active);
         $this->assertSame('telegram-secret-token', $channel->credentials['token']);
+    }
+
+    public function test_create_channel_form_reveals_unified_media_settings_for_supported_bot_platforms(): void
+    {
+        $admin = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => true,
+        ]);
+
+        $component = Livewire::actingAs($admin)
+            ->test(ManageChannels::class)
+            ->mountAction('create')
+            ->assertFormFieldExists('platform', fn (Select $field): bool => $field->isLive())
+            ->assertFormFieldExists('connection_type', fn (Select $field): bool => $field->isLive())
+            ->assertFormFieldHidden('inbound_media_auto_download_max_mb')
+            ->assertFormFieldHidden('inbound_media_on_demand_enabled');
+
+        $component
+            ->fillForm([
+                'platform' => Channel::PLATFORM_TELEGRAM,
+                'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            ])
+            ->assertFormFieldVisible('inbound_media_auto_download_max_mb')
+            ->assertFormFieldVisible('inbound_media_on_demand_enabled')
+            ->fillForm([
+                'platform' => Channel::PLATFORM_TELEGRAM,
+                'connection_type' => Channel::CONNECTION_TYPE_ACCOUNT,
+            ])
+            ->assertFormFieldHidden('inbound_media_auto_download_max_mb')
+            ->assertFormFieldHidden('inbound_media_on_demand_enabled')
+            ->fillForm([
+                'platform' => Channel::PLATFORM_MAX,
+                'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            ])
+            ->assertFormFieldVisible('inbound_media_auto_download_max_mb')
+            ->assertFormFieldVisible('inbound_media_on_demand_enabled');
     }
 
     public function test_channel_form_uses_polished_section_layout(): void

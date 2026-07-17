@@ -41,8 +41,6 @@ class MediaObservabilitySnapshotCommandTest extends TestCase
 
     public function test_json_schema_is_stable_and_clean_snapshot_succeeds(): void
     {
-        $this->seedEmptyStorageBudget();
-
         [$exitCode, $payload, $output] = $this->runSnapshot();
 
         $this->assertSame(Command::SUCCESS, $exitCode);
@@ -84,6 +82,7 @@ class MediaObservabilitySnapshotCommandTest extends TestCase
         $this->assertSame(60, $payload['window_minutes']);
         $this->assertTrue($payload['complete']);
         $this->assertSame([], $payload['incomplete_reasons']);
+        $this->assertSame(0, $payload['current']['storage_ledger_drift']);
         $this->assertSame([], $payload['blocking_anomalies']);
         $this->assertJson($output);
         $this->assertStringNotContainsString('claim-token', $output);
@@ -437,19 +436,25 @@ class MediaObservabilitySnapshotCommandTest extends TestCase
 
         [, $payload] = $this->runSnapshot();
         $channels = $payload['current']['traffic_channels'];
+        $channelsById = collect($channels)->keyBy('channel_id');
+        $firstChannel = $channelsById->get($first->id);
+        $secondChannel = $channelsById->get($second->id);
 
-        $this->assertSame([$first->id, $second->id], array_column($channels, 'channel_id'));
-        $this->assertSame(80.0, $channels[0]['utilization_percent']);
-        $this->assertTrue($channels[0]['warning_80_reached']);
-        $this->assertFalse($channels[0]['over_limit']);
-        $this->assertSame(101.0, $channels[1]['utilization_percent']);
-        $this->assertTrue($channels[1]['warning_80_reached']);
-        $this->assertTrue($channels[1]['over_limit']);
+        $this->assertIsArray($firstChannel);
+        $this->assertIsArray($secondChannel);
+        $this->assertSame(80.0, $firstChannel['utilization_percent']);
+        $this->assertTrue($firstChannel['warning_80_reached']);
+        $this->assertFalse($firstChannel['over_limit']);
+        $this->assertSame(101.0, $secondChannel['utilization_percent']);
+        $this->assertTrue($secondChannel['warning_80_reached']);
+        $this->assertTrue($secondChannel['over_limit']);
 
         config(['inbound_media.traffic.channel_daily_limit_bytes' => null]);
         [, $withoutLimit] = $this->runSnapshot();
-        $channelWithoutLimit = $withoutLimit['current']['traffic_channels'][0];
+        $channelWithoutLimit = collect($withoutLimit['current']['traffic_channels'])
+            ->firstWhere('channel_id', $first->id);
 
+        $this->assertIsArray($channelWithoutLimit);
         $this->assertNull($channelWithoutLimit['daily_limit_bytes']);
         $this->assertNull($channelWithoutLimit['utilization_percent']);
         $this->assertNull($channelWithoutLimit['warning_80_reached']);
@@ -850,36 +855,42 @@ class MediaObservabilitySnapshotCommandTest extends TestCase
 
     private function seedEmptyStorageBudget(): void
     {
-        DB::table('media_download_storage_budgets')->insert([
-            'scope_type' => 'global',
-            'scope_id' => 0,
-            'reserved_bytes' => 0,
-            'used_bytes' => 0,
-            'created_at' => now(),
-            'updated_at' => now(),
-        ]);
+        DB::table('media_download_storage_budgets')->updateOrInsert(
+            [
+                'scope_type' => 'global',
+                'scope_id' => 0,
+            ],
+            [
+                'reserved_bytes' => 0,
+                'used_bytes' => 0,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
+        );
     }
 
     private function seedStorageBudgets(int $channelId, int $usedBytes): void
     {
-        DB::table('media_download_storage_budgets')->insert([
+        foreach ([
             [
                 'scope_type' => 'global',
                 'scope_id' => 0,
-                'reserved_bytes' => 0,
-                'used_bytes' => $usedBytes,
-                'created_at' => now(),
-                'updated_at' => now(),
             ],
             [
                 'scope_type' => 'channel',
                 'scope_id' => $channelId,
-                'reserved_bytes' => 0,
-                'used_bytes' => $usedBytes,
-                'created_at' => now(),
-                'updated_at' => now(),
             ],
-        ]);
+        ] as $scope) {
+            DB::table('media_download_storage_budgets')->updateOrInsert(
+                $scope,
+                [
+                    'reserved_bytes' => 0,
+                    'used_bytes' => $usedBytes,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ],
+            );
+        }
     }
 
     /**

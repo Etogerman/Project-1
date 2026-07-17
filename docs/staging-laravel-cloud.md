@@ -52,9 +52,22 @@ Use Laravel Cloud for staging:
 - `SESSION_DRIVER=database`
 - `CACHE_STORE=database`
 - `QUEUE_CONNECTION=database`
+- `INBOUND_MEDIA_QUEUE_CONNECTION=inbound-media`
+- `INBOUND_MEDIA_QUEUE_NAME=inbound-media`
+- `INBOUND_MEDIA_QUEUE_RETRY_AFTER=21630`
 - `BITRIX24_FAKE_HAPPY_PATH_ENABLED=false`
 
 Database host, port, database, username, and password should come from the attached managed PostgreSQL service.
+
+Для входящих медиа нужен отдельный Laravel Cloud background process:
+
+```bash
+php artisan queue:work inbound-media --queue=inbound-media --tries=1 --sleep=1
+```
+
+Обычный worker не должен слушать очередь `inbound-media`: у неё отдельный
+`retry_after`, превышающий максимальную длительность загрузки. Это не позволяет
+шестичасовому lease медиа задерживать повтор обычных заданий.
 
 `.env.staging.example` фиксирует текущие не-секретные staging defaults для
 real Bitrix24 integration flow. Секреты и portal-specific tokens всё равно
