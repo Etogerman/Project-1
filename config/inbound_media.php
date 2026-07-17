@@ -39,6 +39,13 @@ return [
         'INBOUND_MEDIA_ATTEMPT_DEADLINE_SECONDS',
         6 * 60 * 60,
     ),
+    'queue' => [
+        'connection' => env(
+            'INBOUND_MEDIA_QUEUE_CONNECTION',
+            env('QUEUE_CONNECTION', 'database') === 'sync' ? 'sync' : 'inbound-media',
+        ),
+        'name' => env('INBOUND_MEDIA_QUEUE_NAME', 'inbound-media'),
+    ],
     'lease_stale_seconds' => (int) env('INBOUND_MEDIA_LEASE_STALE_SECONDS', 120),
     'reservation_ttl_buffer_seconds' => (int) env(
         'INBOUND_MEDIA_RESERVATION_TTL_BUFFER_SECONDS',

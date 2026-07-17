@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Jobs\DownloadBotMessageAttachmentJob;
 use App\Models\Message;
 use App\Models\MessageAttachment;
 use App\Services\Bots\DownloadBotMessageAttachmentsAction;
@@ -12,6 +13,7 @@ class DownloadPendingBotMediaAttachmentsCommand extends Command
 {
     protected $signature = 'bot-media:download-pending-images
         {--force : Download and persist local files instead of dry-run}
+        {--dispatch : Dispatch downloads to the queue without network I/O in this process}
         {--channel= : Limit to one channel ID}
         {--limit=50 : Maximum matching attachments to inspect}';
 
@@ -26,8 +28,15 @@ class DownloadPendingBotMediaAttachmentsCommand extends Command
     public function handle(): int
     {
         $force = (bool) $this->option('force');
+        $dispatch = (bool) $this->option('dispatch');
         $limit = min(max((int) $this->option('limit'), 1), 500);
         $channelId = $this->option('channel');
+
+        if ($force && $dispatch) {
+            $this->error('Options --force and --dispatch cannot be used together.');
+
+            return self::INVALID;
+        }
 
         $query = MessageAttachment::query()
             ->where(function ($query): void {
@@ -74,9 +83,11 @@ class DownloadPendingBotMediaAttachmentsCommand extends Command
             ->limit($limit)
             ->get(['id', 'message_id', 'channel_id', 'provider', 'download_status']);
 
-        $this->line($force
-            ? 'Bot media download started.'
-            : 'Bot media download dry-run.');
+        $this->line(match (true) {
+            $force => 'Bot media download started.',
+            $dispatch => 'Bot media download dispatch started.',
+            default => 'Bot media download dry-run.',
+        });
         $this->table(
             ['Metric', 'Count'],
             [
@@ -86,7 +97,20 @@ class DownloadPendingBotMediaAttachmentsCommand extends Command
             ],
         );
 
-        if (! $force || $candidateAttachments->isEmpty()) {
+        if ((! $force && ! $dispatch) || $candidateAttachments->isEmpty()) {
+            return self::SUCCESS;
+        }
+
+        if ($dispatch) {
+            foreach ($candidateAttachments as $attachment) {
+                DownloadBotMessageAttachmentJob::dispatch((int) $attachment->id, manual: false);
+            }
+
+            $this->table(
+                ['Result', 'Count'],
+                [['dispatched_now', (string) $candidateAttachments->count()]],
+            );
+
             return self::SUCCESS;
         }
 

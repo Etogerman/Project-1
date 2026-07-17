@@ -1,5 +1,14 @@
 <?php
 
+$inboundMediaAttemptDeadlineSeconds = max(
+    30,
+    (int) env('INBOUND_MEDIA_ATTEMPT_DEADLINE_SECONDS', 6 * 60 * 60),
+);
+$inboundMediaQueueRetryAfter = max(
+    $inboundMediaAttemptDeadlineSeconds + 30,
+    (int) env('INBOUND_MEDIA_QUEUE_RETRY_AFTER', $inboundMediaAttemptDeadlineSeconds + 30),
+);
+
 return [
 
     /*
@@ -69,6 +78,15 @@ return [
             'queue' => env('REDIS_QUEUE', 'default'),
             'retry_after' => (int) env('REDIS_QUEUE_RETRY_AFTER', 90),
             'block_for' => null,
+            'after_commit' => false,
+        ],
+
+        'inbound-media' => [
+            'driver' => 'database',
+            'connection' => env('INBOUND_MEDIA_DB_QUEUE_CONNECTION', env('DB_QUEUE_CONNECTION')),
+            'table' => env('INBOUND_MEDIA_DB_QUEUE_TABLE', env('DB_QUEUE_TABLE', 'jobs')),
+            'queue' => env('INBOUND_MEDIA_QUEUE_NAME', 'inbound-media'),
+            'retry_after' => $inboundMediaQueueRetryAfter,
             'after_commit' => false,
         ],
 

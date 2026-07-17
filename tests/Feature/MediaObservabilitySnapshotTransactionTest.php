@@ -39,15 +39,6 @@ class MediaObservabilitySnapshotTransactionTest extends TestCase
             'channel_id' => $channel->id,
             'download_status' => MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD,
         ]);
-        DB::table('media_download_storage_budgets')->insert([
-            'scope_type' => 'global',
-            'scope_id' => 0,
-            'reserved_bytes' => 0,
-            'used_bytes' => 0,
-            'created_at' => now(),
-            'updated_at' => now(),
-        ]);
-
         $defaultConnection = config('database.default');
         $concurrentConnection = 'observability_concurrent';
         config([
