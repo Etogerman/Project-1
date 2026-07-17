@@ -592,6 +592,21 @@ class TelegramBotApiService
         $transferFailure = null;
         $heartbeat = null;
         $requestTimeoutSeconds ??= $this->attemptDeadlineSeconds();
+        $maxBytes = min(
+            $maxBytes,
+            max(1, (int) config(
+                'bots.telegram.local_api_file_bridge_max_bytes',
+                64 * 1024 * 1024,
+            )),
+        );
+
+        if ($maxBytes < 1) {
+            throw new InvalidArgumentException('Telegram Bot media download limit must be positive.');
+        }
+
+        if ($providerDeclaredSizeBytes !== null && $providerDeclaredSizeBytes > $maxBytes) {
+            throw new InvalidArgumentException('Telegram Bot media file is larger than the local download limit.');
+        }
 
         if ($onProgress instanceof Closure) {
             $heartbeat = static function (int $receivedBytes) use ($onProgress, &$progressFailure): void {
@@ -950,10 +965,10 @@ class TelegramBotApiService
     private function resolveLocalApiFilePath(string $filePath): string
     {
         $configuredRoot = config('bots.telegram.local_api_files_root');
-        $root = realpath(is_string($configuredRoot) ? $configuredRoot : '');
+        $root = TelegramLocalApiConfiguration::readableFilesRoot($configuredRoot);
         $path = realpath($filePath);
 
-        if ($root === false || $path === false || ! is_file($path) || ! is_readable($path)) {
+        if ($root === null || $path === false || ! is_file($path) || ! is_readable($path)) {
             throw new InvalidArgumentException('Telegram Local Bot API media path is unavailable.');
         }
 

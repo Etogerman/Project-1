@@ -236,6 +236,78 @@ class TelegramBotApiServiceEndpointTest extends TestCase
         $progress(101, 0, 0, 0);
     }
 
+    public function test_file_bridge_applies_configured_runtime_limit_before_opening_sink(): void
+    {
+        config(['bots.telegram.local_api_file_bridge_max_bytes' => 100]);
+        $action = Mockery::mock(StreamHttpResponseToTemporaryFileAction::class);
+        $action->shouldNotReceive('openTemporaryDownloadSink');
+        $method = new ReflectionMethod(TelegramBotApiService::class, 'streamLocalApiFileFromBridge');
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Telegram Bot media file is larger than the local download limit.');
+
+        $method->invoke(
+            new TelegramBotApiService($action),
+            '/var/lib/telegram-bot-api/videos/large.mp4',
+            200,
+            null,
+            101,
+        );
+    }
+
+    public function test_file_bridge_rejects_unknown_provider_size_above_configured_runtime_limit(): void
+    {
+        $payload = str_repeat('x', 101);
+
+        config([
+            'bots.telegram.local_api_media_download_enabled' => true,
+            'bots.telegram.local_api_base_url' => 'https://telegram-gateway.example/api',
+            'bots.telegram.local_api_username' => 'media-reader',
+            'bots.telegram.local_api_password' => 'gateway-secret',
+            'bots.telegram.local_api_trusted_hosts' => ['telegram-gateway.example'],
+            'bots.telegram.local_api_file_transport' => 'http_bridge',
+            'bots.telegram.local_api_files_root' => '/var/lib/telegram-bot-api',
+            'bots.telegram.local_api_file_bridge_base_url' => 'https://telegram-gateway.example/files',
+            'bots.telegram.local_api_file_bridge_trusted_hosts' => ['telegram-gateway.example'],
+            'bots.telegram.local_api_file_bridge_username' => 'file-reader',
+            'bots.telegram.local_api_file_bridge_password' => 'file-secret',
+            'bots.telegram.local_api_file_bridge_max_bytes' => 100,
+        ]);
+
+        Http::fake([
+            'https://telegram-gateway.example/api/bottelegram-token/getFile*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_path' => '/var/lib/telegram-bot-api/videos/large.mp4',
+                ],
+            ]),
+            'https://telegram-gateway.example/files/videos/large.mp4' => Http::response(
+                $payload,
+                200,
+                ['Content-Type' => 'video/mp4'],
+            ),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'telegram-token'],
+        ]);
+
+        try {
+            app(TelegramBotApiService::class)->downloadFileToStream(
+                channel: $channel,
+                fileId: 'large-file-id',
+                maxBytes: 200,
+            );
+            $this->fail('Expected file above the bridge runtime limit to be rejected.');
+        } catch (InvalidArgumentException $exception) {
+            $this->assertSame('Telegram Bot media file is larger than the local download limit.', $exception->getMessage());
+        }
+
+        Http::assertSentCount(2);
+    }
+
     public function test_file_bridge_closes_sink_when_initial_heartbeat_loses_lease(): void
     {
         $sink = tmpfile();
@@ -622,6 +694,60 @@ class TelegramBotApiServiceEndpointTest extends TestCase
         try {
             app(TelegramBotApiService::class)->downloadChatAvatar($channel, 'chat-1');
             $this->fail('Expected oversized Telegram avatar to be rejected.');
+        } catch (InvalidArgumentException $exception) {
+            $this->assertSame('Telegram Bot media file is larger than the local download limit.', $exception->getMessage());
+        }
+
+        Http::assertSentCount(2);
+        Http::assertNotSent(fn (Request $request): bool => str_starts_with(
+            $request->url(),
+            'https://telegram-gateway.example/files/',
+        ));
+    }
+
+    public function test_local_bot_api_rejects_avatar_above_file_bridge_runtime_limit_before_file_request(): void
+    {
+        config([
+            'bots.media.download_max_bytes' => 200,
+            'bots.telegram.local_api_media_download_enabled' => true,
+            'bots.telegram.local_api_base_url' => 'https://telegram-gateway.example/api',
+            'bots.telegram.local_api_username' => 'media-reader',
+            'bots.telegram.local_api_password' => 'gateway-secret',
+            'bots.telegram.local_api_trusted_hosts' => ['telegram-gateway.example'],
+            'bots.telegram.local_api_file_transport' => 'http_bridge',
+            'bots.telegram.local_api_files_root' => '/var/lib/telegram-bot-api',
+            'bots.telegram.local_api_file_bridge_base_url' => 'https://telegram-gateway.example/files',
+            'bots.telegram.local_api_file_bridge_trusted_hosts' => ['telegram-gateway.example'],
+            'bots.telegram.local_api_file_bridge_username' => 'file-reader',
+            'bots.telegram.local_api_file_bridge_password' => 'file-secret',
+            'bots.telegram.local_api_file_bridge_max_bytes' => 100,
+        ]);
+
+        Http::fake([
+            'https://telegram-gateway.example/api/bottelegram-token/getChat*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'photo' => ['big_file_id' => 'avatar-file-id'],
+                ],
+            ]),
+            'https://telegram-gateway.example/api/bottelegram-token/getFile*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_path' => '/var/lib/telegram-bot-api/photos/avatar.jpg',
+                    'file_size' => 101,
+                ],
+            ]),
+        ]);
+
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'telegram-token'],
+        ]);
+
+        try {
+            app(TelegramBotApiService::class)->downloadChatAvatar($channel, 'chat-1');
+            $this->fail('Expected avatar above the file bridge runtime limit to be rejected.');
         } catch (InvalidArgumentException $exception) {
             $this->assertSame('Telegram Bot media file is larger than the local download limit.', $exception->getMessage());
         }
