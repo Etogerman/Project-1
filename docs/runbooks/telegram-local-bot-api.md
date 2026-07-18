@@ -161,10 +161,83 @@ TELEGRAM_LOCAL_BOT_API_MEDIA_DOWNLOAD_ENABLED=false
   `INBOUND_MEDIA_ATTEMPT_DEADLINE_SECONDS` (по умолчанию 21600 секунд), а для
   `/files` отключены response buffering и request buffering;
 - отдельный persistent volume с quota, алертами high-watermark и проверенной
-  cache rotation. Retention Object Storage не очищает кэш Local Bot API;
-- до очистки кэша остановлены Local Bot API и gateway, а нужные файлы уже
-  подтверждены в Object Storage. Команду очистки согласовать отдельно под
-  фактическую схему каталога и backup policy.
+  cache rotation. Retention Object Storage не очищает кэш Local Bot API.
+
+### Жизненный цикл кэша companion
+
+После успешной загрузки единственной долговременной копией приложения является
+объект на `MESSAGE_ATTACHMENTS_DISK`. Временный файл Laravel удаляется при
+закрытии потока. Копия на VPS остаётся только временным кэшем Telegram/TDLib и
+не является резервной или архивной копией.
+
+Образ Telegram Bot API собирается на закреплённых base-image digest и точных
+upstream revisions:
+
+- builder: `debian:bookworm@sha256:9344f8b8992482f80cba753f323adeaf17690076c095ccff6cc9536be98185dc`;
+- runtime: `debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818`;
+- Telegram Bot API: `adfd7f6a8e990272851777eeb3ae0def4216f161`;
+- TDLib: `a9966eb3704a3351568c28013fed67d797c17828`.
+
+Base-image digest убирает дрейф Docker tag, но `apt-get` читает живой Debian
+repository. Поэтому точной release-идентичностью считается digest уже
+собранного image; переход на Debian snapshot требует отдельного dependency
+update-процесса.
+
+Build применяет versioned patch только к расписанию встроенного TDLib storage
+optimizer, проверяет его SHA-256
+`6ffce6b3a46b67a11fc07a37bcf75bff42267f956c90a337d492c6ef40b8cdfd`,
+а затем fail-closed проверяет обе revisions и upstream defaults.
+В audited pinned-сборке `use_file_database=false`: optimizer сканирует известные
+TDLib file directories напрямую, поэтому upstream type-immunity list режима с
+file database здесь не применяется. Защита нового файла по времени продолжает
+действовать.
+При первом запуске либо просроченном `files_gc_ts` встроенный GC запускается
+через 5–60 секунд. При обычном рестарте после недавнего GC он ждёт остаток
+15-минутного интервала плюс jitter; между успешными sweep проходит примерно
+15–16 минут. Порог eligible cache остаётся upstream:
+`100 MiB`, TTL `23 часа`, максимум `40000` файлов и immunity нового файла
+`1 час`. Это не hard limit всего volume: фактический пик включает как минимум
+час входящего трафика, активные/частичные файлы, БД и служебные данные.
+
+Часовой immunity защищает source-файл на VPS от его filesystem `mtime`.
+Объект в Object Storage появляется только после завершения bridge-download и
+успешной durable-записи, поэтому к этому моменту часть либо всё
+immunity-window уже может пройти. Гарантии полного часа одновременного
+хранения на VPS и в Object Storage нет. После успешной durable-записи
+перекрывается только оставшаяся часть immunity-window. Затем файл лишь
+становится доступным для удаления: если eligible cache превышает soft budget
+`100 MiB`, встроенный GC может удалить его на ближайшем sweep; при небольшом
+кэше файл может оставаться примерно до
+`23 часов` после последнего зафиксированного filesystem `atime` плюс интервал
+sweep. VPS-volume смонтирован с `relatime`, поэтому не каждое чтение обновляет
+`atime`: повторный доступ может продлить срок, но не гарантирует этого. Во всех
+случаях это временный управляемый TDLib-кэш, а не второе долговременное
+хранилище. После eviction повторный `getFile` может снова получить файл у
+Telegram, пока provider reference доступен.
+
+Запрещено удалять файлы внешним `rm`, `find -delete`, очищать per-bot каталог или
+использовать `logOut` как cleanup во время работы companion. Каталог `--dir`
+содержит одновременно media, TDLib state и служебные файлы; внешний cleanup
+может гоняться с активной загрузкой или чтением. Online cleanup выполняет только
+встроенный storage optimizer. При заполнении volume runtime оставляют
+выключенным, останавливают новые claims, дожидаются drain и расширяют либо
+переносят volume без произвольного удаления.
+
+При любом обновлении Telegram Bot API или TDLib требуется новый source audit:
+verifier намеренно отклоняет другую revision. Текущая реализация меняет только
+частоту scan и не ослабляет `100 MiB` / `23 часа` / `40000` / `1 час`.
+
+Перед runtime enable на staging необходимо на отдельном выключенном companion:
+
+1. пересобрать образ из чистой Project-1 revision;
+2. проверить labels обеих upstream revisions и SHA-256 patch, зафиксировать
+   digest собранного image;
+3. увидеть в журнале `Schedule next file clean up` и успешный `Finish files GC`;
+4. подтвердить, что импортированный объект продолжает открываться из Object
+   Storage после eviction source cache;
+5. подтвердить повторный `getFile` для evicted, но ещё доступного provider file;
+6. проверить нагрузку scan и запас всего volume по порогам `80%/90%`;
+7. выполнить rollback на предыдущий образ без изменения persistent volume.
 
 Включение `TELEGRAM_LOCAL_BOT_API_MEDIA_DOWNLOAD_ENABLED` переключает на Local
 Bot API все методы бота, не только скачивание. Для общего staging-токена нужен
