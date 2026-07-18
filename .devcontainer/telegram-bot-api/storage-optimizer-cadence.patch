@@ -1,0 +1,20 @@
+diff --git a/td/telegram/StorageManager.h b/td/telegram/StorageManager.h
+index 773d62980..8d6fa7abc 100644
+--- a/td/telegram/StorageManager.h
++++ b/td/telegram/StorageManager.h
+@@ -41,8 +41,11 @@ class StorageManager final : public Actor {
+   void on_new_file(int64 size, int64 real_size, int32 cnt);
+ 
+  private:
+-  static constexpr int32 GC_EACH = 60 * 60 * 24;  // 1 day
+-  static constexpr int32 GC_DELAY = 60;
+-  static constexpr int32 GC_RAND_DELAY = 60 * 15;
++  // Project-1 uses TDLib's built-in file GC as the only online cleanup.
++  // A short cadence reduces delay between eligible-file sweeps without an
++  // external rm racing active downloads or readers.
++  static constexpr int32 GC_EACH = 60 * 15;  // 15 minutes
++  static constexpr int32 GC_DELAY = 5;
++  static constexpr int32 GC_RAND_DELAY = 55;  // 5-60 seconds of jitter
+ 
+   ActorShared<> parent_;
+ 

@@ -14,6 +14,7 @@ use App\Services\Messages\StreamHttpResponseToTemporaryFileAction;
 use App\Support\TelegramLocalApiConfiguration;
 use Closure;
 use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
@@ -336,38 +337,67 @@ class TelegramBotApiService
         }
 
         try {
-            $fileResponse = $this->mediaApiRequest($usesLocalApi, $heartbeat)
-                ->get(
-                    sprintf('%s/bot%s/getFile', $apiBaseUrl, $this->token($channel)),
-                    ['file_id' => $fileId],
-                )
-                ->throw()
-                ->json();
+            $fileResponse = $this->requestMediaFileMetadata(
+                channel: $channel,
+                fileId: $fileId,
+                usesLocalApi: $usesLocalApi,
+                apiBaseUrl: $apiBaseUrl,
+                heartbeat: $heartbeat,
+            );
         } catch (Throwable $throwable) {
             throw $progressFailure instanceof Throwable
                 ? $progressFailure
                 : $throwable;
         }
 
-        $filePath = data_get($fileResponse, 'result.file_path');
-        $fileSize = data_get($fileResponse, 'result.file_size');
-        $providerDeclaredSizeBytes = $this->providerDeclaredSizeBytes($fileSize);
-
-        if (is_numeric($fileSize) && (int) $fileSize > $maxBytes) {
-            throw new InvalidArgumentException('Telegram Bot media file is larger than the local download limit.');
-        }
-
-        if (! filled($filePath)) {
-            throw new InvalidArgumentException("Telegram API did not return file path for channel [{$channel->id}].");
-        }
+        [$filePath, $providerDeclaredSizeBytes] = $this->validatedMediaFileMetadata(
+            $fileResponse,
+            $channel,
+            $maxBytes,
+        );
 
         if ($usesLocalApi) {
-            return $this->streamLocalApiFile(
-                (string) $filePath,
-                $maxBytes,
-                $onProgress,
-                $providerDeclaredSizeBytes,
-            )->withMetadata([
+            try {
+                $downloaded = $this->streamLocalApiFile(
+                    $filePath,
+                    $maxBytes,
+                    $onProgress,
+                    $providerDeclaredSizeBytes,
+                );
+            } catch (RequestException $exception) {
+                if (! $this->isLocalApiFileBridgeCacheMiss($exception)) {
+                    throw $exception;
+                }
+
+                try {
+                    $refreshedFileResponse = $this->requestMediaFileMetadata(
+                        channel: $channel,
+                        fileId: $fileId,
+                        usesLocalApi: true,
+                        apiBaseUrl: $apiBaseUrl,
+                        heartbeat: $heartbeat,
+                    );
+                } catch (Throwable $throwable) {
+                    throw $progressFailure instanceof Throwable
+                        ? $progressFailure
+                        : $throwable;
+                }
+
+                [$filePath, $providerDeclaredSizeBytes] = $this->validatedMediaFileMetadata(
+                    $refreshedFileResponse,
+                    $channel,
+                    $maxBytes,
+                );
+
+                $downloaded = $this->streamLocalApiFile(
+                    $filePath,
+                    $maxBytes,
+                    $onProgress,
+                    $providerDeclaredSizeBytes,
+                );
+            }
+
+            return $downloaded->withMetadata([
                 'provider_declared_size_bytes' => $providerDeclaredSizeBytes,
             ]);
         }
@@ -399,6 +429,54 @@ class TelegramBotApiService
             tooLargeMessage: 'Telegram Bot media file is larger than the local download limit.',
             emptyMessage: "Telegram API returned an empty file for channel [{$channel->id}].",
         );
+    }
+
+    /**
+     * @param  Closure(int): void|null  $heartbeat
+     */
+    private function requestMediaFileMetadata(
+        Channel $channel,
+        string $fileId,
+        bool $usesLocalApi,
+        string $apiBaseUrl,
+        ?Closure $heartbeat,
+    ): mixed {
+        return $this->mediaApiRequest($usesLocalApi, $heartbeat)
+            ->get(
+                sprintf('%s/bot%s/getFile', $apiBaseUrl, $this->token($channel)),
+                ['file_id' => $fileId],
+            )
+            ->throw()
+            ->json();
+    }
+
+    /**
+     * @return array{0:string,1:?int}
+     */
+    private function validatedMediaFileMetadata(
+        mixed $fileResponse,
+        Channel $channel,
+        int $maxBytes,
+    ): array {
+        $filePath = data_get($fileResponse, 'result.file_path');
+        $fileSize = data_get($fileResponse, 'result.file_size');
+        $providerDeclaredSizeBytes = $this->providerDeclaredSizeBytes($fileSize);
+
+        if (is_numeric($fileSize) && (int) $fileSize > $maxBytes) {
+            throw new InvalidArgumentException('Telegram Bot media file is larger than the local download limit.');
+        }
+
+        if (! filled($filePath)) {
+            throw new InvalidArgumentException("Telegram API did not return file path for channel [{$channel->id}].");
+        }
+
+        return [(string) $filePath, $providerDeclaredSizeBytes];
+    }
+
+    private function isLocalApiFileBridgeCacheMiss(RequestException $exception): bool
+    {
+        return $this->localApiFileTransport() === self::LOCAL_API_FILE_TRANSPORT_HTTP_BRIDGE
+            && in_array($exception->response->status(), [404, 410], true);
     }
 
     private function apiMethodUrl(Channel $channel, string $method): string

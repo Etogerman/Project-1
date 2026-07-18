@@ -10,6 +10,9 @@
 /public/css/filament/** -whitespace
 /public/js/filament/** -whitespace
 
+# Unified patches require a single space on otherwise blank context lines.
+/.devcontainer/telegram-bot-api/*.patch -whitespace
+
 /.github export-ignore
 CHANGELOG.md export-ignore
 .styleci.yml export-ignore
