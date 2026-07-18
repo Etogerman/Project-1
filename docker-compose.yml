@@ -109,6 +109,10 @@ services:
     env_file:
       - path: .env.telegram-bot-api
         required: true
+    # Keep the writer UID privileged for upstream compatibility, but assign a
+    # dedicated media GID so the read-only bridge can traverse 0750 directories
+    # and read 0640 media without access to 0600 TDLib state.
+    user: "0:20000"
     command:
       - --local
       - --http-ip-address=0.0.0.0
@@ -129,11 +133,32 @@ services:
       retries: 20
       start_period: 10s
 
+  telegram-bot-api-media-permissions:
+    profiles:
+      - telegram-local-bot-api
+    build:
+      context: .devcontainer/telegram-bot-api-file-bridge
+      args:
+        TELEGRAM_MEDIA_GID: 20000
+    entrypoint:
+      - /usr/local/bin/repair-existing-media-permissions
+    environment:
+      TELEGRAM_LOCAL_BOT_API_FILES_ROOT: /var/lib/telegram-bot-api
+      TELEGRAM_MEDIA_GID: 20000
+    depends_on:
+      telegram-bot-api:
+        condition: service_healthy
+    volumes:
+      - ./storage/app/telegram-bot-api:/var/lib/telegram-bot-api
+    restart: "no"
+
   telegram-bot-api-file-bridge:
     profiles:
       - telegram-local-bot-api
     build:
       context: .devcontainer/telegram-bot-api-file-bridge
+      args:
+        TELEGRAM_MEDIA_GID: 20000
     env_file:
       - path: .env.telegram-bot-api-file-bridge
         required: true
@@ -145,8 +170,8 @@ services:
       - web
     restart: unless-stopped
     depends_on:
-      telegram-bot-api:
-        condition: service_healthy
+      telegram-bot-api-media-permissions:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:8082/healthz"]
       interval: 5s
