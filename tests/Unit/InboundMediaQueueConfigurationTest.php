@@ -44,6 +44,12 @@ class InboundMediaQueueConfigurationTest extends TestCase
                 'bot-media:download-pending-images --dispatch --limit=25',
             ),
         ));
+        $this->assertTrue($commands->contains(
+            fn (string $command): bool => str_contains(
+                $command,
+                'media:prune-temporary-files --limit=100',
+            ),
+        ));
         $this->assertFalse($commands->contains(
             fn (string $command): bool => str_contains(
                 $command,
