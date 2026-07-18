@@ -1,0 +1,56 @@
+name: Telegram File Bridge Contract
+
+on:
+  pull_request:
+    paths:
+      - ".devcontainer/telegram-bot-api-file-bridge/**"
+      - "docker-compose.yml"
+      - "tests/Unit/TelegramBotApiFileBridgeBuildTest.php"
+      - ".github/workflows/telegram-file-bridge-contract.yml"
+  push:
+    branches:
+      - main
+      - staging
+    paths:
+      - ".devcontainer/telegram-bot-api-file-bridge/**"
+      - "docker-compose.yml"
+      - "tests/Unit/TelegramBotApiFileBridgeBuildTest.php"
+      - ".github/workflows/telegram-file-bridge-contract.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  telegram-file-bridge-contract:
+    name: telegram-file-bridge-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Build file bridge image
+        run: >-
+          docker build
+          --tag project1/telegram-bot-api-file-bridge:contract-test
+          .devcontainer/telegram-bot-api-file-bridge
+
+      - name: Prepare Compose contract environment
+        run: |
+          cp .env.telegram-bot-api.example .env.telegram-bot-api
+          cp .env.telegram-bot-api-file-bridge.example .env.telegram-bot-api-file-bridge
+
+      - name: Validate Compose contract
+        run: >-
+          docker compose
+          --profile telegram-local-bot-api
+          config
+          --no-interpolate
+          --quiet
+
+      - name: Verify file access contract
+        run: >-
+          sh .devcontainer/telegram-bot-api-file-bridge/verify-file-access-contract.sh
+          project1/telegram-bot-api-file-bridge:contract-test

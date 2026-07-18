@@ -41,15 +41,40 @@
 2. Заполни `TELEGRAM_API_ID` и `TELEGRAM_API_HASH`, полученные на
    `my.telegram.org`.
 
-3. Подготовь общий каталог файлов:
+3. На Linux/VPS проверь, что выделенный GID `20000` свободен. Команда не должна
+   ничего вывести:
+
+   ```bash
+   getent group 20000
+   ```
+
+   Если команда вывела группу, останови запуск и выбери другой свободный GID
+   одновременно для writer, repair-service и bridge image. Это исключает доступ
+   посторонних host-пользователей к media через совпавший числовой GID.
+
+4. Подготовь общий каталог файлов:
 
    ```bash
    mkdir -p storage/app/telegram-bot-api/tmp
    ```
 
-4. Заполни случайный пароль в `.env.telegram-bot-api-file-bridge`.
+   Compose запускает Telegram Bot API с выделенной media-группой `20000`.
+   Новые каталоги `0750` и media-файлы `0640` остаются закрытыми для остальных
+   пользователей, а file bridge читает их через ту же группу из read-only
+   mount. После готовности нового writer и до открытия bridge одноразовый
+   service `telegram-bot-api-media-permissions` оставляет группе каталогов
+   только traversal (`g=x`), а группе существующих media-файлов — только чтение
+   (`g=r`). В закреплённой версии TDLib аудиофайлы лежат в каталоге `music`, а
+   не `audio`; allowlist синхронизирован с поддерживаемыми приложением типами.
+   Служебные файлы TDLib service не открывает. Nginx дополнительно разрешает
+   только пути из media allowlist; БД, временные файлы, state-файлы, неизвестные
+   каталоги и обход пути возвращают `404`, даже если права ОС допускают чтение.
+   Любая ошибка смены группы, режима или итоговой проверки завершает service
+   ненулевым кодом, и `telegram-bot-api-file-bridge` не запускается.
 
-5. Добавь в основной `.env` для Cloud-подобного HTTP transport:
+5. Заполни случайный пароль в `.env.telegram-bot-api-file-bridge`.
+
+6. Добавь в основной `.env` для Cloud-подобного HTTP transport:
 
    ```dotenv
    TELEGRAM_LOCAL_BOT_API_MEDIA_DOWNLOAD_ENABLED=true
@@ -90,7 +115,7 @@
    для `/api` и `/files`. На внешнем reverse proxy отключи access logs либо
    редактируй пути: Bot API содержит токен бота в URL.
 
-6. Запусти Local Bot API и bridge в том же Docker Compose project, где работает
+7. Запусти Local Bot API и bridge в том же Docker Compose project, где работает
    `dev`:
 
    ```bash
@@ -108,6 +133,11 @@
 docker compose --profile telegram-local-bot-api ps telegram-bot-api
 docker compose --profile telegram-local-bot-api ps telegram-bot-api-file-bridge
 docker compose --profile telegram-local-bot-api logs --tail=100 telegram-bot-api
+docker build \
+  --tag project1/telegram-bot-api-file-bridge:contract-test \
+  .devcontainer/telegram-bot-api-file-bridge
+sh .devcontainer/telegram-bot-api-file-bridge/verify-file-access-contract.sh \
+  project1/telegram-bot-api-file-bridge:contract-test
 docker compose exec -T dev php artisan tinker --execute="dump([
     'enabled' => (bool) config('bots.telegram.local_api_media_download_enabled'),
     'transport' => config('bots.telegram.local_api_file_transport'),
@@ -129,6 +159,11 @@ docker compose exec -T dev php artisan tinker --execute="dump([
   Auth;
 - files root совпадает с каталогом, смонтированным в `dev` и
   `telegram-bot-api`.
+- file bridge contract подтверждает чтение media `0640`, восстановление чтения
+  старого media `0600`, реальный каталог `music`, Nginx allowlist, запрет
+  ложного `audio`, БД, временных и служебных файлов даже при доступных Unix-
+  правах, Basic Auth, Range, обход пути, symlink и остановку repair при
+  фактическом либо скрытом отказе `chgrp`.
 
 Затем отправь локальному боту файл крупнее автоматического лимита. В диалоге
 должно появиться действие `Скачать вручную`; после нажатия файл переходит в
@@ -256,7 +291,11 @@ Bot API все методы бота, не только скачивание. Д
   trusted hosts и Basic Auth. Не расширяй списки внешними host-ами.
 - HTTP `401` от gateway: пароль приложения и companion-контейнера различается;
   проверь обе пары API и file bridge переменных.
-- HTTP `404` от bridge: Local Bot API вернул путь вне общего read-only volume
-  либо bridge смонтировал другой каталог.
+- HTTP `403` для разрешённого media-пути: проверь, что writer запущен с media GID `20000`,
+  каталоги и media принадлежат этой группе, worker Nginx использует группу
+  `telegram-media`, а service `telegram-bot-api-media-permissions` завершился с
+  кодом `0`.
+- HTTP `404` от bridge: Local Bot API вернул путь вне media allowlist или общего
+  read-only volume либо bridge смонтировал другой каталог.
 - После изменения `.env` выполни `docker compose restart dev`, чтобы workers и
   web-процесс получили одинаковую конфигурацию.
