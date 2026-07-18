@@ -4,14 +4,17 @@ namespace Tests\Feature;
 
 use App\Models\Channel;
 use App\Services\Bots\TelegramBotApiService;
+use App\Services\Messages\InboundMediaStorageCapacity;
 use App\Services\Messages\MediaDownloadIntegrityException;
 use App\Services\Messages\StreamHttpResponseToTemporaryFileAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
 use InvalidArgumentException;
 use Mockery;
+use PHPUnit\Framework\Attributes\DataProvider;
 use ReflectionMethod;
 use RuntimeException;
 use Symfony\Component\Process\Process;
@@ -821,6 +824,339 @@ class TelegramBotApiServiceEndpointTest extends TestCase
         Http::assertSentCount(3);
     }
 
+    #[DataProvider('localApiFileBridgeCacheMissStatusProvider')]
+    public function test_file_bridge_rehydrates_once_when_cache_entry_disappears(int $cacheMissStatus): void
+    {
+        $payload = 'rehydrated-video';
+        $getFileCalls = 0;
+        $requestedUrls = [];
+
+        $this->configureFakeTelegramFileBridge();
+
+        Http::fake(function (Request $request) use (
+            &$getFileCalls,
+            &$requestedUrls,
+            $cacheMissStatus,
+            $payload,
+        ) {
+            $url = $request->url();
+            $requestedUrls[] = $url;
+
+            if (str_starts_with($url, 'https://telegram-gateway.example/api/bottelegram-token/getFile?')) {
+                $getFileCalls++;
+
+                return Http::response([
+                    'ok' => true,
+                    'result' => [
+                        'file_path' => $getFileCalls === 1
+                            ? '/var/lib/telegram-bot-api/videos/evicted.mp4'
+                            : '/var/lib/telegram-bot-api/videos/rehydrated.mp4',
+                        'file_size' => strlen($payload),
+                    ],
+                ]);
+            }
+
+            if ($url === 'https://telegram-gateway.example/files/videos/evicted.mp4') {
+                return Http::response('', $cacheMissStatus);
+            }
+
+            if ($url === 'https://telegram-gateway.example/files/videos/rehydrated.mp4') {
+                return Http::response($payload, 200, [
+                    'Content-Type' => 'video/mp4',
+                    'Content-Length' => (string) strlen($payload),
+                ]);
+            }
+
+            return Http::response('', 500);
+        });
+
+        $channel = $this->createTelegramBotChannel();
+        $download = app(TelegramBotApiService::class)->downloadFileToStream(
+            channel: $channel,
+            fileId: 'large-file-id',
+            maxBytes: 1024,
+        );
+
+        try {
+            $this->assertSame($payload, stream_get_contents($download->stream));
+            $this->assertSame('video/mp4', $download->contentType);
+            $this->assertSame(strlen($payload), $download->sizeBytes);
+        } finally {
+            $download->close();
+        }
+
+        $this->assertSame([
+            'https://telegram-gateway.example/api/bottelegram-token/getFile?file_id=large-file-id',
+            'https://telegram-gateway.example/files/videos/evicted.mp4',
+            'https://telegram-gateway.example/api/bottelegram-token/getFile?file_id=large-file-id',
+            'https://telegram-gateway.example/files/videos/rehydrated.mp4',
+        ], $requestedUrls);
+    }
+
+    public function test_file_bridge_stops_after_one_rehydration_when_cache_entry_is_still_missing(): void
+    {
+        $getFileCalls = 0;
+        $requestedUrls = [];
+
+        $this->configureFakeTelegramFileBridge();
+
+        Http::fake(function (Request $request) use (&$getFileCalls, &$requestedUrls) {
+            $url = $request->url();
+            $requestedUrls[] = $url;
+
+            if (str_starts_with($url, 'https://telegram-gateway.example/api/bottelegram-token/getFile?')) {
+                $getFileCalls++;
+
+                return Http::response([
+                    'ok' => true,
+                    'result' => [
+                        'file_path' => $getFileCalls === 1
+                            ? '/var/lib/telegram-bot-api/videos/evicted.mp4'
+                            : '/var/lib/telegram-bot-api/videos/rehydrated.mp4',
+                        'file_size' => 10,
+                    ],
+                ]);
+            }
+
+            return Http::response('', $url === 'https://telegram-gateway.example/files/videos/evicted.mp4'
+                ? 404
+                : 410);
+        });
+
+        try {
+            app(TelegramBotApiService::class)->downloadFileToStream(
+                channel: $this->createTelegramBotChannel(),
+                fileId: 'large-file-id',
+                maxBytes: 1024,
+            );
+            $this->fail('A persistent bridge cache miss must stop after one rehydration.');
+        } catch (RequestException $exception) {
+            $this->assertSame(410, $exception->response->status());
+        }
+
+        $this->assertSame([
+            'https://telegram-gateway.example/api/bottelegram-token/getFile?file_id=large-file-id',
+            'https://telegram-gateway.example/files/videos/evicted.mp4',
+            'https://telegram-gateway.example/api/bottelegram-token/getFile?file_id=large-file-id',
+            'https://telegram-gateway.example/files/videos/rehydrated.mp4',
+        ], $requestedUrls);
+    }
+
+    #[DataProvider('localApiFileBridgeAuthorizationFailureStatusProvider')]
+    public function test_file_bridge_does_not_rehydrate_on_authorization_failure(int $status): void
+    {
+        $requestedUrls = [];
+
+        $this->configureFakeTelegramFileBridge();
+
+        Http::fake(function (Request $request) use (&$requestedUrls, $status) {
+            $url = $request->url();
+            $requestedUrls[] = $url;
+
+            if (str_starts_with($url, 'https://telegram-gateway.example/api/bottelegram-token/getFile?')) {
+                return Http::response([
+                    'ok' => true,
+                    'result' => [
+                        'file_path' => '/var/lib/telegram-bot-api/videos/protected.mp4',
+                        'file_size' => 10,
+                    ],
+                ]);
+            }
+
+            return Http::response('', $status);
+        });
+
+        try {
+            app(TelegramBotApiService::class)->downloadFileToStream(
+                channel: $this->createTelegramBotChannel(),
+                fileId: 'large-file-id',
+                maxBytes: 1024,
+            );
+            $this->fail('Bridge authorization failures must not trigger getFile rehydration.');
+        } catch (RequestException $exception) {
+            $this->assertSame($status, $exception->response->status());
+        }
+
+        $this->assertSame([
+            'https://telegram-gateway.example/api/bottelegram-token/getFile?file_id=large-file-id',
+            'https://telegram-gateway.example/files/videos/protected.mp4',
+        ], $requestedUrls);
+    }
+
+    public function test_file_bridge_revalidates_refreshed_path_before_second_request(): void
+    {
+        $getFileCalls = 0;
+        $requestedUrls = [];
+
+        $this->configureFakeTelegramFileBridge();
+
+        Http::fake(function (Request $request) use (&$getFileCalls, &$requestedUrls) {
+            $url = $request->url();
+            $requestedUrls[] = $url;
+
+            if (str_starts_with($url, 'https://telegram-gateway.example/api/bottelegram-token/getFile?')) {
+                $getFileCalls++;
+
+                return Http::response([
+                    'ok' => true,
+                    'result' => [
+                        'file_path' => $getFileCalls === 1
+                            ? '/var/lib/telegram-bot-api/videos/evicted.mp4'
+                            : '/etc/passwd',
+                        'file_size' => 10,
+                    ],
+                ]);
+            }
+
+            return Http::response('', 404);
+        });
+
+        try {
+            app(TelegramBotApiService::class)->downloadFileToStream(
+                channel: $this->createTelegramBotChannel(),
+                fileId: 'large-file-id',
+                maxBytes: 1024,
+            );
+            $this->fail('A refreshed path outside the configured root must be rejected.');
+        } catch (InvalidArgumentException $exception) {
+            $this->assertSame(
+                'Telegram Local Bot API media path is outside the configured root.',
+                $exception->getMessage(),
+            );
+        }
+
+        $this->assertSame([
+            'https://telegram-gateway.example/api/bottelegram-token/getFile?file_id=large-file-id',
+            'https://telegram-gateway.example/files/videos/evicted.mp4',
+            'https://telegram-gateway.example/api/bottelegram-token/getFile?file_id=large-file-id',
+        ], $requestedUrls);
+    }
+
+    public function test_file_bridge_revalidates_refreshed_size_before_second_request(): void
+    {
+        $getFileCalls = 0;
+        $requestedUrls = [];
+
+        $this->configureFakeTelegramFileBridge();
+
+        Http::fake(function (Request $request) use (&$getFileCalls, &$requestedUrls) {
+            $url = $request->url();
+            $requestedUrls[] = $url;
+
+            if (str_starts_with($url, 'https://telegram-gateway.example/api/bottelegram-token/getFile?')) {
+                $getFileCalls++;
+
+                return Http::response([
+                    'ok' => true,
+                    'result' => [
+                        'file_path' => $getFileCalls === 1
+                            ? '/var/lib/telegram-bot-api/videos/evicted.mp4'
+                            : '/var/lib/telegram-bot-api/videos/oversized.mp4',
+                        'file_size' => $getFileCalls === 1 ? 10 : 2048,
+                    ],
+                ]);
+            }
+
+            return Http::response('', 404);
+        });
+
+        try {
+            app(TelegramBotApiService::class)->downloadFileToStream(
+                channel: $this->createTelegramBotChannel(),
+                fileId: 'large-file-id',
+                maxBytes: 1024,
+            );
+            $this->fail('A refreshed file above the download limit must be rejected.');
+        } catch (InvalidArgumentException $exception) {
+            $this->assertSame(
+                'Telegram Bot media file is larger than the local download limit.',
+                $exception->getMessage(),
+            );
+        }
+
+        $this->assertSame([
+            'https://telegram-gateway.example/api/bottelegram-token/getFile?file_id=large-file-id',
+            'https://telegram-gateway.example/files/videos/evicted.mp4',
+            'https://telegram-gateway.example/api/bottelegram-token/getFile?file_id=large-file-id',
+        ], $requestedUrls);
+    }
+
+    public function test_file_bridge_does_not_retry_integrity_failure_after_rehydration(): void
+    {
+        $payload = 'truncated';
+        $getFileCalls = 0;
+        $requestedUrls = [];
+
+        $this->configureFakeTelegramFileBridge();
+
+        Http::fake(function (Request $request) use (&$getFileCalls, &$requestedUrls, $payload) {
+            $url = $request->url();
+            $requestedUrls[] = $url;
+
+            if (str_starts_with($url, 'https://telegram-gateway.example/api/bottelegram-token/getFile?')) {
+                $getFileCalls++;
+
+                return Http::response([
+                    'ok' => true,
+                    'result' => [
+                        'file_path' => $getFileCalls === 1
+                            ? '/var/lib/telegram-bot-api/videos/evicted.mp4'
+                            : '/var/lib/telegram-bot-api/videos/truncated.mp4',
+                        'file_size' => $getFileCalls === 1
+                            ? strlen($payload)
+                            : strlen($payload) + 1,
+                    ],
+                ]);
+            }
+
+            if ($url === 'https://telegram-gateway.example/files/videos/evicted.mp4') {
+                return Http::response('', 404);
+            }
+
+            return Http::response($payload, 200, [
+                'Content-Type' => 'video/mp4',
+                'Content-Length' => (string) strlen($payload),
+            ]);
+        });
+
+        try {
+            app(TelegramBotApiService::class)->downloadFileToStream(
+                channel: $this->createTelegramBotChannel(),
+                fileId: 'large-file-id',
+                maxBytes: 1024,
+            );
+            $this->fail('Integrity failure after rehydration must be returned without another retry.');
+        } catch (MediaDownloadIntegrityException $exception) {
+            $this->assertSame(
+                'Downloaded media HTTP length does not match the provider-declared length.',
+                $exception->getMessage(),
+            );
+        }
+
+        $this->assertSame([
+            'https://telegram-gateway.example/api/bottelegram-token/getFile?file_id=large-file-id',
+            'https://telegram-gateway.example/files/videos/evicted.mp4',
+            'https://telegram-gateway.example/api/bottelegram-token/getFile?file_id=large-file-id',
+            'https://telegram-gateway.example/files/videos/truncated.mp4',
+        ], $requestedUrls);
+    }
+
+    public static function localApiFileBridgeCacheMissStatusProvider(): array
+    {
+        return [
+            'not found' => [404],
+            'gone' => [410],
+        ];
+    }
+
+    public static function localApiFileBridgeAuthorizationFailureStatusProvider(): array
+    {
+        return [
+            'unauthorized' => [401],
+            'forbidden' => [403],
+        ];
+    }
+
     public function test_file_bridge_rejects_http_length_that_differs_from_telegram_size(): void
     {
         $telegramSize = 51 * 1024 * 1024;
@@ -908,6 +1244,54 @@ class TelegramBotApiServiceEndpointTest extends TestCase
         }
     }
 
+    public function test_real_file_bridge_rehydrates_after_cache_miss_and_closes_first_sink(): void
+    {
+        $temporaryDirectory = storage_path('framework/testing/telegram-real-bridge-'.uniqid('', true));
+        $fixtureStatePath = storage_path('framework/testing/telegram-real-bridge-state-'.uniqid('', true));
+        [$process, $port] = $this->startTelegramFileBridgeFixture($fixtureStatePath);
+        $streamAction = new class(app(InboundMediaStorageCapacity::class)) extends StreamHttpResponseToTemporaryFileAction
+        {
+            /** @var array<int, resource> */
+            public array $openedSinks = [];
+
+            public function openTemporaryDownloadSink(?int $expectedLength = null): array
+            {
+                $sinkData = parent::openTemporaryDownloadSink($expectedLength);
+                $this->openedSinks[] = $sinkData['stream'];
+
+                return $sinkData;
+            }
+        };
+
+        try {
+            $this->configureRealTelegramFileBridge($port, $temporaryDirectory);
+            $channel = $this->createTelegramBotChannel();
+            $download = (new TelegramBotApiService($streamAction))->downloadFileToStream(
+                channel: $channel,
+                fileId: 'rehydrate-file-id',
+                maxBytes: 1024,
+            );
+
+            try {
+                $this->assertCount(2, $streamAction->openedSinks);
+                $this->assertFalse(is_resource($streamAction->openedSinks[0]));
+                $this->assertTrue(is_resource($streamAction->openedSinks[1]));
+                $this->assertSame($download->stream, $streamAction->openedSinks[1]);
+                $this->assertSame('rehydrated-after-real-404', stream_get_contents($download->stream));
+                $this->assertSame('2', trim((string) File::get($fixtureStatePath)));
+                $this->assertSame([], File::files($temporaryDirectory));
+            } finally {
+                $download->close();
+            }
+
+            $this->assertFalse(is_resource($streamAction->openedSinks[1]));
+        } finally {
+            $process->stop(1);
+            File::delete($fixtureStatePath);
+            File::deleteDirectory($temporaryDirectory);
+        }
+    }
+
     public function test_real_file_bridge_streams_51_mib_file_into_temporary_storage(): void
     {
         [$process, $port] = $this->startTelegramFileBridgeFixture();
@@ -982,7 +1366,7 @@ class TelegramBotApiServiceEndpointTest extends TestCase
     /**
      * @return array{0:Process,1:int}
      */
-    private function startTelegramFileBridgeFixture(): array
+    private function startTelegramFileBridgeFixture(?string $statePath = null): array
     {
         $socket = stream_socket_server('tcp://127.0.0.1:0', $errorCode, $errorMessage);
 
@@ -1008,7 +1392,9 @@ class TelegramBotApiServiceEndpointTest extends TestCase
             '-S',
             "127.0.0.1:{$port}",
             base_path('tests/Fixtures/telegram_file_bridge_router.php'),
-        ], base_path());
+        ], base_path(), $statePath === null ? null : [
+            'TELEGRAM_BRIDGE_FIXTURE_STATE_FILE' => $statePath,
+        ]);
         $process->start();
         $deadline = microtime(true) + 5;
 
@@ -1049,6 +1435,32 @@ class TelegramBotApiServiceEndpointTest extends TestCase
             'inbound_media.storage.minimum_free_bytes' => 0,
             'inbound_media.storage.minimum_free_percent' => 0,
             'inbound_media.attempt_deadline_seconds' => 30,
+        ]);
+    }
+
+    private function configureFakeTelegramFileBridge(): void
+    {
+        config([
+            'bots.telegram.local_api_media_download_enabled' => true,
+            'bots.telegram.local_api_base_url' => 'https://telegram-gateway.example/api',
+            'bots.telegram.local_api_username' => 'media-reader',
+            'bots.telegram.local_api_password' => 'gateway-secret',
+            'bots.telegram.local_api_trusted_hosts' => ['telegram-gateway.example'],
+            'bots.telegram.local_api_file_transport' => 'http_bridge',
+            'bots.telegram.local_api_files_root' => '/var/lib/telegram-bot-api',
+            'bots.telegram.local_api_file_bridge_base_url' => 'https://telegram-gateway.example/files',
+            'bots.telegram.local_api_file_bridge_trusted_hosts' => ['telegram-gateway.example'],
+            'bots.telegram.local_api_file_bridge_username' => 'file-reader',
+            'bots.telegram.local_api_file_bridge_password' => 'file-secret',
+        ]);
+    }
+
+    private function createTelegramBotChannel(): Channel
+    {
+        return Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'telegram-token'],
         ]);
     }
 }
