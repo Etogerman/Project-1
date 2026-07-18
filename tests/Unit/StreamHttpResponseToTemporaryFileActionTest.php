@@ -9,6 +9,7 @@ use App\Services\Messages\MediaDownloadIntegrityException;
 use App\Services\Messages\StreamHttpResponseToTemporaryFileAction;
 use GuzzleHttp\Psr7\Response as PsrResponse;
 use Illuminate\Http\Client\Response;
+use Illuminate\Support\Facades\File;
 use InvalidArgumentException;
 use Mockery;
 use Psr\Http\Message\StreamInterface;
@@ -34,9 +35,11 @@ class StreamHttpResponseToTemporaryFileActionTest extends TestCase
 
     public function test_integrity_failure_checkpoints_all_received_bytes(): void
     {
+        $directory = storage_path('framework/testing/inbound-media-'.uniqid('', true));
         $source = fopen('php://temp', 'w+b');
         $checkpoints = [];
 
+        config(['inbound_media.temporary_directory' => $directory]);
         $this->assertIsResource($source);
         fwrite($source, 'truncated');
         rewind($source);
@@ -56,6 +59,12 @@ class StreamHttpResponseToTemporaryFileActionTest extends TestCase
             $this->assertSame([strlen('truncated')], $checkpoints);
         } finally {
             fclose($source);
+
+            try {
+                $this->assertSame([], is_dir($directory) ? File::files($directory) : []);
+            } finally {
+                File::deleteDirectory($directory);
+            }
         }
     }
 
@@ -77,7 +86,7 @@ class StreamHttpResponseToTemporaryFileActionTest extends TestCase
             $this->assertSame(strlen($payload), $download->sizeBytes);
             $this->assertSame(strlen($payload), $download->expectedLengthBytes);
         } finally {
-            fclose($download->stream);
+            $download->close();
         }
     }
 
@@ -97,7 +106,7 @@ class StreamHttpResponseToTemporaryFileActionTest extends TestCase
             $this->assertSame(strlen($payload), $download->sizeBytes);
             $this->assertSame(strlen($payload), $download->expectedLengthBytes);
         } finally {
-            fclose($download->stream);
+            $download->close();
         }
     }
 
@@ -142,7 +151,7 @@ class StreamHttpResponseToTemporaryFileActionTest extends TestCase
             $this->assertSame(strlen($payload), $download->sizeBytes);
             $this->assertSame(strlen($payload), $download->expectedLengthBytes);
         } finally {
-            fclose($download->stream);
+            $download->close();
         }
     }
 
@@ -157,14 +166,14 @@ class StreamHttpResponseToTemporaryFileActionTest extends TestCase
             ],
         ));
         $action = app(StreamHttpResponseToTemporaryFileAction::class);
-        $sinkData = $action->openTemporaryDownloadSink(strlen($payload));
-        $sink = $sinkData['stream'];
+        $temporaryFile = $action->openTemporaryDownloadSink(strlen($payload));
+        $sink = $temporaryFile->stream;
 
         fwrite($sink, $payload);
 
         $download = $action->finalizeTemporaryDownloadSink(
             response: $response,
-            sink: $sink,
+            temporaryFile: $temporaryFile,
             maxBytes: 100,
             expectedLengthFallback: strlen($payload),
             filenameHint: 'video.mp4',
@@ -178,7 +187,7 @@ class StreamHttpResponseToTemporaryFileActionTest extends TestCase
             $this->assertSame('video/mp4', $download->contentType);
             $this->assertSame('video.mp4', $download->filenameHint);
         } finally {
-            fclose($download->stream);
+            $download->close();
         }
     }
 
@@ -186,15 +195,16 @@ class StreamHttpResponseToTemporaryFileActionTest extends TestCase
     {
         $response = new Response(new PsrResponse(200, ['Content-Length' => '10']));
         $action = app(StreamHttpResponseToTemporaryFileAction::class);
-        $sinkData = $action->openTemporaryDownloadSink(10);
-        $sink = $sinkData['stream'];
+        $temporaryFile = $action->openTemporaryDownloadSink(10);
+        $sink = $temporaryFile->stream;
+        $temporaryPath = stream_get_meta_data($sink)['uri'];
 
         fwrite($sink, 'short');
 
         try {
             $action->finalizeTemporaryDownloadSink(
                 response: $response,
-                sink: $sink,
+                temporaryFile: $temporaryFile,
                 maxBytes: 100,
                 expectedLengthFallback: 10,
             );
@@ -202,6 +212,7 @@ class StreamHttpResponseToTemporaryFileActionTest extends TestCase
             $this->fail('Expected prepared sink integrity validation to fail.');
         } catch (MediaDownloadIntegrityException) {
             $this->assertFalse(is_resource($sink));
+            $this->assertFileDoesNotExist($temporaryPath);
         }
     }
 
@@ -227,10 +238,30 @@ class StreamHttpResponseToTemporaryFileActionTest extends TestCase
                 $exception->reason,
             );
             $this->assertSame(0, $exception->transferredBytes);
+            $this->assertSame([], is_dir($directory) ? File::files($directory) : []);
         } finally {
-            if (is_dir($directory)) {
-                rmdir($directory);
-            }
+            File::deleteDirectory($directory);
+        }
+    }
+
+    public function test_discard_only_deletes_its_owned_temporary_file(): void
+    {
+        $directory = storage_path('framework/testing/inbound-media-'.uniqid('', true));
+        config(['inbound_media.temporary_directory' => $directory]);
+        $action = app(StreamHttpResponseToTemporaryFileAction::class);
+        $first = $action->openTemporaryDownloadSink();
+        $second = $action->openTemporaryDownloadSink();
+        $firstPath = stream_get_meta_data($first->stream)['uri'];
+        $secondPath = stream_get_meta_data($second->stream)['uri'];
+
+        try {
+            $action->discardTemporaryDownloadSink($first);
+
+            $this->assertFileDoesNotExist($firstPath);
+            $this->assertFileExists($secondPath);
+        } finally {
+            $action->discardTemporaryDownloadSink($second);
+            File::deleteDirectory($directory);
         }
     }
 
@@ -331,9 +362,19 @@ class StreamHttpResponseToTemporaryFileActionTest extends TestCase
                 $resolvedDirectory.DIRECTORY_SEPARATOR,
                 $metadata['uri'],
             );
-            $this->assertFileDoesNotExist($metadata['uri']);
+            $this->assertFileExists($metadata['uri']);
+            $this->assertSame(
+                'controlled temporary storage',
+                file_get_contents($metadata['uri']),
+            );
 
-            fclose($download->stream);
+            $download = $download->withMetadata(['transport' => 'multipart-reopen']);
+            $temporaryPath = $metadata['uri'];
+
+            $download->close();
+            $download->close();
+
+            $this->assertFileDoesNotExist($temporaryPath);
         } finally {
             fclose($source);
 

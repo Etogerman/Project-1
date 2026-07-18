@@ -139,6 +139,10 @@ Schedule::command('media:reap-expired-reservations --limit=100')
     ->everyFiveMinutes()
     ->withoutOverlapping();
 
+Schedule::command('media:prune-temporary-files --limit=100')
+    ->everyFiveMinutes()
+    ->withoutOverlapping();
+
 Schedule::command('media:prune-storage --limit=100')
     ->daily()
     ->withoutOverlapping();

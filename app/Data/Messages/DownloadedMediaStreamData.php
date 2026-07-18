@@ -17,9 +17,14 @@ final readonly class DownloadedMediaStreamData
         public ?string $filenameHint = null,
         public array $metadata = [],
         public ?int $expectedLengthBytes = null,
+        private ?InboundMediaTemporaryFile $temporaryFile = null,
     ) {
         if (! is_resource($stream)) {
             throw new LogicException('Downloaded media stream must be a resource.');
+        }
+
+        if ($temporaryFile !== null && $temporaryFile->stream !== $stream) {
+            throw new LogicException('Downloaded media stream must match its temporary file owner.');
         }
 
         if ($sizeBytes < 0) {
@@ -39,11 +44,18 @@ final readonly class DownloadedMediaStreamData
             filenameHint: $this->filenameHint,
             metadata: $metadata,
             expectedLengthBytes: $this->expectedLengthBytes,
+            temporaryFile: $this->temporaryFile,
         );
     }
 
     public function close(): void
     {
+        if ($this->temporaryFile !== null) {
+            $this->temporaryFile->closeAndDelete();
+
+            return;
+        }
+
         if (is_resource($this->stream)) {
             fclose($this->stream);
         }
