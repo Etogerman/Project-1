@@ -273,8 +273,12 @@ class TelegramBotApiService
                 $providerDeclaredSizeBytes,
                 self::AVATAR_FILE_DOWNLOAD_TIMEOUT_SECONDS,
             );
-            $contents = stream_get_contents($downloaded->stream);
-            fclose($downloaded->stream);
+
+            try {
+                $contents = stream_get_contents($downloaded->stream);
+            } finally {
+                $downloaded->close();
+            }
 
             if (! is_string($contents) || $contents === '') {
                 throw new InvalidArgumentException("Telegram API returned an empty avatar file for channel [{$channel->id}] and chat [{$chatId}].");
@@ -698,16 +702,16 @@ class TelegramBotApiService
             };
         }
 
-        $sinkData = $this->streamHttpResponseToTemporaryFileAction
+        $temporaryFile = $this->streamHttpResponseToTemporaryFileAction
             ->openTemporaryDownloadSink($providerDeclaredSizeBytes);
-        $sink = $sinkData['stream'];
+        $sink = $temporaryFile->stream;
 
         try {
             $progress = $this->localApiFileBridgeProgress(
                 onProgress: $heartbeat,
                 maxBytes: $maxBytes,
                 timeoutSeconds: $requestTimeoutSeconds,
-                temporaryDirectory: $sinkData['directory'],
+                temporaryDirectory: $temporaryFile->directory,
             );
             $trackedProgress = static function (
                 int $downloadTotal,
@@ -733,9 +737,13 @@ class TelegramBotApiService
 
             $sink = $this->detachLocalApiFileBridgeSink($response, $sink);
 
+            if ($sink !== $temporaryFile->stream) {
+                throw new RuntimeException('Telegram Local Bot API file bridge returned an unexpected sink.');
+            }
+
             return $this->streamHttpResponseToTemporaryFileAction->finalizeTemporaryDownloadSink(
                 response: $response,
-                sink: $sink,
+                temporaryFile: $temporaryFile,
                 maxBytes: $maxBytes,
                 expectedLengthFallback: $providerDeclaredSizeBytes,
                 filenameHint: basename(str_replace('\\', '/', $filePath)),
@@ -744,9 +752,9 @@ class TelegramBotApiService
                 emptyMessage: 'Telegram Local Bot API file bridge returned an empty file.',
             );
         } catch (Throwable $throwable) {
-            if (is_resource($sink)) {
-                fclose($sink);
-            }
+            $this->streamHttpResponseToTemporaryFileAction->discardTemporaryDownloadSink(
+                $temporaryFile,
+            );
 
             throw $progressFailure instanceof Throwable
                 ? $progressFailure

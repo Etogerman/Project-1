@@ -3,6 +3,7 @@
 namespace App\Services\Messages;
 
 use App\Data\Messages\DownloadedMediaStreamData;
+use App\Data\Messages\InboundMediaTemporaryFile;
 use Closure;
 use Illuminate\Http\Client\Response as HttpResponse;
 use InvalidArgumentException;
@@ -22,32 +23,26 @@ class StreamHttpResponseToTemporaryFileAction
         private readonly InboundMediaStorageCapacity $storageCapacity,
     ) {}
 
-    /**
-     * @return array{stream:resource,directory:string}
-     */
-    public function openTemporaryDownloadSink(?int $expectedLength = null): array
+    public function openTemporaryDownloadSink(?int $expectedLength = null): InboundMediaTemporaryFile
     {
         if ($expectedLength !== null && $expectedLength < 0) {
             throw new InvalidArgumentException('Downloaded media expected length must not be negative.');
         }
 
-        [$stream, $directory] = $this->openTemporaryStream();
+        $temporaryFile = $this->openTemporaryFile();
 
         try {
             if ($expectedLength !== null && $expectedLength > 0) {
                 $this->assertTemporaryStorageCapacity(
-                    $directory,
+                    $temporaryFile->directory,
                     $expectedLength,
                     0,
                 );
             }
 
-            return [
-                'stream' => $stream,
-                'directory' => $directory,
-            ];
+            return $temporaryFile;
         } catch (Throwable $throwable) {
-            fclose($stream);
+            $temporaryFile->closeAndDelete();
 
             throw $throwable;
         }
@@ -69,13 +64,12 @@ class StreamHttpResponseToTemporaryFileAction
     }
 
     /**
-     * @param  resource  $sink
      * @param  array<string, mixed>  $metadata
      * @param  Closure(int): void|null  $onProgress
      */
     public function finalizeTemporaryDownloadSink(
         HttpResponse $response,
-        mixed $sink,
+        InboundMediaTemporaryFile $temporaryFile,
         int $maxBytes,
         ?int $expectedLengthFallback = null,
         ?string $filenameHint = null,
@@ -84,6 +78,8 @@ class StreamHttpResponseToTemporaryFileAction
         string $tooLargeMessage = 'Downloaded media is larger than the configured limit.',
         string $emptyMessage = 'Downloaded media response is empty.',
     ): DownloadedMediaStreamData {
+        $sink = $temporaryFile->stream;
+
         if (! is_resource($sink)) {
             throw new InvalidArgumentException('Downloaded media sink must be a writable stream.');
         }
@@ -160,12 +156,18 @@ class StreamHttpResponseToTemporaryFileAction
                 filenameHint: $filenameHint,
                 metadata: $metadata,
                 expectedLengthBytes: $expectedLength,
+                temporaryFile: $temporaryFile,
             );
         } catch (Throwable $throwable) {
-            fclose($sink);
+            $temporaryFile->closeAndDelete();
 
             throw $throwable;
         }
+    }
+
+    public function discardTemporaryDownloadSink(InboundMediaTemporaryFile $temporaryFile): void
+    {
+        $temporaryFile->closeAndDelete();
     }
 
     /**
@@ -237,7 +239,9 @@ class StreamHttpResponseToTemporaryFileAction
             throw new InvalidArgumentException('Downloaded media source must be a readable stream.');
         }
 
-        [$temporary, $temporaryDirectory] = $this->openTemporaryStream();
+        $temporaryFile = $this->openTemporaryFile();
+        $temporary = $temporaryFile->stream;
+        $temporaryDirectory = $temporaryFile->directory;
 
         $receivedBytes = 0;
         $checkpointBytes = 0;
@@ -324,6 +328,7 @@ class StreamHttpResponseToTemporaryFileAction
                 filenameHint: $filenameHint,
                 metadata: $metadata,
                 expectedLengthBytes: $expectedLength,
+                temporaryFile: $temporaryFile,
             );
         } catch (Throwable $throwable) {
             if ($onProgress instanceof Closure && $checkpointBytes !== $receivedBytes) {
@@ -332,13 +337,13 @@ class StreamHttpResponseToTemporaryFileAction
                 try {
                     $onProgress($receivedBytes);
                 } catch (Throwable $progressFailure) {
-                    fclose($temporary);
+                    $temporaryFile->closeAndDelete();
 
                     throw $progressFailure;
                 }
             }
 
-            fclose($temporary);
+            $temporaryFile->closeAndDelete();
 
             throw $throwable;
         }
@@ -389,10 +394,7 @@ class StreamHttpResponseToTemporaryFileAction
         }
     }
 
-    /**
-     * @return array{0:resource,1:string}
-     */
-    private function openTemporaryStream(): array
+    private function openTemporaryFile(): InboundMediaTemporaryFile
     {
         $configuredDirectory = config(
             'inbound_media.temporary_directory',
@@ -428,14 +430,18 @@ class StreamHttpResponseToTemporaryFileAction
             throw new RuntimeException('Failed to open a temporary media stream.');
         }
 
-        if (! @unlink($temporaryPath)) {
+        if (! flock($temporary, LOCK_EX | LOCK_NB)) {
             fclose($temporary);
             @unlink($temporaryPath);
 
-            throw new RuntimeException('Failed to unlink the temporary media file.');
+            throw new RuntimeException('Failed to lock the temporary media stream.');
         }
 
-        return [$temporary, $resolvedDirectory];
+        return new InboundMediaTemporaryFile(
+            stream: $temporary,
+            directory: $resolvedDirectory,
+            path: $temporaryPath,
+        );
     }
 
     private function assertTemporaryStorageCapacity(

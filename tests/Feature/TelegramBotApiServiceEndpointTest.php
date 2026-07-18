@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Data\Messages\InboundMediaTemporaryFile;
 use App\Models\Channel;
 use App\Services\Bots\TelegramBotApiService;
 use App\Services\Messages\InboundMediaStorageCapacity;
@@ -313,17 +314,24 @@ class TelegramBotApiServiceEndpointTest extends TestCase
 
     public function test_file_bridge_closes_sink_when_initial_heartbeat_loses_lease(): void
     {
-        $sink = tmpfile();
+        $temporaryDirectory = storage_path('framework/testing/telegram-bridge-owner-'.uniqid('', true));
+        config(['inbound_media.temporary_directory' => $temporaryDirectory]);
+        $temporaryFile = app(StreamHttpResponseToTemporaryFileAction::class)
+            ->openTemporaryDownloadSink();
+        $sink = $temporaryFile->stream;
         $action = Mockery::mock(StreamHttpResponseToTemporaryFileAction::class);
 
         $this->assertIsResource($sink);
         $action->shouldReceive('openTemporaryDownloadSink')
             ->once()
             ->with(100)
-            ->andReturn([
-                'stream' => $sink,
-                'directory' => storage_path('framework/testing'),
-            ]);
+            ->andReturn($temporaryFile);
+        $action->shouldReceive('discardTemporaryDownloadSink')
+            ->once()
+            ->with($temporaryFile)
+            ->andReturnUsing(static function (InboundMediaTemporaryFile $discardedFile): void {
+                $discardedFile->closeAndDelete();
+            });
         $method = new ReflectionMethod(TelegramBotApiService::class, 'streamLocalApiFileFromBridge');
 
         try {
@@ -341,6 +349,8 @@ class TelegramBotApiServiceEndpointTest extends TestCase
         } catch (RuntimeException $exception) {
             $this->assertSame('lease lost before bridge request', $exception->getMessage());
             $this->assertFalse(is_resource($sink));
+        } finally {
+            File::deleteDirectory($temporaryDirectory);
         }
     }
 
@@ -1234,9 +1244,7 @@ class TelegramBotApiServiceEndpointTest extends TestCase
                 $this->assertIsResource($download->stream);
                 $this->assertSame('ownership-stays-open', stream_get_contents($download->stream));
             } finally {
-                if (is_resource($download->stream)) {
-                    fclose($download->stream);
-                }
+                $download->close();
             }
         } finally {
             $process->stop(1);
@@ -1254,12 +1262,12 @@ class TelegramBotApiServiceEndpointTest extends TestCase
             /** @var array<int, resource> */
             public array $openedSinks = [];
 
-            public function openTemporaryDownloadSink(?int $expectedLength = null): array
+            public function openTemporaryDownloadSink(?int $expectedLength = null): InboundMediaTemporaryFile
             {
-                $sinkData = parent::openTemporaryDownloadSink($expectedLength);
-                $this->openedSinks[] = $sinkData['stream'];
+                $temporaryFile = parent::openTemporaryDownloadSink($expectedLength);
+                $this->openedSinks[] = $temporaryFile->stream;
 
-                return $sinkData;
+                return $temporaryFile;
             }
         };
 
@@ -1279,12 +1287,13 @@ class TelegramBotApiServiceEndpointTest extends TestCase
                 $this->assertSame($download->stream, $streamAction->openedSinks[1]);
                 $this->assertSame('rehydrated-after-real-404', stream_get_contents($download->stream));
                 $this->assertSame('2', trim((string) File::get($fixtureStatePath)));
-                $this->assertSame([], File::files($temporaryDirectory));
+                $this->assertCount(1, File::files($temporaryDirectory));
             } finally {
                 $download->close();
             }
 
             $this->assertFalse(is_resource($streamAction->openedSinks[1]));
+            $this->assertSame([], File::files($temporaryDirectory));
         } finally {
             $process->stop(1);
             File::delete($fixtureStatePath);
@@ -1320,9 +1329,7 @@ class TelegramBotApiServiceEndpointTest extends TestCase
                 fseek($download->stream, -1, SEEK_END);
                 $this->assertSame('z', fread($download->stream, 1));
             } finally {
-                if (is_resource($download->stream)) {
-                    fclose($download->stream);
-                }
+                $download->close();
             }
         } finally {
             $process->stop(1);
@@ -1344,19 +1351,26 @@ class TelegramBotApiServiceEndpointTest extends TestCase
                 'credentials' => ['token' => 'telegram-token'],
             ]);
 
-            $this->expectException(RuntimeException::class);
-            $this->expectExceptionMessage('lease lost during real bridge transfer');
+            try {
+                app(TelegramBotApiService::class)->downloadFileToStream(
+                    channel: $channel,
+                    fileId: 'slow-file-id',
+                    maxBytes: 1024 * 1024,
+                    onProgress: static function (int $receivedBytes): void {
+                        if ($receivedBytes > 0) {
+                            throw new RuntimeException('lease lost during real bridge transfer');
+                        }
+                    },
+                );
 
-            app(TelegramBotApiService::class)->downloadFileToStream(
-                channel: $channel,
-                fileId: 'slow-file-id',
-                maxBytes: 1024 * 1024,
-                onProgress: static function (int $receivedBytes): void {
-                    if ($receivedBytes > 0) {
-                        throw new RuntimeException('lease lost during real bridge transfer');
-                    }
-                },
-            );
+                $this->fail('Expected the real bridge transfer to lose its lease.');
+            } catch (RuntimeException $exception) {
+                $this->assertSame('lease lost during real bridge transfer', $exception->getMessage());
+                $this->assertSame(
+                    [],
+                    is_dir($temporaryDirectory) ? File::files($temporaryDirectory) : [],
+                );
+            }
         } finally {
             $process->stop(1);
             File::deleteDirectory($temporaryDirectory);
