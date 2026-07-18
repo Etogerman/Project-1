@@ -3,7 +3,10 @@ name: Telegram File Bridge Contract
 on:
   pull_request:
     paths:
+      - ".devcontainer/telegram-bot-api/**"
       - ".devcontainer/telegram-bot-api-file-bridge/**"
+      - ".env.telegram-bot-api.example"
+      - ".env.telegram-bot-api-file-bridge.example"
       - "docker-compose.yml"
       - "tests/Unit/TelegramBotApiFileBridgeBuildTest.php"
       - ".github/workflows/telegram-file-bridge-contract.yml"
@@ -12,7 +15,10 @@ on:
       - main
       - staging
     paths:
+      - ".devcontainer/telegram-bot-api/**"
       - ".devcontainer/telegram-bot-api-file-bridge/**"
+      - ".env.telegram-bot-api.example"
+      - ".env.telegram-bot-api-file-bridge.example"
       - "docker-compose.yml"
       - "tests/Unit/TelegramBotApiFileBridgeBuildTest.php"
       - ".github/workflows/telegram-file-bridge-contract.yml"
