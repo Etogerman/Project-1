@@ -99,6 +99,47 @@ class InboundMediaPartialCleanupJobTest extends TestCase
         Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists($currentPath);
     }
 
+    public function test_job_deletes_scoped_commit_candidate_but_preserves_adopted_path(): void
+    {
+        $attachment = $this->createAttachment();
+        $directory = MessageAttachment::LOCAL_PATH_PREFIX.'/'.$attachment->message_id.'/';
+        $orphanPath = $directory.$attachment->id.'.g1.cleanup-job-token.commit.orphan.mp4';
+        $adoptedPath = $directory.$attachment->id.'.g1.cleanup-job-token.commit.adopted.mp4';
+        $attachment->forceFill([
+            'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+            'local_path' => $adoptedPath,
+        ])->save();
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->put($orphanPath, 'orphan');
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->put($adoptedPath, 'adopted');
+
+        (new CleanupInboundMediaPartialFilesJob($attachment->id, 1, 'cleanup-job-token'))
+            ->handle(
+                app(DeleteInboundMediaPartialFilesAction::class),
+                app(InboundMediaQuotaLedger::class),
+            );
+
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertMissing($orphanPath);
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists($adoptedPath);
+    }
+
+    public function test_legacy_job_deletes_unadopted_commit_candidate(): void
+    {
+        $attachment = $this->createAttachment();
+        $commitPath = MessageAttachment::LOCAL_PATH_PREFIX
+            .'/'.$attachment->message_id
+            .'/'.$attachment->id
+            .'.g1.legacy-token.commit.orphan.mp4';
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->put($commitPath, 'orphan');
+
+        (new CleanupInboundMediaPartialFilesJob($attachment->id))
+            ->handle(
+                app(DeleteInboundMediaPartialFilesAction::class),
+                app(InboundMediaQuotaLedger::class),
+            );
+
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertMissing($commitPath);
+    }
+
     public function test_final_failure_logs_only_safe_dead_letter_metadata(): void
     {
         Log::spy();

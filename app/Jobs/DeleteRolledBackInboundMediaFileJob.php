@@ -24,6 +24,7 @@ class DeleteRolledBackInboundMediaFileJob implements ShouldBeUnique, ShouldQueue
         public readonly string $disk,
         public readonly string $path,
         public readonly bool $prepared = false,
+        public readonly bool $waitForLateArrival = false,
     ) {
         $this->uniqueFor = max(
             60,
@@ -51,6 +52,16 @@ class DeleteRolledBackInboundMediaFileJob implements ShouldBeUnique, ShouldQueue
 
     public function handle(DeleteRolledBackInboundMediaFileAction $deleteFile): void
     {
+        if ($this->prepared && $this->waitForLateArrival) {
+            $deleted = $deleteFile->deletePreparedIfPresentOrFail($this->disk, $this->path);
+
+            if (! $deleted && $this->attempts() < $this->tries) {
+                $this->release($this->lateArrivalRetryDelay());
+            }
+
+            return;
+        }
+
         if ($this->prepared) {
             $deleteFile->deletePreparedOrFail($this->disk, $this->path);
 
@@ -58,6 +69,17 @@ class DeleteRolledBackInboundMediaFileJob implements ShouldBeUnique, ShouldQueue
         }
 
         $deleteFile->deleteOrFail($this->attachmentId, $this->disk, $this->path);
+    }
+
+    private function lateArrivalRetryDelay(): int
+    {
+        $delays = $this->backoff();
+
+        if ($delays === []) {
+            return 60;
+        }
+
+        return $delays[min(max(0, $this->attempts() - 1), count($delays) - 1)];
     }
 
     public function failed(?Throwable $exception): void

@@ -753,12 +753,17 @@ class TelegramAccountMediaOnDemandTest extends TestCase
             ): bool {
                 $candidatePath = $path;
                 $progress = data_get($options, 'params.@http.progress');
+                $onStats = data_get($options, 'params.@http.on_stats');
+                $requestTimeout = data_get($options, 'params.@http.timeout');
 
                 $this->assertSame($temporaryPath, $sourcePath);
                 $this->assertIsCallable($progress);
+                $this->assertIsCallable($onStats);
+                $this->assertIsNumeric($requestTimeout);
+                $this->assertLessThan(120, (float) $requestTimeout);
 
-                $this->travel(121)->seconds();
-                $progress(1, 1, 1, 1);
+                $this->travel(80)->seconds();
+                $onStats();
 
                 $duringCopy = $attachment->fresh();
                 $heartbeatAt = $duringCopy->media_download_heartbeat_at;
@@ -766,11 +771,14 @@ class TelegramAccountMediaOnDemandTest extends TestCase
                 $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING, $duringCopy->download_status);
                 $this->assertSame($claimToken, $duringCopy->media_download_claim_token);
 
+                $this->travel(80)->seconds();
                 $reaperStats = app(ReapStaleInboundMediaDownloadsAction::class)->handle();
 
                 $afterReaper = $attachment->fresh();
                 $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING, $afterReaper->download_status);
                 $this->assertSame($claimToken, $afterReaper->media_download_claim_token);
+
+                $onStats();
 
                 return true;
             });
@@ -1278,7 +1286,8 @@ class TelegramAccountMediaOnDemandTest extends TestCase
             static fn (DeleteRolledBackInboundMediaFileJob $job): bool => $job->attachmentId === $attachment->id
                 && $job->disk === MessageAttachment::LOCAL_DISK_PRIVATE
                 && $job->path === $candidatePath
-                && $job->prepared,
+                && $job->prepared
+                && $job->waitForLateArrival,
         );
     }
 

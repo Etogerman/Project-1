@@ -223,7 +223,7 @@ class StoreMessageAttachmentLocalFileAction
                     $storage->getDriver()->copy(
                         $sourcePath,
                         $path,
-                        $this->storageProgressOptions($onStorageProgress),
+                        $this->storageCopyProgressOptions($onStorageProgress),
                     );
                 } catch (\Throwable $throwable) {
                     throw new RuntimeException(
@@ -257,7 +257,7 @@ class StoreMessageAttachmentLocalFileAction
                 sizeBytes: $storedFileSizeBytes,
             );
         } catch (\Throwable $throwable) {
-            $this->deleteRolledBackInboundMediaFileAction->handlePrepared(
+            $this->deleteRolledBackInboundMediaFileAction->handlePossiblyLatePrepared(
                 (int) $attachment->getKey(),
                 $disk,
                 $path,
@@ -448,6 +448,34 @@ class StoreMessageAttachmentLocalFileAction
                 ],
             ],
         ];
+    }
+
+    /**
+     * Keep a server-side S3 copy inside the lease window even when CopyObject
+     * does not emit upload progress callbacks. The per-request timeout ensures
+     * that on_stats runs before the lease can become stale.
+     *
+     * @return array<string, mixed>
+     */
+    private function storageCopyProgressOptions(callable $onStorageProgress): array
+    {
+        $options = $this->storageProgressOptions($onStorageProgress);
+        $leaseStaleSeconds = max(
+            1,
+            (int) config('inbound_media.lease_stale_seconds', 120),
+        );
+
+        $options['params']['@http']['on_stats'] = static function (mixed ...$unused) use (
+            $onStorageProgress,
+        ): void {
+            $onStorageProgress();
+        };
+        $options['params']['@http']['timeout'] = max(
+            0.5,
+            min(90.0, $leaseStaleSeconds * 0.75),
+        );
+
+        return $options;
     }
 
     private function safeClaimToken(string $claimToken): string
