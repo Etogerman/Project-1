@@ -23,8 +23,11 @@ use App\Services\TelegramAccount\StoreTelegramAccountMediaDirectUploadAction;
 use App\Services\TelegramAccount\StoreTelegramAccountMediaDownloadResultAction;
 use App\Services\TelegramAccount\SyncTelegramAccountInboundMessageAttachmentsAction;
 use App\Services\TelegramAccount\TelegramAccountMediaDownloadPolicy;
+use Illuminate\Contracts\Bus\Dispatcher;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Mockery;
@@ -1063,6 +1066,120 @@ class TelegramAccountMediaOnDemandTest extends TestCase
                 && $job->path === $temporaryPath
                 && $job->prepared,
         );
+    }
+
+    public function test_direct_upload_cleanup_enqueue_failure_does_not_fail_committed_result(): void
+    {
+        Log::spy();
+
+        $dispatcher = Mockery::mock(Dispatcher::class);
+        $dispatcher->shouldReceive('dispatch')
+            ->once()
+            ->with(Mockery::on(
+                static fn (mixed $job): bool => $job instanceof DeleteRolledBackInboundMediaFileJob
+                    && $job->prepared,
+            ))
+            ->andThrow(new \RuntimeException('queue unavailable'));
+        $this->app->instance(Dispatcher::class, $dispatcher);
+
+        $channel = Channel::factory()->account()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $message = Message::factory()->create([
+            'channel_id' => $channel->id,
+        ]);
+        $attachment = MessageAttachment::factory()->create([
+            'message_id' => $message->id,
+            'channel_id' => $channel->id,
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT,
+            'provider_file_id' => 'cleanup-enqueue-failure-file',
+            'original_filename' => 'cleanup-enqueue-failure.pdf',
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
+            'media_download_claim_token' => 'cleanup-enqueue-failure-token',
+            'media_download_claimed_at' => now(),
+            'media_download_heartbeat_at' => now(),
+            'media_download_attempt_deadline_at' => now()->addHour(),
+            'media_download_attempts' => 1,
+            'file_size_bytes' => 7,
+        ]);
+        $this->reserveQuotaForAttempt($attachment);
+        $temporaryPath = "message-attachments/{$message->id}/{$attachment->id}.g1.cleanup-enqueue-failure-token.upload";
+        $stream = fopen('php://temp', 'w+b');
+        fwrite($stream, 'PDFDATA');
+        rewind($stream);
+        $candidatePath = null;
+
+        $driver = Mockery::mock();
+        $disk = Mockery::mock();
+        Storage::shouldReceive('disk')
+            ->with(MessageAttachment::LOCAL_DISK_PRIVATE)
+            ->andReturn($disk);
+        $disk->shouldReceive('exists')->times(3)->with($temporaryPath)->andReturn(true);
+        $disk->shouldReceive('readStream')->once()->with($temporaryPath)->andReturn($stream);
+        $disk->shouldReceive('size')->once()->with($temporaryPath)->andReturn(7);
+        $driver->shouldReceive('copy')
+            ->once()
+            ->withArgs(function (string $sourcePath, string $path, array $options) use (
+                $temporaryPath,
+                &$candidatePath,
+            ): bool {
+                $candidatePath = $path;
+
+                return $sourcePath === $temporaryPath
+                    && str_contains($path, '.g1.cleanup-enqueue-failure-token.commit.')
+                    && str_ends_with($path, '.pdf')
+                    && is_callable(data_get($options, 'params.@http.progress'));
+            });
+        $disk->shouldReceive('getDriver')->once()->andReturn($driver);
+        $disk->shouldReceive('size')
+            ->once()
+            ->with(Mockery::on(function (string $path) use (&$candidatePath): bool {
+                return $path === $candidatePath;
+            }))
+            ->andReturn(7);
+        $disk->shouldReceive('delete')->once()->with($temporaryPath)->andReturn(false);
+
+        $stored = app(StoreTelegramAccountMediaDownloadResultAction::class)
+            ->markDownloadedFromDirectUpload(
+                $channel,
+                $attachment,
+                'cleanup-enqueue-failure-token',
+                [
+                    'original_filename' => 'cleanup-enqueue-failure.pdf',
+                    'mime_type' => 'application/pdf',
+                    'file_size_bytes' => 7,
+                ],
+            );
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $stored->download_status);
+        $this->assertSame($candidatePath, $stored->local_path);
+        $this->assertSame($candidatePath, $attachment->fresh()->local_path);
+        $this->assertDatabaseHas('media_download_storage_ledgers', [
+            'message_attachment_id' => $attachment->id,
+            'generation' => 1,
+            'status' => MediaDownloadStorageLedger::STATUS_USED,
+            'used_bytes' => 7,
+        ]);
+        $this->assertDatabaseHas('media_download_traffic_ledgers', [
+            'message_attachment_id' => $attachment->id,
+            'generation' => 1,
+            'attempt_number' => 1,
+            'status' => MediaDownloadTrafficLedger::STATUS_CONSUMED,
+            'consumed_bytes' => 7,
+        ]);
+        $this->assertTrue(Context::missingHidden('laravel_unique_job_cache_store'));
+        $this->assertTrue(Context::missingHidden('laravel_unique_job_key'));
+
+        Log::shouldHaveReceived('error')
+            ->once()
+            ->with(
+                'inbound_media.rolled_back_file_cleanup_enqueue_failed',
+                [
+                    'attachment_id' => $attachment->id,
+                    'prepared' => true,
+                    'error_type' => \RuntimeException::class,
+                ],
+            );
     }
 
     public function test_failed_direct_upload_copy_queues_durable_candidate_cleanup(): void
