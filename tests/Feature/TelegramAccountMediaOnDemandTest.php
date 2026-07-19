@@ -14,6 +14,7 @@ use App\Models\User;
 use App\Services\Messages\InboundMediaDownloadPolicy;
 use App\Services\Messages\InboundMediaQuotaExceededException;
 use App\Services\Messages\InboundMediaQuotaLedger;
+use App\Services\Messages\ReapStaleInboundMediaDownloadsAction;
 use App\Services\Messages\StoreMessageAttachmentLocalFileAction;
 use App\Services\TelegramAccount\ClaimTelegramAccountMediaDownloadAction;
 use App\Services\TelegramAccount\CreateTelegramAccountMediaUploadTargetAction;
@@ -505,8 +506,10 @@ class TelegramAccountMediaOnDemandTest extends TestCase
 
     public function test_s3_upload_target_is_private_temporary_put_without_exposing_host_header(): void
     {
+        $this->travelTo('2026-07-19 10:00:00');
         config()->set('filesystems.message_attachments_disk', 'message_attachments');
         config()->set('filesystems.disks.message_attachments.driver', 's3');
+        $attemptDeadline = now()->addMinutes(37);
 
         $channel = new Channel(['platform' => Channel::PLATFORM_TELEGRAM]);
         $channel->id = 77;
@@ -516,6 +519,7 @@ class TelegramAccountMediaOnDemandTest extends TestCase
             'provider' => MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT,
             'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
             'media_download_claim_token' => 'claim-88',
+            'media_download_attempt_deadline_at' => $attemptDeadline,
         ]);
         $attachment->id = 88;
         $attachment->message_id = 99;
@@ -523,7 +527,11 @@ class TelegramAccountMediaOnDemandTest extends TestCase
         $disk = Mockery::mock();
         $disk->shouldReceive('temporaryUploadUrl')
             ->once()
-            ->with('message-attachments/99/88.g1.claim-88.upload', Mockery::type(\DateTimeInterface::class))
+            ->with(
+                'message-attachments/99/88.g1.claim-88.upload',
+                Mockery::on(static fn (mixed $expiresAt): bool => $expiresAt instanceof \DateTimeInterface
+                    && $expiresAt->getTimestamp() === $attemptDeadline->getTimestamp()),
+            )
             ->andReturn([
                 'url' => 'https://private-storage.example.test/signed-object',
                 'headers' => [
@@ -542,7 +550,60 @@ class TelegramAccountMediaOnDemandTest extends TestCase
         $this->assertSame('https://private-storage.example.test/signed-object', $target['url']);
         $this->assertSame(['x-amz-security-token' => 'temporary-token'], $target['headers']);
         $this->assertFalse($target['requires_gateway_auth']);
-        $this->assertSame(7200, $target['expires_in_seconds']);
+        $this->assertSame(37 * 60, $target['expires_in_seconds']);
+    }
+
+    public function test_s3_upload_target_rejects_missing_attempt_deadline(): void
+    {
+        config()->set('filesystems.message_attachments_disk', 'message_attachments');
+        config()->set('filesystems.disks.message_attachments.driver', 's3');
+
+        $channel = new Channel(['platform' => Channel::PLATFORM_TELEGRAM]);
+        $channel->id = 77;
+        $channel->exists = true;
+        $attachment = new MessageAttachment([
+            'channel_id' => 77,
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT,
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
+            'media_download_claim_token' => 'claim-88',
+        ]);
+        $attachment->id = 88;
+        $attachment->message_id = 99;
+        $attachment->exists = true;
+
+        Storage::shouldReceive('disk')->never();
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Media upload target requires an active attempt deadline.');
+
+        app(CreateTelegramAccountMediaUploadTargetAction::class)->handle($channel, $attachment);
+    }
+
+    public function test_s3_upload_target_rejects_expired_attempt_deadline(): void
+    {
+        config()->set('filesystems.message_attachments_disk', 'message_attachments');
+        config()->set('filesystems.disks.message_attachments.driver', 's3');
+
+        $channel = new Channel(['platform' => Channel::PLATFORM_TELEGRAM]);
+        $channel->id = 77;
+        $channel->exists = true;
+        $attachment = new MessageAttachment([
+            'channel_id' => 77,
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT,
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
+            'media_download_claim_token' => 'claim-88',
+            'media_download_attempt_deadline_at' => now()->subSecond(),
+        ]);
+        $attachment->id = 88;
+        $attachment->message_id = 99;
+        $attachment->exists = true;
+
+        Storage::shouldReceive('disk')->never();
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Media upload target requires an active attempt deadline.');
+
+        app(CreateTelegramAccountMediaUploadTargetAction::class)->handle($channel, $attachment);
     }
 
     public function test_stale_claim_keeps_cleanup_token_when_temporary_object_cannot_be_deleted(): void
@@ -588,7 +649,159 @@ class TelegramAccountMediaOnDemandTest extends TestCase
         ));
     }
 
-    public function test_direct_upload_is_copied_to_stable_object_and_temporary_object_is_deleted_after_commit(): void
+    public function test_stream_result_preserves_concurrent_filename_when_result_does_not_replace_it(): void
+    {
+        $stored = $this->completeStreamAfterConcurrentFilenameUpdate();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $stored->download_status);
+        $this->assertSame('concurrent-stream-name.txt', $stored->original_filename);
+    }
+
+    public function test_stream_result_applies_explicit_filename_over_concurrent_update(): void
+    {
+        $stored = $this->completeStreamAfterConcurrentFilenameUpdate('explicit-stream-name.txt');
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $stored->download_status);
+        $this->assertSame('explicit-stream-name.txt', $stored->original_filename);
+    }
+
+    public function test_direct_upload_result_preserves_concurrent_filename_when_result_does_not_replace_it(): void
+    {
+        $stored = $this->completeDirectUploadAfterConcurrentFilenameUpdate();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $stored->download_status);
+        $this->assertSame('concurrent-direct-name.txt', $stored->original_filename);
+    }
+
+    public function test_direct_upload_result_applies_explicit_filename_over_concurrent_update(): void
+    {
+        $stored = $this->completeDirectUploadAfterConcurrentFilenameUpdate('explicit-direct-name.txt');
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $stored->download_status);
+        $this->assertSame('explicit-direct-name.txt', $stored->original_filename);
+    }
+
+    public function test_direct_upload_copy_progress_heartbeats_before_stale_lease_reaper_runs(): void
+    {
+        Queue::fake();
+        config([
+            'filesystems.message_attachments_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+            'filesystems.disks.'.MessageAttachment::LOCAL_DISK_PRIVATE.'.driver' => 's3',
+            'inbound_media.lease_stale_seconds' => 120,
+        ]);
+
+        $channel = Channel::factory()->account()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $message = Message::factory()->create([
+            'channel_id' => $channel->id,
+        ]);
+        $contents = 'direct-heartbeat-data';
+        $size = strlen($contents);
+        $claimToken = 'direct-heartbeat-token';
+        $attachment = MessageAttachment::factory()->create([
+            'message_id' => $message->id,
+            'channel_id' => $channel->id,
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT,
+            'provider_file_id' => 'direct-heartbeat-file',
+            'media_kind' => MessageAttachment::MEDIA_KIND_DOCUMENT,
+            'original_filename' => 'heartbeat.txt',
+            'mime_type' => 'text/plain',
+            'extension' => 'txt',
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
+            'media_download_claim_token' => $claimToken,
+            'media_download_claimed_at' => now(),
+            'media_download_heartbeat_at' => now(),
+            'media_download_attempt_deadline_at' => now()->addHour(),
+            'media_download_attempts' => 1,
+            'media_download_upload_size_bytes' => $size,
+            'file_size_bytes' => $size,
+        ]);
+        $this->reserveQuotaForAttempt($attachment);
+
+        $temporaryPath = app(StoreMessageAttachmentLocalFileAction::class)
+            ->buildDirectUploadPath($attachment, $claimToken);
+        $stream = fopen('php://temp', 'w+b');
+        $this->assertIsResource($stream);
+        fwrite($stream, $contents);
+        rewind($stream);
+
+        $candidatePath = null;
+        $heartbeatAt = null;
+        $reaperStats = null;
+        $driver = Mockery::mock();
+        $disk = Mockery::mock();
+
+        Storage::shouldReceive('disk')
+            ->with(MessageAttachment::LOCAL_DISK_PRIVATE)
+            ->andReturn($disk);
+        $disk->shouldReceive('exists')->times(3)->with($temporaryPath)->andReturn(true);
+        $disk->shouldReceive('readStream')->once()->with($temporaryPath)->andReturn($stream);
+        $disk->shouldReceive('size')->once()->with($temporaryPath)->andReturn($size);
+        $driver->shouldReceive('copy')
+            ->once()
+            ->withArgs(function (string $sourcePath, string $path, array $options) use (
+                $attachment,
+                $claimToken,
+                $temporaryPath,
+                &$candidatePath,
+                &$heartbeatAt,
+                &$reaperStats,
+            ): bool {
+                $candidatePath = $path;
+                $progress = data_get($options, 'params.@http.progress');
+
+                $this->assertSame($temporaryPath, $sourcePath);
+                $this->assertIsCallable($progress);
+
+                $this->travel(121)->seconds();
+                $progress(1, 1, 1, 1);
+
+                $duringCopy = $attachment->fresh();
+                $heartbeatAt = $duringCopy->media_download_heartbeat_at;
+                $this->assertSame(now()->getTimestamp(), $heartbeatAt?->getTimestamp());
+                $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING, $duringCopy->download_status);
+                $this->assertSame($claimToken, $duringCopy->media_download_claim_token);
+
+                $reaperStats = app(ReapStaleInboundMediaDownloadsAction::class)->handle();
+
+                $afterReaper = $attachment->fresh();
+                $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING, $afterReaper->download_status);
+                $this->assertSame($claimToken, $afterReaper->media_download_claim_token);
+
+                return true;
+            });
+        $disk->shouldReceive('getDriver')->once()->andReturn($driver);
+        $disk->shouldReceive('size')
+            ->once()
+            ->with(Mockery::on(function (string $path) use (&$candidatePath): bool {
+                return $path === $candidatePath;
+            }))
+            ->andReturn($size);
+        $disk->shouldReceive('delete')->once()->with($temporaryPath)->andReturn(true);
+
+        try {
+            $stored = app(StoreTelegramAccountMediaDownloadResultAction::class)->markDownloadedFromDirectUpload(
+                $channel,
+                $attachment,
+                $claimToken,
+                [
+                    'mime_type' => 'text/plain',
+                    'file_size_bytes' => $size,
+                ],
+            );
+        } finally {
+            $this->travelBack();
+        }
+
+        $this->assertNotNull($heartbeatAt);
+        $this->assertSame(0, $reaperStats['inspected'] ?? null);
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $stored->download_status);
+        $this->assertSame($candidatePath, $stored->local_path);
+        $this->assertNull($stored->media_download_claim_token);
+    }
+
+    public function test_direct_upload_is_adopted_from_unique_prepared_object_without_storage_io_in_db_transaction(): void
     {
         config()->set('filesystems.message_attachments_disk', 'message_attachments');
         config()->set('filesystems.disks.message_attachments.driver', 's3');
@@ -617,37 +830,75 @@ class TelegramAccountMediaOnDemandTest extends TestCase
         ]);
         $this->reserveQuotaForAttempt($attachment);
         $temporaryPath = "message-attachments/{$message->id}/{$attachment->id}.g1.s3-cleanup-token.upload";
-        $stablePath = app(StoreMessageAttachmentLocalFileAction::class)->buildClaimedPath(
-            $attachment,
-            'pdf',
-            's3-cleanup-token',
-        );
         $stream = fopen('php://temp', 'w+b');
         $this->assertIsResource($stream);
         fwrite($stream, 'S3-DATA');
         rewind($stream);
         $candidatePath = null;
+        $baselineTransactionLevel = DB::connection()->transactionLevel();
+        $storageTransactionLevels = [];
 
+        $driver = Mockery::mock();
         $disk = Mockery::mock();
-        $disk->shouldReceive('exists')->twice()->with($temporaryPath)->andReturn(true);
-        $disk->shouldReceive('readStream')->once()->with($temporaryPath)->andReturn($stream);
-        $disk->shouldReceive('size')->once()->with($temporaryPath)->andReturn(7);
-        $disk->shouldReceive('copy')
+        $disk->shouldReceive('exists')
+            ->times(3)
+            ->with($temporaryPath)
+            ->andReturnUsing(function () use (&$storageTransactionLevels): bool {
+                $storageTransactionLevels[] = DB::connection()->transactionLevel();
+
+                return true;
+            });
+        $disk->shouldReceive('readStream')
             ->once()
-            ->with($temporaryPath, Mockery::on(function (string $path) use ($stablePath, &$candidatePath): bool {
+            ->with($temporaryPath)
+            ->andReturnUsing(function () use ($stream, &$storageTransactionLevels) {
+                $storageTransactionLevels[] = DB::connection()->transactionLevel();
+
+                return $stream;
+            });
+        $disk->shouldReceive('size')
+            ->once()
+            ->with($temporaryPath)
+            ->andReturnUsing(function () use (&$storageTransactionLevels): int {
+                $storageTransactionLevels[] = DB::connection()->transactionLevel();
+
+                return 7;
+            });
+        $driver->shouldReceive('copy')
+            ->once()
+            ->withArgs(function (string $sourcePath, string $path, array $options) use (
+                $temporaryPath,
+                &$candidatePath,
+            ): bool {
                 $candidatePath = $path;
 
-                return str_starts_with($path, $stablePath.'.commit.');
-            }))
-            ->andReturn(true);
-        $disk->shouldReceive('exists')->once()->with($stablePath)->andReturn(false);
-        $disk->shouldReceive('move')
+                return $sourcePath === $temporaryPath
+                    && str_contains($path, '.g1.s3-cleanup-token.commit.')
+                    && str_ends_with($path, '.pdf')
+                    && is_callable(data_get($options, 'params.@http.progress'));
+            })
+            ->andReturnUsing(function () use (&$storageTransactionLevels): void {
+                $storageTransactionLevels[] = DB::connection()->transactionLevel();
+            });
+        $disk->shouldReceive('getDriver')->once()->andReturn($driver);
+        $disk->shouldReceive('size')
             ->once()
             ->with(Mockery::on(function (string $path) use (&$candidatePath): bool {
                 return $path === $candidatePath;
-            }), $stablePath)
-            ->andReturn(true);
-        $disk->shouldReceive('delete')->once()->with($temporaryPath)->andReturn(true);
+            }))
+            ->andReturnUsing(function () use (&$storageTransactionLevels): int {
+                $storageTransactionLevels[] = DB::connection()->transactionLevel();
+
+                return 7;
+            });
+        $disk->shouldReceive('delete')
+            ->once()
+            ->with($temporaryPath)
+            ->andReturnUsing(function () use (&$storageTransactionLevels): bool {
+                $storageTransactionLevels[] = DB::connection()->transactionLevel();
+
+                return true;
+            });
         Storage::shouldReceive('disk')->with('message_attachments')->andReturn($disk);
 
         $stored = app(StoreTelegramAccountMediaDownloadResultAction::class)->markDownloadedFromDirectUpload(
@@ -662,7 +913,12 @@ class TelegramAccountMediaOnDemandTest extends TestCase
         );
 
         $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $stored->download_status);
-        $this->assertSame($stablePath, $stored->local_path);
+        $this->assertSame($candidatePath, $stored->local_path);
+        $this->assertNotEmpty($storageTransactionLevels);
+        $this->assertSame(
+            array_fill(0, count($storageTransactionLevels), $baselineTransactionLevel),
+            $storageTransactionLevels,
+        );
         $this->assertNull($stored->media_download_upload_size_bytes);
         $this->assertNull($stored->media_download_claim_token);
         $this->assertNull($stored->media_download_claimed_at);
@@ -751,38 +1007,39 @@ class TelegramAccountMediaOnDemandTest extends TestCase
         ]);
         $this->reserveQuotaForAttempt($attachment);
         $temporaryPath = "message-attachments/{$message->id}/{$attachment->id}.g1.cleanup-retry-token.upload";
-        $stablePath = app(StoreMessageAttachmentLocalFileAction::class)->buildClaimedPath(
-            $attachment,
-            'pdf',
-            'cleanup-retry-token',
-        );
         $stream = fopen('php://temp', 'w+b');
         fwrite($stream, 'PDFDATA');
         rewind($stream);
         $candidatePath = null;
 
+        $driver = Mockery::mock();
         $disk = Mockery::mock();
         Storage::shouldReceive('disk')
             ->with(MessageAttachment::LOCAL_DISK_PRIVATE)
             ->andReturn($disk);
-        $disk->shouldReceive('exists')->twice()->with($temporaryPath)->andReturn(true);
+        $disk->shouldReceive('exists')->times(3)->with($temporaryPath)->andReturn(true);
         $disk->shouldReceive('readStream')->once()->with($temporaryPath)->andReturn($stream);
         $disk->shouldReceive('size')->once()->with($temporaryPath)->andReturn(7);
-        $disk->shouldReceive('copy')
+        $driver->shouldReceive('copy')
             ->once()
-            ->with($temporaryPath, Mockery::on(function (string $path) use ($stablePath, &$candidatePath): bool {
+            ->withArgs(function (string $sourcePath, string $path, array $options) use (
+                $temporaryPath,
+                &$candidatePath,
+            ): bool {
                 $candidatePath = $path;
 
-                return str_starts_with($path, $stablePath.'.commit.');
-            }))
-            ->andReturn(true);
-        $disk->shouldReceive('exists')->once()->with($stablePath)->andReturn(false);
-        $disk->shouldReceive('move')
+                return $sourcePath === $temporaryPath
+                    && str_contains($path, '.g1.cleanup-retry-token.commit.')
+                    && str_ends_with($path, '.pdf')
+                    && is_callable(data_get($options, 'params.@http.progress'));
+            });
+        $disk->shouldReceive('getDriver')->once()->andReturn($driver);
+        $disk->shouldReceive('size')
             ->once()
             ->with(Mockery::on(function (string $path) use (&$candidatePath): bool {
                 return $path === $candidatePath;
-            }), $stablePath)
-            ->andReturn(true);
+            }))
+            ->andReturn(7);
         $disk->shouldReceive('delete')->once()->with($temporaryPath)->andReturn(false);
 
         $action = app(StoreTelegramAccountMediaDownloadResultAction::class);
@@ -798,16 +1055,17 @@ class TelegramAccountMediaOnDemandTest extends TestCase
         );
 
         $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $stored->download_status);
-        $this->assertSame($stablePath, $stored->local_path);
+        $this->assertSame($candidatePath, $stored->local_path);
         Queue::assertPushed(
             DeleteRolledBackInboundMediaFileJob::class,
             static fn (DeleteRolledBackInboundMediaFileJob $job): bool => $job->attachmentId === $attachment->id
                 && $job->disk === MessageAttachment::LOCAL_DISK_PRIVATE
-                && $job->path === $temporaryPath,
+                && $job->path === $temporaryPath
+                && $job->prepared,
         );
     }
 
-    public function test_failed_direct_upload_publication_queues_durable_candidate_cleanup(): void
+    public function test_failed_direct_upload_copy_queues_durable_candidate_cleanup(): void
     {
         Queue::fake();
 
@@ -833,11 +1091,6 @@ class TelegramAccountMediaOnDemandTest extends TestCase
         ]);
         $this->reserveQuotaForAttempt($attachment);
         $temporaryPath = "message-attachments/{$message->id}/{$attachment->id}.g1.candidate-cleanup-token.upload";
-        $stablePath = app(StoreMessageAttachmentLocalFileAction::class)->buildClaimedPath(
-            $attachment,
-            'pdf',
-            'candidate-cleanup-token',
-        );
         $stream = fopen('php://temp', 'w+b');
 
         $this->assertIsResource($stream);
@@ -845,29 +1098,30 @@ class TelegramAccountMediaOnDemandTest extends TestCase
         rewind($stream);
 
         $candidatePath = null;
+        $driver = Mockery::mock();
         $disk = Mockery::mock();
 
         Storage::shouldReceive('disk')
             ->with(MessageAttachment::LOCAL_DISK_PRIVATE)
             ->andReturn($disk);
-        $disk->shouldReceive('exists')->once()->with($temporaryPath)->andReturn(true);
+        $disk->shouldReceive('exists')->twice()->with($temporaryPath)->andReturn(true);
         $disk->shouldReceive('readStream')->once()->with($temporaryPath)->andReturn($stream);
         $disk->shouldReceive('size')->once()->with($temporaryPath)->andReturn(7);
-        $disk->shouldReceive('copy')
+        $driver->shouldReceive('copy')
             ->once()
-            ->with($temporaryPath, Mockery::on(function (string $path) use ($stablePath, &$candidatePath): bool {
+            ->withArgs(function (string $sourcePath, string $path, array $options) use (
+                $temporaryPath,
+                &$candidatePath,
+            ): bool {
                 $candidatePath = $path;
 
-                return str_starts_with($path, $stablePath.'.commit.');
-            }))
-            ->andReturn(true);
-        $disk->shouldReceive('exists')->once()->with($stablePath)->andReturn(false);
-        $disk->shouldReceive('move')
-            ->once()
-            ->with(Mockery::on(function (string $path) use (&$candidatePath): bool {
-                return $path === $candidatePath;
-            }), $stablePath)
-            ->andReturn(false);
+                return $sourcePath === $temporaryPath
+                    && str_contains($path, '.g1.candidate-cleanup-token.commit.')
+                    && str_ends_with($path, '.pdf')
+                    && is_callable(data_get($options, 'params.@http.progress'));
+            })
+            ->andThrow(new \RuntimeException('copy failed'));
+        $disk->shouldReceive('getDriver')->once()->andReturn($driver);
         $disk->shouldReceive('exists')
             ->once()
             ->with(Mockery::on(function (string $path) use (&$candidatePath): bool {
@@ -896,7 +1150,7 @@ class TelegramAccountMediaOnDemandTest extends TestCase
             $this->fail('Expected direct upload publication to fail.');
         } catch (\RuntimeException $exception) {
             $this->assertSame(
-                'Direct media upload could not be finalized atomically.',
+                'Failed to prepare message attachment file copy.',
                 $exception->getMessage(),
             );
         }
@@ -906,7 +1160,8 @@ class TelegramAccountMediaOnDemandTest extends TestCase
             DeleteRolledBackInboundMediaFileJob::class,
             static fn (DeleteRolledBackInboundMediaFileJob $job): bool => $job->attachmentId === $attachment->id
                 && $job->disk === MessageAttachment::LOCAL_DISK_PRIVATE
-                && $job->path === $candidatePath,
+                && $job->path === $candidatePath
+                && $job->prepared,
         );
     }
 
@@ -1170,5 +1425,188 @@ class TelegramAccountMediaOnDemandTest extends TestCase
         );
 
         $this->assertTrue($decision->allowed);
+    }
+
+    private function completeStreamAfterConcurrentFilenameUpdate(?string $reportedFilename = null): MessageAttachment
+    {
+        Queue::fake();
+        config()->set('filesystems.message_attachments_disk', MessageAttachment::LOCAL_DISK_PRIVATE);
+
+        $channel = Channel::factory()->account()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $message = Message::factory()->create([
+            'channel_id' => $channel->id,
+        ]);
+        $contents = 'stream-data';
+        $size = strlen($contents);
+        $claimToken = 'stream-concurrent-token';
+        $attachment = MessageAttachment::factory()->create([
+            'message_id' => $message->id,
+            'channel_id' => $channel->id,
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT,
+            'provider_file_id' => 'stream-concurrent-file',
+            'media_kind' => MessageAttachment::MEDIA_KIND_DOCUMENT,
+            'original_filename' => 'snapshot-stream-name.txt',
+            'mime_type' => 'text/plain',
+            'extension' => 'txt',
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
+            'media_download_claim_token' => $claimToken,
+            'media_download_claimed_at' => now(),
+            'media_download_heartbeat_at' => now(),
+            'media_download_attempt_deadline_at' => now()->addHour(),
+            'media_download_attempts' => 1,
+            'file_size_bytes' => $size,
+        ]);
+        $this->reserveQuotaForAttempt($attachment);
+
+        $stream = fopen('php://temp', 'w+b');
+        $this->assertIsResource($stream);
+        fwrite($stream, $contents);
+        rewind($stream);
+
+        $candidatePath = null;
+        $disk = Mockery::mock();
+
+        Storage::shouldReceive('disk')
+            ->with(MessageAttachment::LOCAL_DISK_PRIVATE)
+            ->andReturn($disk);
+        $disk->shouldReceive('put')
+            ->once()
+            ->withArgs(function (string $path, mixed $uploadedStream, array $options) use (
+                $attachment,
+                &$candidatePath,
+            ): bool {
+                $candidatePath = $path;
+                $this->assertIsResource($uploadedStream);
+                $this->assertIsCallable($options['before_upload'] ?? null);
+
+                MessageAttachment::query()
+                    ->whereKey($attachment->id)
+                    ->update(['original_filename' => 'concurrent-stream-name.txt']);
+
+                return true;
+            })
+            ->andReturn(true);
+        $disk->shouldReceive('size')
+            ->once()
+            ->with(Mockery::on(function (string $path) use (&$candidatePath): bool {
+                return $path === $candidatePath;
+            }))
+            ->andReturn($size);
+
+        $metadata = [
+            'mime_type' => 'text/plain',
+            'file_size_bytes' => $size,
+        ];
+
+        if ($reportedFilename !== null) {
+            $metadata['original_filename'] = $reportedFilename;
+        }
+
+        return app(StoreTelegramAccountMediaDownloadResultAction::class)->markDownloadedFromStream(
+            $channel,
+            $attachment,
+            $stream,
+            $claimToken,
+            $metadata,
+        );
+    }
+
+    private function completeDirectUploadAfterConcurrentFilenameUpdate(?string $reportedFilename = null): MessageAttachment
+    {
+        Queue::fake();
+        config([
+            'filesystems.message_attachments_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+            'filesystems.disks.'.MessageAttachment::LOCAL_DISK_PRIVATE.'.driver' => 's3',
+        ]);
+
+        $channel = Channel::factory()->account()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $message = Message::factory()->create([
+            'channel_id' => $channel->id,
+        ]);
+        $contents = 'direct-data';
+        $size = strlen($contents);
+        $claimToken = 'direct-concurrent-token';
+        $attachment = MessageAttachment::factory()->create([
+            'message_id' => $message->id,
+            'channel_id' => $channel->id,
+            'provider' => MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT,
+            'provider_file_id' => 'direct-concurrent-file',
+            'media_kind' => MessageAttachment::MEDIA_KIND_DOCUMENT,
+            'original_filename' => 'snapshot-direct-name.txt',
+            'mime_type' => 'text/plain',
+            'extension' => 'txt',
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
+            'media_download_claim_token' => $claimToken,
+            'media_download_claimed_at' => now(),
+            'media_download_heartbeat_at' => now(),
+            'media_download_attempt_deadline_at' => now()->addHour(),
+            'media_download_attempts' => 1,
+            'media_download_upload_size_bytes' => $size,
+            'file_size_bytes' => $size,
+        ]);
+        $this->reserveQuotaForAttempt($attachment);
+
+        $temporaryPath = app(StoreMessageAttachmentLocalFileAction::class)
+            ->buildDirectUploadPath($attachment, $claimToken);
+        $stream = fopen('php://temp', 'w+b');
+        $this->assertIsResource($stream);
+        fwrite($stream, $contents);
+        rewind($stream);
+
+        $candidatePath = null;
+        $driver = Mockery::mock();
+        $disk = Mockery::mock();
+
+        Storage::shouldReceive('disk')
+            ->with(MessageAttachment::LOCAL_DISK_PRIVATE)
+            ->andReturn($disk);
+        $disk->shouldReceive('exists')->times(3)->with($temporaryPath)->andReturn(true);
+        $disk->shouldReceive('readStream')->once()->with($temporaryPath)->andReturn($stream);
+        $disk->shouldReceive('size')->once()->with($temporaryPath)->andReturn($size);
+        $driver->shouldReceive('copy')
+            ->once()
+            ->withArgs(function (string $sourcePath, string $path, array $options) use (
+                $attachment,
+                $temporaryPath,
+                &$candidatePath,
+            ): bool {
+                $candidatePath = $path;
+                $this->assertSame($temporaryPath, $sourcePath);
+                $this->assertIsCallable(data_get($options, 'params.@http.progress'));
+
+                MessageAttachment::query()
+                    ->whereKey($attachment->id)
+                    ->update(['original_filename' => 'concurrent-direct-name.txt']);
+
+                return true;
+            });
+        $disk->shouldReceive('getDriver')->once()->andReturn($driver);
+        $disk->shouldReceive('size')
+            ->once()
+            ->with(Mockery::on(function (string $path) use (&$candidatePath): bool {
+                return $path === $candidatePath;
+            }))
+            ->andReturn($size);
+        $disk->shouldReceive('delete')->once()->with($temporaryPath)->andReturn(true);
+
+        $metadata = [
+            'mime_type' => 'text/plain',
+            'file_size_bytes' => $size,
+        ];
+
+        if ($reportedFilename !== null) {
+            $metadata['original_filename'] = $reportedFilename;
+        }
+
+        return app(StoreTelegramAccountMediaDownloadResultAction::class)->markDownloadedFromDirectUpload(
+            $channel,
+            $attachment,
+            $claimToken,
+            $metadata,
+        );
     }
 }

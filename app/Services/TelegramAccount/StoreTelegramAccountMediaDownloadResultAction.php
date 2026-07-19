@@ -2,6 +2,7 @@
 
 namespace App\Services\TelegramAccount;
 
+use App\Data\Messages\PreparedMessageAttachmentFile;
 use App\Models\Channel;
 use App\Models\Dialog;
 use App\Models\Message;
@@ -16,7 +17,6 @@ use App\Services\Messages\StoreMessageAttachmentLocalFileAction;
 use App\Services\Messages\ValidateInboundMediaIntegrityAction;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 use InvalidArgumentException;
 use RuntimeException;
 use Throwable;
@@ -67,10 +67,7 @@ class StoreTelegramAccountMediaDownloadResultAction
     ): ?MessageAttachment {
         $handled = $this->acknowledgeHandledResult($channel, $attachment);
 
-        if (
-            $handled instanceof MessageAttachment
-            && $handled->download_status === MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED
-        ) {
+        if ($handled instanceof MessageAttachment) {
             $this->deleteTemporaryUploadAfterFinalization($handled, $claimToken);
         }
 
@@ -129,14 +126,15 @@ class StoreTelegramAccountMediaDownloadResultAction
             throw new InvalidArgumentException('Telegram Account media result must provide a stream.');
         }
 
-        try {
-            return $this->withLockedAttachment($attachment, function (?Dialog $lockedDialog, MessageAttachment $locked) use ($stream, $claimToken, $metadata): MessageAttachment {
-                $this->assertClaimToken($locked, $claimToken);
+        $prepared = null;
 
+        try {
+            $snapshot = $this->withLockedAttachment($attachment, function (?Dialog $lockedDialog, MessageAttachment $locked) use ($claimToken): MessageAttachment {
                 if ($locked->download_status === MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED) {
-                    return $locked;
+                    return $locked->fresh();
                 }
 
+                $this->assertClaimToken($locked, $claimToken);
                 $this->assertResultIsExpected($locked);
                 $this->assertClaimLeaseActive($locked);
 
@@ -144,61 +142,121 @@ class StoreTelegramAccountMediaDownloadResultAction
                     return $this->markLockedMetadataOnlyBecauseBlacklisted($locked, $claimToken);
                 }
 
-                $originalFilename = $this->normalizeNullableScalar($metadata['original_filename'] ?? null) ?? $locked->original_filename;
-                $detectedContents = is_string($metadata['detected_contents'] ?? null)
-                    ? $metadata['detected_contents']
-                    : $this->readDetectionSample($stream);
-                $fileSizeBytes = $this->normalizeFileSize($metadata['file_size_bytes'] ?? null)
-                    ?? $locked->file_size_bytes;
-                $providerSizeBytes = $this->normalizeFileSize($metadata['provider_file_size_bytes'] ?? null);
-                $detectedMimeType = $this->validateInboundMediaIntegrityAction->inspectContents(
-                    attachment: $locked,
-                    sample: $detectedContents,
-                    actualSizeBytes: max(0, (int) $fileSizeBytes),
-                    providerSizeBytes: $providerSizeBytes,
-                    declaredMimeType: $this->normalizeNullableScalar($metadata['mime_type'] ?? null) ?? $locked->mime_type,
-                );
-                $mimeType = $this->resolveDownloadedMimeType(
-                    $locked,
-                    $detectedContents,
-                    $metadata['mime_type'] ?? null,
-                    $detectedMimeType,
-                );
-                $extension = $this->resolveDownloadedExtension($locked, $mimeType, $originalFilename);
-                $attemptNumber = $locked->mediaDownloadLedgerAttemptNumber();
+                return $locked->fresh();
+            });
+
+            if ($snapshot->download_status !== MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING) {
+                return $snapshot;
+            }
+
+            $originalFilename = $this->normalizeNullableScalar($metadata['original_filename'] ?? null) ?? $snapshot->original_filename;
+            $detectedContents = is_string($metadata['detected_contents'] ?? null)
+                ? $metadata['detected_contents']
+                : $this->readDetectionSample($stream);
+            $fileSizeBytes = $this->normalizeFileSize($metadata['file_size_bytes'] ?? null)
+                ?? $snapshot->file_size_bytes;
+            $providerSizeBytes = $this->normalizeFileSize($metadata['provider_file_size_bytes'] ?? null);
+            $detectedMimeType = $this->validateInboundMediaIntegrityAction->inspectContents(
+                attachment: $snapshot,
+                sample: $detectedContents,
+                actualSizeBytes: max(0, (int) $fileSizeBytes),
+                providerSizeBytes: $providerSizeBytes,
+                declaredMimeType: $this->normalizeNullableScalar($metadata['mime_type'] ?? null) ?? $snapshot->mime_type,
+            );
+            $mimeType = $this->resolveDownloadedMimeType(
+                $snapshot,
+                $detectedContents,
+                $metadata['mime_type'] ?? null,
+                $detectedMimeType,
+            );
+            $extension = $this->resolveDownloadedExtension($snapshot, $mimeType, $originalFilename);
+            $attemptNumber = $snapshot->mediaDownloadLedgerAttemptNumber();
+            $declaredSizeBytes = max(0, (int) $fileSizeBytes);
+
+            $this->quotaLedger->assertCanCompleteAttempt(
+                $snapshot,
+                $attemptNumber,
+                $declaredSizeBytes,
+            );
+
+            $prepared = $this->storeMessageAttachmentLocalFileAction->prepareStream(
+                $snapshot,
+                $stream,
+                $fileSizeBytes,
+                $extension,
+                filled($claimToken) ? (string) $claimToken : null,
+                function () use ($snapshot, $claimToken): void {
+                    $this->checkpointPreparedFileProgress($snapshot, $claimToken);
+                },
+            );
+
+            $stored = $this->withLockedAttachment($attachment, function (?Dialog $lockedDialog, MessageAttachment $locked) use (
+                $claimToken,
+                $prepared,
+                $attemptNumber,
+                $mimeType,
+                $extension,
+                $originalFilename,
+                $snapshot,
+            ): MessageAttachment {
+                if ($locked->download_status === MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED) {
+                    return $locked->fresh();
+                }
+
+                $this->assertClaimToken($locked, $claimToken);
+                $this->assertResultIsExpected($locked);
+                $this->assertClaimLeaseActive($locked);
+
+                if ($this->shouldSuppressAutomaticDownload($locked, $lockedDialog)) {
+                    return $this->markLockedMetadataOnlyBecauseBlacklisted($locked, $claimToken);
+                }
 
                 $this->quotaLedger->assertCanCompleteAttempt(
                     $locked,
                     $attemptNumber,
-                    max(0, (int) $fileSizeBytes),
+                    $prepared->sizeBytes,
                 );
 
-                $locked->forceFill([
-                    'mime_type' => $mimeType ?? $locked->mime_type,
-                    'extension' => $extension ?? $locked->extension,
-                    'original_filename' => $originalFilename,
-                    'file_size_bytes' => $fileSizeBytes,
-                ])->save();
-
-                $stored = $this->storeMessageAttachmentLocalFileAction->handleStream(
+                return $this->storeMessageAttachmentLocalFileAction->adoptPreparedFile(
                     $locked,
-                    $stream,
-                    $fileSizeBytes,
-                    $extension,
-                    function (MessageAttachment $storedAttachment) use ($attemptNumber, $fileSizeBytes): void {
+                    $prepared,
+                    $this->mergeConcurrentAttachmentValues(
+                        $snapshot,
+                        $locked,
+                        [
+                            'mime_type' => $mimeType ?? $snapshot->mime_type,
+                            'extension' => $extension ?? $snapshot->extension,
+                            'original_filename' => $originalFilename,
+                        ],
+                    ),
+                    function (MessageAttachment $storedAttachment) use ($attemptNumber, $prepared): void {
                         $this->quotaLedger->completeAttempt(
                             $storedAttachment,
                             $attemptNumber,
-                            max(0, (int) $fileSizeBytes),
+                            $prepared->sizeBytes,
                         );
                     },
-                    expectedClaimToken: filled($claimToken) ? (string) $claimToken : null,
+                    filled($claimToken) ? (string) $claimToken : null,
                 );
-
-                return $stored;
             });
+
+            if ($stored->local_path !== $prepared->path) {
+                $this->storeMessageAttachmentLocalFileAction->discardPreparedFile($prepared);
+            }
+
+            return $stored->fresh();
         } catch (InboundMediaQuotaExceededException $exception) {
+            if ($prepared instanceof PreparedMessageAttachmentFile) {
+                $this->storeMessageAttachmentLocalFileAction->discardPreparedFile($prepared);
+            }
+
             return $this->markQuotaBlocked($channel, $attachment, $claimToken, $exception);
+        } catch (Throwable $exception) {
+            if ($prepared instanceof PreparedMessageAttachmentFile) {
+                $this->storeMessageAttachmentLocalFileAction->discardPreparedFile($prepared);
+            }
+
+            throw $exception;
         }
     }
 
@@ -209,7 +267,7 @@ class StoreTelegramAccountMediaDownloadResultAction
     ): MessageAttachment {
         $this->assertAttachmentBelongsToChannel($channel, $attachment);
 
-        return $this->withLockedAttachment($attachment, function (?Dialog $lockedDialog, MessageAttachment $locked) use ($claimToken): MessageAttachment {
+        $stored = $this->withLockedAttachment($attachment, function (?Dialog $lockedDialog, MessageAttachment $locked) use ($claimToken): MessageAttachment {
             if (
                 $locked->download_status === MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND
                 && blank($locked->media_download_claim_token)
@@ -231,7 +289,6 @@ class StoreTelegramAccountMediaDownloadResultAction
                 return $this->markLockedMetadataOnlyBecauseBlacklisted($locked, $claimToken);
             }
 
-            $this->deleteDirectUploadOrFail($locked, $claimToken);
             $this->quotaLedger->failAttempt(
                 $locked,
                 $locked->mediaDownloadLedgerAttemptNumber(),
@@ -256,6 +313,10 @@ class StoreTelegramAccountMediaDownloadResultAction
 
             return $locked->fresh();
         });
+
+        $this->deleteTemporaryUploadForClaim($stored, $claimToken);
+
+        return $stored;
     }
 
     public function directUploadSize(Channel $channel, MessageAttachment $attachment, string $claimToken): int
@@ -299,24 +360,12 @@ class StoreTelegramAccountMediaDownloadResultAction
     ): MessageAttachment {
         $this->assertAttachmentBelongsToChannel($channel, $attachment);
 
-        $disk = MessageAttachment::storageDiskName();
-        $uploadedPath = $this->storeMessageAttachmentLocalFileAction->buildDirectUploadPath($attachment, $claimToken);
-        $stablePath = null;
-        $stableCandidatePath = null;
-        $stableCopyCreated = false;
+        $prepared = null;
 
         try {
-            $stored = $this->withLockedAttachment($attachment, function (?Dialog $lockedDialog, MessageAttachment $locked) use (
-                $claimToken,
-                $metadata,
-                $disk,
-                $uploadedPath,
-                &$stablePath,
-                &$stableCandidatePath,
-                &$stableCopyCreated,
-            ): MessageAttachment {
+            $snapshot = $this->withLockedAttachment($attachment, function (?Dialog $lockedDialog, MessageAttachment $locked) use ($claimToken): MessageAttachment {
                 if ($locked->download_status === MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED) {
-                    return $locked;
+                    return $locked->fresh();
                 }
 
                 $this->assertClaimToken($locked, $claimToken);
@@ -327,168 +376,151 @@ class StoreTelegramAccountMediaDownloadResultAction
                     return $this->markLockedMetadataOnlyBecauseBlacklisted($locked, $claimToken);
                 }
 
-                if (! Storage::disk($disk)->exists($uploadedPath)) {
-                    throw new InvalidArgumentException('Direct Telegram Account media upload was not found.');
-                }
-
-                $stream = Storage::disk($disk)->readStream($uploadedPath);
-
-                if (! is_resource($stream)) {
-                    throw new InvalidArgumentException('Direct Telegram Account media upload cannot be read.');
-                }
-
-                try {
-                    $detectedContents = $this->readDetectionSample($stream);
-                } finally {
-                    fclose($stream);
-                }
-
-                $fileSizeBytes = (int) Storage::disk($disk)->size($uploadedPath);
-                $reportedFileSizeBytes = $this->normalizeFileSize($metadata['file_size_bytes'] ?? null);
-                $providerSizeBytes = $this->normalizeFileSize($metadata['provider_file_size_bytes'] ?? null);
-                $expectedUploadSizeBytes = $locked->media_download_upload_size_bytes;
-
-                if ($reportedFileSizeBytes === null || $reportedFileSizeBytes !== $fileSizeBytes) {
-                    throw new InvalidArgumentException('Direct media upload size does not match reported file size.');
-                }
-
-                if ($expectedUploadSizeBytes !== null && (int) $expectedUploadSizeBytes !== $fileSizeBytes) {
-                    throw new InvalidArgumentException('Direct media upload is incomplete.');
-                }
-
-                $attemptNumber = $locked->mediaDownloadLedgerAttemptNumber();
-                $this->quotaLedger->assertCanCompleteAttempt($locked, $attemptNumber, $fileSizeBytes);
-
-                $originalFilename = $this->normalizeNullableScalar($metadata['original_filename'] ?? null) ?? $locked->original_filename;
-                $detectedMimeType = $this->validateInboundMediaIntegrityAction->inspectContents(
-                    attachment: $locked,
-                    sample: $detectedContents,
-                    actualSizeBytes: $fileSizeBytes,
-                    providerSizeBytes: $providerSizeBytes,
-                    declaredMimeType: $this->normalizeNullableScalar($metadata['mime_type'] ?? null) ?? $locked->mime_type,
-                );
-                $mimeType = $this->resolveDownloadedMimeType(
-                    $locked,
-                    $detectedContents,
-                    $metadata['mime_type'] ?? null,
-                    $detectedMimeType,
-                );
-                $extension = $this->resolveDownloadedExtension($locked, $mimeType, $originalFilename);
-                $stablePath = $this->storeMessageAttachmentLocalFileAction->buildClaimedPath(
-                    $locked,
-                    $extension,
-                    $claimToken,
-                );
-                $stableCandidatePath = $stablePath.'.commit.'.Str::uuid()->toString();
-                $this->publishDirectUploadAtomically(
-                    $disk,
-                    $uploadedPath,
-                    $stableCandidatePath,
-                    $stablePath,
-                );
-
-                $stableCopyCreated = true;
-
-                $locked->forceFill([
-                    'mime_type' => $mimeType ?? $locked->mime_type,
-                    'extension' => $extension ?? $locked->extension,
-                    'original_filename' => $originalFilename,
-                    'file_size_bytes' => $fileSizeBytes,
-                    'media_download_claim_token' => null,
-                    'media_download_upload_size_bytes' => null,
-                    'media_download_next_retry_at' => null,
-                    'media_download_claimed_at' => null,
-                    'media_download_heartbeat_at' => null,
-                    'media_download_attempt_deadline_at' => null,
-                    'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
-                    'local_disk' => $disk,
-                    'local_path' => $stablePath,
-                    'safe_error_code' => null,
-                    'safe_error_message' => null,
-                ])->save();
-
-                $this->quotaLedger->completeAttempt(
-                    $locked,
-                    $attemptNumber,
-                    $fileSizeBytes,
-                );
-
                 return $locked->fresh();
             });
-        } catch (InboundMediaQuotaExceededException $exception) {
-            $this->deleteStableCandidateAfterFailedTransaction(
-                $disk,
-                $stableCandidatePath,
-                (int) $attachment->id,
+
+            if ($snapshot->download_status !== MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING) {
+                $this->deleteTemporaryUploadForClaim($snapshot, $claimToken);
+
+                return $snapshot;
+            }
+
+            $disk = MessageAttachment::storageDiskName();
+            $uploadedPath = $this->storeMessageAttachmentLocalFileAction->buildDirectUploadPath(
+                $snapshot,
+                $claimToken,
+            );
+            $this->checkpointPreparedFileProgress($snapshot, $claimToken);
+            $storage = Storage::disk($disk);
+
+            if (! $storage->exists($uploadedPath)) {
+                throw new InvalidArgumentException('Direct Telegram Account media upload was not found.');
+            }
+
+            $stream = $storage->readStream($uploadedPath);
+
+            if (! is_resource($stream)) {
+                throw new InvalidArgumentException('Direct Telegram Account media upload cannot be read.');
+            }
+
+            try {
+                $detectedContents = $this->readDetectionSample($stream);
+            } finally {
+                fclose($stream);
+            }
+
+            $fileSizeBytes = (int) $storage->size($uploadedPath);
+            $reportedFileSizeBytes = $this->normalizeFileSize($metadata['file_size_bytes'] ?? null);
+            $providerSizeBytes = $this->normalizeFileSize($metadata['provider_file_size_bytes'] ?? null);
+            $expectedUploadSizeBytes = $snapshot->media_download_upload_size_bytes;
+
+            if ($reportedFileSizeBytes === null || $reportedFileSizeBytes !== $fileSizeBytes) {
+                throw new InvalidArgumentException('Direct media upload size does not match reported file size.');
+            }
+
+            if ($expectedUploadSizeBytes !== null && (int) $expectedUploadSizeBytes !== $fileSizeBytes) {
+                throw new InvalidArgumentException('Direct media upload is incomplete.');
+            }
+
+            $attemptNumber = $snapshot->mediaDownloadLedgerAttemptNumber();
+            $this->quotaLedger->assertCanCompleteAttempt($snapshot, $attemptNumber, $fileSizeBytes);
+
+            $originalFilename = $this->normalizeNullableScalar($metadata['original_filename'] ?? null) ?? $snapshot->original_filename;
+            $detectedMimeType = $this->validateInboundMediaIntegrityAction->inspectContents(
+                attachment: $snapshot,
+                sample: $detectedContents,
+                actualSizeBytes: $fileSizeBytes,
+                providerSizeBytes: $providerSizeBytes,
+                declaredMimeType: $this->normalizeNullableScalar($metadata['mime_type'] ?? null) ?? $snapshot->mime_type,
+            );
+            $mimeType = $this->resolveDownloadedMimeType(
+                $snapshot,
+                $detectedContents,
+                $metadata['mime_type'] ?? null,
+                $detectedMimeType,
+            );
+            $extension = $this->resolveDownloadedExtension($snapshot, $mimeType, $originalFilename);
+            $prepared = $this->storeMessageAttachmentLocalFileAction->prepareCopy(
+                $snapshot,
+                $uploadedPath,
+                $fileSizeBytes,
+                $extension,
+                $claimToken,
+                function () use ($snapshot, $claimToken): void {
+                    $this->checkpointPreparedFileProgress($snapshot, $claimToken);
+                },
             );
 
-            if ($stableCopyCreated && filled($stablePath)) {
-                $this->deleteRolledBackInboundMediaFileAction->handle(
-                    (int) $attachment->id,
-                    $disk,
-                    $stablePath,
+            $stored = $this->withLockedAttachment($attachment, function (?Dialog $lockedDialog, MessageAttachment $locked) use (
+                $claimToken,
+                $prepared,
+                $attemptNumber,
+                $mimeType,
+                $extension,
+                $originalFilename,
+                $snapshot,
+            ): MessageAttachment {
+                if ($locked->download_status === MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED) {
+                    return $locked->fresh();
+                }
+
+                $this->assertClaimToken($locked, $claimToken);
+                $this->assertResultIsExpected($locked);
+                $this->assertClaimLeaseActive($locked);
+
+                if ($this->shouldSuppressAutomaticDownload($locked, $lockedDialog)) {
+                    return $this->markLockedMetadataOnlyBecauseBlacklisted($locked, $claimToken);
+                }
+
+                $this->quotaLedger->assertCanCompleteAttempt(
+                    $locked,
+                    $attemptNumber,
+                    $prepared->sizeBytes,
                 );
+
+                return $this->storeMessageAttachmentLocalFileAction->adoptPreparedFile(
+                    $locked,
+                    $prepared,
+                    $this->mergeConcurrentAttachmentValues(
+                        $snapshot,
+                        $locked,
+                        [
+                            'mime_type' => $mimeType ?? $snapshot->mime_type,
+                            'extension' => $extension ?? $snapshot->extension,
+                            'original_filename' => $originalFilename,
+                        ],
+                    ),
+                    function (MessageAttachment $storedAttachment) use ($attemptNumber, $prepared): void {
+                        $this->quotaLedger->completeAttempt(
+                            $storedAttachment,
+                            $attemptNumber,
+                            $prepared->sizeBytes,
+                        );
+                    },
+                    $claimToken,
+                );
+            });
+
+            if ($stored->local_path !== $prepared->path) {
+                $this->storeMessageAttachmentLocalFileAction->discardPreparedFile($prepared);
+            }
+
+            $this->deleteTemporaryUploadAfterFinalization($stored, $claimToken);
+
+            return $stored->fresh();
+        } catch (InboundMediaQuotaExceededException $exception) {
+            if ($prepared instanceof PreparedMessageAttachmentFile) {
+                $this->storeMessageAttachmentLocalFileAction->discardPreparedFile($prepared);
             }
 
             return $this->markQuotaBlocked($channel, $attachment, $claimToken, $exception);
         } catch (Throwable $exception) {
-            $this->deleteStableCandidateAfterFailedTransaction(
-                $disk,
-                $stableCandidatePath,
-                (int) $attachment->id,
-            );
-
-            if ($stableCopyCreated && filled($stablePath)) {
-                $this->deleteRolledBackInboundMediaFileAction->handle(
-                    (int) $attachment->id,
-                    $disk,
-                    $stablePath,
-                );
+            if ($prepared instanceof PreparedMessageAttachmentFile) {
+                $this->storeMessageAttachmentLocalFileAction->discardPreparedFile($prepared);
             }
 
             throw $exception;
         }
-
-        $this->deleteTemporaryUploadAfterFinalization($stored, $claimToken);
-
-        return $stored;
-    }
-
-    private function publishDirectUploadAtomically(
-        string $disk,
-        string $uploadedPath,
-        string $candidatePath,
-        string $stablePath,
-    ): void {
-        $storage = Storage::disk($disk);
-
-        if (! $storage->copy($uploadedPath, $candidatePath)) {
-            throw new RuntimeException('Direct media upload could not be prepared for finalization.');
-        }
-
-        if ($storage->exists($stablePath) && ! $storage->delete($stablePath)) {
-            throw new RuntimeException('Previous direct media finalization could not be removed.');
-        }
-
-        if (! $storage->move($candidatePath, $stablePath)) {
-            throw new RuntimeException('Direct media upload could not be finalized atomically.');
-        }
-    }
-
-    private function deleteStableCandidateAfterFailedTransaction(
-        string $disk,
-        ?string $path,
-        int $attachmentId,
-    ): void {
-        if (blank($path)) {
-            return;
-        }
-
-        $this->deleteRolledBackInboundMediaFileAction->handle(
-            $attachmentId,
-            $disk,
-            $path,
-        );
     }
 
     public function markQuotaBlocked(
@@ -499,10 +531,9 @@ class StoreTelegramAccountMediaDownloadResultAction
     ): MessageAttachment {
         $this->assertAttachmentBelongsToChannel($channel, $attachment);
 
-        return $this->withLockedAttachment($attachment, function (?Dialog $dialog, MessageAttachment $locked) use ($claimToken, $exception): MessageAttachment {
+        $stored = $this->withLockedAttachment($attachment, function (?Dialog $dialog, MessageAttachment $locked) use ($claimToken, $exception): MessageAttachment {
             $this->assertClaimToken($locked, $claimToken);
             $this->assertResultIsExpected($locked);
-            $this->deleteDirectUploadOrFail($locked, $claimToken);
             $reason = $exception->reason === InboundMediaDownloadPolicy::REASON_SIZE_ABOVE_AUTO_LIMIT
                 ? TelegramAccountMediaDownloadPolicy::ERROR_AUTO_DOWNLOAD_LIMIT_EXCEEDED
                 : $exception->reason;
@@ -535,6 +566,10 @@ class StoreTelegramAccountMediaDownloadResultAction
 
             return $locked->fresh();
         });
+
+        $this->deleteTemporaryUploadForClaim($stored, $claimToken);
+
+        return $stored;
     }
 
     private function quotaErrorMessage(?string $reason): ?string
@@ -558,7 +593,7 @@ class StoreTelegramAccountMediaDownloadResultAction
     ): MessageAttachment {
         $this->assertAttachmentBelongsToChannel($channel, $attachment);
 
-        return $this->withLockedAttachment($attachment, function (?Dialog $lockedDialog, MessageAttachment $locked) use ($claimToken, $payload): MessageAttachment {
+        $stored = $this->withLockedAttachment($attachment, function (?Dialog $lockedDialog, MessageAttachment $locked) use ($claimToken, $payload): MessageAttachment {
             $errorCode = $this->normalizeErrorCode($payload['error_code'] ?? null) ?? self::ERROR_GATEWAY_DOWNLOAD_FAILED;
 
             if (
@@ -593,8 +628,6 @@ class StoreTelegramAccountMediaDownloadResultAction
                 : $errorCode;
             $errorMessage = $this->normalizeSafeErrorMessage($payload['error_message'] ?? null)
                 ?? 'Telegram Account Gateway failed to download media file.';
-
-            $this->deleteDirectUploadOrFail($locked, $claimToken);
 
             $transferredBytes = $this->normalizeFileSize($payload['received_bytes'] ?? null) ?? 0;
             $this->quotaLedger->failAttempt(
@@ -649,6 +682,10 @@ class StoreTelegramAccountMediaDownloadResultAction
 
             return $locked->fresh();
         });
+
+        $this->deleteTemporaryUploadForClaim($stored, $claimToken);
+
+        return $stored;
     }
 
     private function assertAttachmentBelongsToChannel(Channel $channel, MessageAttachment $attachment): void
@@ -795,7 +832,6 @@ class StoreTelegramAccountMediaDownloadResultAction
         MessageAttachment $attachment,
         ?string $claimToken,
     ): MessageAttachment {
-        $this->deleteDirectUploadOrFail($attachment, $claimToken);
         $this->quotaLedger->failAttempt(
             $attachment,
             $attachment->mediaDownloadLedgerAttemptNumber(),
@@ -895,17 +931,55 @@ class StoreTelegramAccountMediaDownloadResultAction
         return is_string($sample) && $sample !== '' ? $sample : null;
     }
 
-    private function deleteDirectUploadOrFail(MessageAttachment $attachment, ?string $claimToken): void
-    {
-        if (! filled($claimToken)) {
-            return;
+    private function checkpointPreparedFileProgress(
+        MessageAttachment $attachment,
+        ?string $claimToken,
+    ): void {
+        $this->withLockedAttachment($attachment, function (?Dialog $dialog, MessageAttachment $locked) use ($claimToken): void {
+            $this->assertClaimToken($locked, $claimToken);
+            $this->assertResultIsExpected($locked);
+            $this->assertClaimLeaseActive($locked);
+
+            $locked->timestamps = false;
+            $locked->forceFill([
+                'media_download_heartbeat_at' => now(),
+                'updated_at' => now(),
+            ])->save();
+            $locked->timestamps = true;
+        });
+    }
+
+    /**
+     * Preserve provider values written after the download snapshot while still
+     * applying values actually resolved by the current download result.
+     *
+     * @param  array<string, mixed>  $preparedValues
+     * @return array<string, mixed>
+     */
+    private function mergeConcurrentAttachmentValues(
+        MessageAttachment $snapshot,
+        MessageAttachment $locked,
+        array $preparedValues,
+    ): array {
+        foreach (['mime_type', 'extension', 'original_filename'] as $key) {
+            if (
+                array_key_exists($key, $preparedValues)
+                && $locked->getAttribute($key) !== $snapshot->getAttribute($key)
+                && $preparedValues[$key] === $snapshot->getAttribute($key)
+            ) {
+                $preparedValues[$key] = $locked->getAttribute($key);
+            }
         }
 
-        $disk = MessageAttachment::storageDiskName();
-        $path = $this->storeMessageAttachmentLocalFileAction->buildDirectUploadPath($attachment, (string) $claimToken);
+        return $preparedValues;
+    }
 
-        if (Storage::disk($disk)->exists($path) && ! Storage::disk($disk)->delete($path)) {
-            throw new InvalidArgumentException('Temporary media upload could not be removed.');
+    private function deleteTemporaryUploadForClaim(
+        MessageAttachment $attachment,
+        ?string $claimToken,
+    ): void {
+        if (filled($claimToken)) {
+            $this->deleteTemporaryUploadAfterFinalization($attachment, (string) $claimToken);
         }
     }
 
@@ -916,7 +990,7 @@ class StoreTelegramAccountMediaDownloadResultAction
         $disk = MessageAttachment::storageDiskName();
         $path = $this->storeMessageAttachmentLocalFileAction->buildDirectUploadPath($attachment, $claimToken);
 
-        $this->deleteRolledBackInboundMediaFileAction->handle(
+        $this->deleteRolledBackInboundMediaFileAction->handlePrepared(
             (int) $attachment->id,
             $disk,
             $path,

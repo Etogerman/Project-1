@@ -7,6 +7,7 @@ use App\Models\MessageAttachment;
 use App\Services\Messages\DeleteRolledBackInboundMediaFileAction;
 use Illuminate\Filesystem\FilesystemAdapter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
@@ -59,6 +60,49 @@ class DeleteRolledBackInboundMediaFileActionTest extends TestCase
 
         $this->assertTrue($deleted);
         Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertMissing($path);
+    }
+
+    public function test_unreferenced_file_storage_io_runs_after_the_reference_transaction(): void
+    {
+        $attachment = MessageAttachment::factory()->create([
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
+            'local_disk' => null,
+            'local_path' => null,
+        ]);
+        $path = 'message-attachments/outside-transaction.pdf';
+        $baselineTransactionLevel = DB::connection()->transactionLevel();
+        $storageTransactionLevels = [];
+        $storage = Mockery::mock(FilesystemAdapter::class);
+        $storage->shouldReceive('exists')
+            ->once()
+            ->with($path)
+            ->andReturnUsing(function () use (&$storageTransactionLevels): bool {
+                $storageTransactionLevels[] = DB::connection()->transactionLevel();
+
+                return true;
+            });
+        $storage->shouldReceive('delete')
+            ->once()
+            ->with($path)
+            ->andReturnUsing(function () use (&$storageTransactionLevels): bool {
+                $storageTransactionLevels[] = DB::connection()->transactionLevel();
+
+                return true;
+            });
+        Storage::shouldReceive('disk')
+            ->once()
+            ->with(MessageAttachment::LOCAL_DISK_PRIVATE)
+            ->andReturn($storage);
+
+        $this->assertTrue(app(DeleteRolledBackInboundMediaFileAction::class)->deleteOrFail(
+            (int) $attachment->id,
+            MessageAttachment::LOCAL_DISK_PRIVATE,
+            $path,
+        ));
+        $this->assertSame(
+            [$baselineTransactionLevel, $baselineTransactionLevel],
+            $storageTransactionLevels,
+        );
     }
 
     public function test_it_dispatches_durable_cleanup_when_immediate_deletion_fails(): void

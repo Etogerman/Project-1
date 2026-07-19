@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Data\Messages\PreparedMessageAttachmentFile;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
@@ -13,6 +14,7 @@ use App\Services\Messages\DeleteRolledBackInboundMediaFileAction;
 use App\Services\Messages\MediaDownloadIntegrityException;
 use App\Services\Messages\MediaDownloadLeaseLostException;
 use App\Services\Messages\StoreMessageAttachmentLocalFileAction;
+use Illuminate\Filesystem\FilesystemAdapter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\DB;
@@ -129,7 +131,7 @@ class MessageAttachmentDownloadTest extends TestCase
         );
     }
 
-    public function test_store_action_schedules_durable_cleanup_for_a_failed_temporary_file(): void
+    public function test_store_action_schedules_durable_cleanup_for_a_failed_prepared_file(): void
     {
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
 
@@ -139,12 +141,13 @@ class MessageAttachmentDownloadTest extends TestCase
             'mime_type' => 'application/pdf',
         ]);
         $cleanup = Mockery::mock(DeleteRolledBackInboundMediaFileAction::class);
-        $cleanup->shouldReceive('handle')
+        $cleanup->shouldReceive('handlePrepared')
             ->once()
             ->withArgs(function (int $attachmentId, string $disk, string $path) use ($attachment): bool {
                 return $attachmentId === (int) $attachment->getKey()
                     && $disk === MessageAttachment::LOCAL_DISK_PRIVATE
-                    && str_contains($path, '.partial.');
+                    && str_contains($path, '.g1.unclaimed.commit.')
+                    && str_ends_with($path, '.pdf');
             })
             ->andReturnFalse();
         $stream = fopen('php://temp', 'w+b');
@@ -167,6 +170,170 @@ class MessageAttachmentDownloadTest extends TestCase
         } finally {
             fclose($stream);
         }
+    }
+
+    public function test_prepare_stream_exposes_throttled_storage_progress_callbacks_for_put(): void
+    {
+        $attachment = $this->createAttachment([
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
+            'extension' => 'pdf',
+            'mime_type' => 'application/pdf',
+        ]);
+        $contents = 'private-pdf-bytes';
+        $stream = fopen('php://temp', 'w+b');
+        $heartbeatCount = 0;
+        $storage = Mockery::mock(FilesystemAdapter::class);
+
+        $this->assertIsResource($stream);
+        fwrite($stream, $contents);
+        rewind($stream);
+
+        $storage->shouldReceive('put')
+            ->once()
+            ->andReturnUsing(function (string $path, mixed $storedStream, array $options) use (&$heartbeatCount): bool {
+                $this->assertIsResource($storedStream);
+                $this->assertStringContainsString('.g1.unclaimed.commit.', $path);
+                $this->assertIsCallable($options['before_upload'] ?? null);
+                $this->assertIsCallable(data_get($options, 'params.@http.progress'));
+                $this->assertSame(1, $heartbeatCount);
+
+                data_get($options, 'params.@http.progress')();
+                $this->assertSame(1, $heartbeatCount);
+
+                $this->travel(31)->seconds();
+                data_get($options, 'params.@http.progress')();
+                $this->assertSame(2, $heartbeatCount);
+
+                $this->travel(31)->seconds();
+                $options['before_upload']();
+                $this->assertSame(3, $heartbeatCount);
+
+                return true;
+            });
+        $storage->shouldReceive('size')
+            ->once()
+            ->with(Mockery::type('string'))
+            ->andReturn(strlen($contents));
+        Storage::shouldReceive('disk')
+            ->with(MessageAttachment::LOCAL_DISK_PRIVATE)
+            ->andReturn($storage);
+
+        try {
+            $prepared = app(StoreMessageAttachmentLocalFileAction::class)->prepareStream(
+                $attachment,
+                $stream,
+                strlen($contents),
+                'pdf',
+                onStorageProgress: static function () use (&$heartbeatCount): void {
+                    $heartbeatCount++;
+                },
+            );
+        } finally {
+            fclose($stream);
+        }
+
+        $this->assertSame(strlen($contents), $prepared->sizeBytes);
+        $this->assertSame(4, $heartbeatCount);
+    }
+
+    public function test_prepared_claim_is_authoritative_when_expected_claim_argument_is_omitted(): void
+    {
+        foreach (['stale-claim', null] as $preparedClaimToken) {
+            $attachment = $this->createAttachment([
+                'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
+                'media_download_generation' => 3,
+                'media_download_claim_token' => 'current-claim',
+                'media_download_attempt_deadline_at' => now()->addHour(),
+            ]);
+            $prepared = new PreparedMessageAttachmentFile(
+                attachmentId: (int) $attachment->id,
+                messageId: (int) $attachment->message_id,
+                generation: 3,
+                claimToken: $preparedClaimToken,
+                disk: MessageAttachment::storageDiskName(),
+                path: "message-attachments/{$attachment->message_id}/{$attachment->id}.candidate.pdf",
+                sizeBytes: 7,
+            );
+
+            try {
+                DB::transaction(function () use ($attachment, $prepared): void {
+                    $locked = MessageAttachment::query()
+                        ->whereKey($attachment->id)
+                        ->lockForUpdate()
+                        ->firstOrFail();
+
+                    app(StoreMessageAttachmentLocalFileAction::class)->adoptPreparedFile(
+                        $locked,
+                        $prepared,
+                    );
+                });
+
+                $this->fail('Expected a stale or unclaimed prepared file to be rejected against the active claim.');
+            } catch (MediaDownloadLeaseLostException) {
+                $this->assertTrue(true);
+            }
+
+            $attachment->refresh();
+
+            $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING, $attachment->download_status);
+            $this->assertSame('current-claim', $attachment->media_download_claim_token);
+            $this->assertNull($attachment->local_path);
+        }
+    }
+
+    public function test_prepare_copy_with_progress_uses_real_flysystem_adapter_contract(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+
+        $contents = 'private-pdf-bytes';
+        $sourcePath = 'message-attachments/source.pdf';
+        $attachment = $this->createAttachment([
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
+            'extension' => 'pdf',
+            'mime_type' => 'application/pdf',
+        ]);
+        $heartbeatCount = 0;
+
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->put($sourcePath, $contents);
+
+        $prepared = app(StoreMessageAttachmentLocalFileAction::class)->prepareCopy(
+            $attachment,
+            $sourcePath,
+            strlen($contents),
+            'pdf',
+            onStorageProgress: static function () use (&$heartbeatCount): void {
+                $heartbeatCount++;
+            },
+        );
+
+        $this->assertSame(2, $heartbeatCount);
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists($prepared->path);
+        $this->assertSame(
+            $contents,
+            Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->get($prepared->path),
+        );
+    }
+
+    public function test_repeated_unclaimed_store_removes_the_previous_object(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+
+        $attachment = $this->createAttachment([
+            'extension' => 'pdf',
+            'mime_type' => 'application/pdf',
+        ]);
+        $action = app(StoreMessageAttachmentLocalFileAction::class);
+        $first = $action->handle($attachment, 'first-version', 'pdf');
+        $firstPath = (string) $first->local_path;
+        $second = $action->handle($first, 'second-version', 'pdf');
+
+        $this->assertNotSame($firstPath, $second->local_path);
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertMissing($firstPath);
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $second->local_path);
+        $this->assertSame(
+            'second-version',
+            Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->get((string) $second->local_path),
+        );
     }
 
     public function test_claimed_store_rejects_an_expired_lease_at_final_publish(): void
@@ -242,10 +409,11 @@ class MessageAttachmentDownloadTest extends TestCase
         $storedAttachment = app(StoreMessageAttachmentLocalFileAction::class)
             ->handle($attachment, 'private-pdf-bytes');
 
-        $this->assertSame(
-            'message-attachments/'.$storedAttachment->message_id.'/'.$storedAttachment->id.'.pdf',
-            $storedAttachment->local_path,
+        $this->assertStringStartsWith(
+            'message-attachments/'.$storedAttachment->message_id.'/'.$storedAttachment->id.'.g1.unclaimed.commit.',
+            (string) $storedAttachment->local_path,
         );
+        $this->assertStringEndsWith('.pdf', (string) $storedAttachment->local_path);
         $this->assertTrue($storedAttachment->isLocallyDownloadable());
 
         $response = $this->actingAs($admin)

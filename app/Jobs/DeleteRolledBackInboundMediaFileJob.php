@@ -23,6 +23,7 @@ class DeleteRolledBackInboundMediaFileJob implements ShouldBeUnique, ShouldQueue
         public readonly int $attachmentId,
         public readonly string $disk,
         public readonly string $path,
+        public readonly bool $prepared = false,
     ) {
         $this->uniqueFor = max(
             60,
@@ -50,6 +51,12 @@ class DeleteRolledBackInboundMediaFileJob implements ShouldBeUnique, ShouldQueue
 
     public function handle(DeleteRolledBackInboundMediaFileAction $deleteFile): void
     {
+        if ($this->prepared) {
+            $deleteFile->deletePreparedOrFail($this->disk, $this->path);
+
+            return;
+        }
+
         $deleteFile->deleteOrFail($this->attachmentId, $this->disk, $this->path);
     }
 
