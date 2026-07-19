@@ -12,6 +12,37 @@ use Throwable;
 
 class DeleteRolledBackInboundMediaFileAction
 {
+    public function handlePrepared(int $attachmentId, string $disk, string $path): bool
+    {
+        try {
+            return $this->deletePreparedOrFail($disk, $path);
+        } catch (Throwable $exception) {
+            Log::warning('inbound_media.prepared_file_cleanup_failed', [
+                'attachment_id' => $attachmentId,
+                'error_type' => $exception::class,
+            ]);
+
+            DeleteRolledBackInboundMediaFileJob::dispatch($attachmentId, $disk, $path, true);
+
+            return false;
+        }
+    }
+
+    public function deletePreparedOrFail(string $disk, string $path): bool
+    {
+        $storage = Storage::disk($disk);
+
+        if (! $storage->exists($path)) {
+            return true;
+        }
+
+        if (! $storage->delete($path)) {
+            throw new RuntimeException('Prepared inbound media file could not be removed.');
+        }
+
+        return true;
+    }
+
     public function handle(int $attachmentId, string $disk, string $path): bool
     {
         try {
@@ -30,32 +61,22 @@ class DeleteRolledBackInboundMediaFileAction
 
     public function deleteOrFail(int $attachmentId, string $disk, string $path): bool
     {
-        return DB::transaction(function () use ($attachmentId, $disk, $path): bool {
+        $isReferenced = DB::transaction(function () use ($attachmentId, $disk, $path): bool {
             $attachment = MessageAttachment::query()
                 ->whereKey($attachmentId)
                 ->lockForUpdate()
                 ->first();
 
-            if (
+            return
                 $attachment instanceof MessageAttachment
-                && $attachment->download_status === MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED
                 && $attachment->local_disk === $disk
-                && $attachment->local_path === $path
-            ) {
-                return false;
-            }
-
-            $storage = Storage::disk($disk);
-
-            if (! $storage->exists($path)) {
-                return true;
-            }
-
-            if (! $storage->delete($path)) {
-                throw new RuntimeException('Rolled back inbound media file could not be removed.');
-            }
-
-            return true;
+                && $attachment->local_path === $path;
         }, 3);
+
+        if ($isReferenced) {
+            return false;
+        }
+
+        return $this->deletePreparedOrFail($disk, $path);
     }
 }

@@ -4,6 +4,7 @@ namespace App\Services\Bots;
 
 use App\Data\Messages\DownloadedMediaStreamData;
 use App\Data\Messages\InboundMediaDownloadFailureDecision;
+use App\Data\Messages\PreparedMessageAttachmentFile;
 use App\Jobs\DownloadBotMessageAttachmentJob;
 use App\Models\Channel;
 use App\Models\Dialog;
@@ -284,69 +285,121 @@ class DownloadBotMessageAttachmentsAction
         DownloadedMediaStreamData $downloaded,
     ): MessageAttachment {
         $this->checkpointDownloadProgress($attachment, $downloaded->sizeBytes);
+        [$prepared, $attachmentValues] = $this->prepareDownloadedAttachment($attachment, $downloaded);
 
-        return DB::transaction(function () use ($message, $attachment, $downloaded): MessageAttachment {
-            $dialogId = Message::query()
-                ->whereKey($message->id)
-                ->value('dialog_id');
-            $lockedDialog = $dialogId === null
-                ? null
-                : Dialog::query()
-                    ->with('dialogStage')
-                    ->whereKey($dialogId)
+        try {
+            $stored = DB::transaction(function () use (
+                $message,
+                $attachment,
+                $downloaded,
+                $prepared,
+                $attachmentValues,
+            ): MessageAttachment {
+                $dialogId = Message::query()
+                    ->whereKey($message->id)
+                    ->value('dialog_id');
+                $lockedDialog = $dialogId === null
+                    ? null
+                    : Dialog::query()
+                        ->with('dialogStage')
+                        ->whereKey($dialogId)
+                        ->lockForUpdate()
+                        ->first();
+                $lockedMessage = Message::query()
+                    ->whereKey($message->id)
                     ->lockForUpdate()
                     ->first();
-            $lockedMessage = Message::query()
-                ->whereKey($message->id)
-                ->lockForUpdate()
-                ->first();
-            $lockedAttachment = MessageAttachment::query()
-                ->whereKey($attachment->id)
-                ->lockForUpdate()
-                ->first();
+                $lockedAttachment = MessageAttachment::query()
+                    ->whereKey($attachment->id)
+                    ->lockForUpdate()
+                    ->first();
 
-            if (
-                ($dialogId !== null && ! $lockedDialog instanceof Dialog)
-                || ! $lockedMessage instanceof Message
-                || ! $lockedAttachment instanceof MessageAttachment
-                || (int) $lockedMessage->dialog_id !== (int) $dialogId
-                || (int) $lockedAttachment->message_id !== (int) $lockedMessage->id
-                || $lockedAttachment->download_status !== MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING
-                || blank($attachment->media_download_claim_token)
-                || blank($lockedAttachment->media_download_claim_token)
-                || ! hash_equals(
-                    (string) $lockedAttachment->media_download_claim_token,
-                    (string) $attachment->media_download_claim_token,
-                )
-            ) {
-                throw new MediaDownloadLeaseLostException;
-            }
+                if (
+                    ($dialogId !== null && ! $lockedDialog instanceof Dialog)
+                    || ! $lockedMessage instanceof Message
+                    || ! $lockedAttachment instanceof MessageAttachment
+                    || (int) $lockedMessage->dialog_id !== (int) $dialogId
+                    || (int) $lockedAttachment->message_id !== (int) $lockedMessage->id
+                ) {
+                    throw new MediaDownloadLeaseLostException;
+                }
 
-            if (
-                $lockedAttachment->manual_download_requested_at === null
-                && ! $this->dialogAutomationGate->accepts($lockedDialog)
-            ) {
-                return $this->markLockedMetadataOnlyBecauseBlacklisted(
+                if (
+                    $lockedAttachment->download_status === MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED
+                    && $this->hasLocalFile($lockedAttachment)
+                ) {
+                    return $lockedAttachment->fresh();
+                }
+
+                if (
+                    $lockedAttachment->download_status !== MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING
+                    || blank($attachment->media_download_claim_token)
+                    || blank($lockedAttachment->media_download_claim_token)
+                    || ! hash_equals(
+                        (string) $lockedAttachment->media_download_claim_token,
+                        (string) $attachment->media_download_claim_token,
+                    )
+                ) {
+                    throw new MediaDownloadLeaseLostException;
+                }
+
+                if (
+                    $lockedAttachment->manual_download_requested_at === null
+                    && ! $this->dialogAutomationGate->accepts($lockedDialog)
+                ) {
+                    return $this->markLockedMetadataOnlyBecauseBlacklisted(
+                        $lockedAttachment,
+                        $downloaded->sizeBytes,
+                    );
+                }
+
+                $attemptNumber = $lockedAttachment->mediaDownloadLedgerAttemptNumber();
+                $this->quotaLedger->assertCanCompleteAttempt(
                     $lockedAttachment,
+                    $attemptNumber,
                     $downloaded->sizeBytes,
                 );
-            }
 
-            return $this->storeDownloadedAttachmentUnderLock($lockedAttachment, $downloaded);
-        }, 3);
+                $mergedAttachmentValues = $this->mergeConcurrentAttachmentValues(
+                    $attachment,
+                    $lockedAttachment,
+                    $attachmentValues,
+                );
+
+                return $this->storeMessageAttachmentLocalFileAction->adoptPreparedFile(
+                    $lockedAttachment,
+                    $prepared,
+                    $mergedAttachmentValues,
+                    function (MessageAttachment $storedAttachment) use ($attemptNumber, $downloaded): void {
+                        $this->quotaLedger->completeAttempt(
+                            $storedAttachment,
+                            $attemptNumber,
+                            $downloaded->sizeBytes,
+                        );
+                    },
+                    expectedClaimToken: (string) $attachment->media_download_claim_token,
+                );
+            }, 3);
+        } catch (Throwable $throwable) {
+            $this->storeMessageAttachmentLocalFileAction->discardPreparedFile($prepared);
+
+            throw $throwable;
+        }
+
+        if ($stored->local_path !== $prepared->path) {
+            $this->storeMessageAttachmentLocalFileAction->discardPreparedFile($prepared);
+        }
+
+        return $stored->refresh();
     }
 
-    private function storeDownloadedAttachmentUnderLock(
+    /**
+     * @return array{0:PreparedMessageAttachmentFile,1:array<string,mixed>}
+     */
+    private function prepareDownloadedAttachment(
         MessageAttachment $attachment,
         DownloadedMediaStreamData $downloaded,
-    ): MessageAttachment {
-        $attemptNumber = $attachment->mediaDownloadLedgerAttemptNumber();
-        $this->quotaLedger->assertCanCompleteAttempt(
-            $attachment,
-            $attemptNumber,
-            $downloaded->sizeBytes,
-        );
-
+    ): array {
         $filename = $this->filenameFromHint($downloaded->filenameHint);
         $headerMimeType = $this->normalizeMimeType($downloaded->contentType);
         $attachmentExtension = MessageAttachment::sanitizeExtension($attachment->extension);
@@ -404,23 +457,75 @@ class DownloadBotMessageAttachmentsAction
 
         rewind($downloaded->stream);
 
-        $stored = $this->storeMessageAttachmentLocalFileAction->handleStream(
+        $prepared = $this->storeMessageAttachmentLocalFileAction->prepareStream(
             $attachment,
             $downloaded->stream,
             $downloaded->sizeBytes,
             $extension,
-            function (MessageAttachment $storedAttachment) use ($attemptNumber, $downloaded): void {
-                $this->quotaLedger->completeAttempt(
-                    $storedAttachment,
-                    $attemptNumber,
-                    $downloaded->sizeBytes,
-                );
-            },
             expectedClaimToken: (string) $attachment->media_download_claim_token,
-            attachmentValues: $values,
+            onStorageProgress: fn () => $this->checkpointDownloadProgress(
+                $attachment,
+                $downloaded->sizeBytes,
+            ),
         );
 
-        return $stored;
+        return [$prepared, $values];
+    }
+
+    /**
+     * Preserve values written after the download snapshot while still applying
+     * metadata that was actually resolved by the current download.
+     *
+     * @param  array<string, mixed>  $preparedValues
+     * @return array<string, mixed>
+     */
+    private function mergeConcurrentAttachmentValues(
+        MessageAttachment $snapshot,
+        MessageAttachment $locked,
+        array $preparedValues,
+    ): array {
+        foreach (['mime_type', 'extension', 'original_filename', 'media_kind'] as $key) {
+            if (
+                array_key_exists($key, $preparedValues)
+                && $locked->getAttribute($key) !== $snapshot->getAttribute($key)
+                && $preparedValues[$key] === $snapshot->getAttribute($key)
+            ) {
+                $preparedValues[$key] = $locked->getAttribute($key);
+            }
+        }
+
+        foreach (['provider_metadata', 'raw_payload_excerpt'] as $key) {
+            if (! array_key_exists($key, $preparedValues)) {
+                continue;
+            }
+
+            $snapshotValues = is_array($snapshot->getAttribute($key))
+                ? $snapshot->getAttribute($key)
+                : [];
+            $lockedValues = is_array($locked->getAttribute($key))
+                ? $locked->getAttribute($key)
+                : [];
+            $preparedArray = is_array($preparedValues[$key])
+                ? $preparedValues[$key]
+                : [];
+            $merged = $lockedValues;
+
+            foreach ($preparedArray as $metadataKey => $value) {
+                $snapshotValue = $snapshotValues[$metadataKey] ?? null;
+                $lockedValue = $lockedValues[$metadataKey] ?? null;
+
+                if ($value !== $snapshotValue || $lockedValue === $snapshotValue) {
+                    $merged[$metadataKey] = $value;
+                }
+            }
+
+            $preparedValues[$key] = array_filter(
+                $merged,
+                static fn (mixed $value): bool => $value !== null && $value !== '',
+            );
+        }
+
+        return $preparedValues;
     }
 
     private function markLockedMetadataOnlyBecauseBlacklisted(

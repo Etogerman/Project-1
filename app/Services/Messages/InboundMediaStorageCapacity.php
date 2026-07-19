@@ -11,7 +11,24 @@ class InboundMediaStorageCapacity
     public function availableBytes(): ?int
     {
         try {
-            $path = Storage::disk(MessageAttachment::storageDiskName())->path('');
+            $diskName = MessageAttachment::storageDiskName();
+            $driver = config("filesystems.disks.{$diskName}.driver");
+
+            if (! is_string($driver) || trim($driver) === '') {
+                return null;
+            }
+
+            $driver = strtolower(trim($driver));
+
+            if ($driver === 's3') {
+                return PHP_INT_MAX;
+            }
+
+            if ($driver !== 'local') {
+                return null;
+            }
+
+            $path = Storage::disk($diskName)->path('');
         } catch (Throwable) {
             return null;
         }
