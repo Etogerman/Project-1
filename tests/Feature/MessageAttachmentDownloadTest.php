@@ -174,6 +174,11 @@ class MessageAttachmentDownloadTest extends TestCase
 
     public function test_prepare_stream_exposes_throttled_storage_progress_callbacks_for_put(): void
     {
+        config()->set(
+            'filesystems.disks.'.MessageAttachment::LOCAL_DISK_PRIVATE.'.driver',
+            's3',
+        );
+
         $attachment = $this->createAttachment([
             'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
             'extension' => 'pdf',
@@ -234,6 +239,55 @@ class MessageAttachmentDownloadTest extends TestCase
 
         $this->assertSame(strlen($contents), $prepared->sizeBytes);
         $this->assertSame(4, $heartbeatCount);
+    }
+
+    public function test_prepare_stream_heartbeats_between_large_local_file_chunks(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+
+        $fileSizeBytes = (64 * 1024 * 1024) + 1;
+        $attachment = $this->createAttachment([
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
+            'extension' => 'bin',
+            'mime_type' => 'application/octet-stream',
+        ]);
+        $heartbeatCount = 0;
+        $stream = tmpfile();
+
+        $this->assertIsResource($stream);
+        $this->assertSame(0, fseek($stream, $fileSizeBytes - 1));
+        $this->assertSame(1, fwrite($stream, 'a'));
+        $sourcePath = stream_get_meta_data($stream)['uri'] ?? null;
+        $this->assertIsString($sourcePath);
+        $expectedHash = hash_file('sha256', $sourcePath);
+        $this->assertIsString($expectedHash);
+        rewind($stream);
+
+        try {
+            $prepared = app(StoreMessageAttachmentLocalFileAction::class)->prepareStream(
+                $attachment,
+                $stream,
+                $fileSizeBytes,
+                'bin',
+                onStorageProgress: static function () use (&$heartbeatCount): void {
+                    $heartbeatCount++;
+                },
+            );
+
+            $this->assertIsResource($stream);
+        } finally {
+            fclose($stream);
+        }
+
+        $storage = Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE);
+
+        $this->assertSame(4, $heartbeatCount);
+        $storage->assertExists($prepared->path);
+        $this->assertSame($fileSizeBytes, $prepared->sizeBytes);
+        $this->assertSame(
+            $expectedHash,
+            hash_file('sha256', $storage->path($prepared->path)),
+        );
     }
 
     public function test_prepared_claim_is_authoritative_when_expected_claim_argument_is_omitted(): void
