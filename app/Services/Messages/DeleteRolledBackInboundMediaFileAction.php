@@ -4,6 +4,7 @@ namespace App\Services\Messages;
 
 use App\Jobs\DeleteRolledBackInboundMediaFileJob;
 use App\Models\MessageAttachment;
+use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -22,7 +23,7 @@ class DeleteRolledBackInboundMediaFileAction
                 'error_type' => $exception::class,
             ]);
 
-            DeleteRolledBackInboundMediaFileJob::dispatch($attachmentId, $disk, $path, true);
+            $this->dispatchDurableCleanup($attachmentId, $disk, $path, true);
 
             return false;
         }
@@ -53,7 +54,7 @@ class DeleteRolledBackInboundMediaFileAction
                 'error_type' => $exception::class,
             ]);
 
-            DeleteRolledBackInboundMediaFileJob::dispatch($attachmentId, $disk, $path);
+            $this->dispatchDurableCleanup($attachmentId, $disk, $path);
 
             return false;
         }
@@ -78,5 +79,29 @@ class DeleteRolledBackInboundMediaFileAction
         }
 
         return $this->deletePreparedOrFail($disk, $path);
+    }
+
+    private function dispatchDurableCleanup(
+        int $attachmentId,
+        string $disk,
+        string $path,
+        bool $prepared = false,
+    ): void {
+        $job = new DeleteRolledBackInboundMediaFileJob($attachmentId, $disk, $path, $prepared);
+
+        try {
+            dispatch($job);
+        } catch (Throwable $exception) {
+            Context::forgetHidden([
+                'laravel_unique_job_cache_store',
+                'laravel_unique_job_key',
+            ]);
+
+            Log::error('inbound_media.rolled_back_file_cleanup_enqueue_failed', [
+                'attachment_id' => $attachmentId,
+                'prepared' => $prepared,
+                'error_type' => $exception::class,
+            ]);
+        }
     }
 }
