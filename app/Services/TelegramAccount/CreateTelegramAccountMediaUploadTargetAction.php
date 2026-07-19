@@ -12,8 +12,6 @@ use RuntimeException;
 
 class CreateTelegramAccountMediaUploadTargetAction
 {
-    private const S3_UPLOAD_TARGET_TTL_MINUTES = 120;
-
     private const LOCAL_UPLOAD_TARGET_TTL_MINUTES = 24 * 60;
 
     public const LOCAL_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024;
@@ -50,9 +48,16 @@ class CreateTelegramAccountMediaUploadTargetAction
         $path = $this->storeMessageAttachmentLocalFileAction->buildDirectUploadPath($attachment, $claimToken);
 
         if ($driver === 's3') {
+            $now = now();
+            $attemptDeadline = $attachment->media_download_attempt_deadline_at;
+
+            if ($attemptDeadline === null || $attemptDeadline->lessThanOrEqualTo($now)) {
+                throw new InvalidArgumentException('Media upload target requires an active attempt deadline.');
+            }
+
             $target = Storage::disk($disk)->temporaryUploadUrl(
                 $path,
-                now()->addMinutes(self::S3_UPLOAD_TARGET_TTL_MINUTES),
+                $attemptDeadline,
             );
             $headers = $this->normalizeHeaders($target['headers'] ?? []);
 
@@ -60,7 +65,7 @@ class CreateTelegramAccountMediaUploadTargetAction
                 'strategy' => self::STRATEGY_DIRECT_PUT,
                 'url' => (string) $target['url'],
                 'requires_gateway_auth' => false,
-                'expires_in_seconds' => self::S3_UPLOAD_TARGET_TTL_MINUTES * 60,
+                'expires_in_seconds' => max(1, (int) ceil($now->diffInSeconds($attemptDeadline))),
             ];
 
             if ($headers !== []) {

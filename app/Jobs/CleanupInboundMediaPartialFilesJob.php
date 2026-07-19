@@ -8,6 +8,7 @@ use App\Services\Messages\InboundMediaQuotaLedger;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
 use Throwable;
@@ -57,33 +58,38 @@ class CleanupInboundMediaPartialFilesJob implements ShouldBeUnique, ShouldQueue
         DeleteInboundMediaPartialFilesAction $deletePartialFiles,
         InboundMediaQuotaLedger $quotaLedger,
     ): void {
-        $attachment = MessageAttachment::query()->find($this->attachmentId);
+        DB::transaction(function () use ($deletePartialFiles, $quotaLedger): void {
+            $attachment = MessageAttachment::query()
+                ->whereKey($this->attachmentId)
+                ->lockForUpdate()
+                ->first();
 
-        if (! $attachment instanceof MessageAttachment) {
-            return;
-        }
+            if (! $attachment instanceof MessageAttachment) {
+                return;
+            }
 
-        $transferredBytes = $deletePartialFiles->scopedBytes(
-            $attachment,
-            $this->claimToken,
-            $this->generation,
-        );
-
-        if ($transferredBytes === null) {
-            throw new RuntimeException('Inbound media partial inspection failed.');
-        }
-
-        if ($transferredBytes > 0 && $this->isCurrentRevokedClaim($attachment)) {
-            $quotaLedger->checkpointTraffic(
+            $transferredBytes = $deletePartialFiles->scopedBytes(
                 $attachment,
-                $attachment->mediaDownloadLedgerAttemptNumber(),
-                $transferredBytes,
+                $this->claimToken,
+                $this->generation,
             );
-        }
 
-        if (! $deletePartialFiles->handle($attachment, $this->claimToken, $this->generation)) {
-            throw new RuntimeException('Inbound media partial cleanup failed.');
-        }
+            if ($transferredBytes === null) {
+                throw new RuntimeException('Inbound media partial inspection failed.');
+            }
+
+            if ($transferredBytes > 0 && $this->isCurrentRevokedClaim($attachment)) {
+                $quotaLedger->checkpointTraffic(
+                    $attachment,
+                    $attachment->mediaDownloadLedgerAttemptNumber(),
+                    $transferredBytes,
+                );
+            }
+
+            if (! $deletePartialFiles->handle($attachment, $this->claimToken, $this->generation)) {
+                throw new RuntimeException('Inbound media partial cleanup failed.');
+            }
+        }, 3);
     }
 
     private function isCurrentRevokedClaim(MessageAttachment $attachment): bool

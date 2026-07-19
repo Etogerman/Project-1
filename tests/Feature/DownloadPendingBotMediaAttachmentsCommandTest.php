@@ -11,7 +11,9 @@ use App\Models\MediaDownloadTrafficLedger;
 use App\Models\Message;
 use App\Models\MessageAttachment;
 use App\Services\Bots\DownloadBotMessageAttachmentsAction;
+use App\Services\Messages\DeleteRolledBackInboundMediaFileAction;
 use App\Services\Messages\InboundMediaDownloadPolicy;
+use App\Services\Messages\ReapStaleInboundMediaDownloadsAction;
 use App\Services\Messages\StoreMessageAttachmentLocalFileAction;
 use Illuminate\Console\Command;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -19,6 +21,7 @@ use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
+use Mockery;
 use Tests\TestCase;
 
 class DownloadPendingBotMediaAttachmentsCommandTest extends TestCase
@@ -107,6 +110,237 @@ class DownloadPendingBotMediaAttachmentsCommandTest extends TestCase
         $this->assertSame('image/jpeg', $attachment->mime_type);
         $this->assertTrue($attachment->isInlinePreviewable());
         Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists((string) $attachment->local_path);
+    }
+
+    public function test_bot_storage_upload_heartbeat_keeps_claim_alive_past_stale_lease_window(): void
+    {
+        config()->set('inbound_media.lease_stale_seconds', 120);
+        config()->set('inbound_media.storage.minimum_free_bytes', 0);
+        config()->set('inbound_media.storage.minimum_free_percent', 0);
+        config()->set(
+            'filesystems.disks.'.MessageAttachment::LOCAL_DISK_PRIVATE.'.driver',
+            's3',
+        );
+        $realStorage = Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        Http::fake([
+            'https://api.telegram.org/bottelegram-token/getFile*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_path' => 'photos/storage-heartbeat.jpg',
+                    'file_size' => strlen('telegram-image-bytes'),
+                ],
+            ]),
+            'https://api.telegram.org/file/bottelegram-token/photos/storage-heartbeat.jpg' => Http::response(
+                'telegram-image-bytes',
+                200,
+                [],
+            ),
+        ]);
+
+        $attachment = $this->createPendingTelegramBotImageAttachment();
+        $storage = Mockery::mock($realStorage)->makePartial();
+        $storage->shouldReceive('put')
+            ->once()
+            ->andReturnUsing(function (string $path, mixed $stream, array $options) use (
+                $attachment,
+                $realStorage,
+            ): bool {
+                $progress = data_get($options, 'params.@http.progress');
+
+                $this->assertIsCallable($progress);
+
+                $beforeHeartbeat = MessageAttachment::query()->findOrFail($attachment->id);
+                $claimToken = (string) $beforeHeartbeat->media_download_claim_token;
+
+                $this->assertSame(
+                    MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
+                    $beforeHeartbeat->download_status,
+                );
+                $this->assertNotSame('', $claimToken);
+                $this->assertNotNull($beforeHeartbeat->media_download_heartbeat_at);
+
+                $this->travel(121)->seconds();
+                $progress();
+
+                $afterHeartbeat = MessageAttachment::query()->findOrFail($attachment->id);
+
+                $this->assertSame(
+                    MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
+                    $afterHeartbeat->download_status,
+                );
+                $this->assertSame($claimToken, $afterHeartbeat->media_download_claim_token);
+                $this->assertTrue(
+                    $afterHeartbeat->media_download_heartbeat_at->gt($beforeHeartbeat->media_download_heartbeat_at),
+                );
+
+                $reaperStats = app(ReapStaleInboundMediaDownloadsAction::class)->handle();
+
+                $this->assertSame(0, $reaperStats['inspected']);
+                $this->assertSame(
+                    MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
+                    $afterHeartbeat->fresh()->download_status,
+                );
+                $this->assertSame($claimToken, $afterHeartbeat->media_download_claim_token);
+
+                return $realStorage->put($path, $stream, $options);
+            });
+        Storage::shouldReceive('disk')
+            ->with(MessageAttachment::LOCAL_DISK_PRIVATE)
+            ->andReturn($storage);
+
+        $this->artisan('bot-media:download-pending-images', [
+            '--force' => true,
+            '--limit' => 10,
+        ])->assertExitCode(0);
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $attachment->download_status);
+        $this->assertNull($attachment->media_download_claim_token);
+        $this->assertNull($attachment->media_download_heartbeat_at);
+        $realStorage->assertExists((string) $attachment->local_path);
+    }
+
+    public function test_bot_download_preserves_provider_metadata_written_while_storage_upload_is_running(): void
+    {
+        config()->set('inbound_media.storage.minimum_free_bytes', 0);
+        config()->set('inbound_media.storage.minimum_free_percent', 0);
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        Http::fake([
+            'https://api.telegram.org/bottelegram-token/getFile*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_path' => 'photos/concurrent-metadata.jpg',
+                    'file_size' => strlen('telegram-image-bytes'),
+                ],
+            ]),
+            'https://api.telegram.org/file/bottelegram-token/photos/concurrent-metadata.jpg' => Http::response(
+                'telegram-image-bytes',
+                200,
+                [],
+            ),
+        ]);
+
+        $attachment = $this->createPendingTelegramBotImageAttachment();
+        $attachment->forceFill([
+            'provider_metadata' => [
+                'caption' => 'snapshot caption',
+                'source' => 'webhook',
+            ],
+        ])->save();
+
+        $realStore = app(StoreMessageAttachmentLocalFileAction::class);
+        $store = Mockery::mock(StoreMessageAttachmentLocalFileAction::class, [
+            app(DeleteRolledBackInboundMediaFileAction::class),
+        ])->makePartial();
+        $store->shouldReceive('prepareStream')
+            ->once()
+            ->andReturnUsing(function (mixed ...$arguments) use ($realStore, $attachment) {
+                $prepared = $realStore->prepareStream(...$arguments);
+
+                MessageAttachment::query()
+                    ->whereKey($attachment->id)
+                    ->update([
+                        'provider_metadata' => json_encode([
+                            'caption' => 'fresh concurrent caption',
+                            'source' => 'webhook',
+                            'concurrent_key' => 'preserved',
+                        ], JSON_THROW_ON_ERROR),
+                    ]);
+
+                return $prepared;
+            });
+        $this->app->instance(StoreMessageAttachmentLocalFileAction::class, $store);
+
+        $this->artisan('bot-media:download-pending-images', [
+            '--force' => true,
+            '--limit' => 10,
+        ])->assertExitCode(0);
+
+        $attachment->refresh();
+
+        $this->assertSame(
+            MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+            $attachment->download_status,
+            json_encode($attachment->only([
+                'download_status',
+                'safe_error_code',
+                'safe_error_message',
+            ]), JSON_THROW_ON_ERROR),
+        );
+        $this->assertSame('fresh concurrent caption', data_get($attachment->provider_metadata, 'caption'));
+        $this->assertSame('preserved', data_get($attachment->provider_metadata, 'concurrent_key'));
+        $this->assertSame('webhook', data_get($attachment->provider_metadata, 'source'));
+    }
+
+    public function test_bot_download_keeps_file_committed_by_concurrent_finalizer_and_discards_its_candidate(): void
+    {
+        config()->set('inbound_media.storage.minimum_free_bytes', 0);
+        config()->set('inbound_media.storage.minimum_free_percent', 0);
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+        Http::fake([
+            'https://api.telegram.org/bottelegram-token/getFile*' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'file_path' => 'photos/concurrent-finalizer.jpg',
+                    'file_size' => strlen('telegram-image-bytes'),
+                ],
+            ]),
+            'https://api.telegram.org/file/bottelegram-token/photos/concurrent-finalizer.jpg' => Http::response(
+                'telegram-image-bytes',
+                200,
+                [],
+            ),
+        ]);
+
+        $attachment = $this->createPendingTelegramBotImageAttachment();
+        $stablePath = "message-attachments/{$attachment->message_id}/{$attachment->id}.concurrent.jpg";
+        $candidatePath = null;
+        $realStore = app(StoreMessageAttachmentLocalFileAction::class);
+        $store = Mockery::mock(StoreMessageAttachmentLocalFileAction::class, [
+            app(DeleteRolledBackInboundMediaFileAction::class),
+        ])->makePartial();
+        $store->shouldReceive('prepareStream')
+            ->once()
+            ->andReturnUsing(function (mixed ...$arguments) use (
+                $realStore,
+                $attachment,
+                $stablePath,
+                &$candidatePath,
+            ) {
+                $prepared = $realStore->prepareStream(...$arguments);
+                $candidatePath = $prepared->path;
+
+                Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->put($stablePath, 'stable bytes');
+                MessageAttachment::query()
+                    ->whereKey($attachment->id)
+                    ->update([
+                        'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
+                        'local_disk' => MessageAttachment::LOCAL_DISK_PRIVATE,
+                        'local_path' => $stablePath,
+                        'file_size_bytes' => strlen('stable bytes'),
+                        'media_download_claim_token' => null,
+                        'media_download_claimed_at' => null,
+                        'media_download_heartbeat_at' => null,
+                        'media_download_attempt_deadline_at' => null,
+                    ]);
+
+                return $prepared;
+            });
+        $this->app->instance(StoreMessageAttachmentLocalFileAction::class, $store);
+
+        $this->artisan('bot-media:download-pending-images', [
+            '--force' => true,
+            '--limit' => 10,
+        ])->assertExitCode(0);
+
+        $attachment->refresh();
+
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $attachment->download_status);
+        $this->assertSame($stablePath, $attachment->local_path);
+        $this->assertIsString($candidatePath);
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists($stablePath);
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertMissing($candidatePath);
     }
 
     public function test_command_streams_telegram_bot_media_from_configured_local_api_files_root(): void

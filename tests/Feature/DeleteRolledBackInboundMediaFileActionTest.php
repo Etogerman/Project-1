@@ -5,8 +5,13 @@ namespace Tests\Feature;
 use App\Jobs\DeleteRolledBackInboundMediaFileJob;
 use App\Models\MessageAttachment;
 use App\Services\Messages\DeleteRolledBackInboundMediaFileAction;
+use Illuminate\Bus\UniqueLock;
+use Illuminate\Contracts\Bus\Dispatcher;
+use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Filesystem\FilesystemAdapter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Context;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
@@ -61,6 +66,49 @@ class DeleteRolledBackInboundMediaFileActionTest extends TestCase
         Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertMissing($path);
     }
 
+    public function test_unreferenced_file_storage_io_runs_after_the_reference_transaction(): void
+    {
+        $attachment = MessageAttachment::factory()->create([
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
+            'local_disk' => null,
+            'local_path' => null,
+        ]);
+        $path = 'message-attachments/outside-transaction.pdf';
+        $baselineTransactionLevel = DB::connection()->transactionLevel();
+        $storageTransactionLevels = [];
+        $storage = Mockery::mock(FilesystemAdapter::class);
+        $storage->shouldReceive('exists')
+            ->once()
+            ->with($path)
+            ->andReturnUsing(function () use (&$storageTransactionLevels): bool {
+                $storageTransactionLevels[] = DB::connection()->transactionLevel();
+
+                return true;
+            });
+        $storage->shouldReceive('delete')
+            ->once()
+            ->with($path)
+            ->andReturnUsing(function () use (&$storageTransactionLevels): bool {
+                $storageTransactionLevels[] = DB::connection()->transactionLevel();
+
+                return true;
+            });
+        Storage::shouldReceive('disk')
+            ->once()
+            ->with(MessageAttachment::LOCAL_DISK_PRIVATE)
+            ->andReturn($storage);
+
+        $this->assertTrue(app(DeleteRolledBackInboundMediaFileAction::class)->deleteOrFail(
+            (int) $attachment->id,
+            MessageAttachment::LOCAL_DISK_PRIVATE,
+            $path,
+        ));
+        $this->assertSame(
+            [$baselineTransactionLevel, $baselineTransactionLevel],
+            $storageTransactionLevels,
+        );
+    }
+
     public function test_it_dispatches_durable_cleanup_when_immediate_deletion_fails(): void
     {
         Queue::fake();
@@ -91,6 +139,92 @@ class DeleteRolledBackInboundMediaFileActionTest extends TestCase
                 && $job->disk === MessageAttachment::LOCAL_DISK_PRIVATE
                 && $job->path === $path,
         );
+    }
+
+    public function test_enqueue_failure_releases_unique_lock_for_durable_retry(): void
+    {
+        config(['cache.default' => 'array']);
+
+        $path = 'message-attachments/prepared-file.pdf';
+        $storage = Mockery::mock(FilesystemAdapter::class);
+        $storage->shouldReceive('exists')->once()->with($path)->andReturnTrue();
+        $storage->shouldReceive('delete')->once()->with($path)->andReturnFalse();
+        Storage::shouldReceive('disk')
+            ->once()
+            ->with(MessageAttachment::LOCAL_DISK_PRIVATE)
+            ->andReturn($storage);
+
+        $dispatcher = Mockery::mock(Dispatcher::class);
+        $dispatcher->shouldReceive('dispatch')
+            ->once()
+            ->with(Mockery::type(DeleteRolledBackInboundMediaFileJob::class))
+            ->andThrow(new RuntimeException('queue unavailable'));
+        $this->app->instance(Dispatcher::class, $dispatcher);
+
+        $this->assertFalse(app(DeleteRolledBackInboundMediaFileAction::class)->handlePrepared(
+            42,
+            MessageAttachment::LOCAL_DISK_PRIVATE,
+            $path,
+        ));
+
+        $job = new DeleteRolledBackInboundMediaFileJob(
+            42,
+            MessageAttachment::LOCAL_DISK_PRIVATE,
+            $path,
+            true,
+        );
+        $uniqueLock = new UniqueLock(app(CacheRepository::class));
+
+        $this->assertTrue($uniqueLock->acquire($job));
+        $uniqueLock->release($job);
+        $this->assertTrue(Context::missingHidden('laravel_unique_job_cache_store'));
+        $this->assertTrue(Context::missingHidden('laravel_unique_job_key'));
+    }
+
+    public function test_copy_failure_schedules_rechecks_even_when_prepared_path_is_not_visible_yet(): void
+    {
+        Queue::fake();
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+
+        $path = 'message-attachments/possibly-late.commit.file.pdf';
+
+        $this->assertTrue(app(DeleteRolledBackInboundMediaFileAction::class)->handlePossiblyLatePrepared(
+            42,
+            MessageAttachment::LOCAL_DISK_PRIVATE,
+            $path,
+        ));
+
+        Queue::assertPushed(
+            DeleteRolledBackInboundMediaFileJob::class,
+            static fn (DeleteRolledBackInboundMediaFileJob $job): bool => $job->attachmentId === 42
+                && $job->disk === MessageAttachment::LOCAL_DISK_PRIVATE
+                && $job->path === $path
+                && $job->prepared
+                && $job->waitForLateArrival,
+        );
+    }
+
+    public function test_late_arrival_cleanup_releases_missing_path_for_another_check(): void
+    {
+        config(['inbound_media.cleanup.retry_delays_seconds' => [10, 20, 30, 40]]);
+
+        $action = Mockery::mock(DeleteRolledBackInboundMediaFileAction::class);
+        $action->shouldReceive('deletePreparedIfPresentOrFail')
+            ->once()
+            ->with(MessageAttachment::LOCAL_DISK_PRIVATE, 'message-attachments/late.commit.file.pdf')
+            ->andReturnFalse();
+
+        $job = (new DeleteRolledBackInboundMediaFileJob(
+            42,
+            MessageAttachment::LOCAL_DISK_PRIVATE,
+            'message-attachments/late.commit.file.pdf',
+            true,
+            true,
+        ))->withFakeQueueInteractions();
+
+        $job->handle($action);
+
+        $job->assertReleased(10);
     }
 
     public function test_durable_cleanup_job_retries_unconfirmed_deletion(): void

@@ -2458,7 +2458,7 @@ class TelegramAccountGatewayControllerTest extends TestCase
 
         $claimedAttachment = $attachment->fresh();
         $claimToken = (string) $claimedAttachment->media_download_claim_token;
-        $expectedLocalPath = app(StoreMessageAttachmentLocalFileAction::class)->buildClaimedPath(
+        $claimedLocalPath = app(StoreMessageAttachmentLocalFileAction::class)->buildClaimedPath(
             $claimedAttachment,
             'jpg',
             $claimToken,
@@ -2486,8 +2486,15 @@ class TelegramAccountGatewayControllerTest extends TestCase
         $this->assertSame('image/jpeg', $attachment->mime_type);
         $this->assertSame('jpg', $attachment->extension);
         $this->assertTrue($attachment->isInlinePreviewable());
-        $this->assertSame($expectedLocalPath, $attachment->local_path);
-        $this->assertSame($contents, Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->get((string) $attachment->local_path));
+        $storedPath = (string) $attachment->local_path;
+        $preparedPathPrefix = substr($claimedLocalPath, 0, -strlen('.jpg')).'.commit.';
+
+        $this->assertMatchesRegularExpression(
+            '/^'.preg_quote($preparedPathPrefix, '/').'[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\.jpg$/',
+            $storedPath,
+        );
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists($storedPath);
+        $this->assertSame($contents, Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->get($storedPath));
     }
 
     public function test_gateway_successful_media_download_result_does_not_overwrite_provider_file_identity(): void
@@ -3734,15 +3741,20 @@ class TelegramAccountGatewayControllerTest extends TestCase
             ->assertJsonPath('download_status', MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED);
 
         $attachment->refresh();
-        $stablePath = app(StoreMessageAttachmentLocalFileAction::class)
+        $claimedLocalPath = app(StoreMessageAttachmentLocalFileAction::class)
             ->buildClaimedPath($attachment, 'pdf', $claimToken);
+        $storedPath = (string) $attachment->local_path;
+        $preparedPathPrefix = substr($claimedLocalPath, 0, -strlen('.pdf')).'.commit.';
 
         $this->assertSame(
             'FIRST-SECOND',
-            Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->get((string) $attachment->local_path),
+            Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->get($storedPath),
         );
-        $this->assertSame($stablePath, $attachment->local_path);
-        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists($stablePath);
+        $this->assertMatchesRegularExpression(
+            '/^'.preg_quote($preparedPathPrefix, '/').'[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\.pdf$/',
+            $storedPath,
+        );
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists($storedPath);
         Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertMissing($temporaryPath);
     }
 

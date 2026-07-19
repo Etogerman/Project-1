@@ -250,6 +250,32 @@ class InboundMediaQuotaLedgerTest extends TestCase
         $this->assertSame(1, MediaDownloadStorageLedger::query()->count());
     }
 
+    public function test_s3_storage_enforcement_uses_logical_limits_without_host_disk_probe(): void
+    {
+        config([
+            'filesystems.message_attachments_disk' => 'quota_s3',
+            'filesystems.disks.quota_s3' => [
+                'driver' => 's3',
+            ],
+            'inbound_media.storage.global_limit_bytes' => 1_000,
+            'inbound_media.storage.channel_limit_bytes' => 1_000,
+            'inbound_media.storage.minimum_free_bytes' => 10 * 1024 * 1024 * 1024,
+            'inbound_media.storage.minimum_free_percent' => 10,
+        ]);
+        $ledger = app(InboundMediaQuotaLedger::class);
+        $first = $this->createAttachment(100);
+
+        $this->assertTrue($ledger->reserveForAttempt($first, 1)->allowed);
+
+        config(['inbound_media.storage.global_limit_bytes' => 150]);
+        $second = $this->createAttachment(100);
+        $decision = $ledger->reserveForAttempt($second, 1);
+
+        $this->assertFalse($decision->allowed);
+        $this->assertSame(InboundMediaDownloadPolicy::REASON_STORAGE_QUOTA_EXCEEDED, $decision->reason);
+        $this->assertSame(1, MediaDownloadStorageLedger::query()->count());
+    }
+
     public function test_preview_snapshot_reuses_budget_rows_and_physical_capacity_for_same_channel(): void
     {
         $this->mock(InboundMediaStorageCapacity::class, function (MockInterface $mock): void {
