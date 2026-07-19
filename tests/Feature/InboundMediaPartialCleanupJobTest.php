@@ -140,6 +140,56 @@ class InboundMediaPartialCleanupJobTest extends TestCase
         Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertMissing($commitPath);
     }
 
+    public function test_generation_cleanup_without_claim_preserves_current_active_claim_files(): void
+    {
+        $attachment = $this->createAttachment();
+        $attachment->forceFill([
+            'media_download_claim_token' => 'active-token',
+        ])->save();
+        $directory = MessageAttachment::LOCAL_PATH_PREFIX.'/'.$attachment->message_id.'/';
+        $activePartialPath = $directory.$attachment->id.'.bin.partial.g1.active-token.current';
+        $activeUploadPath = $directory.$attachment->id.'.g1.active-token.upload';
+        $activeCommitPath = $directory.$attachment->id.'.g1.active-token.commit.current.mp4';
+        $orphanCommitPath = $directory.$attachment->id.'.g1.old-token.commit.orphan.mp4';
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->put($activePartialPath, 'active-partial');
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->put($activeUploadPath, 'active-upload');
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->put($activeCommitPath, 'active-commit');
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->put($orphanCommitPath, 'orphan');
+
+        (new CleanupInboundMediaPartialFilesJob($attachment->id, 1))
+            ->handle(
+                app(DeleteInboundMediaPartialFilesAction::class),
+                app(InboundMediaQuotaLedger::class),
+            );
+
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists($activePartialPath);
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists($activeUploadPath);
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists($activeCommitPath);
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertMissing($orphanCommitPath);
+    }
+
+    public function test_legacy_cleanup_preserves_current_active_claim_files(): void
+    {
+        $attachment = $this->createAttachment();
+        $attachment->forceFill([
+            'media_download_claim_token' => 'active-token',
+        ])->save();
+        $directory = MessageAttachment::LOCAL_PATH_PREFIX.'/'.$attachment->message_id.'/';
+        $activeCommitPath = $directory.$attachment->id.'.g1.active-token.commit.current.mp4';
+        $orphanCommitPath = $directory.$attachment->id.'.g1.old-token.commit.orphan.mp4';
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->put($activeCommitPath, 'active');
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->put($orphanCommitPath, 'orphan');
+
+        (new CleanupInboundMediaPartialFilesJob($attachment->id))
+            ->handle(
+                app(DeleteInboundMediaPartialFilesAction::class),
+                app(InboundMediaQuotaLedger::class),
+            );
+
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists($activeCommitPath);
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertMissing($orphanCommitPath);
+    }
+
     public function test_final_failure_logs_only_safe_dead_letter_metadata(): void
     {
         Log::spy();
