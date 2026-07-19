@@ -117,6 +117,10 @@ class DownloadPendingBotMediaAttachmentsCommandTest extends TestCase
         config()->set('inbound_media.lease_stale_seconds', 120);
         config()->set('inbound_media.storage.minimum_free_bytes', 0);
         config()->set('inbound_media.storage.minimum_free_percent', 0);
+        config()->set(
+            'filesystems.disks.'.MessageAttachment::LOCAL_DISK_PRIVATE.'.driver',
+            's3',
+        );
         $realStorage = Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
         Http::fake([
             'https://api.telegram.org/bottelegram-token/getFile*' => Http::response([

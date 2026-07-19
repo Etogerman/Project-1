@@ -148,6 +148,7 @@ class StoreMessageAttachmentLocalFileAction
             $extension ?? $attachment->extension,
             $expectedClaimToken,
         );
+        $storage = Storage::disk($disk);
         $storageOptions = [];
 
         if ($onStorageProgress !== null) {
@@ -156,13 +157,26 @@ class StoreMessageAttachmentLocalFileAction
         }
 
         try {
-            $stored = Storage::disk($disk)->put($path, $stream, $storageOptions);
+            if (
+                $onStorageProgress !== null
+                && $this->storageDiskUsesLocalDriver($disk, $storage)
+            ) {
+                $this->writeLocalStreamWithProgress(
+                    $storage,
+                    $path,
+                    $stream,
+                    $onStorageProgress,
+                );
+                $stored = true;
+            } else {
+                $stored = $storage->put($path, $stream, $storageOptions);
+            }
 
             if ($stored === false) {
                 throw new RuntimeException('Failed to prepare message attachment file.');
             }
 
-            $storedFileSizeBytes = (int) Storage::disk($disk)->size($path);
+            $storedFileSizeBytes = (int) $storage->size($path);
 
             if ($onStorageProgress !== null) {
                 $onStorageProgress();
@@ -538,6 +552,56 @@ class StoreMessageAttachmentLocalFileAction
             }
 
             fclose($source);
+        }
+
+        if (! $storage->setVisibility($destinationPath, 'private')) {
+            throw new RuntimeException('Failed to protect the message attachment destination file.');
+        }
+    }
+
+    /**
+     * @param  resource  $stream
+     */
+    private function writeLocalStreamWithProgress(
+        FilesystemAdapter $storage,
+        string $destinationPath,
+        mixed $stream,
+        callable $onStorageProgress,
+    ): void {
+        $directory = dirname($destinationPath);
+
+        if ($directory !== '.' && ! $storage->makeDirectory($directory)) {
+            throw new RuntimeException('Failed to create the message attachment directory.');
+        }
+
+        $destination = @fopen($storage->path($destinationPath), 'xb');
+
+        if ($destination === false) {
+            throw new RuntimeException('Failed to open the message attachment destination file.');
+        }
+
+        try {
+            while (! feof($stream)) {
+                $writtenBytes = stream_copy_to_stream(
+                    $stream,
+                    $destination,
+                    self::LOCAL_COPY_CHUNK_BYTES,
+                );
+
+                if ($writtenBytes === false || ($writtenBytes === 0 && ! feof($stream))) {
+                    throw new RuntimeException('Failed while writing the message attachment file.');
+                }
+
+                if ($writtenBytes > 0) {
+                    $onStorageProgress();
+                }
+            }
+
+            if (! fflush($destination)) {
+                throw new RuntimeException('Failed to flush the message attachment destination file.');
+            }
+        } finally {
+            fclose($destination);
         }
 
         if (! $storage->setVisibility($destinationPath, 'private')) {
