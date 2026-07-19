@@ -103,6 +103,13 @@ class DeleteInboundMediaPartialFilesAction
             && filled($attachment->local_path)
                 ? (string) $attachment->local_path
                 : null;
+        $currentClaimToken = trim((string) $attachment->media_download_claim_token);
+        $activeClaimToken = $attachment->download_status === MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING
+            && $currentClaimToken !== ''
+            && ! str_starts_with($currentClaimToken, 'revoked-')
+                ? $this->safeClaimToken($currentClaimToken)
+                : null;
+        $activeGeneration = max(1, (int) $attachment->media_download_generation);
 
         return array_values(array_filter(
             Storage::disk(MessageAttachment::storageDiskName())->files($directory),
@@ -111,6 +118,8 @@ class DeleteInboundMediaPartialFilesAction
                 $safeClaimToken,
                 $generation,
                 $referencedPath,
+                $activeClaimToken,
+                $activeGeneration,
             ): bool {
                 if ($referencedPath !== null && $path === $referencedPath) {
                     return false;
@@ -120,6 +129,21 @@ class DeleteInboundMediaPartialFilesAction
 
                 if (! str_starts_with($basename, $prefix)) {
                     return false;
+                }
+
+                if ($safeClaimToken === null && $activeClaimToken !== null) {
+                    $activeGenerationMarker = '.g'.$activeGeneration.'.'.$activeClaimToken;
+
+                    if (
+                        str_contains(
+                            $basename,
+                            '.partial.g'.$activeGeneration.'.'.$activeClaimToken.'.',
+                        )
+                        || str_ends_with($basename, $activeGenerationMarker.'.upload')
+                        || str_contains($basename, $activeGenerationMarker.'.commit.')
+                    ) {
+                        return false;
+                    }
                 }
 
                 if ($generation === null) {
