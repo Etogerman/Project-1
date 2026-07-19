@@ -107,6 +107,51 @@ class InboundMediaLeaseReaperTest extends TestCase
         $this->assertSame(73, $traffic->consumed_bytes);
     }
 
+    public function test_stale_lease_deletes_unadopted_commit_candidate_before_releasing_quota(): void
+    {
+        $attachment = $this->createDownloadingAttachment(
+            provider: MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT,
+            heartbeatAt: now()->subSeconds(121),
+        );
+        $commitPath = MessageAttachment::LOCAL_PATH_PREFIX
+            .'/'.$attachment->message_id
+            .'/'.$attachment->id
+            .'.g1.claim-token.commit.orphan.mp4';
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->put($commitPath, str_repeat('x', 73));
+
+        app(ReapStaleInboundMediaDownloadsAction::class)->handle();
+
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertMissing($commitPath);
+        $this->assertSame(
+            MediaDownloadStorageLedger::STATUS_RELEASED,
+            MediaDownloadStorageLedger::query()->firstOrFail()->status,
+        );
+        $traffic = MediaDownloadTrafficLedger::query()->firstOrFail();
+        $this->assertSame(MediaDownloadTrafficLedger::STATUS_CONSUMED, $traffic->status);
+        $this->assertSame(73, $traffic->consumed_bytes);
+    }
+
+    public function test_stale_lease_does_not_double_count_upload_and_commit_candidate_bytes(): void
+    {
+        $attachment = $this->createDownloadingAttachment(
+            provider: MessageAttachment::PROVIDER_TELEGRAM_ACCOUNT,
+            heartbeatAt: now()->subSeconds(121),
+        );
+        $directory = MessageAttachment::LOCAL_PATH_PREFIX.'/'.$attachment->message_id.'/';
+        $uploadPath = $directory.$attachment->id.'.g1.claim-token.upload';
+        $commitPath = $directory.$attachment->id.'.g1.claim-token.commit.orphan.mp4';
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->put($uploadPath, str_repeat('x', 73));
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->put($commitPath, str_repeat('x', 73));
+
+        app(ReapStaleInboundMediaDownloadsAction::class)->handle();
+
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertMissing($uploadPath);
+        Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertMissing($commitPath);
+        $traffic = MediaDownloadTrafficLedger::query()->firstOrFail();
+        $this->assertSame(MediaDownloadTrafficLedger::STATUS_CONSUMED, $traffic->status);
+        $this->assertSame(73, $traffic->consumed_bytes);
+    }
+
     public function test_fifth_stale_attempt_becomes_terminal_failure(): void
     {
         $attachment = $this->createDownloadingAttachment(

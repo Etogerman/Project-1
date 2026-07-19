@@ -4,6 +4,8 @@ namespace App\Services\Messages;
 
 use App\Jobs\DeleteRolledBackInboundMediaFileJob;
 use App\Models\MessageAttachment;
+use Illuminate\Bus\UniqueLock;
+use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -29,12 +31,45 @@ class DeleteRolledBackInboundMediaFileAction
         }
     }
 
+    public function handlePossiblyLatePrepared(int $attachmentId, string $disk, string $path): bool
+    {
+        $deleted = true;
+
+        try {
+            $this->deletePreparedOrFail($disk, $path);
+        } catch (Throwable $exception) {
+            $deleted = false;
+
+            Log::warning('inbound_media.prepared_file_cleanup_failed', [
+                'attachment_id' => $attachmentId,
+                'error_type' => $exception::class,
+            ]);
+        }
+
+        $this->dispatchDurableCleanup(
+            $attachmentId,
+            $disk,
+            $path,
+            prepared: true,
+            waitForLateArrival: true,
+        );
+
+        return $deleted;
+    }
+
     public function deletePreparedOrFail(string $disk, string $path): bool
+    {
+        $this->deletePreparedIfPresentOrFail($disk, $path);
+
+        return true;
+    }
+
+    public function deletePreparedIfPresentOrFail(string $disk, string $path): bool
     {
         $storage = Storage::disk($disk);
 
         if (! $storage->exists($path)) {
-            return true;
+            return false;
         }
 
         if (! $storage->delete($path)) {
@@ -86,16 +121,33 @@ class DeleteRolledBackInboundMediaFileAction
         string $disk,
         string $path,
         bool $prepared = false,
+        bool $waitForLateArrival = false,
     ): void {
-        $job = new DeleteRolledBackInboundMediaFileJob($attachmentId, $disk, $path, $prepared);
+        $job = new DeleteRolledBackInboundMediaFileJob(
+            $attachmentId,
+            $disk,
+            $path,
+            $prepared,
+            $waitForLateArrival,
+        );
 
         try {
             dispatch($job);
         } catch (Throwable $exception) {
-            Context::forgetHidden([
-                'laravel_unique_job_cache_store',
-                'laravel_unique_job_key',
-            ]);
+            try {
+                (new UniqueLock(app(CacheRepository::class)))->release($job);
+            } catch (Throwable $lockException) {
+                Log::error('inbound_media.rolled_back_file_cleanup_unique_lock_release_failed', [
+                    'attachment_id' => $attachmentId,
+                    'prepared' => $prepared,
+                    'error_type' => $lockException::class,
+                ]);
+            } finally {
+                Context::forgetHidden([
+                    'laravel_unique_job_cache_store',
+                    'laravel_unique_job_key',
+                ]);
+            }
 
             Log::error('inbound_media.rolled_back_file_cleanup_enqueue_failed', [
                 'attachment_id' => $attachmentId,

@@ -16,13 +16,24 @@ class DeleteInboundMediaPartialFilesAction
     ): ?int {
         try {
             $disk = Storage::disk(MessageAttachment::storageDiskName());
-            $bytes = 0;
+            $transferredBytes = 0;
+            $commitFallbackBytes = 0;
 
             foreach ($this->matchingPaths($attachment, $claimToken, $generation) as $path) {
-                $bytes += max(0, (int) $disk->size($path));
+                $bytes = max(0, (int) $disk->size($path));
+
+                if (str_contains(basename($path), '.commit.')) {
+                    $commitFallbackBytes = max($commitFallbackBytes, $bytes);
+
+                    continue;
+                }
+
+                $transferredBytes += $bytes;
             }
 
-            return $bytes;
+            return $transferredBytes > 0
+                ? $transferredBytes
+                : $commitFallbackBytes;
         } catch (Throwable $exception) {
             $this->logFailure($attachment, $exception::class);
 
@@ -88,10 +99,23 @@ class DeleteInboundMediaPartialFilesAction
             ? $this->safeClaimToken($claimToken)
             : null;
         $generation = $generation !== null ? max(1, $generation) : null;
+        $referencedPath = $attachment->local_disk === MessageAttachment::storageDiskName()
+            && filled($attachment->local_path)
+                ? (string) $attachment->local_path
+                : null;
 
         return array_values(array_filter(
             Storage::disk(MessageAttachment::storageDiskName())->files($directory),
-            static function (string $path) use ($prefix, $safeClaimToken, $generation): bool {
+            static function (string $path) use (
+                $prefix,
+                $safeClaimToken,
+                $generation,
+                $referencedPath,
+            ): bool {
+                if ($referencedPath !== null && $path === $referencedPath) {
+                    return false;
+                }
+
                 $basename = basename($path);
 
                 if (! str_starts_with($basename, $prefix)) {
@@ -99,7 +123,9 @@ class DeleteInboundMediaPartialFilesAction
                 }
 
                 if ($generation === null) {
-                    return str_contains($basename, '.partial.') || str_ends_with($basename, '.upload');
+                    return str_contains($basename, '.partial.')
+                        || str_ends_with($basename, '.upload')
+                        || str_contains($basename, '.commit.');
                 }
 
                 $generationMarker = '.g'.$generation.'.';
@@ -110,11 +136,13 @@ class DeleteInboundMediaPartialFilesAction
 
                 if ($safeClaimToken === null) {
                     return str_contains($basename, '.partial'.$generationMarker)
-                        || str_ends_with($basename, '.upload');
+                        || str_ends_with($basename, '.upload')
+                        || str_contains($basename, '.commit.');
                 }
 
                 return str_contains($basename, '.partial'.$generationMarker.$safeClaimToken.'.')
-                    || str_ends_with($basename, $generationMarker.$safeClaimToken.'.upload');
+                    || str_ends_with($basename, $generationMarker.$safeClaimToken.'.upload')
+                    || str_contains($basename, $generationMarker.$safeClaimToken.'.commit.');
             },
         ));
     }
