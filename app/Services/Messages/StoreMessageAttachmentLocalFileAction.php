@@ -4,6 +4,7 @@ namespace App\Services\Messages;
 
 use App\Data\Messages\PreparedMessageAttachmentFile;
 use App\Models\MessageAttachment;
+use Illuminate\Filesystem\FilesystemAdapter;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -12,6 +13,10 @@ use RuntimeException;
 
 class StoreMessageAttachmentLocalFileAction
 {
+    private const LOCAL_COPY_CHUNK_BYTES = 64 * 1024 * 1024;
+
+    private const S3_COPY_MULTIPART_PART_BYTES = 16 * 1024 * 1024;
+
     public function __construct(
         private readonly DeleteRolledBackInboundMediaFileAction $deleteRolledBackInboundMediaFileAction,
     ) {}
@@ -220,11 +225,20 @@ class StoreMessageAttachmentLocalFileAction
         try {
             if ($onStorageProgress !== null) {
                 try {
-                    $storage->getDriver()->copy(
-                        $sourcePath,
-                        $path,
-                        $this->storageCopyProgressOptions($onStorageProgress),
-                    );
+                    if ($this->storageDiskUsesLocalDriver($disk, $storage)) {
+                        $this->copyLocalFileWithProgress(
+                            $storage,
+                            $sourcePath,
+                            $path,
+                            $onStorageProgress,
+                        );
+                    } else {
+                        $storage->getDriver()->copy(
+                            $sourcePath,
+                            $path,
+                            $this->storageCopyProgressOptions($onStorageProgress),
+                        );
+                    }
                 } catch (\Throwable $throwable) {
                     throw new RuntimeException(
                         'Failed to prepare message attachment file copy.',
@@ -451,31 +465,84 @@ class StoreMessageAttachmentLocalFileAction
     }
 
     /**
-     * Keep a server-side S3 copy inside the lease window even when CopyObject
-     * does not emit upload progress callbacks. The per-request timeout ensures
-     * that on_stats runs before the lease can become stale.
+     * Keep a server-side S3 copy inside the lease window without shortening
+     * the attempt deadline. cURL progress reports long requests while a
+     * multipart copy also checkpoints between individual parts.
      *
      * @return array<string, mixed>
      */
     private function storageCopyProgressOptions(callable $onStorageProgress): array
     {
         $options = $this->storageProgressOptions($onStorageProgress);
-        $leaseStaleSeconds = max(
-            1,
-            (int) config('inbound_media.lease_stale_seconds', 120),
-        );
-
-        $options['params']['@http']['on_stats'] = static function (mixed ...$unused) use (
-            $onStorageProgress,
-        ): void {
-            $onStorageProgress();
-        };
-        $options['params']['@http']['timeout'] = max(
-            0.5,
-            min(90.0, $leaseStaleSeconds * 0.75),
-        );
+        $options['mup_threshold'] = self::S3_COPY_MULTIPART_PART_BYTES;
+        $options['part_size'] = self::S3_COPY_MULTIPART_PART_BYTES;
 
         return $options;
+    }
+
+    private function storageDiskUsesLocalDriver(string $disk, mixed $storage): bool
+    {
+        return $storage instanceof FilesystemAdapter
+            && config("filesystems.disks.{$disk}.driver") === 'local';
+    }
+
+    private function copyLocalFileWithProgress(
+        FilesystemAdapter $storage,
+        string $sourcePath,
+        string $destinationPath,
+        callable $onStorageProgress,
+    ): void {
+        $directory = dirname($destinationPath);
+
+        if ($directory !== '.' && ! $storage->makeDirectory($directory)) {
+            throw new RuntimeException('Failed to create the message attachment copy directory.');
+        }
+
+        $source = @fopen($storage->path($sourcePath), 'rb');
+
+        if ($source === false) {
+            throw new RuntimeException('Failed to open the message attachment source file.');
+        }
+
+        $destination = null;
+
+        try {
+            $destination = @fopen($storage->path($destinationPath), 'xb');
+
+            if ($destination === false) {
+                throw new RuntimeException('Failed to open the message attachment destination file.');
+            }
+
+            while (! feof($source)) {
+                $copiedBytes = stream_copy_to_stream(
+                    $source,
+                    $destination,
+                    self::LOCAL_COPY_CHUNK_BYTES,
+                );
+
+                if ($copiedBytes === false || ($copiedBytes === 0 && ! feof($source))) {
+                    throw new RuntimeException('Failed while copying the message attachment file.');
+                }
+
+                if ($copiedBytes > 0) {
+                    $onStorageProgress();
+                }
+            }
+
+            if (! fflush($destination)) {
+                throw new RuntimeException('Failed to flush the message attachment destination file.');
+            }
+        } finally {
+            if (is_resource($destination)) {
+                fclose($destination);
+            }
+
+            fclose($source);
+        }
+
+        if (! $storage->setVisibility($destinationPath, 'private')) {
+            throw new RuntimeException('Failed to protect the message attachment destination file.');
+        }
     }
 
     private function safeClaimToken(string $claimToken): string

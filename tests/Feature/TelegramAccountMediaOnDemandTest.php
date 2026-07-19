@@ -753,17 +753,17 @@ class TelegramAccountMediaOnDemandTest extends TestCase
             ): bool {
                 $candidatePath = $path;
                 $progress = data_get($options, 'params.@http.progress');
-                $onStats = data_get($options, 'params.@http.on_stats');
-                $requestTimeout = data_get($options, 'params.@http.timeout');
 
                 $this->assertSame($temporaryPath, $sourcePath);
                 $this->assertIsCallable($progress);
-                $this->assertIsCallable($onStats);
-                $this->assertIsNumeric($requestTimeout);
-                $this->assertLessThan(120, (float) $requestTimeout);
+                $this->assertIsCallable($options['before_upload'] ?? null);
+                $this->assertSame(16 * 1024 * 1024, $options['mup_threshold'] ?? null);
+                $this->assertSame(16 * 1024 * 1024, $options['part_size'] ?? null);
+                $this->assertNull(data_get($options, 'params.@http.on_stats'));
+                $this->assertNull(data_get($options, 'params.@http.timeout'));
 
                 $this->travel(80)->seconds();
-                $onStats();
+                $progress(0, 0, 0, 0);
 
                 $duringCopy = $attachment->fresh();
                 $heartbeatAt = $duringCopy->media_download_heartbeat_at;
@@ -778,7 +778,7 @@ class TelegramAccountMediaOnDemandTest extends TestCase
                 $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING, $afterReaper->download_status);
                 $this->assertSame($claimToken, $afterReaper->media_download_claim_token);
 
-                $onStats();
+                $progress(0, 0, 0, 0);
 
                 return true;
             });

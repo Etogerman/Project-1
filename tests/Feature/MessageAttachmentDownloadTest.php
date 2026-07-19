@@ -306,11 +306,50 @@ class MessageAttachmentDownloadTest extends TestCase
             },
         );
 
-        $this->assertSame(2, $heartbeatCount);
+        $this->assertSame(3, $heartbeatCount);
         Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->assertExists($prepared->path);
         $this->assertSame(
             $contents,
             Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE)->get($prepared->path),
+        );
+    }
+
+    public function test_prepare_copy_heartbeats_between_large_local_file_chunks(): void
+    {
+        Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
+
+        $sourcePath = 'message-attachments/large-source.bin';
+        $fileSizeBytes = (64 * 1024 * 1024) + 1;
+        $attachment = $this->createAttachment([
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
+            'extension' => 'bin',
+            'mime_type' => 'application/octet-stream',
+        ]);
+        $heartbeatCount = 0;
+        $storage = Storage::disk(MessageAttachment::LOCAL_DISK_PRIVATE);
+
+        $this->assertTrue($storage->makeDirectory(dirname($sourcePath)));
+        $source = fopen($storage->path($sourcePath), 'w+b');
+        $this->assertIsResource($source);
+        $this->assertSame(0, fseek($source, $fileSizeBytes - 1));
+        $this->assertSame(1, fwrite($source, 'a'));
+        fclose($source);
+
+        $prepared = app(StoreMessageAttachmentLocalFileAction::class)->prepareCopy(
+            $attachment,
+            $sourcePath,
+            $fileSizeBytes,
+            'bin',
+            onStorageProgress: static function () use (&$heartbeatCount): void {
+                $heartbeatCount++;
+            },
+        );
+
+        $this->assertSame(4, $heartbeatCount);
+        $storage->assertExists($prepared->path);
+        $this->assertSame(
+            hash_file('sha256', $storage->path($sourcePath)),
+            hash_file('sha256', $storage->path($prepared->path)),
         );
     }
 
