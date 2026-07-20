@@ -88,6 +88,10 @@ class Channel extends Model
         'is_active',
         'is_hidden',
         'sync_external_outgoing_enabled',
+        'telegram_account_media_auto_download_max_bytes',
+        'telegram_account_media_on_demand_enabled',
+        'inbound_media_auto_download_max_bytes',
+        'inbound_media_on_demand_enabled',
         'connection_status',
         'webhook_status',
         'connection_checked_at',
@@ -103,6 +107,10 @@ class Channel extends Model
         'is_active' => 'boolean',
         'is_hidden' => 'boolean',
         'sync_external_outgoing_enabled' => 'boolean',
+        'telegram_account_media_auto_download_max_bytes' => 'integer',
+        'telegram_account_media_on_demand_enabled' => 'boolean',
+        'inbound_media_auto_download_max_bytes' => 'integer',
+        'inbound_media_on_demand_enabled' => 'boolean',
         'channel_connection_type_id' => 'integer',
         'bot_token_present' => 'boolean',
         'credentials' => 'encrypted:array',
@@ -191,6 +199,13 @@ class Channel extends Model
     public function isAccountConnection(): bool
     {
         return $this->resolvedConnectionKind() === self::CONNECTION_TYPE_ACCOUNT;
+    }
+
+    public function supportsInboundMediaOnDemand(): bool
+    {
+        return ($this->platform === self::PLATFORM_TELEGRAM && $this->isAccountConnection())
+            || (in_array($this->platform, [self::PLATFORM_TELEGRAM, self::PLATFORM_MAX], true)
+                && $this->isBotConnection());
     }
 
     public function getConnectionTypeLabel(): string

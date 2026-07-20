@@ -2,16 +2,18 @@
 
 namespace App\Console\Commands;
 
+use App\Jobs\DownloadBotMessageAttachmentJob;
 use App\Models\Message;
 use App\Models\MessageAttachment;
 use App\Services\Bots\DownloadBotMessageAttachmentsAction;
-use App\Services\Dialogs\DialogAutomationGate;
 use Illuminate\Console\Command;
+use Illuminate\Database\Eloquent\Builder;
 
 class DownloadPendingBotMediaAttachmentsCommand extends Command
 {
     protected $signature = 'bot-media:download-pending-images
         {--force : Download and persist local files instead of dry-run}
+        {--dispatch : Dispatch downloads to the queue without network I/O in this process}
         {--channel= : Limit to one channel ID}
         {--limit=50 : Maximum matching attachments to inspect}';
 
@@ -26,8 +28,15 @@ class DownloadPendingBotMediaAttachmentsCommand extends Command
     public function handle(): int
     {
         $force = (bool) $this->option('force');
+        $dispatch = (bool) $this->option('dispatch');
         $limit = min(max((int) $this->option('limit'), 1), 500);
         $channelId = $this->option('channel');
+
+        if ($force && $dispatch) {
+            $this->error('Options --force and --dispatch cannot be used together.');
+
+            return self::INVALID;
+        }
 
         $query = MessageAttachment::query()
             ->where(function ($query): void {
@@ -59,14 +68,12 @@ class DownloadPendingBotMediaAttachmentsCommand extends Command
                             ]);
                     });
             })
-            ->whereIn('download_status', [
-                MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
-                MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD,
-            ])
-            ->where(function ($query): void {
+            ->where('download_status', MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD)
+            ->whereNull('manual_download_requested_at')
+            ->where(function (Builder $query): void {
                 $query
-                    ->whereNull('safe_error_code')
-                    ->orWhere('safe_error_code', '!=', DialogAutomationGate::REASON_BLACKLIST_STAGE);
+                    ->whereNull('media_download_next_retry_at')
+                    ->orWhere('media_download_next_retry_at', '<=', now());
             })
             ->when(filled($channelId), fn ($builder) => $builder->where('channel_id', (int) $channelId))
             ->orderBy('id');
@@ -76,9 +83,11 @@ class DownloadPendingBotMediaAttachmentsCommand extends Command
             ->limit($limit)
             ->get(['id', 'message_id', 'channel_id', 'provider', 'download_status']);
 
-        $this->line($force
-            ? 'Bot media download started.'
-            : 'Bot media download dry-run.');
+        $this->line(match (true) {
+            $force => 'Bot media download started.',
+            $dispatch => 'Bot media download dispatch started.',
+            default => 'Bot media download dry-run.',
+        });
         $this->table(
             ['Metric', 'Count'],
             [
@@ -88,7 +97,20 @@ class DownloadPendingBotMediaAttachmentsCommand extends Command
             ],
         );
 
-        if (! $force || $candidateAttachments->isEmpty()) {
+        if ((! $force && ! $dispatch) || $candidateAttachments->isEmpty()) {
+            return self::SUCCESS;
+        }
+
+        if ($dispatch) {
+            foreach ($candidateAttachments as $attachment) {
+                DownloadBotMessageAttachmentJob::dispatch((int) $attachment->id, manual: false);
+            }
+
+            $this->table(
+                ['Result', 'Count'],
+                [['dispatched_now', (string) $candidateAttachments->count()]],
+            );
+
             return self::SUCCESS;
         }
 
@@ -97,11 +119,22 @@ class DownloadPendingBotMediaAttachmentsCommand extends Command
             ->where('download_status', MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED)
             ->count();
 
+        $candidateIdsByMessage = $candidateAttachments
+            ->groupBy('message_id')
+            ->map(fn ($attachments): array => $attachments
+                ->pluck('id')
+                ->map(static fn (mixed $id): int => (int) $id)
+                ->values()
+                ->all());
+
         Message::query()
             ->whereKey($candidateAttachments->pluck('message_id')->unique()->values())
             ->with(['channel', 'attachments'])
             ->get()
-            ->each(fn (Message $message) => $this->downloadBotMessageAttachmentsAction->handle($message));
+            ->each(fn (Message $message) => $this->downloadBotMessageAttachmentsAction->handle(
+                $message,
+                attachmentIds: $candidateIdsByMessage->get($message->id, []),
+            ));
 
         $processedAttachments = MessageAttachment::query()
             ->whereIn('id', $candidateAttachments->pluck('id'))

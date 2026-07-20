@@ -3,7 +3,9 @@
 namespace Tests\Feature;
 
 use App\Data\Bots\StoredInboundMessageResult;
+use App\Jobs\DownloadBotMessageAttachmentJob;
 use App\Jobs\ExportMessageToBitrix24OpenLinesJob;
+use App\Jobs\ProbeMaxBotMediaMetadataJob;
 use App\Jobs\ProcessAutoReplyJob;
 use App\Jobs\ProcessDataCollectionQuestionJob;
 use App\Jobs\ProcessDataCollectionResponseJob;
@@ -19,6 +21,8 @@ use App\Models\ContactDuplicateReview;
 use App\Models\ContactIdentity;
 use App\Models\ContactPhoneNumber;
 use App\Models\Dialog;
+use App\Models\MediaDownloadStorageLedger;
+use App\Models\MediaDownloadTrafficLedger;
 use App\Models\Message;
 use App\Models\MessageAttachment;
 use App\Models\MessageRevision;
@@ -26,6 +30,9 @@ use App\Models\Scenario;
 use App\Models\ScenarioChannelBinding;
 use App\Models\ScenarioRun;
 use App\Models\ScenarioVersion;
+use App\Services\Bots\DownloadBotMessageAttachmentsAction;
+use App\Services\Messages\InboundMediaDownloadPolicy;
+use App\Services\Messages\InboundMediaQuotaLedger;
 use App\Services\Scenarios\DispatchStoredInboundScenarioAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
@@ -438,6 +445,25 @@ class BotWebhookAutoReplyTest extends TestCase
         ])->postJson("/webhooks/max/{$channel->id}", $createdPayload)->assertOk();
 
         $message = $this->inboundMessages()->firstOrFail();
+        $attachment = MessageAttachment::factory()->create([
+            'message_id' => $message->id,
+            'channel_id' => $channel->id,
+            'provider' => MessageAttachment::PROVIDER_MAX_BOT,
+            'media_kind' => MessageAttachment::MEDIA_KIND_VIDEO,
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD,
+            'file_size_bytes' => 100,
+            'media_download_max_bytes' => 500,
+            'media_download_generation' => 1,
+        ]);
+        app(InboundMediaQuotaLedger::class)->reserveForAttempt($attachment, 1);
+        $attachment->forceFill([
+            'download_status' => MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
+            'media_download_claim_token' => 'removed-message-claim',
+            'media_download_attempts' => 1,
+            'media_download_claimed_at' => now(),
+            'media_download_heartbeat_at' => now(),
+            'media_download_attempt_deadline_at' => now()->addHour(),
+        ])->save();
 
         Queue::assertPushed(ProcessAutoReplyJob::class, 1);
 
@@ -464,6 +490,19 @@ class BotWebhookAutoReplyTest extends TestCase
         $this->assertSame(1, $message->remove_count);
         $this->assertEquals($removedPayload, data_get($message->raw_payload, 'provider_remove_event.payload'));
         $this->assertStringStartsWith('max-message-removed:', (string) $message->last_remove_provider_event_key);
+        $attachment->refresh();
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOAD_FAILED, $attachment->download_status);
+        $this->assertSame(InboundMediaDownloadPolicy::REASON_SOURCE_UNAVAILABLE, $attachment->safe_error_code);
+        $this->assertNull($attachment->media_download_claim_token);
+        $this->assertSame(
+            MediaDownloadStorageLedger::STATUS_RELEASED,
+            MediaDownloadStorageLedger::query()->firstOrFail()->status,
+        );
+        $this->assertSame(
+            MediaDownloadTrafficLedger::STATUS_RELEASED,
+            MediaDownloadTrafficLedger::query()->firstOrFail()->status,
+        );
+        $this->assertSame(0, MediaDownloadTrafficLedger::query()->firstOrFail()->consumed_bytes);
         $this->assertDatabaseHas('channel_activity_logs', [
             'channel_id' => $channel->id,
             'event' => 'message_remove.applied',
@@ -627,7 +666,7 @@ class BotWebhookAutoReplyTest extends TestCase
 
     public function test_telegram_photo_webhook_downloads_previewable_message_attachment(): void
     {
-        Queue::fake();
+        $this->fakeQueueExceptMediaDownloads();
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
         Http::fake([
             'https://api.telegram.org/bottelegram-token/getFile*' => Http::response([
@@ -678,6 +717,7 @@ class BotWebhookAutoReplyTest extends TestCase
         ])->postJson("/webhooks/telegram/{$channel->id}", $payload)->assertOk();
 
         $inboundMessage = $this->inboundMessages()->firstOrFail();
+        $this->runPendingBotMediaDownloads();
 
         $this->assertDatabaseHas('message_attachments', [
             'message_id' => $inboundMessage->id,
@@ -715,7 +755,7 @@ class BotWebhookAutoReplyTest extends TestCase
 
     public function test_telegram_voice_webhook_downloads_previewable_audio_attachment(): void
     {
-        Queue::fake();
+        $this->fakeQueueExceptMediaDownloads();
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
         Http::fake([
             'https://api.telegram.org/bottelegram-token/getFile*' => Http::response([
@@ -757,6 +797,7 @@ class BotWebhookAutoReplyTest extends TestCase
         ])->postJson("/webhooks/telegram/{$channel->id}", $payload)->assertOk();
 
         $inboundMessage = $this->inboundMessages()->firstOrFail();
+        $this->runPendingBotMediaDownloads();
 
         $this->assertDatabaseHas('message_attachments', [
             'message_id' => $inboundMessage->id,
@@ -784,7 +825,7 @@ class BotWebhookAutoReplyTest extends TestCase
 
     public function test_telegram_document_webhook_downloads_previewable_pdf_attachment(): void
     {
-        Queue::fake();
+        $this->fakeQueueExceptMediaDownloads();
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
         Http::fake([
             'https://api.telegram.org/bottelegram-token/getFile*' => Http::response([
@@ -827,6 +868,7 @@ class BotWebhookAutoReplyTest extends TestCase
         ])->postJson("/webhooks/telegram/{$channel->id}", $payload)->assertOk();
 
         $inboundMessage = $this->inboundMessages()->firstOrFail();
+        $this->runPendingBotMediaDownloads();
 
         $this->assertDatabaseHas('message_attachments', [
             'message_id' => $inboundMessage->id,
@@ -855,7 +897,7 @@ class BotWebhookAutoReplyTest extends TestCase
 
     public function test_telegram_video_webhook_downloads_previewable_video_attachment(): void
     {
-        Queue::fake();
+        $this->fakeQueueExceptMediaDownloads();
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
         Http::fake([
             'https://api.telegram.org/bottelegram-token/getFile*' => Http::response([
@@ -901,6 +943,7 @@ class BotWebhookAutoReplyTest extends TestCase
         ])->postJson("/webhooks/telegram/{$channel->id}", $payload)->assertOk();
 
         $inboundMessage = $this->inboundMessages()->firstOrFail();
+        $this->runPendingBotMediaDownloads();
 
         $this->assertDatabaseHas('message_attachments', [
             'message_id' => $inboundMessage->id,
@@ -929,7 +972,7 @@ class BotWebhookAutoReplyTest extends TestCase
 
     public function test_telegram_animation_webhook_treats_bot_api_document_copy_as_one_animation_attachment(): void
     {
-        Queue::fake();
+        $this->fakeQueueExceptMediaDownloads();
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
         Http::fake([
             'https://api.telegram.org/bottelegram-token/getFile*' => Http::response([
@@ -976,6 +1019,7 @@ class BotWebhookAutoReplyTest extends TestCase
         ])->postJson("/webhooks/telegram/{$channel->id}", $payload)->assertOk();
 
         $inboundMessage = $this->inboundMessages()->firstOrFail();
+        $this->runPendingBotMediaDownloads();
 
         $this->assertSame(1, MessageAttachment::query()->where('message_id', $inboundMessage->id)->count());
         $this->assertDatabaseHas('message_attachments', [
@@ -1005,14 +1049,14 @@ class BotWebhookAutoReplyTest extends TestCase
 
     public function test_telegram_sticker_webhook_downloads_previewable_sticker_attachment(): void
     {
-        Queue::fake();
+        $this->fakeQueueExceptMediaDownloads();
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
         Http::fake([
             'https://api.telegram.org/bottelegram-token/getFile*' => Http::response([
                 'ok' => true,
                 'result' => [
                     'file_path' => 'stickers/sticker.webp',
-                    'file_size' => strlen('telegram-webp-sticker-bytes'),
+                    'file_size' => strlen('RIFFtelegram-webp-sticker-bytesWEBP'),
                 ],
             ]),
             'https://api.telegram.org/file/bottelegram-token/stickers/sticker.webp' => Http::response(
@@ -1051,6 +1095,7 @@ class BotWebhookAutoReplyTest extends TestCase
         ])->postJson("/webhooks/telegram/{$channel->id}", $payload)->assertOk();
 
         $inboundMessage = $this->inboundMessages()->firstOrFail();
+        $this->runPendingBotMediaDownloads();
 
         $this->assertDatabaseHas('message_attachments', [
             'message_id' => $inboundMessage->id,
@@ -1077,7 +1122,7 @@ class BotWebhookAutoReplyTest extends TestCase
 
     public function test_telegram_animated_sticker_uses_thumbnail_as_inline_preview(): void
     {
-        Queue::fake();
+        $this->fakeQueueExceptMediaDownloads();
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
         Http::fake([
             'https://api.telegram.org/bottelegram-token/getFile*' => Http::response([
@@ -1130,6 +1175,7 @@ class BotWebhookAutoReplyTest extends TestCase
         ])->postJson("/webhooks/telegram/{$channel->id}", $payload)->assertOk();
 
         $inboundMessage = $this->inboundMessages()->firstOrFail();
+        $this->runPendingBotMediaDownloads();
 
         $this->assertDatabaseHas('message_attachments', [
             'message_id' => $inboundMessage->id,
@@ -1204,7 +1250,7 @@ class BotWebhookAutoReplyTest extends TestCase
 
     public function test_telegram_video_note_webhook_downloads_previewable_round_video_attachment(): void
     {
-        Queue::fake();
+        $this->fakeQueueExceptMediaDownloads();
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
         Http::fake([
             'https://api.telegram.org/bottelegram-token/getFile*' => Http::response([
@@ -1246,6 +1292,7 @@ class BotWebhookAutoReplyTest extends TestCase
         ])->postJson("/webhooks/telegram/{$channel->id}", $payload)->assertOk();
 
         $inboundMessage = $this->inboundMessages()->firstOrFail();
+        $this->runPendingBotMediaDownloads();
 
         $this->assertDatabaseHas('message_attachments', [
             'message_id' => $inboundMessage->id,
@@ -1448,7 +1495,7 @@ class BotWebhookAutoReplyTest extends TestCase
 
     public function test_max_image_webhook_downloads_previewable_message_attachment_without_secret_fields(): void
     {
-        Queue::fake();
+        $this->fakeQueueExceptMediaDownloads();
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
         config()->set('bots.max.trusted_media_hosts', ['max.example']);
         Http::fake([
@@ -1473,6 +1520,7 @@ class BotWebhookAutoReplyTest extends TestCase
         $payload['message']['body']['attachments'] = [
             [
                 'type' => 'image',
+                'size' => 14,
                 'payload' => [
                     'photo_id' => '25852958504',
                     'url' => 'https://max.example/private/photo.jpg?access_token=secret-token',
@@ -1488,6 +1536,7 @@ class BotWebhookAutoReplyTest extends TestCase
         ])->postJson("/webhooks/max/{$channel->id}", $payload)->assertOk();
 
         $inboundMessage = $this->inboundMessages()->firstOrFail();
+        $this->runPendingBotMediaDownloads();
         $attachment = MessageAttachment::query()->where('message_id', $inboundMessage->id)->firstOrFail();
 
         $this->assertSame(MessageAttachment::PROVIDER_MAX_BOT, $attachment->provider);
@@ -1504,7 +1553,7 @@ class BotWebhookAutoReplyTest extends TestCase
 
     public function test_max_sticker_webhook_downloads_real_asset_from_message_lookup_when_webhook_has_stub_url(): void
     {
-        Queue::fake();
+        $this->fakeQueueExceptMediaDownloads();
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
         config()->set('bots.max.trusted_media_hosts', ['mycdn.me', 'oneme.ru']);
         Http::fake([
@@ -1514,6 +1563,7 @@ class BotWebhookAutoReplyTest extends TestCase
                     'attachments' => [
                         [
                             'type' => 'sticker',
+                            'size' => 25,
                             'width' => 170,
                             'height' => 170,
                             'payload' => [
@@ -1550,6 +1600,7 @@ class BotWebhookAutoReplyTest extends TestCase
         $payload['message']['body']['attachments'] = [
             [
                 'type' => 'sticker',
+                'size' => 25,
                 'width' => 144,
                 'height' => 144,
                 'payload' => [
@@ -1564,6 +1615,7 @@ class BotWebhookAutoReplyTest extends TestCase
         ])->postJson("/webhooks/max/{$channel->id}", $payload)->assertOk();
 
         $inboundMessage = $this->inboundMessages()->firstOrFail();
+        $this->runPendingBotMediaDownloads();
         $attachment = MessageAttachment::query()->where('message_id', $inboundMessage->id)->firstOrFail();
 
         $this->assertSame(MessageAttachment::PROVIDER_MAX_BOT, $attachment->provider);
@@ -1588,7 +1640,7 @@ class BotWebhookAutoReplyTest extends TestCase
 
     public function test_max_audio_webhook_downloads_previewable_message_attachment_without_secret_fields(): void
     {
-        Queue::fake();
+        $this->fakeQueueExceptMediaDownloads();
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
         config()->set('bots.max.trusted_media_hosts', ['max.example']);
         Http::fake([
@@ -1618,6 +1670,7 @@ class BotWebhookAutoReplyTest extends TestCase
         $payload['message']['body']['attachments'] = [
             [
                 'type' => 'audio',
+                'size' => 15,
                 'payload' => [
                     'token' => 'max-audio-token',
                     'url' => 'https://max.example/private/audio.mp3?access_token=secret-token',
@@ -1631,6 +1684,7 @@ class BotWebhookAutoReplyTest extends TestCase
         ])->postJson("/webhooks/max/{$channel->id}", $payload)->assertOk();
 
         $inboundMessage = $this->inboundMessages()->firstOrFail();
+        $this->runPendingBotMediaDownloads();
         $attachment = MessageAttachment::query()->where('message_id', $inboundMessage->id)->firstOrFail();
 
         $this->assertSame(MessageAttachment::PROVIDER_MAX_BOT, $attachment->provider);
@@ -1652,7 +1706,7 @@ class BotWebhookAutoReplyTest extends TestCase
 
     public function test_max_audio_webhook_downloads_real_okcdn_media_url_by_default(): void
     {
-        Queue::fake();
+        $this->fakeQueueExceptMediaDownloads();
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
         Http::fake([
             'https://platform-api.max.ru/videos/max-okcdn-audio-token' => Http::response([
@@ -1680,6 +1734,7 @@ class BotWebhookAutoReplyTest extends TestCase
         $payload['message']['body']['attachments'] = [
             [
                 'type' => 'audio',
+                'size' => 21,
                 'payload' => [
                     'id' => 15446112952411,
                     'token' => 'max-okcdn-audio-token',
@@ -1693,6 +1748,7 @@ class BotWebhookAutoReplyTest extends TestCase
         ])->postJson("/webhooks/max/{$channel->id}", $payload)->assertOk();
 
         $inboundMessage = $this->inboundMessages()->firstOrFail();
+        $this->runPendingBotMediaDownloads();
         $attachment = MessageAttachment::query()->where('message_id', $inboundMessage->id)->firstOrFail();
 
         $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $attachment->download_status);
@@ -1708,7 +1764,7 @@ class BotWebhookAutoReplyTest extends TestCase
 
     public function test_max_video_webhook_downloads_previewable_message_attachment_without_secret_fields(): void
     {
-        Queue::fake();
+        $this->fakeQueueExceptMediaDownloads();
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
         config()->set('bots.max.trusted_media_hosts', ['max.example']);
         Http::fake([
@@ -1719,7 +1775,7 @@ class BotWebhookAutoReplyTest extends TestCase
                 ],
                 'width' => 1280,
                 'height' => 720,
-                'duration' => 14,
+                'duration' => 14000,
             ]),
             'https://max.example/private/video-720.mp4*' => Http::response(
                 'max-video-bytes',
@@ -1743,6 +1799,7 @@ class BotWebhookAutoReplyTest extends TestCase
         $payload['message']['body']['attachments'] = [
             [
                 'type' => 'video',
+                'size' => 15,
                 'payload' => [
                     'token' => 'max-video-token',
                     'url' => 'https://max.example/private/video.mp4?access_token=secret-token',
@@ -1758,6 +1815,7 @@ class BotWebhookAutoReplyTest extends TestCase
         ])->postJson("/webhooks/max/{$channel->id}", $payload)->assertOk();
 
         $inboundMessage = $this->inboundMessages()->firstOrFail();
+        $this->runPendingBotMediaDownloads();
         $attachment = MessageAttachment::query()->where('message_id', $inboundMessage->id)->firstOrFail();
 
         $this->assertSame(MessageAttachment::PROVIDER_MAX_BOT, $attachment->provider);
@@ -1779,9 +1837,51 @@ class BotWebhookAutoReplyTest extends TestCase
         Http::assertSent(fn ($request): bool => str_starts_with($request->url(), 'https://max.example/private/video-720.mp4?'));
     }
 
-    public function test_max_forwarded_video_webhook_downloads_link_message_attachment_as_video_note(): void
+    public function test_max_video_without_size_queues_metadata_probe_after_storing_duration(): void
     {
         Queue::fake();
+        Http::fake();
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'inbound_media_on_demand_enabled' => true,
+            'credentials' => [
+                'token' => 'max-token',
+                'webhook_secret' => 'max-secret',
+            ],
+        ]);
+        $payload = $this->maxPayload(
+            messageId: 'max-video-probe-103',
+            text: null,
+        );
+        $payload['message']['body']['attachments'] = [[
+            'type' => 'video',
+            'payload' => [
+                'token' => 'max-video-probe-token',
+                'url' => 'https://max.example/private/video.mp4?access_token=secret-token',
+            ],
+            'duration' => 1651,
+        ]];
+
+        $this->withHeaders([
+            'X-Max-Bot-Api-Secret' => 'max-secret',
+        ])->postJson("/webhooks/max/{$channel->id}", $payload)->assertOk();
+
+        $attachment = MessageAttachment::query()->firstOrFail();
+
+        $this->assertNull($attachment->file_size_bytes);
+        $this->assertSame(1651, data_get($attachment->provider_metadata, 'duration'));
+        $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_AVAILABLE_ON_DEMAND, $attachment->download_status);
+        $this->assertSame(InboundMediaDownloadPolicy::REASON_SIZE_UNKNOWN, $attachment->safe_error_code);
+        Queue::assertPushed(ProbeMaxBotMediaMetadataJob::class, function (ProbeMaxBotMediaMetadataJob $job) use ($attachment): bool {
+            return $job->attachmentId === $attachment->id
+                && $job->allowAutomaticDownload;
+        });
+        Http::assertNothingSent();
+    }
+
+    public function test_max_forwarded_video_webhook_downloads_link_message_attachment_as_video_note(): void
+    {
+        $this->fakeQueueExceptMediaDownloads();
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
         config()->set('bots.max.trusted_media_hosts', ['max.example']);
         Http::fake([
@@ -1825,6 +1925,7 @@ class BotWebhookAutoReplyTest extends TestCase
                 'attachments' => [
                     [
                         'type' => 'video',
+                        'size' => 25,
                         'payload' => [
                             'token' => 'forwarded-video-token',
                             'url' => 'https://max.example/private/payload-video.mp4?access_token=secret-token',
@@ -1843,6 +1944,7 @@ class BotWebhookAutoReplyTest extends TestCase
         ])->postJson("/webhooks/max/{$channel->id}", $payload)->assertOk();
 
         $inboundMessage = $this->inboundMessages()->firstOrFail();
+        $this->runPendingBotMediaDownloads();
         $attachment = MessageAttachment::query()->where('message_id', $inboundMessage->id)->firstOrFail();
 
         $this->assertSame(MessageAttachment::PROVIDER_MAX_BOT, $attachment->provider);
@@ -1870,7 +1972,7 @@ class BotWebhookAutoReplyTest extends TestCase
 
     public function test_max_forwarded_media_webhook_stores_link_message_text_and_markup(): void
     {
-        Queue::fake();
+        $this->fakeQueueExceptMediaDownloads();
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
         config()->set('bots.max.trusted_media_hosts', ['max.example']);
         Http::fake([
@@ -1928,6 +2030,7 @@ class BotWebhookAutoReplyTest extends TestCase
                 'attachments' => [
                     [
                         'type' => 'image',
+                        'size' => 24,
                         'payload' => [
                             'photo_id' => 'forwarded-photo-101',
                             'url' => 'https://max.example/private/photo.jpg?access_token=secret-token',
@@ -1943,6 +2046,7 @@ class BotWebhookAutoReplyTest extends TestCase
         ])->postJson("/webhooks/max/{$channel->id}", $payload)->assertOk();
 
         $inboundMessage = $this->inboundMessages()->firstOrFail();
+        $this->runPendingBotMediaDownloads();
         $attachment = MessageAttachment::query()->where('message_id', $inboundMessage->id)->firstOrFail();
 
         $this->assertSame("plain\nbold\nitalic under\nstrike", $inboundMessage->text);
@@ -1995,7 +2099,7 @@ class BotWebhookAutoReplyTest extends TestCase
 
     public function test_max_video_webhook_downloads_real_okcdn_media_url_by_default(): void
     {
-        Queue::fake();
+        $this->fakeQueueExceptMediaDownloads();
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
         Http::fake([
             'https://platform-api.max.ru/videos/max-okcdn-video-token' => Http::response([
@@ -2003,7 +2107,7 @@ class BotWebhookAutoReplyTest extends TestCase
                 'urls' => [
                     'mp4_720' => 'https://maxvd369.okcdn.ru/?expires=1782842206501&srcIp=0.0.0.0&type=2&sig=signed&ct=0',
                 ],
-                'duration' => 21,
+                'duration' => 21000,
             ]),
             'https://maxvd369.okcdn.ru/*' => Http::response(
                 'max-okcdn-video-bytes',
@@ -2026,6 +2130,7 @@ class BotWebhookAutoReplyTest extends TestCase
         $payload['message']['body']['attachments'] = [
             [
                 'type' => 'video',
+                'size' => 21,
                 'payload' => [
                     'id' => 14963193636361,
                     'token' => 'max-okcdn-video-token',
@@ -2040,6 +2145,7 @@ class BotWebhookAutoReplyTest extends TestCase
         ])->postJson("/webhooks/max/{$channel->id}", $payload)->assertOk();
 
         $inboundMessage = $this->inboundMessages()->firstOrFail();
+        $this->runPendingBotMediaDownloads();
         $attachment = MessageAttachment::query()->where('message_id', $inboundMessage->id)->firstOrFail();
 
         $this->assertSame(MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED, $attachment->download_status);
@@ -2057,7 +2163,7 @@ class BotWebhookAutoReplyTest extends TestCase
 
     public function test_max_file_webhook_downloads_previewable_pdf_attachment_without_secret_fields(): void
     {
-        Queue::fake();
+        $this->fakeQueueExceptMediaDownloads();
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
         config()->set('bots.max.trusted_media_hosts', ['max.example']);
         Http::fake([
@@ -2096,6 +2202,7 @@ class BotWebhookAutoReplyTest extends TestCase
         ])->postJson("/webhooks/max/{$channel->id}", $payload)->assertOk();
 
         $inboundMessage = $this->inboundMessages()->firstOrFail();
+        $this->runPendingBotMediaDownloads();
         $attachment = MessageAttachment::query()->where('message_id', $inboundMessage->id)->firstOrFail();
 
         $this->assertSame(MessageAttachment::PROVIDER_MAX_BOT, $attachment->provider);
@@ -2118,7 +2225,7 @@ class BotWebhookAutoReplyTest extends TestCase
 
     public function test_max_media_download_rejects_urls_with_connection_parts(): void
     {
-        Queue::fake();
+        $this->fakeQueueExceptMediaDownloads();
         Storage::fake(MessageAttachment::LOCAL_DISK_PRIVATE);
         config()->set('bots.max.trusted_media_hosts', ['max.example']);
         Http::fake();
@@ -2145,6 +2252,7 @@ class BotWebhookAutoReplyTest extends TestCase
             $payload['message']['body']['attachments'] = [
                 [
                     'type' => 'audio',
+                    'size' => 1024,
                     'payload' => [
                         'url' => $url,
                     ],
@@ -2154,6 +2262,8 @@ class BotWebhookAutoReplyTest extends TestCase
             $this->withHeaders([
                 'X-Max-Bot-Api-Secret' => 'max-secret',
             ])->postJson("/webhooks/max/{$channel->id}", $payload)->assertOk();
+
+            $this->runPendingBotMediaDownloads();
 
             $attachment = MessageAttachment::query()
                 ->where('provider_event_key', 'max-bad-url-'.$case)
@@ -6493,6 +6603,28 @@ class BotWebhookAutoReplyTest extends TestCase
         ]);
 
         return $scenario->fresh('publishedVersion');
+    }
+
+    protected function fakeQueueExceptMediaDownloads(): void
+    {
+        Queue::fake()->except([DownloadBotMessageAttachmentJob::class]);
+    }
+
+    protected function runPendingBotMediaDownloads(): void
+    {
+        $attachmentIds = MessageAttachment::query()
+            ->whereIn('provider', [
+                MessageAttachment::PROVIDER_TELEGRAM_BOT,
+                MessageAttachment::PROVIDER_MAX_BOT,
+            ])
+            ->where('download_status', MessageAttachment::DOWNLOAD_STATUS_PENDING_DOWNLOAD)
+            ->pluck('id');
+
+        foreach ($attachmentIds as $attachmentId) {
+            (new DownloadBotMessageAttachmentJob((int) $attachmentId, manual: false))->handle(
+                app(DownloadBotMessageAttachmentsAction::class),
+            );
+        }
     }
 
     protected function assertMessageDirectionCount(string $direction, int $expectedCount): void

@@ -11,11 +11,12 @@ class StoreInboundMessageRemovalAction
 {
     public function __construct(
         private readonly ChannelActivityLogger $channelActivityLogger,
+        private readonly CancelRemovedMessageMediaDownloadsAction $cancelMediaDownloads,
     ) {}
 
     public function handle(Channel $channel, IncomingBotMessageRemoval $removal): ?Message
     {
-        return DB::transaction(function () use ($channel, $removal): ?Message {
+        $message = DB::transaction(function () use ($channel, $removal): ?Message {
             $message = $this->findRemovableMessage($channel, $removal);
 
             if (! $message instanceof Message) {
@@ -63,6 +64,12 @@ class StoreInboundMessageRemovalAction
 
             return $message->fresh(['revisions']) ?? $message;
         });
+
+        if ($message instanceof Message && $message->removed_at !== null) {
+            $this->cancelMediaDownloads->handle($message);
+        }
+
+        return $message?->fresh(['revisions']) ?? $message;
     }
 
     private function findRemovableMessage(Channel $channel, IncomingBotMessageRemoval $removal): ?Message

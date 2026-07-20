@@ -9,16 +9,28 @@ use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 
 class ResolveMessageMediaItemsAction
 {
+    public function __construct(
+        private readonly InboundMediaDownloadPolicy $mediaDownloadPolicy,
+    ) {}
+
+    public function withManualAvailabilitySnapshot(callable $callback): mixed
+    {
+        return $this->mediaDownloadPolicy->withManualAvailabilitySnapshot($callback);
+    }
+
     /**
      * @return list<array<string, mixed>>
      */
-    public function handle(Message $message): array
+    public function handle(Message $message, bool $resolveManualAvailability = true): array
     {
         $attachments = $this->resolveAttachments($message);
 
         if ($attachments->isNotEmpty()) {
             return $attachments
-                ->map(fn (MessageAttachment $attachment): array => $this->normalizeAttachment($attachment))
+                ->map(fn (MessageAttachment $attachment): array => $this->normalizeAttachment(
+                    $attachment,
+                    $resolveManualAvailability,
+                ))
                 ->values()
                 ->all();
         }
@@ -50,9 +62,14 @@ class ResolveMessageMediaItemsAction
     /**
      * @return array<string, mixed>
      */
-    private function normalizeAttachment(MessageAttachment $attachment): array
-    {
+    private function normalizeAttachment(
+        MessageAttachment $attachment,
+        bool $resolveManualAvailability,
+    ): array {
         $mediaKind = MessageAttachment::normalizeMediaKind($attachment->media_kind);
+        $manualAvailability = $resolveManualAvailability
+            ? $this->mediaDownloadPolicy->manualAvailability($attachment)
+            : ['visible' => false, 'allowed' => false, 'reason' => null];
 
         return [
             'source' => 'attachment',
@@ -74,6 +91,9 @@ class ResolveMessageMediaItemsAction
             'preview_kind' => $attachment->previewKind(),
             'safe_error_code' => $attachment->safe_error_code,
             'safe_error_message' => $attachment->safe_error_message,
+            'show_manual_download_action' => $manualAvailability['visible'],
+            'can_request_manual_download' => $manualAvailability['allowed'],
+            'manual_download_unavailable_reason' => $manualAvailability['reason'],
         ];
     }
 
@@ -127,6 +147,9 @@ class ResolveMessageMediaItemsAction
             'preview_kind' => null,
             'safe_error_code' => $this->normalizeScalar(data_get($item, 'download_error_code')),
             'safe_error_message' => $this->normalizeScalar(data_get($item, 'download_error_message')),
+            'show_manual_download_action' => false,
+            'can_request_manual_download' => false,
+            'manual_download_unavailable_reason' => null,
         ];
     }
 

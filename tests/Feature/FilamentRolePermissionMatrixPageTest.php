@@ -47,6 +47,7 @@ class FilamentRolePermissionMatrixPageTest extends TestCase
             ->assertSee('Администратор')
             ->assertSee('Сотрудник')
             ->assertSee('Создание и редактирование')
+            ->assertSee('Ручная загрузка медиа')
             ->assertSee('Настройка маршрутов')
             ->assertSee('Создание, редактирование и архивация')
             ->assertSee('Сохранить')
@@ -58,6 +59,7 @@ class FilamentRolePermissionMatrixPageTest extends TestCase
             ->assertDontSeeText('dialogs.view')
             ->assertDontSeeText('dialogs.edit')
             ->assertDontSeeText('dialogs.delete')
+            ->assertDontSeeText('download_media_manual')
             ->assertDontSeeText('tags.view')
             ->assertDontSeeText('users.delete')
             ->assertDontSeeText('channels.delete')
@@ -111,12 +113,20 @@ class FilamentRolePermissionMatrixPageTest extends TestCase
 
         Livewire::test(RolePermissionMatrix::class)
             ->set('permissionState.employee.contacts.delete', true)
+            ->set('permissionState.employee.download_media_manual', false)
             ->call('savePermissionMatrix');
 
         $this->assertTrue(
             (bool) DB::table('role_permissions')
                 ->where('role', User::ROLE_EMPLOYEE)
                 ->where('permission_key', 'contacts.delete')
+                ->value('granted'),
+        );
+
+        $this->assertFalse(
+            (bool) DB::table('role_permissions')
+                ->where('role', User::ROLE_EMPLOYEE)
+                ->where('permission_key', 'download_media_manual')
                 ->value('granted'),
         );
     }

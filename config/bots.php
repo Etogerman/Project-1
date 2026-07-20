@@ -299,11 +299,41 @@ return [
 
     'media' => [
         'download_max_bytes' => (int) env('BOT_MEDIA_DOWNLOAD_MAX_BYTES', 20 * 1024 * 1024),
+        'max_streaming_download_enabled' => (bool) env('BOT_MAX_STREAMING_MEDIA_DOWNLOAD_ENABLED', false),
     ],
 
     'telegram' => [
         'webhook_secret_header' => 'X-Telegram-Bot-Api-Secret-Token',
         'webhook_ip_address' => env('TELEGRAM_WEBHOOK_IP_ADDRESS'),
+        'cloud_api_base_url' => 'https://api.telegram.org',
+        'local_api_media_download_enabled' => (bool) env('TELEGRAM_LOCAL_BOT_API_MEDIA_DOWNLOAD_ENABLED', false),
+        'local_api_base_url' => env('TELEGRAM_LOCAL_BOT_API_BASE_URL'),
+        'local_api_username' => env('TELEGRAM_LOCAL_BOT_API_USERNAME'),
+        'local_api_password' => env('TELEGRAM_LOCAL_BOT_API_PASSWORD'),
+        'local_api_allow_insecure_http' => (bool) env('TELEGRAM_LOCAL_BOT_API_ALLOW_INSECURE_HTTP', false),
+        'local_api_trusted_hosts' => array_values(array_filter(array_map(
+            static fn (string $host): string => trim(mb_strtolower($host)),
+            explode(',', (string) env(
+                'TELEGRAM_LOCAL_BOT_API_TRUSTED_HOSTS',
+                'telegram-bot-api,localhost,127.0.0.1,::1',
+            )),
+        ), static fn (string $host): bool => $host !== '')),
+        'local_api_file_transport' => env('TELEGRAM_LOCAL_BOT_API_FILE_TRANSPORT', 'filesystem'),
+        'local_api_files_root' => env('TELEGRAM_LOCAL_BOT_API_FILES_ROOT'),
+        'local_api_file_bridge_base_url' => env('TELEGRAM_LOCAL_BOT_API_FILE_BRIDGE_BASE_URL'),
+        'local_api_file_bridge_trusted_hosts' => array_values(array_filter(array_map(
+            static fn (string $host): string => trim(mb_strtolower($host)),
+            explode(',', (string) env(
+                'TELEGRAM_LOCAL_BOT_API_FILE_BRIDGE_TRUSTED_HOSTS',
+                'telegram-bot-api-file-bridge,localhost,127.0.0.1,::1',
+            )),
+        ), static fn (string $host): bool => $host !== '')),
+        'local_api_file_bridge_username' => env('TELEGRAM_LOCAL_BOT_API_FILE_BRIDGE_USERNAME'),
+        'local_api_file_bridge_password' => env('TELEGRAM_LOCAL_BOT_API_FILE_BRIDGE_PASSWORD'),
+        'local_api_file_bridge_max_bytes' => (int) env(
+            'TELEGRAM_LOCAL_BOT_API_FILE_BRIDGE_MAX_BYTES',
+            64 * 1024 * 1024,
+        ),
         'allowed_updates' => [
             'message',
             'edited_message',
@@ -315,7 +345,9 @@ return [
     'telegram_account' => [
         'gateway_shared_secret' => env('TELEGRAM_ACCOUNT_GATEWAY_SHARED_SECRET'),
         'gateway_rate_limit_per_minute' => (int) env('TELEGRAM_ACCOUNT_GATEWAY_RATE_LIMIT_PER_MINUTE', 120),
+        'gateway_media_upload_rate_limit_per_minute' => (int) env('TELEGRAM_ACCOUNT_GATEWAY_MEDIA_UPLOAD_RATE_LIMIT_PER_MINUTE', 600),
         'media_download_max_bytes' => (int) env('TELEGRAM_ACCOUNT_MEDIA_DOWNLOAD_MAX_BYTES', 20 * 1024 * 1024),
+        'media_download_retry_delay_seconds' => (int) env('TELEGRAM_ACCOUNT_MEDIA_DOWNLOAD_RETRY_DELAY_SECONDS', 60),
         'external_outgoing_backfill_days' => (int) env('TELEGRAM_ACCOUNT_EXTERNAL_OUTGOING_BACKFILL_DAYS', 7),
         'external_outgoing_backfill_known_dialogs_only' => true,
         'external_outgoing_echo_deferral_seconds' => (int) env('TELEGRAM_ACCOUNT_EXTERNAL_OUTGOING_ECHO_DEFERRAL_SECONDS', 15),
@@ -336,6 +368,7 @@ return [
             'mycdn.me',
             'okcdn.ru',
         ],
+        'pinned_media_ips' => [],
         'update_types' => [
             'message_created',
             'bot_started',

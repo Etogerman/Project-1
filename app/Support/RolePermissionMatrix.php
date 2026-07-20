@@ -81,7 +81,6 @@ class RolePermissionMatrix
 
         foreach (app(RolePermissionCatalog::class)->groups() as $group) {
             foreach ($group['actions'] as $action) {
-                [$resource, $ability] = explode('.', $action['code'], 2);
                 $permissionKeys = $this->actionPermissionKeys($action);
 
                 foreach ($roles as $role) {
@@ -90,7 +89,11 @@ class RolePermissionMatrix
                         $permissionKeys,
                     );
 
-                    $state[$role][$resource][$ability] = ! in_array(false, $values, true);
+                    data_set(
+                        $state,
+                        sprintf('%s.%s', $role, $action['code']),
+                        ! in_array(false, $values, true),
+                    );
                 }
             }
         }

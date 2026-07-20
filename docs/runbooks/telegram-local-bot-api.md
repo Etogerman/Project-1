@@ -1,0 +1,304 @@
+# Telegram Local Bot API
+
+Этот runbook описывает транспорт Telegram Bot для ручной загрузки входящих
+файлов крупнее облачного лимита Telegram Bot API.
+
+Поддерживаются два способа чтения файла:
+
+- `filesystem` — PHP и Local Bot API используют общий каталог; только локальный
+  Docker Compose;
+- `http_bridge` — защищённый gateway проксирует методы Local Bot API и потоково
+  отдаёт файл PHP; этот режим не требует общего filesystem с Laravel Cloud.
+
+## Границы безопасности
+
+- Используй отдельного локального или тестового бота.
+- Не включай этот транспорт для staging/production-токена без согласованного
+  identity gate и окна переключения.
+- Один токен не должен одновременно обслуживаться cloud Bot API и Local Bot API.
+- Не коммить `.env.telegram-bot-api`, токены, `TELEGRAM_API_ID` и
+  `TELEGRAM_API_HASH`, а также пароль file bridge.
+- Запуск контейнера сам по себе не переключает приложение на Local Bot API.
+- Gateway и Local Bot API не публикуются в открытый интернет. Для удалённого
+  runtime нужен защищённый внутренний маршрут либо HTTPS reverse proxy с
+  сетевым ограничением. Laravel Cloud обращается к gateway с Basic Auth, а
+  исходный Local Bot API остаётся доступен только внутри companion-контура.
+
+Перед использованием токена, который мог применяться в другой среде, оператор
+обязан проверить его текущий webhook через cloud `getWebhookInfo` и сверить
+окружение. Несовпадение с ожидаемым локальным URL означает стоп. `logOut` и
+переключение общего токена не выполняются в рамках обычного локального запуска.
+
+## Первый запуск
+
+1. Создай локальный файл секретов:
+
+   ```bash
+   cp .env.telegram-bot-api.example .env.telegram-bot-api
+   cp .env.telegram-bot-api-file-bridge.example .env.telegram-bot-api-file-bridge
+   ```
+
+2. Заполни `TELEGRAM_API_ID` и `TELEGRAM_API_HASH`, полученные на
+   `my.telegram.org`.
+
+3. На Linux/VPS проверь, что выделенный GID `20000` свободен. Команда не должна
+   ничего вывести:
+
+   ```bash
+   getent group 20000
+   ```
+
+   Если команда вывела группу, останови запуск и не разворачивай этот
+   Compose-контур. GID `20000` зафиксирован одновременно для writer,
+   repair-service, bridge image и контрактных тестов. Для другого GID требуется
+   отдельное изменение проекта, которое синхронно обновит все эти места. Это
+   исключает доступ посторонних host-пользователей к media через совпавший
+   числовой GID.
+
+4. Подготовь общий каталог файлов:
+
+   ```bash
+   mkdir -p storage/app/telegram-bot-api/tmp
+   ```
+
+   Compose запускает Telegram Bot API с выделенной media-группой `20000`.
+   Новые каталоги `0750` и media-файлы `0640` остаются закрытыми для остальных
+   пользователей, а file bridge читает их через ту же группу из read-only
+   mount. После готовности нового writer и до открытия bridge одноразовый
+   service `telegram-bot-api-media-permissions` оставляет группе каталогов
+   только traversal (`g=x`), а группе существующих media-файлов — только чтение
+   (`g=r`). В закреплённой версии TDLib аудиофайлы лежат в каталоге `music`, а
+   не `audio`; allowlist синхронизирован с поддерживаемыми приложением типами.
+   Служебные файлы TDLib service не открывает. Nginx дополнительно разрешает
+   только пути из media allowlist; БД, временные файлы, state-файлы, неизвестные
+   каталоги и обход пути возвращают `404`, даже если права ОС допускают чтение.
+   Любая ошибка смены группы, режима или итоговой проверки завершает service
+   ненулевым кодом, и `telegram-bot-api-file-bridge` не запускается.
+
+5. Заполни случайный пароль в `.env.telegram-bot-api-file-bridge`.
+
+6. Добавь в основной `.env` для Cloud-подобного HTTP transport:
+
+   ```dotenv
+   TELEGRAM_LOCAL_BOT_API_MEDIA_DOWNLOAD_ENABLED=true
+   TELEGRAM_LOCAL_BOT_API_BASE_URL=http://telegram-bot-api-file-bridge:8082/api
+   TELEGRAM_LOCAL_BOT_API_TRUSTED_HOSTS=telegram-bot-api-file-bridge
+   TELEGRAM_LOCAL_BOT_API_USERNAME=media-reader
+   TELEGRAM_LOCAL_BOT_API_PASSWORD=<тот же случайный пароль>
+   TELEGRAM_LOCAL_BOT_API_ALLOW_INSECURE_HTTP=true
+   TELEGRAM_LOCAL_BOT_API_FILE_TRANSPORT=http_bridge
+   TELEGRAM_LOCAL_BOT_API_FILES_ROOT=/var/www/html/storage/app/telegram-bot-api
+   TELEGRAM_LOCAL_BOT_API_FILE_BRIDGE_BASE_URL=http://telegram-bot-api-file-bridge:8082/files
+   TELEGRAM_LOCAL_BOT_API_FILE_BRIDGE_TRUSTED_HOSTS=telegram-bot-api-file-bridge
+   TELEGRAM_LOCAL_BOT_API_FILE_BRIDGE_USERNAME=media-reader
+   TELEGRAM_LOCAL_BOT_API_FILE_BRIDGE_PASSWORD=<тот же случайный пароль>
+   TELEGRAM_LOCAL_BOT_API_FILE_BRIDGE_MAX_BYTES=67108864
+   ```
+
+   Для прежнего локального shared-volume режима задай
+   `TELEGRAM_LOCAL_BOT_API_BASE_URL=http://telegram-bot-api:8081` и
+   `TELEGRAM_LOCAL_BOT_API_FILE_TRANSPORT=filesystem`; gateway-переменные и
+   логин/пароль Local API тогда не требуются.
+
+   `FILE_BRIDGE_MAX_BYTES` ограничивает размер с учётом временного диска PHP.
+   Значение по умолчанию — 64 МБ, поэтому файл 51 МБ поддерживается с запасом
+   для параллельных загрузок. Для
+   большего лимита сначала проверь свободный ephemeral disk Laravel Cloud.
+   Лимит в гигабайтах требует отдельной прямой multipart-загрузки в Object
+   Storage без промежуточного файла PHP.
+
+   Перед увеличением лимита учти суммарный временный объём всех активных
+   загрузок. Пока нет отдельной reservation для ephemeral disk, на Cloud оставь
+   `INBOUND_MEDIA_GLOBAL_MAX_ACTIVE=1` и
+   `INBOUND_MEDIA_CHANNEL_MAX_ACTIVE=1` либо докажи запас диска под выбранную
+   параллельность.
+
+   `ALLOW_INSECURE_HTTP=true` допустим только внутри локальной Docker-сети. Для
+   Laravel Cloud оставь `false`, опубликуй gateway через HTTPS и укажи HTTPS URL
+   для `/api` и `/files`. На внешнем reverse proxy отключи access logs либо
+   редактируй пути: Bot API содержит токен бота в URL.
+
+7. Запусти Local Bot API и bridge в том же Docker Compose project, где работает
+   `dev`:
+
+   ```bash
+   docker compose --profile telegram-local-bot-api up -d --build telegram-bot-api telegram-bot-api-file-bridge
+   docker compose restart dev
+   ```
+
+Если основной runtime запущен с `docker compose -p <project>`, добавь тот же
+`-p <project>` в обе команды. Иначе появится второй изолированный compose-контур,
+который приложение не увидит.
+
+## Проверка
+
+```bash
+docker compose --profile telegram-local-bot-api ps telegram-bot-api
+docker compose --profile telegram-local-bot-api ps telegram-bot-api-file-bridge
+docker compose --profile telegram-local-bot-api logs --tail=100 telegram-bot-api
+docker build \
+  --tag project1/telegram-bot-api-file-bridge:contract-test \
+  .devcontainer/telegram-bot-api-file-bridge
+sh .devcontainer/telegram-bot-api-file-bridge/verify-file-access-contract.sh \
+  project1/telegram-bot-api-file-bridge:contract-test
+docker compose exec -T dev php artisan tinker --execute="dump([
+    'enabled' => (bool) config('bots.telegram.local_api_media_download_enabled'),
+    'transport' => config('bots.telegram.local_api_file_transport'),
+    'api_auth_configured' => filled(config('bots.telegram.local_api_username'))
+        && filled(config('bots.telegram.local_api_password')),
+    'file_auth_configured' => filled(config('bots.telegram.local_api_file_bridge_username'))
+        && filled(config('bots.telegram.local_api_file_bridge_password')),
+]);"
+```
+
+Ожидаемый результат:
+
+- контейнер `telegram-bot-api` имеет статус `healthy`;
+- контейнер `telegram-bot-api-file-bridge` имеет статус `healthy` для режима
+  `http_bridge`;
+- `local_api_media_download_enabled` равно `true`;
+- в режиме `http_bridge` base URL равен
+  `http://telegram-bot-api-file-bridge:8082/api`, а API-вызовы защищены Basic
+  Auth;
+- files root совпадает с каталогом, смонтированным в `dev` и
+  `telegram-bot-api`.
+- file bridge contract подтверждает чтение media `0640`, восстановление чтения
+  старого media `0600`, реальный каталог `music`, Nginx allowlist, запрет
+  ложного `audio`, БД, временных и служебных файлов даже при доступных Unix-
+  правах, Basic Auth, Range, обход пути, symlink и остановку repair при
+  фактическом либо скрытом отказе `chgrp`.
+
+Затем отправь локальному боту файл крупнее автоматического лимита. В диалоге
+должно появиться действие `Скачать вручную`; после нажатия файл переходит в
+загрузку и отображается без обновления страницы.
+
+## Остановка
+
+```bash
+docker compose --profile telegram-local-bot-api stop telegram-bot-api-file-bridge telegram-bot-api
+```
+
+После остановки верни в `.env`:
+
+```dotenv
+TELEGRAM_LOCAL_BOT_API_MEDIA_DOWNLOAD_ENABLED=false
+```
+
+и перезапусти `dev`.
+
+## Перед удалённым companion и staging
+
+Локальный Compose не создаёт сервис, доступный Laravel Cloud. До staging нужен
+отдельный persistent companion-контур с Local Bot API и gateway:
+
+- HTTPS DNS, доступный Cloud workers; исходный порт Local Bot API остаётся
+  приватным;
+- Basic Auth, сетевое ограничение и отключённые либо редактирующие URI access,
+  error и APM logs;
+- upstream/response/read timeout не меньше
+  `INBOUND_MEDIA_ATTEMPT_DEADLINE_SECONDS` (по умолчанию 21600 секунд), а для
+  `/files` отключены response buffering и request buffering;
+- отдельный persistent volume с quota, алертами high-watermark и проверенной
+  cache rotation. Retention Object Storage не очищает кэш Local Bot API.
+
+### Жизненный цикл кэша companion
+
+После успешной загрузки единственной долговременной копией приложения является
+объект на `MESSAGE_ATTACHMENTS_DISK`. Временный файл Laravel удаляется при
+закрытии потока. Копия на VPS остаётся только временным кэшем Telegram/TDLib и
+не является резервной или архивной копией.
+
+Образ Telegram Bot API собирается на закреплённых base-image digest и точных
+upstream revisions:
+
+- builder: `debian:bookworm@sha256:9344f8b8992482f80cba753f323adeaf17690076c095ccff6cc9536be98185dc`;
+- runtime: `debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818`;
+- Telegram Bot API: `adfd7f6a8e990272851777eeb3ae0def4216f161`;
+- TDLib: `a9966eb3704a3351568c28013fed67d797c17828`.
+
+Base-image digest убирает дрейф Docker tag, но `apt-get` читает живой Debian
+repository. Поэтому точной release-идентичностью считается digest уже
+собранного image; переход на Debian snapshot требует отдельного dependency
+update-процесса.
+
+Build применяет versioned patch только к расписанию встроенного TDLib storage
+optimizer, проверяет его SHA-256
+`6ffce6b3a46b67a11fc07a37bcf75bff42267f956c90a337d492c6ef40b8cdfd`,
+а затем fail-closed проверяет обе revisions и upstream defaults.
+В audited pinned-сборке `use_file_database=false`: optimizer сканирует известные
+TDLib file directories напрямую, поэтому upstream type-immunity list режима с
+file database здесь не применяется. Защита нового файла по времени продолжает
+действовать.
+При первом запуске либо просроченном `files_gc_ts` встроенный GC запускается
+через 5–60 секунд. При обычном рестарте после недавнего GC он ждёт остаток
+15-минутного интервала плюс jitter; между успешными sweep проходит примерно
+15–16 минут. Порог eligible cache остаётся upstream:
+`100 MiB`, TTL `23 часа`, максимум `40000` файлов и immunity нового файла
+`1 час`. Это не hard limit всего volume: фактический пик включает как минимум
+час входящего трафика, активные/частичные файлы, БД и служебные данные.
+
+Часовой immunity защищает source-файл на VPS от его filesystem `mtime`.
+Объект в Object Storage появляется только после завершения bridge-download и
+успешной durable-записи, поэтому к этому моменту часть либо всё
+immunity-window уже может пройти. Гарантии полного часа одновременного
+хранения на VPS и в Object Storage нет. После успешной durable-записи
+перекрывается только оставшаяся часть immunity-window. Затем файл лишь
+становится доступным для удаления: если eligible cache превышает soft budget
+`100 MiB`, встроенный GC может удалить его на ближайшем sweep; при небольшом
+кэше файл может оставаться примерно до
+`23 часов` после последнего зафиксированного filesystem `atime` плюс интервал
+sweep. VPS-volume смонтирован с `relatime`, поэтому не каждое чтение обновляет
+`atime`: повторный доступ может продлить срок, но не гарантирует этого. Во всех
+случаях это временный управляемый TDLib-кэш, а не второе долговременное
+хранилище. После eviction повторный `getFile` может снова получить файл у
+Telegram, пока provider reference доступен.
+
+Запрещено удалять файлы внешним `rm`, `find -delete`, очищать per-bot каталог или
+использовать `logOut` как cleanup во время работы companion. Каталог `--dir`
+содержит одновременно media, TDLib state и служебные файлы; внешний cleanup
+может гоняться с активной загрузкой или чтением. Online cleanup выполняет только
+встроенный storage optimizer. При заполнении volume runtime оставляют
+выключенным, останавливают новые claims, дожидаются drain и расширяют либо
+переносят volume без произвольного удаления.
+
+При любом обновлении Telegram Bot API или TDLib требуется новый source audit:
+verifier намеренно отклоняет другую revision. Текущая реализация меняет только
+частоту scan и не ослабляет `100 MiB` / `23 часа` / `40000` / `1 час`.
+
+Перед runtime enable на staging необходимо на отдельном выключенном companion:
+
+1. пересобрать образ из чистой Project-1 revision;
+2. проверить labels обеих upstream revisions и SHA-256 patch, зафиксировать
+   digest собранного image;
+3. увидеть в журнале `Schedule next file clean up` и успешный `Finish files GC`;
+4. подтвердить, что импортированный объект продолжает открываться из Object
+   Storage после eviction source cache;
+5. подтвердить повторный `getFile` для evicted, но ещё доступного provider file;
+6. проверить нагрузку scan и запас всего volume по порогам `80%/90%`;
+7. выполнить rollback на предыдущий образ без изменения persistent volume.
+
+Включение `TELEGRAM_LOCAL_BOT_API_MEDIA_DOWNLOAD_ENABLED` переключает на Local
+Bot API все методы бота, не только скачивание. Для общего staging-токена нужен
+отдельный cutover: cloud `getWebhookInfo` → согласованный cloud `logOut` → local
+`setWebhook` → проверка входящих и исходящих сообщений → готовый rollback. Не
+выполняй этот cutover одним изменением env.
+
+## Диагностика
+
+- `Доступно для загрузки` без последующей загрузки: проверь, что контейнер
+  `healthy`, а приложение использует тот же compose project.
+- Ошибка облачного лимита Telegram: Local Bot API выключен, недоступен или токен
+  не обслуживается локальным транспортом.
+- Ошибка доверенного host/path: проверь `TELEGRAM_LOCAL_BOT_API_TRUSTED_HOSTS` и
+  `TELEGRAM_LOCAL_BOT_API_FILES_ROOT`; для bridge также проверь его base URL,
+  trusted hosts и Basic Auth. Не расширяй списки внешними host-ами.
+- HTTP `401` от gateway: пароль приложения и companion-контейнера различается;
+  проверь обе пары API и file bridge переменных.
+- HTTP `403` для разрешённого media-пути: проверь, что writer запущен с media GID `20000`,
+  каталоги и media принадлежат этой группе, worker Nginx использует группу
+  `telegram-media`, а service `telegram-bot-api-media-permissions` завершился с
+  кодом `0`.
+- HTTP `404` от bridge: Local Bot API вернул путь вне media allowlist или общего
+  read-only volume либо bridge смонтировал другой каталог.
+- После изменения `.env` выполни `docker compose restart dev`, чтобы workers и
+  web-процесс получили одинаковую конфигурацию.

@@ -6,11 +6,18 @@ use App\Data\Bots\IncomingBotMessage;
 use App\Models\Channel;
 use App\Models\Message;
 use App\Models\MessageAttachment;
+use App\Services\Dialogs\DialogAutomationGate;
+use App\Services\Messages\InboundMediaDownloadPolicy;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 
 class SyncBotInboundMessageAttachmentsAction
 {
+    public function __construct(
+        private readonly InboundMediaDownloadPolicy $mediaDownloadPolicy,
+        private readonly DialogAutomationGate $dialogAutomationGate,
+    ) {}
+
     public function handle(Channel $channel, Message $message, IncomingBotMessage $incomingMessage): void
     {
         if ($incomingMessage->media === [] || ! filled($incomingMessage->providerEventKey)) {
@@ -23,12 +30,23 @@ class SyncBotInboundMessageAttachmentsAction
             return;
         }
 
+        $message->loadMissing('dialog.dialogStage');
+        $automaticDownloadAllowed = $this->dialogAutomationGate->acceptsMessage($message);
+
         foreach (array_values($incomingMessage->media) as $index => $item) {
             if (! is_array($item)) {
                 continue;
             }
 
-            $this->syncAttachment($provider, $message, $incomingMessage, $item, $index);
+            $this->syncAttachment(
+                $channel,
+                $provider,
+                $message,
+                $incomingMessage,
+                $item,
+                $index,
+                $automaticDownloadAllowed,
+            );
         }
 
         $message->unsetRelation('attachments');
@@ -38,11 +56,13 @@ class SyncBotInboundMessageAttachmentsAction
      * @param  array<string, mixed>  $item
      */
     private function syncAttachment(
+        Channel $channel,
         string $provider,
         Message $message,
         IncomingBotMessage $incomingMessage,
         array $item,
         int $fallbackSortOrder,
+        bool $automaticDownloadAllowed,
     ): void {
         $providerEventKey = $this->normalizeScalar($incomingMessage->providerEventKey);
         $providerAttachmentKey = $this->normalizeScalar(data_get($item, 'provider_attachment_key'));
@@ -54,6 +74,15 @@ class SyncBotInboundMessageAttachmentsAction
         $mediaKind = MessageAttachment::mediaKindFromLegacyType(
             $this->normalizeScalar(data_get($item, 'media_kind'))
                 ?? $this->normalizeScalar(data_get($item, 'type'))
+        );
+        $fileSizeBytes = $this->normalizeInteger(data_get($item, 'file_size_bytes'))
+            ?? $this->normalizeInteger(data_get($item, 'file_size'));
+        $downloadDecision = $this->mediaDownloadPolicy->initialDecision(
+            $channel,
+            $provider,
+            $mediaKind,
+            $fileSizeBytes,
+            $automaticDownloadAllowed,
         );
 
         $identity = [
@@ -69,8 +98,7 @@ class SyncBotInboundMessageAttachmentsAction
             'extension' => $this->normalizeScalar(data_get($item, 'extension')),
             'original_filename' => $this->normalizeScalar(data_get($item, 'file_name'))
                 ?? $this->normalizeScalar(data_get($item, 'original_filename')),
-            'file_size_bytes' => $this->normalizeInteger(data_get($item, 'file_size_bytes'))
-                ?? $this->normalizeInteger(data_get($item, 'file_size')),
+            'file_size_bytes' => $fileSizeBytes,
             'provider_file_id' => $this->normalizeScalar(data_get($item, 'provider_file_id')),
             'provider_file_unique_id' => $this->normalizeScalar(data_get($item, 'provider_file_unique_id')),
             'provider_file_reference' => $this->normalizeScalar(data_get($item, 'provider_file_reference')),
@@ -80,12 +108,13 @@ class SyncBotInboundMessageAttachmentsAction
         ];
         $createValues = [
             ...$metadataValues,
-            'download_status' => MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY,
+            'download_status' => $downloadDecision['status'],
+            'media_download_max_bytes' => $this->mediaDownloadPolicy->automaticRequestMaxBytes($channel, $provider),
             'send_status' => MessageAttachment::SEND_STATUS_NOT_APPLICABLE,
             'local_disk' => null,
             'local_path' => null,
-            'safe_error_code' => null,
-            'safe_error_message' => null,
+            'safe_error_code' => $downloadDecision['reason'],
+            'safe_error_message' => $downloadDecision['message'],
         ];
 
         $this->createOrUpdateAttachment($identity, $createValues, $metadataValues);
@@ -136,19 +165,63 @@ class SyncBotInboundMessageAttachmentsAction
      */
     private function updateExistingAttachment(MessageAttachment $attachment, array $createValues, array $metadataValues): void
     {
+        $metadataValues = $this->mergeExistingMetadataValues($attachment, $metadataValues);
         $values = $this->shouldPreserveDownloadState($attachment)
             ? $metadataValues
-            : $createValues;
+            : [...$createValues, ...$metadataValues];
 
         $attachment->forceFill($values)->save();
     }
 
+    /**
+     * Provider replays often omit optional metadata. They must not erase values
+     * that were resolved later by a metadata probe or a completed download.
+     *
+     * @param  array<string, mixed>  $metadataValues
+     * @return array<string, mixed>
+     */
+    private function mergeExistingMetadataValues(
+        MessageAttachment $attachment,
+        array $metadataValues,
+    ): array {
+        foreach ($metadataValues as $key => $value) {
+            if (
+                $value === null
+                || ($key === 'file_size_bytes' && is_int($value) && $value <= 0)
+            ) {
+                $metadataValues[$key] = $attachment->getAttribute($key);
+            }
+        }
+
+        $metadataValues['provider_metadata'] = $this->mergeMetadataArray(
+            $attachment->provider_metadata,
+            $metadataValues['provider_metadata'] ?? null,
+        );
+        $metadataValues['raw_payload_excerpt'] = $this->mergeMetadataArray(
+            $attachment->raw_payload_excerpt,
+            $metadataValues['raw_payload_excerpt'] ?? null,
+        ) ?? [];
+
+        return $metadataValues;
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function mergeMetadataArray(mixed $existing, mixed $incoming): ?array
+    {
+        $existing = is_array($existing) ? $existing : [];
+        $incoming = is_array($incoming) ? $incoming : [];
+        $merged = [...$existing, ...$incoming];
+
+        return $merged !== [] ? $merged : null;
+    }
+
     private function shouldPreserveDownloadState(MessageAttachment $attachment): bool
     {
-        return in_array($attachment->download_status, [
-            MessageAttachment::DOWNLOAD_STATUS_DOWNLOADING,
-            MessageAttachment::DOWNLOAD_STATUS_DOWNLOADED,
-        ], true)
+        return $attachment->download_status !== MessageAttachment::DOWNLOAD_STATUS_METADATA_ONLY
+            || $attachment->manual_download_requested_at !== null
+            || filled($attachment->safe_error_code)
             || filled($attachment->local_disk)
             || filled($attachment->local_path);
     }

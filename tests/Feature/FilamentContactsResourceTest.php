@@ -758,7 +758,8 @@ class FilamentContactsResourceTest extends TestCase
             ->assertDontSee('Ссылка на сделку')
             ->assertDontSee('Открыть контакт в Bitrix24')
             ->assertDontSee('Открыть сделку в Bitrix24')
-            ->assertDontSee('https://')
+            ->assertDontSee('data-role="contact-bitrix24-contact-link"', false)
+            ->assertDontSee('data-role="contact-bitrix24-deal-link"', false)
             ->assertDontSee('crm/contact/details', false)
             ->assertDontSee('crm/deal/details', false);
     }

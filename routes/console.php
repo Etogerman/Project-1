@@ -126,3 +126,31 @@ Schedule::command('bot-constructor:run-scheduled-arrows')
 Schedule::command('bot-constructor:cleanup-processing-runs')
     ->everyFiveMinutes()
     ->withoutOverlapping();
+
+Schedule::command('bot-media:download-pending-images --dispatch --limit=25')
+    ->everyMinute()
+    ->withoutOverlapping();
+
+Schedule::command('media:reap-stale-downloads --limit=100')
+    ->everyMinute()
+    ->withoutOverlapping();
+
+Schedule::command('media:reap-expired-reservations --limit=100')
+    ->everyFiveMinutes()
+    ->withoutOverlapping();
+
+Schedule::command('media:prune-temporary-files --limit=100')
+    ->everyFiveMinutes()
+    ->withoutOverlapping();
+
+Schedule::command('media:prune-storage --limit=100')
+    ->daily()
+    ->withoutOverlapping();
+
+Schedule::command('media:reconcile-storage --repair --limit=5000 --orphan-limit=5000')
+    ->dailyAt('03:00')
+    ->withoutOverlapping();
+
+Schedule::command('media:reconcile-quota --repair')
+    ->dailyAt('03:30')
+    ->withoutOverlapping();

@@ -106,6 +106,11 @@ class AppServiceProvider extends ServiceProvider
             return Limit::perMinute(max(1, (int) config('bots.telegram_account.gateway_rate_limit_per_minute', 120)))
                 ->by($this->resolveTelegramAccountGatewayRateLimitKey($request));
         });
+
+        RateLimiter::for('telegram-account-media-upload', function (Request $request): Limit {
+            return Limit::perMinute(max(1, (int) config('bots.telegram_account.gateway_media_upload_rate_limit_per_minute', 600)))
+                ->by($this->resolveTelegramAccountGatewayRateLimitKey($request));
+        });
     }
 
     private function resolveTelegramAccountGatewayRateLimitKey(Request $request): string

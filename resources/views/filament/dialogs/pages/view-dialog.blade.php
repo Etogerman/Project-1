@@ -326,14 +326,21 @@
                                 window.clearInterval(this.refreshIntervalId);
                             }
 
-                            this.refreshIntervalId = window.setInterval(() => {
+                            this.refreshIntervalId = window.setInterval(async () => {
                                 if (document.visibilityState !== 'visible' || this.isRefreshing || this.shouldDeferLiveRefresh()) {
                                     return;
                                 }
 
                                 this.shouldScrollOnRefresh = this.isNearBottom();
                                 this.isRefreshing = true;
-                                this.$wire.refreshDialogViewData();
+
+                                try {
+                                    await this.$wire.refreshDialogViewData();
+                                } catch (error) {
+                                    console.warn('Не удалось обновить диалог.', error);
+                                } finally {
+                                    this.isRefreshing = false;
+                                }
                             }, {{ $liveRefreshPollIntervalMs }});
                         },
                         scheduleInitialScroll() {

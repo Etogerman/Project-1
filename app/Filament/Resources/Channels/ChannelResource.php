@@ -16,6 +16,7 @@ use App\Services\Bots\ResolveChannelConnectionCheckerHealthAction;
 use App\Services\Bots\SyncChannelBotMetadataAction;
 use App\Services\Dialogs\BuildConversationFeedViewDataAction;
 use App\Services\Dialogs\MessageChronology;
+use App\Services\Messages\InboundMediaDownloadPolicy;
 use App\Services\Scenarios\ScenarioRegistry;
 use App\Services\Scenarios\SyncChannelScenarioBindingsAction;
 use App\Services\TelegramAccount\ResolveTelegramAccountGatewayDiagnosticsAction;
@@ -33,6 +34,7 @@ use Filament\Infolists\Components\TextEntry;
 use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Section;
+use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Schema;
 use Filament\Support\Enums\Alignment;
@@ -131,6 +133,7 @@ class ChannelResource extends Resource
                             ->required()
                             ->selectablePlaceholder(false)
                             ->native(false)
+                            ->live()
                             ->hidden(fn (?Channel $record): bool => $record?->isAccountConnection() ?? false),
                         Select::make('connection_type')
                             ->label('Тип')
@@ -140,6 +143,7 @@ class ChannelResource extends Resource
                             ->required()
                             ->selectablePlaceholder(false)
                             ->native(false)
+                            ->live()
                             ->hidden(fn (?Channel $record): bool => $record?->isAccountConnection() ?? false),
                     ])
                     ->columnSpanFull()
@@ -172,6 +176,29 @@ class ChannelResource extends Resource
                             ->label('Синхронизация исходящих из Telegram')
                             ->default(false)
                             ->visible(fn (?Channel $record): bool => $record?->isAccountConnection() ?? false),
+                        TextInput::make('inbound_media_auto_download_max_mb')
+                            ->label('Автозагрузка медиа до')
+                            ->numeric()
+                            ->minValue(0)
+                            ->maxValue(4096)
+                            ->step(1)
+                            ->suffix('МБ')
+                            ->placeholder('20')
+                            ->helperText('Более крупные файлы останутся в диалоге. Ручное действие управляется переключателем ниже.')
+                            ->visible(fn (Get $get, ?Channel $record): bool => static::supportsInboundMediaSettings(
+                                $record,
+                                (string) $get('platform'),
+                                (string) $get('connection_type'),
+                            )),
+                        Toggle::make('inbound_media_on_demand_enabled')
+                            ->label('Ручная загрузка крупных медиа')
+                            ->helperText('Показывает оператору действие «Скачать вручную». Включайте после обновления Gateway.')
+                            ->default(false)
+                            ->visible(fn (Get $get, ?Channel $record): bool => static::supportsInboundMediaSettings(
+                                $record,
+                                (string) $get('platform'),
+                                (string) $get('connection_type'),
+                            )),
                     ])
                     ->columnSpanFull()
                     ->columns(2),
@@ -529,7 +556,7 @@ class ChannelResource extends Resource
                     ->toggleable(),
                 TextColumn::make('connection_error_message')
                     ->label('Ошибка')
-                    ->state(fn (Channel $record): ?string => static::resolveConnectionErrorDisplay($record, static::resolveConnectionState($record)))
+                    ->state(fn (Channel $record): ?string => static::resolveChannelTableErrorDisplay($record, static::resolveConnectionState($record)))
                     ->limit(60)
                     ->wrap()
                     ->toggleable(),
@@ -870,6 +897,20 @@ class ChannelResource extends Resource
                         ],
                         'is_active' => $record->is_active ? '1' : '0',
                         'sync_external_outgoing_enabled' => (bool) $record->sync_external_outgoing_enabled,
+                        'inbound_media_on_demand_enabled' => $record->inbound_media_on_demand_enabled
+                            ?? ($record->isAccountConnection()
+                                ? (bool) $record->telegram_account_media_on_demand_enabled
+                                : false),
+                        'inbound_media_auto_download_max_mb' => (int) round(
+                            ($record->inbound_media_auto_download_max_bytes
+                                ?? $record->telegram_account_media_auto_download_max_bytes
+                                ?? config(
+                                    $record->isAccountConnection()
+                                        ? 'bots.telegram_account.media_download_max_bytes'
+                                        : 'bots.media.download_max_bytes',
+                                    InboundMediaDownloadPolicy::DEFAULT_AUTO_DOWNLOAD_MAX_BYTES,
+                                )) / 1024 / 1024,
+                        ),
                     ])
                     ->using(function (array $data, Channel $record): void {
                         static::updateChannelRecord($record, static::mutateChannelData($data, $record));
@@ -1086,6 +1127,7 @@ class ChannelResource extends Resource
         }
 
         $data = static::syncChannelConnectionTypeData($data);
+        $data = static::mutateInboundMediaSettings($data, $record);
         $token = trim((string) data_get($data, 'credentials.token', ''));
         $credentials = $record?->readableCredentials() ?? [];
 
@@ -1125,11 +1167,93 @@ class ChannelResource extends Resource
             ? filter_var(data_get($data, 'sync_external_outgoing_enabled'), FILTER_VALIDATE_BOOLEAN)
             : (bool) $record->sync_external_outgoing_enabled;
 
+        $mediaOnDemandEnabled = array_key_exists('inbound_media_on_demand_enabled', $data)
+            ? filter_var(data_get($data, 'inbound_media_on_demand_enabled'), FILTER_VALIDATE_BOOLEAN)
+            : (array_key_exists('telegram_account_media_on_demand_enabled', $data)
+                ? filter_var(data_get($data, 'telegram_account_media_on_demand_enabled'), FILTER_VALIDATE_BOOLEAN)
+                : (bool) ($record->inbound_media_on_demand_enabled
+                    ?? $record->telegram_account_media_on_demand_enabled));
+
+        $autoDownloadMaxBytes = $record->inbound_media_auto_download_max_bytes
+            ?? $record->telegram_account_media_auto_download_max_bytes;
+
+        if (
+            array_key_exists('inbound_media_auto_download_max_mb', $data)
+            || array_key_exists('telegram_account_media_auto_download_max_mb', $data)
+        ) {
+            $autoDownloadMaxMb = data_get(
+                $data,
+                'inbound_media_auto_download_max_mb',
+                data_get($data, 'telegram_account_media_auto_download_max_mb'),
+            );
+            $autoDownloadMaxBytes = filled($autoDownloadMaxMb)
+                ? max(0, (int) $autoDownloadMaxMb) * 1024 * 1024
+                : null;
+        }
+
         return [
             'name' => (string) data_get($data, 'name', $record->name),
             'auto_reply_mode' => $autoReplyMode,
             'sync_external_outgoing_enabled' => $syncExternalOutgoingEnabled,
+            'inbound_media_on_demand_enabled' => $mediaOnDemandEnabled,
+            'inbound_media_auto_download_max_bytes' => $autoDownloadMaxBytes,
+            'telegram_account_media_on_demand_enabled' => $mediaOnDemandEnabled,
+            'telegram_account_media_auto_download_max_bytes' => $autoDownloadMaxBytes,
         ];
+    }
+
+    protected static function supportsInboundMediaSettings(
+        ?Channel $record,
+        string $platform,
+        string $connectionType,
+    ): bool {
+        return $record?->supportsInboundMediaOnDemand()
+            ?? (
+                in_array($platform, [Channel::PLATFORM_TELEGRAM, Channel::PLATFORM_MAX], true)
+                && $connectionType === Channel::CONNECTION_TYPE_BOT
+            );
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    protected static function mutateInboundMediaSettings(array $data, ?Channel $record): array
+    {
+        $supportsInboundMedia = static::supportsInboundMediaSettings(
+            $record,
+            (string) data_get($data, 'platform'),
+            (string) data_get($data, 'connection_type'),
+        );
+
+        $autoDownloadMaxMb = data_get($data, 'inbound_media_auto_download_max_mb');
+        $onDemandEnabled = array_key_exists('inbound_media_on_demand_enabled', $data)
+            ? filter_var(data_get($data, 'inbound_media_on_demand_enabled'), FILTER_VALIDATE_BOOLEAN)
+            : $record?->inbound_media_on_demand_enabled;
+
+        Arr::forget($data, [
+            'inbound_media_auto_download_max_mb',
+            'telegram_account_media_auto_download_max_mb',
+            'telegram_account_media_on_demand_enabled',
+        ]);
+
+        if (! $supportsInboundMedia) {
+            Arr::forget($data, 'inbound_media_on_demand_enabled');
+
+            return $data;
+        }
+
+        $data['inbound_media_on_demand_enabled'] = (bool) $onDemandEnabled;
+
+        if ($autoDownloadMaxMb !== null) {
+            $data['inbound_media_auto_download_max_bytes'] = filled($autoDownloadMaxMb)
+                ? max(0, (int) $autoDownloadMaxMb) * 1024 * 1024
+                : null;
+        } elseif ($record instanceof Channel) {
+            $data['inbound_media_auto_download_max_bytes'] = $record->inbound_media_auto_download_max_bytes;
+        }
+
+        return $data;
     }
 
     /**
@@ -1597,7 +1721,7 @@ SQL;
     protected static function resolveConnectionStatusLabel(Channel $record, array $connectionState): string
     {
         if ($record->isAccountConnection()) {
-            return $record->getHealthStatusLabel();
+            return static::resolveTelegramAccountGatewayDiagnostics($record)->label;
         }
 
         $schedulerHealth = static::resolveStaleConnectionSchedulerHealth($connectionState);
@@ -1619,7 +1743,7 @@ SQL;
     protected static function resolveConnectionStatusColor(Channel $record, array $connectionState): string
     {
         if ($record->isAccountConnection()) {
-            return $record->getHealthStatusColor();
+            return static::resolveTelegramAccountGatewayDiagnostics($record)->severity;
         }
 
         $schedulerHealth = static::resolveStaleConnectionSchedulerHealth($connectionState);
@@ -1743,6 +1867,20 @@ SQL;
         }
 
         return $connectionState['connection_error_message'];
+    }
+
+    /**
+     * @param  array{connection_status: string, webhook_status: string, connection_error_message: ?string, provider_webhook_url: ?string, expected_webhook_url: ?string, connection_checked_at: mixed}  $connectionState
+     */
+    protected static function resolveChannelTableErrorDisplay(Channel $record, array $connectionState): ?string
+    {
+        if ($record->isAccountConnection()) {
+            $diagnostics = static::resolveTelegramAccountGatewayDiagnostics($record);
+
+            return $diagnostics->isOutgoingReplyReady ? null : $diagnostics->description;
+        }
+
+        return static::resolveConnectionErrorDisplay($record, $connectionState);
     }
 
     /**
