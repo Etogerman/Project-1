@@ -5,7 +5,7 @@ description: Create or update AB Connector repo skills under .agents/skills. Use
 
 # AB Connector Skill Authoring
 
-Use this skill to design focused repo-scoped skills for AB Connector. Keep the work aligned with `AGENTS.md` and `docs/task-delivery-workflow.md`.
+Use this skill to design focused repo-scoped skills for AB Connector. Keep the work aligned with `AGENTS.md`, `docs/task-delivery-workflow.md`, and `docs/agent-docs-lifecycle.md`.
 
 ## Workflow
 
@@ -40,7 +40,7 @@ Use this skill to design focused repo-scoped skills for AB Connector. Keep the w
    - New code/runtime streams are staging-first after local MVP and operator decision.
    - Docs-only/policy-only skills may use the docs-only path from clean `origin/main`.
    - Skills must not create shortcuts around Spec repo, Spec doc, Spec revision, PR checkpoints, CI, ready, merge, deploy, or smoke gates.
-   - If a skill describes PR handoff, it must label `merge` in `staging` or `main` as user-performed; Codex only verifies before/after and handles cleanup after the user's merge.
+   - If a skill describes PR handoff, it must label `merge` in `staging` or `main` as user-performed. Codex verifies the result and routes to the next canonical checkpoint; it must not collapse the remaining deploy, smoke, acceptance, Issue reconciliation, Spec closure, or cleanup gates into a generic `merge -> cleanup` branch.
    - If a skill could touch Bitrix24, Open Lines, Telegram, MAX, queues, scheduler, env, config, or runtime, classify it as code/runtime unless proven otherwise.
 
 6. Write the files.
@@ -51,6 +51,8 @@ Use this skill to design focused repo-scoped skills for AB Connector. Keep the w
 
 7. Validate.
    - Run the skill validation script if available.
+   - For every changed action transition, run the consistency audit from `docs/agent-docs-lifecycle.md` across `AGENTS.md`, the canonical workflow, action ownership, affected skills, Copilot instructions, and executable guards.
+   - If a renewed review repeats the same root invariant after a fix, stop local patching and apply the `Approach Reset Gate` before another commit/push.
    - Check the changed scope internally with git status or a diff summary.
    - Run `git diff --check`.
    - Search for leftover placeholder markers before handoff.

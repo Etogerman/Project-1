@@ -1,4 +1,4 @@
 interface:
   display_name: "AB PR CI Review"
-  short_description: "Проверяет PR, CI, задачи и следующий checkpoint"
-  default_prompt: "Используй $ab-pr-ci-review, чтобы read-only проверить PR, CI, review, русский title/body, поля готовности, Spec-поля, связанные задачи и их lineage, guard-скрипты и следующий допустимый PR checkpoint без merge и обхода delivery gates."
+  short_description: "Проверяет PR, все review-surfaces и следующий checkpoint"
+  default_prompt: "Используй $ab-pr-ci-review для read-only проверки PR, CI, всех review-surfaces, связанных задач, guard-полей, статуса approach reset и следующего допустимого checkpoint."
