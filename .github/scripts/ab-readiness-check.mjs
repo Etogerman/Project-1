@@ -111,9 +111,42 @@ function stripHtmlComments(text) {
   return text.replace(/<!--[\s\S]*?(?:-->|$)/g, " ");
 }
 
+function stripMarkdownFencedCode(text) {
+  const lines = String(text).split("\n");
+  let activeFence = null;
+
+  return lines.map((line) => {
+    if (activeFence) {
+      const closingFence = line.match(/^ {0,3}(`{3,}|~{3,})[ \t]*\r?$/);
+
+      if (
+        closingFence
+        && closingFence[1][0] === activeFence.marker
+        && closingFence[1].length >= activeFence.length
+      ) {
+        activeFence = null;
+      }
+
+      return "";
+    }
+
+    const openingFence = line.match(/^ {0,3}(`{3,}|~{3,})/);
+
+    if (!openingFence) {
+      return line;
+    }
+
+    activeFence = {
+      marker: openingFence[1][0],
+      length: openingFence[1].length,
+    };
+
+    return "";
+  }).join("\n");
+}
+
 function stripMarkdownCode(text) {
-  return stripHtmlComments(text)
-    .replace(/```[\s\S]*?```/g, " ")
+  return stripMarkdownFencedCode(stripHtmlComments(text))
     .replace(/`[^`]*`/g, " ");
 }
 
@@ -137,7 +170,7 @@ function normalizeValue(value = "") {
 }
 
 function extractField(body, label, { preserveInternalWhitespace = false } = {}) {
-  const pattern = new RegExp(`(?:^|\\n)[^\\S\\n]*(?:[-*][^\\S\\n]*)?${escapeRegExp(label)}[^\\S\\n]*:[^\\S\\n]*(.*?)(?=\\n|$)`, "i");
+  const pattern = new RegExp(`(?:^|\\n) {0,3}(?:[-*][^\\S\\n]*)?${escapeRegExp(label)}[^\\S\\n]*:[^\\S\\n]*(.*?)(?=\\n|$)`, "i");
   const match = body.match(pattern);
 
   if (!match) {
@@ -171,7 +204,7 @@ function extractFields(body) {
 }
 
 function countFieldOccurrences(body, label) {
-  const pattern = new RegExp(`(?:^|\\n)[^\\S\\n]*(?:[-*][^\\S\\n]*)?${escapeRegExp(label)}[^\\S\\n]*:`, "gi");
+  const pattern = new RegExp(`(?:^|\\n) {0,3}(?:[-*][^\\S\\n]*)?${escapeRegExp(label)}[^\\S\\n]*:`, "gi");
 
   return [...stripMarkdownCode(body).matchAll(pattern)].length;
 }
@@ -619,6 +652,62 @@ function runSelfTest() {
       baseRef: "main",
       title: "[codex] Уточнить процесс ревью",
       body: readyProcessBody.replace("- Связанные задачи: не требуется\n", ""),
+      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
+      isDraft: false,
+    }).failures.join("\n"),
+    /Связанные задачи/,
+  );
+
+  assert.match(
+    evaluateReadiness({
+      baseRef: "main",
+      title: "[codex] Уточнить процесс ревью",
+      body: readyProcessBody.replace(
+        "- Связанные задачи: не требуется",
+        "~~~text\nСвязанные задачи: #708",
+      ),
+      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
+      isDraft: false,
+    }).failures.join("\n"),
+    /Связанные задачи/,
+  );
+
+  assert.match(
+    evaluateReadiness({
+      baseRef: "main",
+      title: "[codex] Уточнить процесс ревью",
+      body: readyProcessBody.replace(
+        "- Связанные задачи: не требуется",
+        "~~~text\nСвязанные задачи: #708\n~~~",
+      ),
+      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
+      isDraft: false,
+    }).failures.join("\n"),
+    /Связанные задачи/,
+  );
+
+  assert.match(
+    evaluateReadiness({
+      baseRef: "main",
+      title: "[codex] Уточнить процесс ревью",
+      body: readyProcessBody.replace(
+        "- Связанные задачи: не требуется",
+        "    Связанные задачи: #708",
+      ),
+      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
+      isDraft: false,
+    }).failures.join("\n"),
+    /Связанные задачи/,
+  );
+
+  assert.match(
+    evaluateReadiness({
+      baseRef: "main",
+      title: "[codex] Уточнить процесс ревью",
+      body: readyProcessBody.replace(
+        "- Связанные задачи: не требуется",
+        "```text\nСвязанные задачи: #708",
+      ),
       files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
       isDraft: false,
     }).failures.join("\n"),

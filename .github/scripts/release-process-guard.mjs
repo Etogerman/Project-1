@@ -59,7 +59,7 @@ function extractStagingPrNumber(body) {
 }
 
 function parseLinkedIssues(body = "") {
-  const fieldPattern = /^\s*(?:[-*]\s*)?Связанные задачи\s*:\s*(.*?)\s*$/gim;
+  const fieldPattern = /^ {0,3}(?:[-*][ \t]*)?Связанные задачи[ \t]*:[ \t]*(.*?)[ \t]*\r?$/gim;
   const matches = [...stripMarkdownCode(String(body)).matchAll(fieldPattern)];
 
   if (matches.length === 0) {
@@ -428,10 +428,42 @@ function compareValidatedFileContents(currentFiles, stagingFiles, fileContentSna
   return failures;
 }
 
+function stripMarkdownFencedCode(text) {
+  const lines = String(text).split("\n");
+  let activeFence = null;
+
+  return lines.map((line) => {
+    if (activeFence) {
+      const closingFence = line.match(/^ {0,3}(`{3,}|~{3,})[ \t]*\r?$/);
+
+      if (
+        closingFence
+        && closingFence[1][0] === activeFence.marker
+        && closingFence[1].length >= activeFence.length
+      ) {
+        activeFence = null;
+      }
+
+      return "";
+    }
+
+    const openingFence = line.match(/^ {0,3}(`{3,}|~{3,})/);
+
+    if (!openingFence) {
+      return line;
+    }
+
+    activeFence = {
+      marker: openingFence[1][0],
+      length: openingFence[1].length,
+    };
+
+    return "";
+  }).join("\n");
+}
+
 function stripMarkdownCode(text) {
-  return text
-    .replace(/<!--[\s\S]*?(?:-->|$)/g, " ")
-    .replace(/```[\s\S]*?```/g, " ")
+  return stripMarkdownFencedCode(text.replace(/<!--[\s\S]*?(?:-->|$)/g, " "))
     .replace(/`[^`]*`/g, " ");
 }
 
@@ -926,6 +958,10 @@ function runSelfTest() {
   assert.equal(parseLinkedIssues("Связанные задачи: https://github.com/Etogerman/Project-1/issues/708").valid, false);
   assert.equal(parseLinkedIssues("Связанные задачи: #0").valid, false);
   assert.equal(parseLinkedIssues("```text\nСвязанные задачи: #708\n```").valid, false);
+  assert.equal(parseLinkedIssues("```text\nСвязанные задачи: #708").valid, false);
+  assert.equal(parseLinkedIssues("~~~text\nСвязанные задачи: #708\n~~~").valid, false);
+  assert.equal(parseLinkedIssues("~~~text\nСвязанные задачи: #708").valid, false);
+  assert.equal(parseLinkedIssues("    Связанные задачи: #708").valid, false);
   assert.equal(parseLinkedIssues("<!--\nСвязанные задачи: #708\n-->").valid, false);
   assert.equal(parseLinkedIssues("<!--\nСвязанные задачи: #708").valid, false);
   const linkedStagingPr708 = { number: 614, body: "Связанные задачи: #708" };

@@ -13,9 +13,10 @@
 - Для каждого PR проверь поле `Связанные задачи:`. Допустим строгий список
   `#NNN, #MMM` либо `не требуется`. Для runtime PR в `main` набор должен точно
   совпадать с объединением связанных задач из всех указанных staging PR.
-- Не предлагай `Closes`, `Fixes` или `Resolves` для этих задач: итоговое решение
-  по Issue принимается после production deploy, smoke и пользовательской
-  приёмки.
+- Не предлагай `Closes`, `Fixes` или `Resolves` для этих задач до конечной
+  приёмки соответствующего delivery path: после production deploy, smoke и
+  пользовательской приёмки для code/release stream либо после `merge` в `main`
+  и проверки результата merge для docs/process-only stream.
 - Если staging-доказательств нет, явно напиши, что PR нарушает release process и должен сначала пройти через `staging`.
 - При ревью всегда проверяй статус GitHub Actions job `release-process-guard`.
 
