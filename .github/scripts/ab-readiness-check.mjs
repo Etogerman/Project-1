@@ -1,5 +1,10 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
+import {
+  analyzeMarkdown,
+  restoreInlineCodeTokens,
+  stripMarkdownCode,
+} from "./lib/markdown-visibility.mjs";
 
 const PROCESS_ONLY_FILE_PATTERNS = [
   /^AGENTS\.md$/,
@@ -14,6 +19,9 @@ const PROCESS_ONLY_FILE_PATTERNS = [
   /^\.github\/workflows\/release-process-guard\.ya?ml$/,
   /^\.github\/scripts\/ab-readiness-check\.mjs$/,
   /^\.github\/workflows\/ab-readiness-check\.ya?ml$/,
+  /^\.github\/scripts\/(?:package(?:-lock)?\.json|\.gitignore)$/,
+  /^\.github\/scripts\/lib\/markdown-visibility\.mjs$/,
+  /^\.github\/scripts\/tests\/markdown-visibility\.test\.mjs$/,
   /^\.github\/scripts\/copilot-feasibility-spike\.mjs$/,
   /^\.github\/workflows\/copilot-feasibility-spike\.ya?ml$/,
   /^\.github\/scripts\/copilot-merge-readiness\.mjs$/,
@@ -35,13 +43,16 @@ const STAGING_PROCESS_CI_SYNC_FILE_PATTERNS = [
   /^docs\/runbooks\/release-rollback\.md$/,
   /^docs\/runbooks\/test-env\.md$/,
   /^docs\/task-delivery-workflow\.md$/,
-  /^\.agents\/skills\/ab-connector-skill-authoring\/SKILL\.md$/,
+  /^\.agents\/skills\/ab-connector-skill-authoring\/(?:SKILL\.md|agents\/openai\.yaml)$/,
   /^\.agents\/skills\/ab-pr-ci-review\/(SKILL\.md|agents\/openai\.yaml)$/,
   /^\.agents\/skills\/ab-spec-workflow\/(SKILL\.md|agents\/openai\.yaml)$/,
   /^\.agents\/skills\/ab-stream-state-resolver\/(SKILL\.md|agents\/openai\.yaml)$/,
   /^\.github\/PULL_REQUEST_TEMPLATE\.md$/,
   /^\.github\/copilot-instructions\.md$/,
   /^\.github\/scripts\/ab-readiness-check\.mjs$/,
+  /^\.github\/scripts\/(?:package(?:-lock)?\.json|\.gitignore)$/,
+  /^\.github\/scripts\/lib\/markdown-visibility\.mjs$/,
+  /^\.github\/scripts\/tests\/markdown-visibility\.test\.mjs$/,
   /^\.github\/scripts\/ci-change-scope\.mjs$/,
   /^\.github\/scripts\/copilot-feasibility-spike\.mjs$/,
   /^\.github\/scripts\/copilot-merge-readiness\.mjs$/,
@@ -56,7 +67,7 @@ const STAGING_PROCESS_CI_SYNC_FILE_PATTERNS = [
 const CYRILLIC_PATTERN = /[А-Яа-яЁё]/;
 const LATIN_PATTERN = /[A-Za-z]/;
 const ENGLISH_PR_HEADING_PATTERN =
-  /^\s{0,3}#{1,6}\s*(Summary|Overview|Description|Why|Validation|Testing|Tests|Checks|Delivery note|Implementation|Changes|Root cause|Impact|Risks|Rollout)\s*$/gim;
+  /^(Summary|Overview|Description|Why|Validation|Testing|Tests|Checks|Delivery note|Implementation|Changes|Root cause|Impact|Risks|Rollout)\s*$/i;
 const ALLOWED_TECHNICAL_TERMS_PATTERN =
   /\b(codex|Copilot|Copilot CLI|Copilot Requests|CLI|PAT|token|secret|workflow_dispatch|GITHUB_TOKEN|COPILOT_GITHUB_TOKEN|READY_TO_MERGE|BLOCKED|shadow|verdict|merge-readiness|PR|MCP|CI|UI|URL|API|JSON|YAML|TOML|PHP|SQL|HTTP|HTTPS|Docker|Laravel|Boost|Filament|Livewire|Bitrix24|AB Connector|Spec repo|Spec doc|Spec revision|MVP|Staging PRs|Staging PR|Staging smoke|Staging Post-Deploy Smoke|rev-check|public smoke|admin smoke|dev-only|validated diff|clean-main-PR|workflow|runtime|main|staging|draft|ready|merge|commit|branch|pull request|hotfix|release-process-guard|ab-readiness-check|copilot-feasibility-spike|copilot-merge-readiness|php-artisan-test)\b/gi;
 const LINKED_ISSUES_PATTERN = /^#[1-9]\d*(?:, #[1-9]\d*)*$/;
@@ -107,168 +118,6 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function stripHtmlComments(text) {
-  return String(text).replace(/<!--[\s\S]*?(?:-->|$)/g, " ");
-}
-
-function stripMarkdownFencedCode(text) {
-  const lines = String(text).split("\n");
-  let activeFence = null;
-
-  return lines.map((line) => {
-    if (activeFence) {
-      const closingFence = line.match(/^ {0,3}(`{3,}|~{3,})[ \t]*\r?$/);
-
-      if (
-        closingFence
-        && closingFence[1][0] === activeFence.marker
-        && closingFence[1].length >= activeFence.length
-      ) {
-        activeFence = null;
-      }
-
-      return "";
-    }
-
-    const openingFence = line.match(/^ {0,3}(`{3,}|~{3,})/);
-
-    if (!openingFence) {
-      return line;
-    }
-
-    activeFence = {
-      marker: openingFence[1][0],
-      length: openingFence[1].length,
-    };
-
-    return "";
-  }).join("\n");
-}
-
-function leadingMarkdownIndentationColumns(line) {
-  let indentationColumns = 0;
-
-  for (const character of line) {
-    if (character === " ") {
-      indentationColumns += 1;
-    } else if (character === "\t") {
-      indentationColumns += 4 - (indentationColumns % 4);
-    } else {
-      break;
-    }
-  }
-
-  return indentationColumns;
-}
-
-function isMarkdownParagraphBoundary(line, paragraphOpen) {
-  const content = String(line).replace(/\r$/, "").replace(/^ {0,3}/, "");
-  const isAtxHeading = /^#{1,6}(?:[ \t]+|$)/.test(content);
-  const isThematicBreak = /^(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,})$/.test(content);
-  const isSetextUnderline = paragraphOpen && /^(?:=+|-+)[ \t]*$/.test(content);
-
-  return isAtxHeading || isThematicBreak || isSetextUnderline;
-}
-
-function stripMarkdownIndentedCode(text) {
-  let inIndentedCode = false;
-  let paragraphOpen = false;
-
-  return String(text).split("\n").map((line) => {
-    if (/^[ \t]*\r?$/.test(line)) {
-      if (!inIndentedCode) {
-        paragraphOpen = false;
-      }
-
-      return inIndentedCode ? "" : line;
-    }
-
-    if (leadingMarkdownIndentationColumns(line) >= 4) {
-      if (inIndentedCode || !paragraphOpen) {
-        inIndentedCode = true;
-        paragraphOpen = false;
-        return "";
-      }
-
-      return line;
-    }
-
-    inIndentedCode = false;
-    paragraphOpen = !isMarkdownParagraphBoundary(line, paragraphOpen);
-
-    return line;
-  }).join("\n");
-}
-
-function stripMarkdownCodeSpans(text) {
-  const source = String(text);
-  let result = "";
-  let cursor = 0;
-
-  while (cursor < source.length) {
-    const openingStart = source.indexOf("`", cursor);
-
-    if (openingStart === -1) {
-      result += source.slice(cursor);
-      break;
-    }
-
-    result += source.slice(cursor, openingStart);
-
-    let openingEnd = openingStart;
-
-    while (source[openingEnd] === "`") {
-      openingEnd += 1;
-    }
-
-    const delimiterLength = openingEnd - openingStart;
-    let searchCursor = openingEnd;
-    let closingEnd = null;
-
-    while (searchCursor < source.length) {
-      const closingStart = source.indexOf("`", searchCursor);
-
-      if (closingStart === -1) {
-        break;
-      }
-
-      let candidateEnd = closingStart;
-
-      while (source[candidateEnd] === "`") {
-        candidateEnd += 1;
-      }
-
-      if (candidateEnd - closingStart === delimiterLength) {
-        closingEnd = candidateEnd;
-        break;
-      }
-
-      searchCursor = candidateEnd;
-    }
-
-    if (closingEnd === null) {
-      result += source.slice(openingStart, openingEnd);
-      cursor = openingEnd;
-      continue;
-    }
-
-    result += source.slice(openingStart, closingEnd).replace(/[^\r\n]/g, " ");
-    cursor = closingEnd;
-  }
-
-  return result;
-}
-
-function stripMarkdownBlockCode(text) {
-  const withoutFencedCode = stripMarkdownFencedCode(stripHtmlComments(text));
-
-  return stripMarkdownIndentedCode(withoutFencedCode);
-}
-
-function stripMarkdownCode(text) {
-  return stripMarkdownCodeSpans(stripMarkdownBlockCode(text));
-}
-
 function stripTechnicalMarkdown(text) {
   return stripMarkdownCode(text)
     .replace(/https?:\/\/\S+/g, " ")
@@ -288,41 +137,41 @@ function normalizeValue(value = "") {
     .replace(/\s+/g, " ");
 }
 
-function extractField(body, label, { preserveInternalWhitespace = false } = {}) {
-  const source = String(body);
+function extractField(
+  source,
+  label,
+  { preserveInternalWhitespace = false, inlineCodeTokens = [] } = {},
+) {
   const patternSource = `^ {0,3}(?:[-*][^\\S\\n]*)?${escapeRegExp(label)}[^\\S\\n]*:[^\\S\\n]*(.*?)\\r?$`;
-  const visibleMatch = stripMarkdownCodeSpans(source).match(new RegExp(patternSource, "im"));
+  const match = String(source).match(new RegExp(patternSource, "im"));
 
-  if (!visibleMatch) {
+  if (!match) {
     return null;
   }
 
-  const rawLine = source.slice(visibleMatch.index, visibleMatch.index + visibleMatch[0].length);
-  const rawMatch = rawLine.match(new RegExp(patternSource, "i"));
-
-  if (!rawMatch) {
-    return null;
-  }
+  const restoredValue = restoreInlineCodeTokens(match[1], inlineCodeTokens);
 
   const value = preserveInternalWhitespace
-    ? rawMatch[1].trim().replace(/^`|`$/g, "")
-    : normalizeValue(rawMatch[1]);
+    ? restoredValue.trim().replace(/^`|`$/g, "")
+    : normalizeValue(restoredValue);
 
   return value === "" ? null : value;
 }
 
 function extractFields(body) {
-  const visibleBody = stripMarkdownBlockCode(body);
+  const markdown = analyzeMarkdown(body);
   const fields = [...REQUIRED_FIELDS, ...SPEC_FIELDS].reduce(
     (fields, field) => ({
       ...fields,
-      [field.key]: extractField(visibleBody, field.label),
+      [field.key]: extractField(markdown.fieldText, field.label, {
+        inlineCodeTokens: markdown.inlineCodeTokens,
+      }),
     }),
     {},
   );
 
   fields.linkedIssues = extractField(
-    stripMarkdownCodeSpans(visibleBody),
+    markdown.visibleFieldText,
     "Связанные задачи",
     { preserveInternalWhitespace: true },
   );
@@ -333,7 +182,7 @@ function extractFields(body) {
 function countFieldOccurrences(body, label) {
   const pattern = new RegExp(`(?:^|\\n) {0,3}(?:[-*][^\\S\\n]*)?${escapeRegExp(label)}[^\\S\\n]*:`, "gi");
 
-  return [...stripMarkdownCode(body).matchAll(pattern)].length;
+  return [...analyzeMarkdown(body).visibleFieldText.matchAll(pattern)].length;
 }
 
 function parseLinkedIssues(value) {
@@ -366,10 +215,11 @@ function hasClosingIssueKeyword(body) {
 
 function validatePublishLanguage({ title, body }) {
   const failures = [];
+  const markdown = analyzeMarkdown(body);
   const readableTitle = title.replace(/^\s*\[codex\]\s*/i, "").trim();
   const readableBody = stripTechnicalMarkdown(body);
   const readableText = `${stripTechnicalMarkdown(readableTitle)}\n${readableBody}`;
-  const englishHeadings = [...stripMarkdownCode(body).matchAll(ENGLISH_PR_HEADING_PATTERN)].map((match) => match[1]);
+  const englishHeadings = markdown.headings.filter((heading) => ENGLISH_PR_HEADING_PATTERN.test(heading));
   const cyrillicCount = countMatches(readableText, /[А-Яа-яЁё]/g);
   const latinCount = countMatches(readableText, /[A-Za-z]/g);
 
@@ -393,7 +243,7 @@ function validatePublishLanguage({ title, body }) {
 }
 
 function hasStagingEvidence(body) {
-  const visibleBody = stripMarkdownCode(body);
+  const visibleBody = analyzeMarkdown(body).visibleFieldText;
 
   return /(?:^|\n) {0,3}Staging[ \t]+PRs?[ \t]*:[ \t]*(?:.*(?:https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/)?#?\d+\b)/i.test(visibleBody)
     && /(?:^|\n) {0,3}Staging[ \t]+smoke[ \t]*:[ \t]*(?:.*https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/actions\/runs\/\d+)/i.test(visibleBody);
@@ -609,6 +459,9 @@ function printWarning(message) {
 
 function runSelfTest() {
   assert.equal(isProcessOnlyFile(".github/scripts/ab-readiness-check.mjs"), true);
+  assert.equal(isProcessOnlyFile(".github/scripts/package-lock.json"), true);
+  assert.equal(isProcessOnlyFile(".github/scripts/lib/markdown-visibility.mjs"), true);
+  assert.equal(isProcessOnlyFile(".github/scripts/tests/markdown-visibility.test.mjs"), true);
   assert.equal(isProcessOnlyFile(".github/workflows/ab-readiness-check.yml"), true);
   assert.equal(isProcessOnlyFile(".github/scripts/copilot-feasibility-spike.mjs"), true);
   assert.equal(isProcessOnlyFile(".github/workflows/copilot-feasibility-spike.yml"), true);
@@ -670,12 +523,17 @@ function runSelfTest() {
   assert.equal(hasClosingIssueKeyword("Обычный текст\n    Fixes #708"), true);
   assert.equal(hasClosingIssueKeyword("Обычный текст\n\tFixes #708"), true);
   assert.equal(hasClosingIssueKeyword("- Обычный текст\n    Fixes #708"), true);
+  assert.equal(hasClosingIssueKeyword("- Обычный текст\n\n    Fixes #708"), true);
   assert.equal(hasClosingIssueKeyword("Обычный текст\n\n    Fixes #708"), false);
   assert.equal(hasClosingIssueKeyword("# Заголовок\n    Fixes #708"), false);
   assert.equal(hasClosingIssueKeyword("Заголовок\n---\n    Fixes #708"), false);
   assert.equal(extractFields("``Авторская самопроверка: выполнена``").authorSelfCheck, null);
   assert.equal(extractFields("```text\nАвторская самопроверка: выполнена\n```").authorSelfCheck, null);
   assert.equal(extractFields("    Авторская самопроверка: выполнена").authorSelfCheck, null);
+  assert.equal(
+    countFieldOccurrences("Связанные задачи: не требуется\n```text`x\nСвязанные задачи: #708", "Связанные задачи"),
+    2,
+  );
   assert.equal(
     extractFields("Spec revision: `abcdef1`\nСвязанные задачи: #708").specRevision,
     "abcdef1",
@@ -842,10 +700,11 @@ function runSelfTest() {
     evaluateReadiness({
       baseRef: "main",
       title: "[codex] Уточнить процесс ревью",
-      body: readyProcessBody.replace(
-        "- Связанные задачи: не требуется",
+      body: [
         "    Связанные задачи: #708",
-      ),
+        "",
+        readyProcessBody.replace("- Связанные задачи: не требуется\n", ""),
+      ].join("\n"),
       files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
       isDraft: false,
     }).failures.join("\n"),
@@ -1087,7 +946,7 @@ function runSelfTest() {
     evaluateReadiness({
       baseRef: "main",
       title: "[codex] Исправить синхронизацию Bitrix24",
-      body: `${readyProcessBody.replace("процессное", "кодовое").replace("документационный путь", "до merge в main")}\n\n    Staging PR: #614\n    Staging smoke: https://github.com/Etogerman/Project-1/actions/runs/123`,
+      body: `${readyProcessBody.replace("процессное", "кодовое").replace("документационный путь", "до merge в main")}\n\n<!-- -->\n\n    Staging PR: #614\n    Staging smoke: https://github.com/Etogerman/Project-1/actions/runs/123`,
       files: [{ filename: "app/Services/Bitrix24ContactSyncService.php" }],
       isDraft: false,
     }).failures.join("\n"),

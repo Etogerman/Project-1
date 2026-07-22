@@ -2,6 +2,10 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import {
+  analyzeMarkdown,
+  stripMarkdownCode,
+} from "./lib/markdown-visibility.mjs";
 
 const PROCESS_ONLY_FILE_PATTERNS = [
   /^AGENTS\.md$/,
@@ -15,6 +19,9 @@ const PROCESS_ONLY_FILE_PATTERNS = [
   /^\.github\/workflows\/release-process-guard\.ya?ml$/,
   /^\.github\/scripts\/ab-readiness-check\.mjs$/,
   /^\.github\/workflows\/ab-readiness-check\.ya?ml$/,
+  /^\.github\/scripts\/(?:package(?:-lock)?\.json|\.gitignore)$/,
+  /^\.github\/scripts\/lib\/markdown-visibility\.mjs$/,
+  /^\.github\/scripts\/tests\/markdown-visibility\.test\.mjs$/,
   /^\.github\/scripts\/copilot-feasibility-spike\.mjs$/,
   /^\.github\/workflows\/copilot-feasibility-spike\.ya?ml$/,
   /^\.github\/scripts\/copilot-merge-readiness\.mjs$/,
@@ -31,7 +38,7 @@ const STAGING_SMOKE_WORKFLOW_NAME = "Staging Post-Deploy Smoke";
 const CYRILLIC_PATTERN = /[А-Яа-яЁё]/;
 const LATIN_PATTERN = /[A-Za-z]/;
 const ENGLISH_PR_HEADING_PATTERN =
-  /^\s{0,3}#{1,6}\s*(Summary|Overview|Description|Why|Validation|Testing|Tests|Checks|Delivery note|Implementation|Changes|Root cause|Impact)\s*$/gim;
+  /^(Summary|Overview|Description|Why|Validation|Testing|Tests|Checks|Delivery note|Implementation|Changes|Root cause|Impact)\s*$/i;
 const ALLOWED_TECHNICAL_TERMS_PATTERN =
   /\b(codex|Copilot|Copilot CLI|Copilot Requests|CLI|PAT|token|secret|workflow_dispatch|GITHUB_TOKEN|COPILOT_GITHUB_TOKEN|READY_TO_MERGE|BLOCKED|shadow|verdict|merge-readiness|PR|MCP|CI|UI|URL|API|JSON|YAML|TOML|PHP|SQL|HTTP|HTTPS|Docker|Laravel|Boost|Filament|Livewire|Bitrix24|AB Connector|Spec repo|Spec doc|Spec revision|Staging PR|Staging smoke|Staging Post-Deploy Smoke|rev-check|public smoke|admin smoke|dev-only|validated diff|clean-main-PR|workflow|runtime|main|staging|draft|ready|merge|commit|branch|pull request|release-process-guard|ab-readiness-check|copilot-feasibility-spike|copilot-merge-readiness|php-artisan-test)\b/gi;
 
@@ -41,7 +48,7 @@ function isProcessOnlyFile(filename) {
 
 function extractStagingPrNumbers(body) {
   const fieldPattern = /(?:^|\n) {0,3}(?:Staging[ \t]+PRs?|staging-prs?)[ \t]*:[ \t]*(.+)/gi;
-  const matches = [...stripMarkdownCode(String(body)).matchAll(fieldPattern)];
+  const matches = [...analyzeMarkdown(body).visibleFieldText.matchAll(fieldPattern)];
 
   return [
     ...new Set(
@@ -60,7 +67,7 @@ function extractStagingPrNumber(body) {
 
 function parseLinkedIssues(body = "") {
   const fieldPattern = /^ {0,3}(?:[-*][ \t]*)?Связанные задачи[ \t]*:[ \t]*(.*?)[ \t]*\r?$/gim;
-  const matches = [...stripMarkdownCode(String(body)).matchAll(fieldPattern)];
+  const matches = [...analyzeMarkdown(body).visibleFieldText.matchAll(fieldPattern)];
 
   if (matches.length === 0) {
     return {
@@ -172,7 +179,7 @@ function validateLinkedIssuesLineage({
 }
 
 function extractStagingSmokeRunUrl(body) {
-  const lineMatch = stripMarkdownCode(String(body)).match(/(?:^|\n) {0,3}Staging[ \t]+smoke[ \t]*:[ \t]*(.+)/i);
+  const lineMatch = analyzeMarkdown(body).visibleFieldText.match(/(?:^|\n) {0,3}Staging[ \t]+smoke[ \t]*:[ \t]*(.+)/i);
 
   if (!lineMatch) {
     return null;
@@ -428,162 +435,6 @@ function compareValidatedFileContents(currentFiles, stagingFiles, fileContentSna
   return failures;
 }
 
-function stripMarkdownFencedCode(text) {
-  const lines = String(text).split("\n");
-  let activeFence = null;
-
-  return lines.map((line) => {
-    if (activeFence) {
-      const closingFence = line.match(/^ {0,3}(`{3,}|~{3,})[ \t]*\r?$/);
-
-      if (
-        closingFence
-        && closingFence[1][0] === activeFence.marker
-        && closingFence[1].length >= activeFence.length
-      ) {
-        activeFence = null;
-      }
-
-      return "";
-    }
-
-    const openingFence = line.match(/^ {0,3}(`{3,}|~{3,})/);
-
-    if (!openingFence) {
-      return line;
-    }
-
-    activeFence = {
-      marker: openingFence[1][0],
-      length: openingFence[1].length,
-    };
-
-    return "";
-  }).join("\n");
-}
-
-function leadingMarkdownIndentationColumns(line) {
-  let indentationColumns = 0;
-
-  for (const character of line) {
-    if (character === " ") {
-      indentationColumns += 1;
-    } else if (character === "\t") {
-      indentationColumns += 4 - (indentationColumns % 4);
-    } else {
-      break;
-    }
-  }
-
-  return indentationColumns;
-}
-
-function isMarkdownParagraphBoundary(line, paragraphOpen) {
-  const content = String(line).replace(/\r$/, "").replace(/^ {0,3}/, "");
-  const isAtxHeading = /^#{1,6}(?:[ \t]+|$)/.test(content);
-  const isThematicBreak = /^(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,})$/.test(content);
-  const isSetextUnderline = paragraphOpen && /^(?:=+|-+)[ \t]*$/.test(content);
-
-  return isAtxHeading || isThematicBreak || isSetextUnderline;
-}
-
-function stripMarkdownIndentedCode(text) {
-  let inIndentedCode = false;
-  let paragraphOpen = false;
-
-  return String(text).split("\n").map((line) => {
-    if (/^[ \t]*\r?$/.test(line)) {
-      if (!inIndentedCode) {
-        paragraphOpen = false;
-      }
-
-      return inIndentedCode ? "" : line;
-    }
-
-    if (leadingMarkdownIndentationColumns(line) >= 4) {
-      if (inIndentedCode || !paragraphOpen) {
-        inIndentedCode = true;
-        paragraphOpen = false;
-        return "";
-      }
-
-      return line;
-    }
-
-    inIndentedCode = false;
-    paragraphOpen = !isMarkdownParagraphBoundary(line, paragraphOpen);
-
-    return line;
-  }).join("\n");
-}
-
-function stripMarkdownCodeSpans(text) {
-  const source = String(text);
-  let result = "";
-  let cursor = 0;
-
-  while (cursor < source.length) {
-    const openingStart = source.indexOf("`", cursor);
-
-    if (openingStart === -1) {
-      result += source.slice(cursor);
-      break;
-    }
-
-    result += source.slice(cursor, openingStart);
-
-    let openingEnd = openingStart;
-
-    while (source[openingEnd] === "`") {
-      openingEnd += 1;
-    }
-
-    const delimiterLength = openingEnd - openingStart;
-    let searchCursor = openingEnd;
-    let closingEnd = null;
-
-    while (searchCursor < source.length) {
-      const closingStart = source.indexOf("`", searchCursor);
-
-      if (closingStart === -1) {
-        break;
-      }
-
-      let candidateEnd = closingStart;
-
-      while (source[candidateEnd] === "`") {
-        candidateEnd += 1;
-      }
-
-      if (candidateEnd - closingStart === delimiterLength) {
-        closingEnd = candidateEnd;
-        break;
-      }
-
-      searchCursor = candidateEnd;
-    }
-
-    if (closingEnd === null) {
-      result += source.slice(openingStart, openingEnd);
-      cursor = openingEnd;
-      continue;
-    }
-
-    result += source.slice(openingStart, closingEnd).replace(/[^\r\n]/g, " ");
-    cursor = closingEnd;
-  }
-
-  return result;
-}
-
-function stripMarkdownCode(text) {
-  const withoutHtmlComments = String(text).replace(/<!--[\s\S]*?(?:-->|$)/g, " ");
-  const withoutFencedCode = stripMarkdownFencedCode(withoutHtmlComments);
-  const withoutIndentedCode = stripMarkdownIndentedCode(withoutFencedCode);
-
-  return stripMarkdownCodeSpans(withoutIndentedCode);
-}
-
 function stripTechnicalMarkdown(text) {
   return stripMarkdownCode(text)
     .replace(/https?:\/\/\S+/g, " ")
@@ -684,10 +535,11 @@ function worktreeStatus() {
 
 function validatePublishLanguage({ title, body }) {
   const failures = [];
+  const markdown = analyzeMarkdown(body);
   const readableTitle = title.replace(/^\s*\[codex\]\s*/i, "").trim();
   const readableBody = stripTechnicalMarkdown(body);
   const readableText = `${stripTechnicalMarkdown(readableTitle)}\n${readableBody}`;
-  const englishHeadings = [...stripMarkdownCode(body).matchAll(ENGLISH_PR_HEADING_PATTERN)].map((match) => match[1]);
+  const englishHeadings = markdown.headings.filter((heading) => ENGLISH_PR_HEADING_PATTERN.test(heading));
   const cyrillicCount = countMatches(readableText, /[А-Яа-яЁё]/g);
   const latinCount = countMatches(readableText, /[A-Za-z]/g);
 
@@ -1020,6 +872,9 @@ function runSelfTest() {
   assert.equal(isProcessOnlyFile(".github/copilot-instructions.md"), true);
   assert.equal(isProcessOnlyFile(".github/workflows/release-process-guard.yml"), true);
   assert.equal(isProcessOnlyFile(".github/scripts/ab-readiness-check.mjs"), true);
+  assert.equal(isProcessOnlyFile(".github/scripts/package-lock.json"), true);
+  assert.equal(isProcessOnlyFile(".github/scripts/lib/markdown-visibility.mjs"), true);
+  assert.equal(isProcessOnlyFile(".github/scripts/tests/markdown-visibility.test.mjs"), true);
   assert.equal(isProcessOnlyFile(".github/workflows/ab-readiness-check.yml"), true);
   assert.equal(isProcessOnlyFile(".github/scripts/copilot-feasibility-spike.mjs"), true);
   assert.equal(isProcessOnlyFile(".github/workflows/copilot-feasibility-spike.yml"), true);
@@ -1031,13 +886,11 @@ function runSelfTest() {
   assert.equal(isProcessOnlyFile("tests/Feature/ScenarioBuilderV3StateTest.php"), true);
   assert.equal(isProcessOnlyFile(".agents/skills/ab-connector-skill-authoring/agents/openai.yaml"), true);
   assert.equal(isProcessOnlyFile("app/Services/Bitrix24ContactSyncService.php"), false);
-  assert.equal(
-    stripMarkdownCode("Обычный текст\n    Fixes #708"),
-    "Обычный текст\n    Fixes #708",
-  );
-  assert.equal(stripMarkdownCode("Обычный текст\n\n    Fixes #708"), "Обычный текст\n\n");
-  assert.equal(stripMarkdownCode("# Заголовок\n    Fixes #708"), "# Заголовок\n");
-  assert.equal(stripMarkdownCode("Заголовок\n---\n    Fixes #708"), "Заголовок\n---\n");
+  assert.match(stripMarkdownCode("Обычный текст\n    Fixes #708"), /Fixes #708/);
+  assert.match(stripMarkdownCode("- пояснение\n\n    Fixes #708"), /Fixes #708/);
+  assert.doesNotMatch(stripMarkdownCode("Обычный текст\n\n    Fixes #708"), /Fixes #708/);
+  assert.doesNotMatch(stripMarkdownCode("# Заголовок\n    Fixes #708"), /Fixes #708/);
+  assert.doesNotMatch(stripMarkdownCode("Заголовок\n---\n    Fixes #708"), /Fixes #708/);
   assert.deepEqual(parseGitHubActionsRunUrl("https://github.com/Etogerman/Project-1/actions/runs/123"), {
     owner: "Etogerman",
     repo: "Project-1",
@@ -1093,6 +946,10 @@ function runSelfTest() {
   assert.equal(parseLinkedIssues("    Связанные задачи: #708").valid, false);
   assert.equal(parseLinkedIssues("<!--\nСвязанные задачи: #708\n-->").valid, false);
   assert.equal(parseLinkedIssues("<!--\nСвязанные задачи: #708").valid, false);
+  assert.equal(
+    parseLinkedIssues("Связанные задачи: не требуется\n```text`x\nСвязанные задачи: #708").valid,
+    false,
+  );
   const linkedStagingPr708 = { number: 614, body: "Связанные задачи: #708" };
   const linkedStagingPr708And712 = { number: 615, body: "Связанные задачи: #712, #708" };
   const linkedStagingPrWithoutIssues = { number: 616, body: "Связанные задачи: не требуется" };

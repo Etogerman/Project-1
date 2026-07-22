@@ -1,0 +1,8 @@
+{
+  "name": "ab-connector-github-guards",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "commonmark": "0.31.2"
+  }
+}
