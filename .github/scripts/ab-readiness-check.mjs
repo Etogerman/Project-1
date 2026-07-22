@@ -108,7 +108,7 @@ function escapeRegExp(value) {
 }
 
 function stripHtmlComments(text) {
-  return text.replace(/<!--[\s\S]*?(?:-->|$)/g, " ");
+  return String(text).replace(/<!--[\s\S]*?(?:-->|$)/g, " ");
 }
 
 function stripMarkdownFencedCode(text) {
@@ -145,9 +145,95 @@ function stripMarkdownFencedCode(text) {
   }).join("\n");
 }
 
+function stripMarkdownIndentedCode(text) {
+  return String(text).split("\n").map((line) => {
+    let indentationColumns = 0;
+
+    for (const character of line) {
+      if (character === " ") {
+        indentationColumns += 1;
+      } else if (character === "\t") {
+        indentationColumns += 4 - (indentationColumns % 4);
+      } else {
+        break;
+      }
+
+      if (indentationColumns >= 4) {
+        return "";
+      }
+    }
+
+    return line;
+  }).join("\n");
+}
+
+function stripMarkdownCodeSpans(text) {
+  const source = String(text);
+  let result = "";
+  let cursor = 0;
+
+  while (cursor < source.length) {
+    const openingStart = source.indexOf("`", cursor);
+
+    if (openingStart === -1) {
+      result += source.slice(cursor);
+      break;
+    }
+
+    result += source.slice(cursor, openingStart);
+
+    let openingEnd = openingStart;
+
+    while (source[openingEnd] === "`") {
+      openingEnd += 1;
+    }
+
+    const delimiterLength = openingEnd - openingStart;
+    let searchCursor = openingEnd;
+    let closingEnd = null;
+
+    while (searchCursor < source.length) {
+      const closingStart = source.indexOf("`", searchCursor);
+
+      if (closingStart === -1) {
+        break;
+      }
+
+      let candidateEnd = closingStart;
+
+      while (source[candidateEnd] === "`") {
+        candidateEnd += 1;
+      }
+
+      if (candidateEnd - closingStart === delimiterLength) {
+        closingEnd = candidateEnd;
+        break;
+      }
+
+      searchCursor = candidateEnd;
+    }
+
+    if (closingEnd === null) {
+      result += source.slice(openingStart, openingEnd);
+      cursor = openingEnd;
+      continue;
+    }
+
+    result += source.slice(openingStart, closingEnd).replace(/[^\r\n]/g, " ");
+    cursor = closingEnd;
+  }
+
+  return result;
+}
+
+function stripMarkdownBlockCode(text) {
+  const withoutFencedCode = stripMarkdownFencedCode(stripHtmlComments(text));
+
+  return stripMarkdownIndentedCode(withoutFencedCode);
+}
+
 function stripMarkdownCode(text) {
-  return stripMarkdownFencedCode(stripHtmlComments(text))
-    .replace(/`[^`]*`/g, " ");
+  return stripMarkdownCodeSpans(stripMarkdownBlockCode(text));
 }
 
 function stripTechnicalMarkdown(text) {
@@ -170,22 +256,30 @@ function normalizeValue(value = "") {
 }
 
 function extractField(body, label, { preserveInternalWhitespace = false } = {}) {
-  const pattern = new RegExp(`(?:^|\\n) {0,3}(?:[-*][^\\S\\n]*)?${escapeRegExp(label)}[^\\S\\n]*:[^\\S\\n]*(.*?)(?=\\n|$)`, "i");
-  const match = body.match(pattern);
+  const source = String(body);
+  const patternSource = `^ {0,3}(?:[-*][^\\S\\n]*)?${escapeRegExp(label)}[^\\S\\n]*:[^\\S\\n]*(.*?)\\r?$`;
+  const visibleMatch = stripMarkdownCodeSpans(source).match(new RegExp(patternSource, "im"));
 
-  if (!match) {
+  if (!visibleMatch) {
+    return null;
+  }
+
+  const rawLine = source.slice(visibleMatch.index, visibleMatch.index + visibleMatch[0].length);
+  const rawMatch = rawLine.match(new RegExp(patternSource, "i"));
+
+  if (!rawMatch) {
     return null;
   }
 
   const value = preserveInternalWhitespace
-    ? match[1].trim().replace(/^`|`$/g, "")
-    : normalizeValue(match[1]);
+    ? rawMatch[1].trim().replace(/^`|`$/g, "")
+    : normalizeValue(rawMatch[1]);
 
   return value === "" ? null : value;
 }
 
 function extractFields(body) {
-  const visibleBody = stripHtmlComments(body);
+  const visibleBody = stripMarkdownBlockCode(body);
   const fields = [...REQUIRED_FIELDS, ...SPEC_FIELDS].reduce(
     (fields, field) => ({
       ...fields,
@@ -195,7 +289,7 @@ function extractFields(body) {
   );
 
   fields.linkedIssues = extractField(
-    stripMarkdownCode(visibleBody),
+    stripMarkdownCodeSpans(visibleBody),
     "Связанные задачи",
     { preserveInternalWhitespace: true },
   );
@@ -268,8 +362,8 @@ function validatePublishLanguage({ title, body }) {
 function hasStagingEvidence(body) {
   const visibleBody = stripMarkdownCode(body);
 
-  return /(?:^|\n)\s*Staging\s+PRs?\s*:\s*(?:.*(?:https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/)?#?\d+\b)/i.test(visibleBody)
-    && /(?:^|\n)\s*Staging\s+smoke\s*:\s*(?:.*https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/actions\/runs\/\d+)/i.test(visibleBody);
+  return /(?:^|\n) {0,3}Staging[ \t]+PRs?[ \t]*:[ \t]*(?:.*(?:https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/)?#?\d+\b)/i.test(visibleBody)
+    && /(?:^|\n) {0,3}Staging[ \t]+smoke[ \t]*:[ \t]*(?:.*https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/actions\/runs\/\d+)/i.test(visibleBody);
 }
 
 function isSubstantialStream(fields) {
@@ -537,7 +631,12 @@ function runSelfTest() {
 
   assert.equal(hasClosingIssueKeyword("Связанные задачи: #708"), false);
   assert.equal(hasClosingIssueKeyword("Пример: `Fixes #708` использовать нельзя."), false);
+  assert.equal(hasClosingIssueKeyword("Пример: ``Fixes #708`` использовать нельзя."), false);
   assert.equal(hasClosingIssueKeyword("```text\nFixes #708\n```"), false);
+  assert.equal(hasClosingIssueKeyword("    Fixes #708"), false);
+  assert.equal(extractFields("``Авторская самопроверка: выполнена``").authorSelfCheck, null);
+  assert.equal(extractFields("```text\nАвторская самопроверка: выполнена\n```").authorSelfCheck, null);
+  assert.equal(extractFields("    Авторская самопроверка: выполнена").authorSelfCheck, null);
   assert.equal(
     extractFields("Spec revision: `abcdef1`\nСвязанные задачи: #708").specRevision,
     "abcdef1",
@@ -652,6 +751,20 @@ function runSelfTest() {
       baseRef: "main",
       title: "[codex] Уточнить процесс ревью",
       body: readyProcessBody.replace("- Связанные задачи: не требуется\n", ""),
+      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
+      isDraft: false,
+    }).failures.join("\n"),
+    /Связанные задачи/,
+  );
+
+  assert.match(
+    evaluateReadiness({
+      baseRef: "main",
+      title: "[codex] Уточнить процесс ревью",
+      body: readyProcessBody.replace(
+        "- Связанные задачи: не требуется",
+        "``Связанные задачи: #708``",
+      ),
       files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
       isDraft: false,
     }).failures.join("\n"),
@@ -925,6 +1038,31 @@ function runSelfTest() {
       baseRef: "main",
       title: "[codex] Исправить синхронизацию Bitrix24",
       body: readyProcessBody.replace("процессное", "кодовое"),
+      files: [{ filename: "app/Services/Bitrix24ContactSyncService.php" }],
+      isDraft: false,
+    }).failures.join("\n"),
+    /Runtime PR/,
+  );
+
+  assert.match(
+    evaluateReadiness({
+      baseRef: "main",
+      title: "[codex] Исправить синхронизацию Bitrix24",
+      body: `${readyProcessBody.replace("процессное", "кодовое").replace("документационный путь", "до merge в main")}\n\n    Staging PR: #614\n    Staging smoke: https://github.com/Etogerman/Project-1/actions/runs/123`,
+      files: [{ filename: "app/Services/Bitrix24ContactSyncService.php" }],
+      isDraft: false,
+    }).failures.join("\n"),
+    /Runtime PR/,
+  );
+
+  assert.match(
+    evaluateReadiness({
+      baseRef: "main",
+      title: "[codex] Исправить синхронизацию Bitrix24",
+      body: readyProcessBody
+        .replace("процессное", "кодовое")
+        .replace("документационный путь", "до merge в main")
+        .concat("\n\n``Staging PR: #614``\n``Staging smoke: https://github.com/Etogerman/Project-1/actions/runs/123``"),
       files: [{ filename: "app/Services/Bitrix24ContactSyncService.php" }],
       isDraft: false,
     }).failures.join("\n"),

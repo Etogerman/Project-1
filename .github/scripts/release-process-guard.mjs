@@ -40,7 +40,7 @@ function isProcessOnlyFile(filename) {
 }
 
 function extractStagingPrNumbers(body) {
-  const fieldPattern = /(?:^|\n)\s*(?:Staging\s+PRs?|staging-prs?)\s*:\s*(.+)/gi;
+  const fieldPattern = /(?:^|\n) {0,3}(?:Staging[ \t]+PRs?|staging-prs?)[ \t]*:[ \t]*(.+)/gi;
   const matches = [...stripMarkdownCode(String(body)).matchAll(fieldPattern)];
 
   return [
@@ -172,7 +172,7 @@ function validateLinkedIssuesLineage({
 }
 
 function extractStagingSmokeRunUrl(body) {
-  const lineMatch = stripMarkdownCode(String(body)).match(/(?:^|\n)\s*Staging\s+smoke\s*:\s*(.+)/i);
+  const lineMatch = stripMarkdownCode(String(body)).match(/(?:^|\n) {0,3}Staging[ \t]+smoke[ \t]*:[ \t]*(.+)/i);
 
   if (!lineMatch) {
     return null;
@@ -462,9 +462,93 @@ function stripMarkdownFencedCode(text) {
   }).join("\n");
 }
 
+function stripMarkdownIndentedCode(text) {
+  return String(text).split("\n").map((line) => {
+    let indentationColumns = 0;
+
+    for (const character of line) {
+      if (character === " ") {
+        indentationColumns += 1;
+      } else if (character === "\t") {
+        indentationColumns += 4 - (indentationColumns % 4);
+      } else {
+        break;
+      }
+
+      if (indentationColumns >= 4) {
+        return "";
+      }
+    }
+
+    return line;
+  }).join("\n");
+}
+
+function stripMarkdownCodeSpans(text) {
+  const source = String(text);
+  let result = "";
+  let cursor = 0;
+
+  while (cursor < source.length) {
+    const openingStart = source.indexOf("`", cursor);
+
+    if (openingStart === -1) {
+      result += source.slice(cursor);
+      break;
+    }
+
+    result += source.slice(cursor, openingStart);
+
+    let openingEnd = openingStart;
+
+    while (source[openingEnd] === "`") {
+      openingEnd += 1;
+    }
+
+    const delimiterLength = openingEnd - openingStart;
+    let searchCursor = openingEnd;
+    let closingEnd = null;
+
+    while (searchCursor < source.length) {
+      const closingStart = source.indexOf("`", searchCursor);
+
+      if (closingStart === -1) {
+        break;
+      }
+
+      let candidateEnd = closingStart;
+
+      while (source[candidateEnd] === "`") {
+        candidateEnd += 1;
+      }
+
+      if (candidateEnd - closingStart === delimiterLength) {
+        closingEnd = candidateEnd;
+        break;
+      }
+
+      searchCursor = candidateEnd;
+    }
+
+    if (closingEnd === null) {
+      result += source.slice(openingStart, openingEnd);
+      cursor = openingEnd;
+      continue;
+    }
+
+    result += source.slice(openingStart, closingEnd).replace(/[^\r\n]/g, " ");
+    cursor = closingEnd;
+  }
+
+  return result;
+}
+
 function stripMarkdownCode(text) {
-  return stripMarkdownFencedCode(text.replace(/<!--[\s\S]*?(?:-->|$)/g, " "))
-    .replace(/`[^`]*`/g, " ");
+  const withoutHtmlComments = String(text).replace(/<!--[\s\S]*?(?:-->|$)/g, " ");
+  const withoutFencedCode = stripMarkdownFencedCode(withoutHtmlComments);
+  const withoutIndentedCode = stripMarkdownIndentedCode(withoutFencedCode);
+
+  return stripMarkdownCodeSpans(withoutIndentedCode);
 }
 
 function stripTechnicalMarkdown(text) {
@@ -570,7 +654,7 @@ function validatePublishLanguage({ title, body }) {
   const readableTitle = title.replace(/^\s*\[codex\]\s*/i, "").trim();
   const readableBody = stripTechnicalMarkdown(body);
   const readableText = `${stripTechnicalMarkdown(readableTitle)}\n${readableBody}`;
-  const englishHeadings = [...body.matchAll(ENGLISH_PR_HEADING_PATTERN)].map((match) => match[1]);
+  const englishHeadings = [...stripMarkdownCode(body).matchAll(ENGLISH_PR_HEADING_PATTERN)].map((match) => match[1]);
   const cyrillicCount = countMatches(readableText, /[А-Яа-яЁё]/g);
   const latinCount = countMatches(readableText, /[A-Za-z]/g);
 
@@ -934,6 +1018,10 @@ function runSelfTest() {
     extractStagingPrNumbers("<!--\nStaging PR: #999\n-->\nStaging PR: #614"),
     [614],
   );
+  assert.deepEqual(extractStagingPrNumbers("``Staging PR: #614``"), []);
+  assert.deepEqual(extractStagingPrNumbers("    Staging PR: #614"), []);
+  assert.equal(extractStagingSmokeRunUrl("``Staging smoke: https://github.com/Etogerman/Project-1/actions/runs/123``"), null);
+  assert.equal(extractStagingSmokeRunUrl("    Staging smoke: https://github.com/Etogerman/Project-1/actions/runs/123"), null);
   assert.deepEqual(parseLinkedIssues("- Связанные задачи: #708"), {
     valid: true,
     issues: [708],
@@ -961,6 +1049,7 @@ function runSelfTest() {
   assert.equal(parseLinkedIssues("```text\nСвязанные задачи: #708").valid, false);
   assert.equal(parseLinkedIssues("~~~text\nСвязанные задачи: #708\n~~~").valid, false);
   assert.equal(parseLinkedIssues("~~~text\nСвязанные задачи: #708").valid, false);
+  assert.equal(parseLinkedIssues("``Связанные задачи: #708``").valid, false);
   assert.equal(parseLinkedIssues("    Связанные задачи: #708").valid, false);
   assert.equal(parseLinkedIssues("<!--\nСвязанные задачи: #708\n-->").valid, false);
   assert.equal(parseLinkedIssues("<!--\nСвязанные задачи: #708").valid, false);
