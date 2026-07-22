@@ -40,34 +40,139 @@ function isProcessOnlyFile(filename) {
 }
 
 function extractStagingPrNumbers(body) {
-  const patterns = [
-    /(?:^|\n)\s*Staging\s+PRs?\s*:\s*(.+)/i,
-    /(?:^|\n)\s*staging-prs?\s*:\s*(.+)/i,
+  const fieldPattern = /(?:^|\n)\s*(?:Staging\s+PRs?|staging-prs?)\s*:\s*(.+)/gi;
+  const matches = [...stripMarkdownCode(String(body)).matchAll(fieldPattern)];
+
+  return [
+    ...new Set(
+      matches.flatMap((match) => (
+        [...match[1].matchAll(/(?:https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/)?#?(\d+)\b/gi)]
+          .map((numberMatch) => Number.parseInt(numberMatch[1], 10))
+          .filter(Number.isInteger)
+      )),
+    ),
   ];
-
-  for (const pattern of patterns) {
-    const match = body.match(pattern);
-
-    if (match) {
-      return [
-        ...new Set(
-          [...match[1].matchAll(/(?:https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/)?#?(\d+)\b/gi)]
-            .map((numberMatch) => Number.parseInt(numberMatch[1], 10))
-            .filter(Number.isInteger),
-        ),
-      ];
-    }
-  }
-
-  return [];
 }
 
 function extractStagingPrNumber(body) {
   return extractStagingPrNumbers(body)[0] || null;
 }
 
+function parseLinkedIssues(body = "") {
+  const fieldPattern = /^\s*(?:[-*]\s*)?Связанные задачи\s*:\s*(.*?)\s*$/gim;
+  const matches = [...stripMarkdownCode(String(body)).matchAll(fieldPattern)];
+
+  if (matches.length === 0) {
+    return {
+      valid: false,
+      issues: [],
+      error: "отсутствует строка `Связанные задачи: #NNN, #MMM` или `Связанные задачи: не требуется`",
+    };
+  }
+
+  if (matches.length > 1) {
+    return {
+      valid: false,
+      issues: [],
+      error: "поле `Связанные задачи` должно встречаться ровно один раз",
+    };
+  }
+
+  const value = matches[0][1].trim().replace(/^`|`$/g, "");
+
+  if (/^не требуется$/i.test(value)) {
+    return { valid: true, issues: [], error: null };
+  }
+
+  if (!/^#[1-9]\d*(?:, #[1-9]\d*)*$/.test(value)) {
+    return {
+      valid: false,
+      issues: [],
+      error: "поле `Связанные задачи` должно содержать только `#NNN, #MMM` или `не требуется`",
+    };
+  }
+
+  const issues = [...value.matchAll(/#([1-9]\d*)/g)].map((match) => Number.parseInt(match[1], 10));
+
+  if (issues.some((issueNumber) => !Number.isSafeInteger(issueNumber))) {
+    return {
+      valid: false,
+      issues: [],
+      error: "поле `Связанные задачи` содержит недопустимый номер задачи",
+    };
+  }
+
+  if (new Set(issues).size !== issues.length) {
+    return {
+      valid: false,
+      issues: [],
+      error: "поле `Связанные задачи` содержит повторяющиеся номера",
+    };
+  }
+
+  return { valid: true, issues, error: null };
+}
+
+function formatIssueNumbers(issueNumbers) {
+  return issueNumbers.length > 0 ? issueNumbers.map((issueNumber) => `#${issueNumber}`).join(", ") : "не требуется";
+}
+
+function validateLinkedIssuesLineage({
+  body,
+  stagingPrNumbers,
+  stagingPrs,
+  stagingPrFetchErrors,
+}) {
+  const failures = [];
+  const mainLinkedIssues = parseLinkedIssues(body);
+
+  if (!mainLinkedIssues.valid) {
+    failures.push(`PR в \`main\`: ${mainLinkedIssues.error}.`);
+  }
+
+  const expectedIssues = new Set();
+  let stagingFieldsValid = true;
+
+  for (const stagingPr of stagingPrs) {
+    const stagingLinkedIssues = parseLinkedIssues(stagingPr.body);
+
+    if (!stagingLinkedIssues.valid) {
+      stagingFieldsValid = false;
+      failures.push(`Связанный staging PR #${stagingPr.number}: ${stagingLinkedIssues.error}.`);
+      continue;
+    }
+
+    for (const issueNumber of stagingLinkedIssues.issues) {
+      expectedIssues.add(issueNumber);
+    }
+  }
+
+  const allStagingPrsLoaded = stagingPrNumbers.length > 0
+    && stagingPrFetchErrors.length === 0
+    && stagingPrs.length === stagingPrNumbers.length;
+
+  if (!mainLinkedIssues.valid || !stagingFieldsValid || !allStagingPrsLoaded) {
+    return failures;
+  }
+
+  const actualIssues = new Set(mainLinkedIssues.issues);
+  const missingIssues = [...expectedIssues].filter((issueNumber) => !actualIssues.has(issueNumber)).sort((a, b) => a - b);
+  const extraIssues = [...actualIssues].filter((issueNumber) => !expectedIssues.has(issueNumber)).sort((a, b) => a - b);
+
+  if (missingIssues.length > 0 || extraIssues.length > 0) {
+    failures.push(
+      "PR в `main` должен точно сохранять объединение поля `Связанные задачи` из всех связанных staging PR: "
+      + `ожидалось ${formatIssueNumbers([...expectedIssues].sort((a, b) => a - b))}; `
+      + `получено ${formatIssueNumbers([...actualIssues].sort((a, b) => a - b))}; `
+      + `отсутствуют ${formatIssueNumbers(missingIssues)}; лишние ${formatIssueNumbers(extraIssues)}.`,
+    );
+  }
+
+  return failures;
+}
+
 function extractStagingSmokeRunUrl(body) {
-  const lineMatch = body.match(/(?:^|\n)\s*Staging\s+smoke\s*:\s*(.+)/i);
+  const lineMatch = stripMarkdownCode(String(body)).match(/(?:^|\n)\s*Staging\s+smoke\s*:\s*(.+)/i);
 
   if (!lineMatch) {
     return null;
@@ -323,10 +428,15 @@ function compareValidatedFileContents(currentFiles, stagingFiles, fileContentSna
   return failures;
 }
 
-function stripTechnicalMarkdown(text) {
+function stripMarkdownCode(text) {
   return text
+    .replace(/<!--[\s\S]*?(?:-->|$)/g, " ")
     .replace(/```[\s\S]*?```/g, " ")
-    .replace(/`[^`]*`/g, " ")
+    .replace(/`[^`]*`/g, " ");
+}
+
+function stripTechnicalMarkdown(text) {
+  return stripMarkdownCode(text)
     .replace(/https?:\/\/\S+/g, " ")
     .replace(/(?:^|\s)[\w./-]+\.[A-Za-z0-9]+(?=\s|$)/g, " ")
     .replace(ALLOWED_TECHNICAL_TERMS_PATTERN, " ");
@@ -513,6 +623,13 @@ function evaluatePullRequest({
   for (const { number, error } of resolvedStagingPrFetchErrors) {
     failures.push(`Referenced staging PR #${number || "unknown"} could not be loaded: ${error.message}`);
   }
+
+  failures.push(...validateLinkedIssuesLineage({
+    body,
+    stagingPrNumbers,
+    stagingPrs: resolvedStagingPrs,
+    stagingPrFetchErrors: resolvedStagingPrFetchErrors,
+  }));
 
   for (const currentStagingPr of resolvedStagingPrs) {
     if (currentStagingPr.base?.ref !== "staging") {
@@ -777,6 +894,115 @@ function runSelfTest() {
     extractStagingPrNumbers("Staging PRs: https://github.com/Etogerman/Project-1/pull/614, #615"),
     [614, 615],
   );
+  assert.deepEqual(
+    extractStagingPrNumbers("Staging PR: #614\nStaging PRs: #615, #616"),
+    [614, 615, 616],
+  );
+  assert.deepEqual(
+    extractStagingPrNumbers("<!--\nStaging PR: #999\n-->\nStaging PR: #614"),
+    [614],
+  );
+  assert.deepEqual(parseLinkedIssues("- Связанные задачи: #708"), {
+    valid: true,
+    issues: [708],
+    error: null,
+  });
+  assert.deepEqual(parseLinkedIssues("Связанные задачи: #712, #708"), {
+    valid: true,
+    issues: [712, 708],
+    error: null,
+  });
+  assert.deepEqual(parseLinkedIssues("* Связанные задачи: НЕ ТРЕБУЕТСЯ"), {
+    valid: true,
+    issues: [],
+    error: null,
+  });
+  assert.equal(parseLinkedIssues("Описание без поля").valid, false);
+  assert.equal(parseLinkedIssues("Связанные задачи: #708, #708").valid, false);
+  assert.equal(parseLinkedIssues("Связанные задачи: #708,#712").valid, false);
+  assert.equal(parseLinkedIssues("Связанные задачи: #708,  #712").valid, false);
+  assert.equal(parseLinkedIssues("Связанные задачи: не требуется, #708").valid, false);
+  assert.equal(parseLinkedIssues("Связанные задачи: Closes #708").valid, false);
+  assert.equal(parseLinkedIssues("Связанные задачи: https://github.com/Etogerman/Project-1/issues/708").valid, false);
+  assert.equal(parseLinkedIssues("Связанные задачи: #0").valid, false);
+  assert.equal(parseLinkedIssues("```text\nСвязанные задачи: #708\n```").valid, false);
+  assert.equal(parseLinkedIssues("<!--\nСвязанные задачи: #708\n-->").valid, false);
+  assert.equal(parseLinkedIssues("<!--\nСвязанные задачи: #708").valid, false);
+  const linkedStagingPr708 = { number: 614, body: "Связанные задачи: #708" };
+  const linkedStagingPr708And712 = { number: 615, body: "Связанные задачи: #712, #708" };
+  const linkedStagingPrWithoutIssues = { number: 616, body: "Связанные задачи: не требуется" };
+  assert.deepEqual(
+    validateLinkedIssuesLineage({
+      body: "Связанные задачи: #708, #712",
+      stagingPrNumbers: [614, 615],
+      stagingPrs: [linkedStagingPr708, linkedStagingPr708And712],
+      stagingPrFetchErrors: [],
+    }),
+    [],
+  );
+  assert.deepEqual(
+    validateLinkedIssuesLineage({
+      body: "Связанные задачи: #708",
+      stagingPrNumbers: [614, 616],
+      stagingPrs: [linkedStagingPr708, linkedStagingPrWithoutIssues],
+      stagingPrFetchErrors: [],
+    }),
+    [],
+  );
+  assert.deepEqual(
+    validateLinkedIssuesLineage({
+      body: "Связанные задачи: не требуется",
+      stagingPrNumbers: [616],
+      stagingPrs: [linkedStagingPrWithoutIssues],
+      stagingPrFetchErrors: [],
+    }),
+    [],
+  );
+  assert.match(
+    validateLinkedIssuesLineage({
+      body: "Связанные задачи: #708",
+      stagingPrNumbers: [614, 615],
+      stagingPrs: [linkedStagingPr708, linkedStagingPr708And712],
+      stagingPrFetchErrors: [],
+    }).join("\n"),
+    /отсутствуют #712/,
+  );
+  assert.match(
+    validateLinkedIssuesLineage({
+      body: "Связанные задачи: #708, #999",
+      stagingPrNumbers: [614],
+      stagingPrs: [linkedStagingPr708],
+      stagingPrFetchErrors: [],
+    }).join("\n"),
+    /лишние #999/,
+  );
+  assert.match(
+    validateLinkedIssuesLineage({
+      body: "Описание без поля",
+      stagingPrNumbers: [614],
+      stagingPrs: [linkedStagingPr708],
+      stagingPrFetchErrors: [],
+    }).join("\n"),
+    /PR в `main`: отсутствует строка/,
+  );
+  assert.match(
+    validateLinkedIssuesLineage({
+      body: "Связанные задачи: #708",
+      stagingPrNumbers: [614],
+      stagingPrs: [{ number: 614, body: "Описание без поля" }],
+      stagingPrFetchErrors: [],
+    }).join("\n"),
+    /Связанный staging PR #614: отсутствует строка/,
+  );
+  assert.deepEqual(
+    validateLinkedIssuesLineage({
+      body: "Связанные задачи: #708",
+      stagingPrNumbers: [614, 615],
+      stagingPrs: [linkedStagingPr708],
+      stagingPrFetchErrors: [{ number: 615, error: new Error("503") }],
+    }),
+    [],
+  );
   assert.equal(
     normalizePatch("index aaa..bbb 100644\n@@ -1,3 +1,3 @@\n context\n-old\n+new"),
     "-old\n+new",
@@ -835,12 +1061,14 @@ function runSelfTest() {
     base: { ref: "staging" },
     merged_at: "2026-06-21T20:00:00Z",
     merge_commit_sha: "2c2097fd20d0aede9124c99fdec293f17c4d7eb1",
+    body: "Описание staging PR на русском языке.\n\nСвязанные задачи: #708",
   };
   const nextStagingPr = {
     number: 615,
     base: { ref: "staging" },
     merged_at: "2026-06-21T21:00:00Z",
     merge_commit_sha: "3c2097fd20d0aede9124c99fdec293f17c4d7eb2",
+    body: "Описание staging PR на русском языке.\n\nСвязанные задачи: #708",
   };
   const successfulSmokeRun = {
     name: STAGING_SMOKE_WORKFLOW_NAME,
@@ -864,7 +1092,7 @@ function runSelfTest() {
     evaluatePullRequest({
       baseRef: "main",
       title: "[codex] Исправить синхронизацию Bitrix24",
-      body: "Описание PR на русском языке.\n\nStaging PRs: #614, #615\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
+      body: "Описание PR на русском языке.\n\nСвязанные задачи: #708\nStaging PRs: #614, #615\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
       files: [
         {
           ...runtimeFiles[0],
@@ -893,7 +1121,7 @@ function runSelfTest() {
     evaluatePullRequest({
       baseRef: "main",
       title: "[codex] Исправить cutover автоответчика",
-      body: "Описание PR на русском языке.\n\nStaging PRs: #614, #615\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
+      body: "Описание PR на русском языке.\n\nСвязанные задачи: #708\nStaging PRs: #614, #615\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
       files: [
         {
           filename: ".env.example",
@@ -928,7 +1156,7 @@ function runSelfTest() {
     evaluatePullRequest({
       baseRef: "main",
       title: "[codex] Исправить синхронизацию Bitrix24",
-      body: "Описание PR на русском языке.\n\nStaging PRs: #614, #615\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
+      body: "Описание PR на русском языке.\n\nСвязанные задачи: #708\nStaging PRs: #614, #615\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
       files: runtimeFiles,
       repository: { owner: "Etogerman", repo: "Project-1" },
       stagingPrs: [stagingPr, nextStagingPr],
@@ -971,7 +1199,7 @@ function runSelfTest() {
     evaluatePullRequest({
       baseRef: "main",
       title: "[codex] Исправить синхронизацию Bitrix24",
-      body: "Описание PR на русском языке.\n\nStaging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
+      body: "Описание PR на русском языке.\n\nСвязанные задачи: #708\nStaging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
       files: runtimeFiles,
       stagingPr,
       stagingPrFiles: matchingStagingFiles,
@@ -1005,7 +1233,7 @@ function runSelfTest() {
     evaluatePullRequest({
       baseRef: "main",
       title: "[codex] Исправить синхронизацию Bitrix24",
-      body: "Описание PR на русском языке.\n\nStaging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
+      body: "Описание PR на русском языке.\n\nСвязанные задачи: #708\nStaging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
       files: runtimeFiles,
       repository: { owner: "Etogerman", repo: "Project-1" },
       stagingPr,
@@ -1020,7 +1248,7 @@ function runSelfTest() {
     evaluatePullRequest({
       baseRef: "main",
       title: "[codex] Исправить синхронизацию Bitrix24",
-      body: "Описание PR на русском языке.\n\nStaging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
+      body: "Описание PR на русском языке.\n\nСвязанные задачи: #708\nStaging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
       files: runtimeFiles,
       stagingPr: {
         ...stagingPr,
@@ -1037,7 +1265,7 @@ function runSelfTest() {
     evaluatePullRequest({
       baseRef: "main",
       title: "[codex] Исправить синхронизацию Bitrix24",
-      body: "Описание PR на русском языке.\n\nStaging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
+      body: "Описание PR на русском языке.\n\nСвязанные задачи: #708\nStaging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
       files: runtimeFiles,
       stagingPr,
       stagingPrFiles: mismatchingStagingFiles,
@@ -1051,7 +1279,7 @@ function runSelfTest() {
     evaluatePullRequest({
       baseRef: "main",
       title: "[codex] Исправить синхронизацию Bitrix24",
-      body: "Описание PR на русском языке.\n\nStaging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
+      body: "Описание PR на русском языке.\n\nСвязанные задачи: #708\nStaging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
       files: runtimeFiles,
       stagingPr,
       stagingPrFiles: matchingStagingFiles,
@@ -1065,7 +1293,7 @@ function runSelfTest() {
     evaluatePullRequest({
       baseRef: "main",
       title: "[codex] Исправить синхронизацию Bitrix24",
-      body: "Описание PR на русском языке.\n\nStaging PR: #614\nStaging smoke: https://example.com/run",
+      body: "Описание PR на русском языке.\n\nСвязанные задачи: #708\nStaging PR: #614\nStaging smoke: https://example.com/run",
       files: runtimeFiles,
       stagingPr,
       stagingPrFiles: matchingStagingFiles,
@@ -1079,7 +1307,7 @@ function runSelfTest() {
     evaluatePullRequest({
       baseRef: "main",
       title: "[codex] Исправить синхронизацию Bitrix24",
-      body: "Описание PR на русском языке.\n\nStaging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
+      body: "Описание PR на русском языке.\n\nСвязанные задачи: #708\nStaging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123",
       files: runtimeFiles,
       stagingPr,
       stagingPrFiles: matchingStagingFiles,

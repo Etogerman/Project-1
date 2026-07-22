@@ -10,6 +10,12 @@
   - `Staging PR: #NNN`
   - `Staging smoke: https://...`
 - Для `main` PR с runtime-изменениями проверь, что указанный `Staging PR` уже смержен, текущий `main` PR содержит validated diff из этого staging PR, а не накопленное состояние ветки `staging`, и ссылка `Staging smoke` ведет на успешный GitHub Actions run для staging merge commit.
+- Для каждого PR проверь поле `Связанные задачи:`. Допустим строгий список
+  `#NNN, #MMM` либо `не требуется`. Для runtime PR в `main` набор должен точно
+  совпадать с объединением связанных задач из всех указанных staging PR.
+- Не предлагай `Closes`, `Fixes` или `Resolves` для этих задач: итоговое решение
+  по Issue принимается после production deploy, smoke и пользовательской
+  приёмки.
 - Если staging-доказательств нет, явно напиши, что PR нарушает release process и должен сначала пройти через `staging`.
 - При ревью всегда проверяй статус GitHub Actions job `release-process-guard`.
 

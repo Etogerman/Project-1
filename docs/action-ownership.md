@@ -74,10 +74,13 @@ review завершён, не находится в pending/in-progress сост
 | 29 | Запустить production deploy | Только пользователь |
 | 30 | Проверить production smoke, если у агента есть доступ | Агент |
 | 31 | Принять production результат или риск | Пользователь или оператор |
-| 32 | Выполнить cleanup локальных веток/worktree | Агент |
-| 33 | Удалить remote branch после merge | GitHub auto-delete или агент после явной команды пользователя и проверок |
-| 34 | Изменить GitHub-настройки, repository rules, secrets или environments | Только пользователь |
-| 35 | Проверить, что хвост закрыт | Агент |
+| 32 | Сверить связанные Issues и дать по каждой итоговый вердикт | Агент |
+| 33 | Закрыть, переоткрыть Issue или подтвердить решение оставить её открытой с причиной и следующим follow-up | Только пользователь |
+| 34 | Проверить фактическое состояние связанных Issues после действия пользователя | Агент |
+| 35 | Выполнить cleanup локальных веток/worktree | Агент |
+| 36 | Удалить remote branch после merge | GitHub auto-delete или агент после явной команды пользователя и проверок |
+| 37 | Изменить GitHub-настройки, repository rules, secrets или environments | Только пользователь |
+| 38 | Проверить, что хвост закрыт | Агент |
 
 Если пользователь выявил проблему CI до `ready`, он возвращает задачу агенту.
 Если агент выявил проблему guard-полей, логов или pre-ready проверки, агент
@@ -122,13 +125,17 @@ GitHub-статус. После fix commit/push поток повторяет CI
 | 2 | Перевести PR обратно в draft |
 | 3 | Выполнить merge PR |
 | 4 | Закрыть или переоткрыть PR |
-| 5 | Approve, request changes или dismiss review |
-| 6 | Нажать GitHub UI-кнопку deploy, promote, approve environment |
-| 7 | Менять branch protection, required checks или repository rules |
-| 8 | Управлять GitHub secrets и environment variables |
+| 5 | Закрыть или переоткрыть GitHub Issue |
+| 6 | Approve, request changes или dismiss review |
+| 7 | Нажать GitHub UI-кнопку deploy, promote, approve environment |
+| 8 | Менять branch protection, required checks или repository rules |
+| 9 | Управлять GitHub secrets и environment variables |
 
 Агент может читать состояние этих действий, объяснять следующий checkpoint и
 проверять результат после того, как пользователь выполнил действие.
+Для связанной Issue агент готовит русскоязычный итоговый комментарий и точный
+список действий по `Issue Closure Checklist` из `docs/task-delivery-workflow.md`,
+но не выполняет close/reopen.
 
 Исключение для branch cleanup: после явной команды пользователя агент может
 удалить remote head branch уже слитого PR, если проверил, что PR имеет статус

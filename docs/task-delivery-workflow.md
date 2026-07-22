@@ -48,6 +48,7 @@
 - `Хвост` — незавершённый diff, незапушенная работа, открытый PR, незавершённый CI, deploy, smoke, cleanup или другой обязательный follow-up текущего stream
 - `Branch hygiene tail` — cleanup-хвост по веткам: merged remote branch, merged локальная ветка, локальная ветка без upstream или stale worktree, которые остались после фактического закрытия stream-а
 - `Branch hygiene gate` — preflight/cleanup-проверка `Branch hygiene tail` перед новым code stream; gate требует закрыть такой хвост cleanup-ом или явно принять его как временное исключение с перечислением оставшихся веток/worktree и рисков
+- `Issue/admin tail` — связанная GitHub Issue, по которой после принятого production-результата ещё не зафиксировано итоговое решение: закрыть, оставить открытой с причиной и следующим follow-up или переоткрыть
 - `Validated PR` — опубликованный PR текущего stream, по которому пользователь подтвердил, что `CI` зелёный и в рамках текущего scope не осталось blocker-ов. Если `CI` красный или неоднозначный, пользователь возвращает задачу агенту для разбора ошибки и исправления.
 - `Технический вердикт агента по review` — read-only заключение после Copilot/reviewer review: `готово к merge`, `нужны правки` или `нужен выбор пользователя`. Вердикт не является GitHub approve, request changes, dismiss review, переводом статуса или merge.
 - `Внешняя публикация` — `push`, создание или обновление PR, `merge`, `deploy`, `migrate`, `staging`, VPS, секреты, smoke внешней среды и действия во внешних системах
@@ -64,7 +65,7 @@
 4. Branch hygiene gate является частью проверки хвоста перед новым code stream: merged remote/local ветки, stale worktree и локальные ветки без upstream должны быть либо очищены, либо явно классифицированы как допустимый остаток.
 5. По умолчанию реализация идёт только после read-only анализа и согласованного ТЗ.
 6. Если пользователь явно ограничил шаг локальной работой или явно запретил публикацию, действует локальный режим.
-7. Если ТЗ согласовано, пользователь дал команду на реализацию и явно не запретил публикацию, для нового code stream normal default rollout path: `локальная реализация до локального MVP -> операторская приёмка и решение о выкладке -> фиксация существенного ТЗ во внешнем репозитории документации -> draft PR в staging -> пользовательский ready в staging -> Copilot/reviewer review в staging -> вердикт агента по review в staging -> пользовательский merge в staging -> staging smoke -> draft PR в main -> пользовательский ready в main -> Copilot/reviewer review в main -> вердикт агента по review в main -> пользовательский merge в main -> production deploy -> production smoke`. Для срочного hotfix-а пользователь может отдельно разрешить `Spec pending draft PR` до внешней `Spec revision`.
+7. Если ТЗ согласовано, пользователь дал команду на реализацию и явно не запретил публикацию, для нового code stream normal default rollout path: `локальная реализация до локального MVP -> операторская приёмка и решение о выкладке -> фиксация существенного ТЗ во внешнем репозитории документации -> draft PR в staging -> пользовательский ready в staging -> Copilot/reviewer review в staging -> вердикт агента по review в staging -> пользовательский merge в staging -> staging smoke -> draft PR в main -> пользовательский ready в main -> Copilot/reviewer review в main -> вердикт агента по review в main -> пользовательский merge в main -> production deploy -> production smoke -> принятие production-результата -> reconciliation связанных Issues -> пользовательское решение по Issues -> cleanup`. Для срочного hotfix-а пользователь может отдельно разрешить `Spec pending draft PR` до внешней `Spec revision`.
 8. Default trigger после достижения согласованного `Локального MVP` — операторская приёмка локального контура.
 9. Команда `реализовать` по умолчанию разрешает агенту вести stream локально до `Локального MVP` и подготовки к операторской приёмке; ближайший внешний publish-level открывается только после явного решения о выкладке.
 10. Если пользователь явно решил идти в `staging` раньше или позже операторской приёмки, это фиксируется как override относительно default-правила.
@@ -488,8 +489,9 @@ Helper-review не заменяет `author self-check` и не заменяет
 
 Назначение проверки:
 - показать, заполнены ли обязательные readiness-поля PR
+- проверить наличие и формат машинно-читаемого поля `Связанные задачи:`
 - подсветить незакрытые условия `Локального MVP`, операторской приёмки, self-check, блокеров и принятого риска
-- отделить pre-ready gate от `release-process-guard`, который защищает язык PR, staging-first и validated diff
+- отделить pre-ready gate от `release-process-guard`, который защищает язык PR, staging-first, validated diff и точное наследование связанных Issues в runtime PR в `main`
 
 На `draft` PR незакрытые readiness-поля отображаются как warnings и не означают готовность к `ready`.
 После события `ready_for_review` те же незакрытые readiness-поля становятся blocker-ами.
@@ -510,6 +512,7 @@ Helper-review не заменяет `author self-check` и не заменяет
 - отсутствие англоязычной prose вне технических токенов
 - наличие всех readiness-полей
 - допустимые значения readiness-полей
+- наличие и допустимый формат поля `Связанные задачи:`
 - для runtime/code PR в `main` после `staging` — точные строки `Staging PR:` /
   `Staging PRs:` и `Staging smoke:`
 
@@ -524,6 +527,18 @@ Helper-review не заменяет `author self-check` и не заменяет
 - `Блокеры: отсутствуют`
 - `Принятый риск: отсутствует | принят: <краткая причина>`
 
+Обязательное поле связи с исходными GitHub Issues:
+
+- `Связанные задачи: #NNN[, #MMM]`
+- `Связанные задачи: не требуется`
+
+Поле содержит нейтральные ссылки без auto-close keywords. Формулировки
+`Closes #NNN`, `Fixes #NNN` и `Resolves #NNN` не используются: merge в `main` предшествует
+production deploy, smoke и принятию production-результата. В PR в `main` поле
+переносится без потери номеров из связанных staging PR; если staging PR
+несколько, значение должно точно совпадать с объединением их наборов связанных
+задач.
+
 Недопустимо:
 
 - `Локальный MVP: выполнен локально`
@@ -536,6 +551,7 @@ Helper-review не заменяет `author self-check` и не заменяет
 ```text
 Staging PR: #639
 Staging smoke: https://github.com/Etogerman/Project-1/actions/runs/28181486011
+Связанные задачи: #708
 
 Локальный MVP: принят
 Операторская приёмка: принята
@@ -546,6 +562,7 @@ Staging smoke: https://github.com/Etogerman/Project-1/actions/runs/28181486011
 ```text
 Staging PRs: #614, #615
 Staging smoke: https://github.com/Etogerman/Project-1/actions/runs/123
+Связанные задачи: #708, #709
 ```
 
 Если PR уже создан, агент не должен отдавать его как готовый checkpoint, пока
@@ -574,7 +591,10 @@ Staging smoke: https://github.com/Etogerman/Project-1/actions/runs/123
 15. Если действует уровень `до merge в main`, вердикт агента по review — `готово к merge`, рекомендуемый вариант — `1. Пользователь выполняет merge в main, агент затем проверяет результат`.
 16. Если `merge` в `main` уже выполнен для code/release stream, рекомендуемый вариант — `1. Ручной production deploy`.
 17. Если ручной production deploy уже выполнен для code/release stream, рекомендуемый вариант — `1. Production Post-Deploy Smoke`.
-18. Если production smoke закрыт успешно, рекомендуемый вариант — `1. Cleanup` или `1. Следующая задача`.
+18. Если production smoke закрыт успешно, но production-результат ещё не принят, рекомендуемый вариант — `1. Пользователь или оператор принимает production-результат или риск`.
+19. Если production-результат принят, но связанные Issues ещё не сверены, рекомендуемый вариант — `1. Агент выполняет reconciliation связанных Issues и даёт вердикт по каждой`.
+20. Если reconciliation завершён и по Issue требуется GitHub-контрольное действие, рекомендуемый вариант — `1. Пользователь закрывает или переоткрывает Issue либо подтверждает решение оставить её открытой с причиной и следующим follow-up`.
+21. Если по всем связанным Issues зафиксировано итоговое решение или поле содержит `не требуется`, рекомендуемый вариант — `1. Cleanup` или `1. Следующая задача`.
 
 Если вердикт агента по review — `нужны правки`, следующим шагом считается
 исправление в текущем scope. Агент не переводит PR обратно в draft и не меняет
@@ -803,7 +823,7 @@ Stream может быть доведён до разных handoff-точек:
 
 Handoff-точка — это допустимая точка остановки и следующего решения пользователя, но не автоматически закрытый хвост.
 
-Открытый PR, незавершённый `CI`, незавершённый `staging`/`main` path, deploy, smoke и cleanup остаются хвостом до их фактического завершения.
+Открытый PR, незавершённый `CI`, незавершённый `staging`/`main` path, deploy, smoke, связанная Issue без итогового решения и cleanup остаются хвостом до их фактического завершения.
 
 Новый code stream по умолчанию не начинается, пока этот хвост не закрыт или пользователь явно не разрешил исключение после перечисления хвоста и связанных рисков.
 
@@ -811,11 +831,12 @@ Stream считается полностью закрытым только ко�
 
 Для существенного stream-а полное закрытие включает `spec closure`.
 
-Нужно различать три типа хвоста:
+Нужно различать четыре типа хвоста:
 
 1. runtime/release tail: открытый PR, незавершённый `CI`, незавершённый `staging`/`main` path, deploy и smoke; это жёсткие blockers
 2. branch hygiene tail: merged remote/local ветки, stale worktree и локальные ветки без upstream; это cleanup-gate перед новым code stream-ом
 3. spec/admin tail: `Spec doc` status, `streams/README.md`, запись в `active-streams.md`, `archive pending`; это обязательные follow-up, но не отдельный rollout gate сами по себе
+4. issue/admin tail: связанные GitHub Issues, по которым после принятого production-результата не зафиксировано итоговое решение; это обязательный closure follow-up, но не runtime blocker после успешного production acceptance
 
 ### Spec Closure Checklist
 
@@ -830,8 +851,22 @@ Stream считается полностью закрытым только ко�
 Статус `planned` для уже материализованного acceptance считается process-error и не является допустимым состоянием закрытия stream-а.
 Незакрытый `spec/admin tail` нужно явно перечислять перед стартом нового substantial code stream-а, но он сам по себе не запрещает unrelated `docs-only` шаг или малый локальный maintenance step.
 
+### Issue Closure Checklist
+
+После успешного production smoke и принятия production-результата агент обязан:
+
+1. прочитать поле `Связанные задачи:` в PR в `main` и восстановить полный набор Issues из связанных staging PR
+2. для каждой Issue сопоставить исходный acceptance с фактически выпущенным поведением и принятым production-результатом
+3. дать по каждой Issue один вердикт: `закрыть`, `оставить открытой: <причина и следующий follow-up>` или `переоткрыть: <причина>`
+4. подготовить короткий русскоязычный итоговый комментарий со ссылками на PR в `main`, production deploy/smoke и проверенный результат
+5. передать пользователю точный список GitHub-действий; после его действий read-only проверить фактическое состояние Issues
+
+Stream не считается полностью закрытым, пока каждая связанная Issue не закрыта
+либо явно оставлена открытой с причиной и следующим follow-up. Агент не
+закрывает и не переоткрывает Issue.
+
 Для AB Connector `merge` в `main` остаётся только handoff-точкой для code/release stream.
-Для code/release stream хвост остаётся открытым до ручного production deploy и успешного production smoke по правилам `docs/post-deploy-smoke.md`.
+Для code/release stream хвост остаётся открытым до ручного production deploy, успешного production smoke, принятия production-результата и reconciliation связанных Issues по правилам `docs/post-deploy-smoke.md` и этого раздела.
 Для `docs-only` path после `merge` в `main` следующим шагом считается cleanup временных артефактов или переход к следующей задаче.
 
 Результат:

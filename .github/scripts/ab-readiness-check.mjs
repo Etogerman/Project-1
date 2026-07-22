@@ -59,6 +59,9 @@ const ENGLISH_PR_HEADING_PATTERN =
   /^\s{0,3}#{1,6}\s*(Summary|Overview|Description|Why|Validation|Testing|Tests|Checks|Delivery note|Implementation|Changes|Root cause|Impact|Risks|Rollout)\s*$/gim;
 const ALLOWED_TECHNICAL_TERMS_PATTERN =
   /\b(codex|Copilot|Copilot CLI|Copilot Requests|CLI|PAT|token|secret|workflow_dispatch|GITHUB_TOKEN|COPILOT_GITHUB_TOKEN|READY_TO_MERGE|BLOCKED|shadow|verdict|merge-readiness|PR|MCP|CI|UI|URL|API|JSON|YAML|TOML|PHP|SQL|HTTP|HTTPS|Docker|Laravel|Boost|Filament|Livewire|Bitrix24|AB Connector|Spec repo|Spec doc|Spec revision|MVP|Staging PRs|Staging PR|Staging smoke|Staging Post-Deploy Smoke|rev-check|public smoke|admin smoke|dev-only|validated diff|clean-main-PR|workflow|runtime|main|staging|draft|ready|merge|commit|branch|pull request|hotfix|release-process-guard|ab-readiness-check|copilot-feasibility-spike|copilot-merge-readiness|php-artisan-test)\b/gi;
+const LINKED_ISSUES_PATTERN = /^#[1-9]\d*(?:, #[1-9]\d*)*$/;
+const CLOSING_KEYWORD_PATTERN =
+  /\b(?:close(?:s|d)?|fix(?:es|ed)?|resolve(?:s|d)?)\s+(?:https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/issues\/[1-9]\d*|(?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?#[1-9]\d*)\b/i;
 
 const REQUIRED_FIELDS = [
   { key: "changeType", label: "Тип изменения" },
@@ -67,6 +70,7 @@ const REQUIRED_FIELDS = [
   { key: "localMvp", label: "Локальный MVP" },
   { key: "operatorAcceptance", label: "Операторская приёмка" },
   { key: "authorSelfCheck", label: "Авторская самопроверка" },
+  { key: "linkedIssues", label: "Связанные задачи" },
   { key: "blockers", label: "Блокеры" },
   { key: "acceptedRisk", label: "Принятый риск" },
 ];
@@ -103,8 +107,12 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function stripHtmlComments(text) {
+  return text.replace(/<!--[\s\S]*?(?:-->|$)/g, " ");
+}
+
 function stripMarkdownCode(text) {
-  return text
+  return stripHtmlComments(text)
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/`[^`]*`/g, " ");
 }
@@ -128,7 +136,7 @@ function normalizeValue(value = "") {
     .replace(/\s+/g, " ");
 }
 
-function extractField(body, label) {
+function extractField(body, label, { preserveInternalWhitespace = false } = {}) {
   const pattern = new RegExp(`(?:^|\\n)[^\\S\\n]*(?:[-*][^\\S\\n]*)?${escapeRegExp(label)}[^\\S\\n]*:[^\\S\\n]*(.*?)(?=\\n|$)`, "i");
   const match = body.match(pattern);
 
@@ -136,19 +144,64 @@ function extractField(body, label) {
     return null;
   }
 
-  const value = normalizeValue(match[1]);
+  const value = preserveInternalWhitespace
+    ? match[1].trim().replace(/^`|`$/g, "")
+    : normalizeValue(match[1]);
 
   return value === "" ? null : value;
 }
 
 function extractFields(body) {
-  return [...REQUIRED_FIELDS, ...SPEC_FIELDS].reduce(
+  const visibleBody = stripHtmlComments(body);
+  const fields = [...REQUIRED_FIELDS, ...SPEC_FIELDS].reduce(
     (fields, field) => ({
       ...fields,
-      [field.key]: extractField(body, field.label),
+      [field.key]: extractField(visibleBody, field.label),
     }),
     {},
   );
+
+  fields.linkedIssues = extractField(
+    stripMarkdownCode(visibleBody),
+    "Связанные задачи",
+    { preserveInternalWhitespace: true },
+  );
+
+  return fields;
+}
+
+function countFieldOccurrences(body, label) {
+  const pattern = new RegExp(`(?:^|\\n)[^\\S\\n]*(?:[-*][^\\S\\n]*)?${escapeRegExp(label)}[^\\S\\n]*:`, "gi");
+
+  return [...stripMarkdownCode(body).matchAll(pattern)].length;
+}
+
+function parseLinkedIssues(value) {
+  const normalized = String(value || "").trim().replace(/^[-*]\s*/, "").replace(/^`|`$/g, "");
+
+  if (/^не требуется$/i.test(normalized)) {
+    return { valid: true, noneRequired: true, issueNumbers: [] };
+  }
+
+  if (!LINKED_ISSUES_PATTERN.test(normalized)) {
+    return { valid: false, noneRequired: false, issueNumbers: [] };
+  }
+
+  const issueNumbers = normalized
+    .split(",")
+    .map((reference) => Number(reference.trim().slice(1)));
+  const hasUnsafeNumber = issueNumbers.some((issueNumber) => !Number.isSafeInteger(issueNumber));
+  const hasDuplicates = new Set(issueNumbers).size !== issueNumbers.length;
+
+  return {
+    valid: !hasUnsafeNumber && !hasDuplicates,
+    noneRequired: false,
+    issueNumbers,
+  };
+}
+
+function hasClosingIssueKeyword(body) {
+  return CLOSING_KEYWORD_PATTERN.test(stripMarkdownCode(body));
 }
 
 function validatePublishLanguage({ title, body }) {
@@ -180,8 +233,10 @@ function validatePublishLanguage({ title, body }) {
 }
 
 function hasStagingEvidence(body) {
-  return /(?:^|\n)\s*Staging\s+PRs?\s*:\s*(?:.*(?:https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/)?#?\d+\b)/i.test(body)
-    && /(?:^|\n)\s*Staging\s+smoke\s*:\s*(?:.*https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/actions\/runs\/\d+)/i.test(body);
+  const visibleBody = stripMarkdownCode(body);
+
+  return /(?:^|\n)\s*Staging\s+PRs?\s*:\s*(?:.*(?:https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/)?#?\d+\b)/i.test(visibleBody)
+    && /(?:^|\n)\s*Staging\s+smoke\s*:\s*(?:.*https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/actions\/runs\/\d+)/i.test(visibleBody);
 }
 
 function isSubstantialStream(fields) {
@@ -229,10 +284,22 @@ function evaluateReadiness({ baseRef, title = "", body = "", files = [], isDraft
     failures.push("Runtime PR в `main` должен содержать `Staging PR: #NNN` или `Staging PRs: #NNN, #MMM`, а также `Staging smoke: https://github.com/.../actions/runs/...`.");
   }
 
+  if (hasClosingIssueKeyword(body)) {
+    failures.push("PR не должен содержать закрывающие ключевые слова `close`, `fix` или `resolve`: итоговое решение по связанным задачам фиксируется отдельно после приёмки результата.");
+  }
+
   for (const field of REQUIRED_FIELDS) {
     if (!fields[field.key]) {
       readinessIssues.push(`Не заполнено поле \`${field.label}:\`.`);
     }
+  }
+
+  if (fields.linkedIssues && !parseLinkedIssues(fields.linkedIssues).valid) {
+    readinessIssues.push("Поле `Связанные задачи:` должно быть `#NNN`, списком `#NNN, #MMM` или `не требуется`; повторы задач запрещены.");
+  }
+
+  if (countFieldOccurrences(body, "Связанные задачи") > 1) {
+    readinessIssues.push("Поле `Связанные задачи:` должно встречаться ровно один раз.");
   }
 
   if (fields.blockers && !/^отсутствуют$/i.test(fields.blockers)) {
@@ -394,6 +461,54 @@ function runSelfTest() {
   assert.throws(() => parsePullNumber("123abc"), /positive integer/);
   assert.throws(() => parsePullNumber("0"), /positive integer/);
   assert.throws(() => parsePullNumber(""), /positive integer/);
+  assert.deepEqual(parseLinkedIssues("#708"), {
+    valid: true,
+    noneRequired: false,
+    issueNumbers: [708],
+  });
+  assert.deepEqual(parseLinkedIssues("#708, #712"), {
+    valid: true,
+    noneRequired: false,
+    issueNumbers: [708, 712],
+  });
+  assert.deepEqual(parseLinkedIssues("не требуется"), {
+    valid: true,
+    noneRequired: true,
+    issueNumbers: [],
+  });
+
+  for (const invalidLinkedIssues of [
+    "708",
+    "#708 #712",
+    "#708,#712",
+    "#708,  #712",
+    "https://github.com/Etogerman/Project-1/issues/708",
+    "Closes #708",
+    "#0",
+    "#708, #708",
+    "#9999999999999999999999",
+  ]) {
+    assert.equal(parseLinkedIssues(invalidLinkedIssues).valid, false);
+  }
+
+  for (const closingReference of [
+    "Closes #708",
+    "closed Etogerman/Project-1#708",
+    "Fixes https://github.com/Etogerman/Project-1/issues/708",
+    "fixed #708",
+    "Resolves #708",
+    "resolved #708",
+  ]) {
+    assert.equal(hasClosingIssueKeyword(closingReference), true);
+  }
+
+  assert.equal(hasClosingIssueKeyword("Связанные задачи: #708"), false);
+  assert.equal(hasClosingIssueKeyword("Пример: `Fixes #708` использовать нельзя."), false);
+  assert.equal(hasClosingIssueKeyword("```text\nFixes #708\n```"), false);
+  assert.equal(
+    extractFields("Spec revision: `abcdef1`\nСвязанные задачи: #708").specRevision,
+    "abcdef1",
+  );
 
   const readyProcessBody = [
     "## Что изменено",
@@ -408,6 +523,7 @@ function runSelfTest() {
     "- Локальный MVP: не требуется",
     "- Операторская приёмка: не требуется",
     "- Авторская самопроверка: выполнена",
+    "- Связанные задачи: не требуется",
     "- Блокеры: отсутствуют",
     "- Принятый риск: отсутствует",
   ].join("\n");
@@ -496,6 +612,118 @@ function runSelfTest() {
       isDraft: true,
     }).warnings.length > 0,
     true,
+  );
+
+  assert.match(
+    evaluateReadiness({
+      baseRef: "main",
+      title: "[codex] Уточнить процесс ревью",
+      body: readyProcessBody.replace("- Связанные задачи: не требуется\n", ""),
+      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
+      isDraft: false,
+    }).failures.join("\n"),
+    /Связанные задачи/,
+  );
+
+  assert.match(
+    evaluateReadiness({
+      baseRef: "main",
+      title: "[codex] Уточнить процесс ревью",
+      body: readyProcessBody.replace(
+        "- Связанные задачи: не требуется",
+        "<!--\nСвязанные задачи: #708",
+      ),
+      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
+      isDraft: false,
+    }).failures.join("\n"),
+    /Связанные задачи/,
+  );
+
+  assert.match(
+    evaluateReadiness({
+      baseRef: "main",
+      title: "[codex] Уточнить процесс ревью",
+      body: readyProcessBody.replace(
+        "- Связанные задачи: не требуется",
+        "<!--\nСвязанные задачи: #708\n-->",
+      ),
+      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
+      isDraft: false,
+    }).failures.join("\n"),
+    /Связанные задачи/,
+  );
+
+  assert.match(
+    evaluateReadiness({
+      baseRef: "main",
+      title: "[codex] Уточнить процесс ревью",
+      body: `${readyProcessBody}\n- Связанные задачи: #708`,
+      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
+      isDraft: false,
+    }).failures.join("\n"),
+    /ровно один раз/,
+  );
+
+  assert.match(
+    evaluateReadiness({
+      baseRef: "main",
+      title: "[codex] Уточнить процесс ревью",
+      body: readyProcessBody.replace(
+        "- Связанные задачи: не требуется",
+        "```text\nСвязанные задачи: #708\n```",
+      ),
+      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
+      isDraft: false,
+    }).failures.join("\n"),
+    /Связанные задачи/,
+  );
+
+  assert.match(
+    evaluateReadiness({
+      baseRef: "main",
+      title: "[codex] Уточнить процесс ревью",
+      body: `${readyProcessBody}\n\nFixes #708`,
+      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
+      isDraft: true,
+    }).failures.join("\n"),
+    /закрывающие ключевые слова/,
+  );
+
+  assert.match(
+    evaluateReadiness({
+      baseRef: "main",
+      title: "[codex] Уточнить процесс ревью",
+      body: readyProcessBody.replace("Связанные задачи: не требуется", "Связанные задачи: #708 #712"),
+      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
+      isDraft: false,
+    }).failures.join("\n"),
+    /Связанные задачи/,
+  );
+
+  assert.match(
+    evaluateReadiness({
+      baseRef: "main",
+      title: "[codex] Уточнить процесс ревью",
+      body: readyProcessBody.replace("- Связанные задачи: не требуется\n", ""),
+      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
+      isDraft: true,
+    }).warnings.join("\n"),
+    /Связанные задачи/,
+  );
+
+  assert.match(
+    evaluateReadiness({
+      baseRef: "staging",
+      title: "[codex] Исправить синхронизацию Bitrix24",
+      body: readyProcessBody
+        .replace("процессное", "кодовое")
+        .replace("документационный путь", "PR в staging")
+        .replace("Связанные задачи: не требуется", "Связанные задачи: #708")
+        .concat("\n\nFixes #708"),
+      files: [{ filename: "app/Services/Bitrix24ContactSyncService.php" }],
+      isDraft: true,
+    }).failures.join("\n"),
+    /закрывающие ключевые слова/,
   );
 
   assert.match(
