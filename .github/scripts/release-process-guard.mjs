@@ -462,23 +462,56 @@ function stripMarkdownFencedCode(text) {
   }).join("\n");
 }
 
-function stripMarkdownIndentedCode(text) {
-  return String(text).split("\n").map((line) => {
-    let indentationColumns = 0;
+function leadingMarkdownIndentationColumns(line) {
+  let indentationColumns = 0;
 
-    for (const character of line) {
-      if (character === " ") {
-        indentationColumns += 1;
-      } else if (character === "\t") {
-        indentationColumns += 4 - (indentationColumns % 4);
-      } else {
-        break;
+  for (const character of line) {
+    if (character === " ") {
+      indentationColumns += 1;
+    } else if (character === "\t") {
+      indentationColumns += 4 - (indentationColumns % 4);
+    } else {
+      break;
+    }
+  }
+
+  return indentationColumns;
+}
+
+function isMarkdownParagraphBoundary(line, paragraphOpen) {
+  const content = String(line).replace(/\r$/, "").replace(/^ {0,3}/, "");
+  const isAtxHeading = /^#{1,6}(?:[ \t]+|$)/.test(content);
+  const isThematicBreak = /^(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,})$/.test(content);
+  const isSetextUnderline = paragraphOpen && /^(?:=+|-+)[ \t]*$/.test(content);
+
+  return isAtxHeading || isThematicBreak || isSetextUnderline;
+}
+
+function stripMarkdownIndentedCode(text) {
+  let inIndentedCode = false;
+  let paragraphOpen = false;
+
+  return String(text).split("\n").map((line) => {
+    if (/^[ \t]*\r?$/.test(line)) {
+      if (!inIndentedCode) {
+        paragraphOpen = false;
       }
 
-      if (indentationColumns >= 4) {
+      return inIndentedCode ? "" : line;
+    }
+
+    if (leadingMarkdownIndentationColumns(line) >= 4) {
+      if (inIndentedCode || !paragraphOpen) {
+        inIndentedCode = true;
+        paragraphOpen = false;
         return "";
       }
+
+      return line;
     }
+
+    inIndentedCode = false;
+    paragraphOpen = !isMarkdownParagraphBoundary(line, paragraphOpen);
 
     return line;
   }).join("\n");
@@ -998,6 +1031,13 @@ function runSelfTest() {
   assert.equal(isProcessOnlyFile("tests/Feature/ScenarioBuilderV3StateTest.php"), true);
   assert.equal(isProcessOnlyFile(".agents/skills/ab-connector-skill-authoring/agents/openai.yaml"), true);
   assert.equal(isProcessOnlyFile("app/Services/Bitrix24ContactSyncService.php"), false);
+  assert.equal(
+    stripMarkdownCode("Обычный текст\n    Fixes #708"),
+    "Обычный текст\n    Fixes #708",
+  );
+  assert.equal(stripMarkdownCode("Обычный текст\n\n    Fixes #708"), "Обычный текст\n\n");
+  assert.equal(stripMarkdownCode("# Заголовок\n    Fixes #708"), "# Заголовок\n");
+  assert.equal(stripMarkdownCode("Заголовок\n---\n    Fixes #708"), "Заголовок\n---\n");
   assert.deepEqual(parseGitHubActionsRunUrl("https://github.com/Etogerman/Project-1/actions/runs/123"), {
     owner: "Etogerman",
     repo: "Project-1",

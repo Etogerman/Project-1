@@ -145,23 +145,56 @@ function stripMarkdownFencedCode(text) {
   }).join("\n");
 }
 
-function stripMarkdownIndentedCode(text) {
-  return String(text).split("\n").map((line) => {
-    let indentationColumns = 0;
+function leadingMarkdownIndentationColumns(line) {
+  let indentationColumns = 0;
 
-    for (const character of line) {
-      if (character === " ") {
-        indentationColumns += 1;
-      } else if (character === "\t") {
-        indentationColumns += 4 - (indentationColumns % 4);
-      } else {
-        break;
+  for (const character of line) {
+    if (character === " ") {
+      indentationColumns += 1;
+    } else if (character === "\t") {
+      indentationColumns += 4 - (indentationColumns % 4);
+    } else {
+      break;
+    }
+  }
+
+  return indentationColumns;
+}
+
+function isMarkdownParagraphBoundary(line, paragraphOpen) {
+  const content = String(line).replace(/\r$/, "").replace(/^ {0,3}/, "");
+  const isAtxHeading = /^#{1,6}(?:[ \t]+|$)/.test(content);
+  const isThematicBreak = /^(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,})$/.test(content);
+  const isSetextUnderline = paragraphOpen && /^(?:=+|-+)[ \t]*$/.test(content);
+
+  return isAtxHeading || isThematicBreak || isSetextUnderline;
+}
+
+function stripMarkdownIndentedCode(text) {
+  let inIndentedCode = false;
+  let paragraphOpen = false;
+
+  return String(text).split("\n").map((line) => {
+    if (/^[ \t]*\r?$/.test(line)) {
+      if (!inIndentedCode) {
+        paragraphOpen = false;
       }
 
-      if (indentationColumns >= 4) {
+      return inIndentedCode ? "" : line;
+    }
+
+    if (leadingMarkdownIndentationColumns(line) >= 4) {
+      if (inIndentedCode || !paragraphOpen) {
+        inIndentedCode = true;
+        paragraphOpen = false;
         return "";
       }
+
+      return line;
     }
+
+    inIndentedCode = false;
+    paragraphOpen = !isMarkdownParagraphBoundary(line, paragraphOpen);
 
     return line;
   }).join("\n");
@@ -634,6 +667,12 @@ function runSelfTest() {
   assert.equal(hasClosingIssueKeyword("Пример: ``Fixes #708`` использовать нельзя."), false);
   assert.equal(hasClosingIssueKeyword("```text\nFixes #708\n```"), false);
   assert.equal(hasClosingIssueKeyword("    Fixes #708"), false);
+  assert.equal(hasClosingIssueKeyword("Обычный текст\n    Fixes #708"), true);
+  assert.equal(hasClosingIssueKeyword("Обычный текст\n\tFixes #708"), true);
+  assert.equal(hasClosingIssueKeyword("- Обычный текст\n    Fixes #708"), true);
+  assert.equal(hasClosingIssueKeyword("Обычный текст\n\n    Fixes #708"), false);
+  assert.equal(hasClosingIssueKeyword("# Заголовок\n    Fixes #708"), false);
+  assert.equal(hasClosingIssueKeyword("Заголовок\n---\n    Fixes #708"), false);
   assert.equal(extractFields("``Авторская самопроверка: выполнена``").authorSelfCheck, null);
   assert.equal(extractFields("```text\nАвторская самопроверка: выполнена\n```").authorSelfCheck, null);
   assert.equal(extractFields("    Авторская самопроверка: выполнена").authorSelfCheck, null);
