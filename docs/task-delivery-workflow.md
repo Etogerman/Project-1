@@ -579,7 +579,7 @@ Staging smoke: https://github.com/Etogerman/Project-1/actions/runs/123
 18. Если production smoke закрыт успешно, но production-результат или риск ещё не принят, рекомендуемый вариант — `1. Пользователь или оператор принимает production-результат или риск`.
 19. Если production-результат принят и в `Связанные задачи` указаны `#NNN`, рекомендуемый вариант — `1. Агент сверяет все связанные Issues; пользователь по каждой решает: закрыть или оставить открытой`. При `Связанные задачи: не требуется` checkpoint получает `Issue Closure: not_required`.
 20. Если `Issue Closure` имеет состояние `completed` или `not_required`, но применимый `Spec Closure` ещё не закрыт, рекомендуемый вариант — `1. Выполнить Spec Closure`. Если внешний Spec неприменим, фиксируется `Spec Closure: not_required` с причиной.
-21. Только если `Issue Closure` и применимый `Spec Closure` имеют состояние `completed` или `not_required`, рекомендуемый вариант — `1. Cleanup`. До завершения обязательного branch-hygiene cleanup новый code implementation step не начинается; допустим только docs-only/spec/admin follow-up, который не меняет runtime/code diff и не маскирует release-хвост.
+21. После `Issue Closure: completed | not_required` и `Spec Closure: completed | not_required` рекомендуемый вариант — `1. Cleanup`. До cleanup запрещён новый code implementation step; допустим только docs-only/spec/admin follow-up без runtime/code diff.
 
 Если вердикт агента по review — `нужны правки`, следующим шагом считается
 исправление в текущем scope. Агент не переводит PR обратно в draft и не меняет
@@ -884,9 +884,8 @@ issue_closure in {completed, not_required}
 
 ## Этап 19. Cleanup
 
-После завершения `Issue Closure` и применимого `Spec Closure` агент отдельно
-предлагает cleanup временных артефактов. Полное закрытие stream фиксируется
-только после cleanup.
+После обоих closure-checkpoint агент предлагает cleanup; полное закрытие stream
+фиксируется после cleanup.
 Если stream дошёл до `merge`, branch cleanup является обязательным closure-подшагом:
 агент должен показать конкретный dry-run список и выполнить удаление только после
 явного подтверждения пользователя, если удаление затрагивает remote branch,
