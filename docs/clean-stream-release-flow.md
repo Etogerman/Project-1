@@ -183,15 +183,9 @@ scope с drift относительно `origin/main`.
 Если staging deploy уходит автоматически после push в `staging`:
 
 - релиз не считается закрытым, пока не пройден post-deploy smoke-check
-- успешный production smoke передаёт результат на пользовательское принятие, а
-  не прямо в cleanup
-- после принятия результата агент сверяет все связанные Issues, пользователь по
-  каждой решает и выполняет `закрыть` или `оставить открытой`
-- `Связанные задачи: не требуется` даёт `Issue Closure: not_required`;
-  оставленная открытой Issue становится `issue/admin tail`
-- если `Spec Closure` неприменим, фиксируется явное
-  `Spec Closure: not_required` с причиной
-- cleanup доступен только после `Issue Closure` и применимого `Spec Closure`
+- production smoke ведёт к принятию результата, затем к closure-route из
+  `docs/task-delivery-workflow.md`; cleanup до `Issue Closure` и применимого
+  `Spec Closure` недоступен
 - smoke-check проводится по реально рабочим окружениям текущего release flow
 - если production не автодеплоится, production smoke запускается только после
   фактического production deploy
@@ -199,8 +193,7 @@ scope с drift относительно `origin/main`.
   подтверждением релиза
 - destructive maintenance-команды не запускаются просто ради проверки
 
-Для docs/process stream closure-route начинается после пользовательского merge и
-проверки результата: `Issue Closure` -> применимый `Spec Closure` -> cleanup.
+Для docs/process stream тот же route начинается после merge и проверки результата.
 
 Подробный checklist см. в `docs/post-deploy-smoke.md`.
 

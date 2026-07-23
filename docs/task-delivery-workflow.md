@@ -46,7 +46,7 @@
 - `Локальный MVP` — минимальный локально тестируемый feature increment текущего stream-а; default trigger операторской приёмки, а не автоматического выхода в первый внешний publish-level
 - `Implementation stream` — полный цикл текущего шага от preflight до закрытия хвоста
 - `Хвост` — незавершённый diff, незапушенная работа, открытый PR, незавершённый CI, deploy, smoke, cleanup или другой обязательный follow-up текущего stream
-- `Branch hygiene tail` — cleanup-хвост по веткам: merged remote branch, merged локальная ветка, локальная ветка без upstream или stale worktree, которые остались после фактического закрытия stream-а
+- `Branch hygiene tail` — merged remote/local branch, локальная ветка без upstream или stale worktree, которые после merge или closure-checkpoint ждут cleanup
 - `Branch hygiene gate` — preflight/cleanup-проверка `Branch hygiene tail` перед новым code stream; gate требует закрыть такой хвост cleanup-ом или явно принять его как временное исключение с перечислением оставшихся веток/worktree и рисков
 - `Validated PR` — опубликованный PR текущего stream, по которому пользователь подтвердил, что `CI` зелёный и в рамках текущего scope не осталось blocker-ов. Если `CI` красный или неоднозначный, пользователь возвращает задачу агенту для разбора ошибки и исправления.
 - `Технический вердикт агента по review` — read-only заключение после Copilot/reviewer review: `готово к merge`, `нужны правки` или `нужен выбор пользователя`. Вердикт не является GitHub approve, request changes, dismiss review, переводом статуса или merge.
@@ -835,14 +835,14 @@ stream и после проверки merged result для docs/process stream.
 1. `Связанные задачи: не требуется` даёт `Issue Closure: not_required`.
 2. Для `#NNN` или `#NNN, #MMM` агент сверяет актуальное состояние каждой Issue с
    принятым результатом.
-3. Пользователь по каждой Issue решает и выполняет `закрыть` или
-   `оставить открытой`; close/reopen Issue агент не выполняет.
-4. `Оставить открытой` завершает checkpoint по этой Issue и создаёт видимый
+3. Пользователь решает и выполняет действие; close/reopen Issue агент не делает.
+4. На merged PR пользователь публикует одну запись: `Issue Closure: completed`
+   и по каждой Issue ровно одну строку `Issue #NNN: closed | left_open`.
+5. `closed` должно совпадать с CLOSED, `left_open` — с OPEN и создаёт
    `issue/admin tail`.
 
-`Issue Closure` имеет состояние `completed`, только когда решение принято по
-каждой указанной Issue. Наличие открытого `issue/admin tail` после явного решения
-не блокирует применимый `Spec Closure` и cleanup принятого результата.
+Без полной записи или при расхождении live-состояния `Issue Closure` остаётся
+pending. Завершённый `left_open` не блокирует `Spec Closure` и cleanup.
 
 ### Spec Closure Checklist
 

@@ -163,14 +163,11 @@ close/reopen PR или Issue, approve/request changes, GitHub deploy/promote, en
 approval, branch protection, required checks и secrets. Агент не предлагает себя
 исполнителем таких действий и в меню указывает пользователя.
 
-После успешного production smoke для code/release stream следующим шагом является
-принятие production-результата, затем `Issue Closure`, применимый `Spec Closure`
-и cleanup. Для docs/process stream тот же closure-route начинается после merge и
-проверки результата. При `Связанные задачи: не требуется` фиксируется
-`Issue Closure: not_required`; при нескольких Issues пользователь принимает
-решение по каждой. Оставленная открытой Issue становится `issue/admin tail` и не
-исчезает из отчёта. Если `Spec Closure` неприменим, фиксируется явное
-`Spec Closure: not_required` с причиной.
+После принятого production smoke либо проверки merged docs/process PR используй
+closure-route из `docs/task-delivery-workflow.md`. Для `#NNN` сверяй live Issue и
+closure-запись merged PR; без записи checkpoint pending, `left_open` создаёт
+`issue/admin tail`. Неприменимый Spec требует `Spec Closure: not_required` с
+причиной.
 
 Исключение branch cleanup: после явной команды пользователя агент может удалить
 remote head branch уже слитого PR, если проверил `MERGED`, соответствие branch

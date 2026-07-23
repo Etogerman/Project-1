@@ -22,14 +22,13 @@
 - Основание связи:
 <!--
 `Связанные задачи` — нейтральная lineage-связь: `не требуется`, `#NNN` или
-`#NNN, #MMM`. Не используйте `Closes` / `Fixes`: после принятия результата
-пользователь отдельно решает и выполняет по каждой Issue `закрыть` или
-`оставить открытой`; это `Issue Closure`. Затем выполняется применимый
-`Spec Closure`; если он неприменим, фиксируется
-`Spec Closure: not_required` с причиной. Cleanup
-разрешён только после обоих closure-checkpoint.
-`не требуется` даёт `Issue Closure: not_required`; оставленная открытой Issue
-становится `issue/admin tail`.
+`#NNN, #MMM`. Не используйте closing keywords GitHub:
+`close/closes/closed`, `fix/fixes/fixed`, `resolve/resolves/resolved`.
+После принятия результата пользователь решает по каждой Issue, выполняет решение
+и фиксирует `Issue Closure` на merged PR по workflow. Затем идёт применимый
+`Spec Closure`; cleanup разрешён после обоих checkpoint.
+`не требуется` даёт `Issue Closure: not_required`; `left_open` создаёт
+`issue/admin tail`.
 -->
 - Блокеры:
 - Принятый риск:
