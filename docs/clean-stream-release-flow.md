@@ -38,8 +38,9 @@
 - staging smoke завершён, но тот же validated diff ещё не проведён отдельным PR в `main`
 - смерженный PR в `main`, который ещё не выкачен в production, если production входит в release flow
 - завершившийся production deploy без закрытого production smoke-check
-- успешный production smoke без принятого production-результата
-- принятый результат без `Issue Closure` или применимого `Spec Closure`
+- production smoke (code/release) или merge (docs/process) без выполненного
+  основания закрытия
+- выполненное основание закрытия без `Issue Closure` или применимого `Spec Closure`
 - незакрытый branch hygiene tail: merged remote/local ветки, stale worktree или локальные ветки без upstream, не классифицированные как допустимый остаток
 
 Пока такой хвост существует, допустимы только четыре действия:
@@ -55,8 +56,7 @@
 1. проверить, есть ли активный PR по предыдущему шагу
 2. проверить, есть ли незавершённый staging deploy или staging smoke
 3. проверить, есть ли незавершённый production deploy или production smoke
-4. проверить принятие production-результата, `Issue Closure` и применимый
-   `Spec Closure`
+4. проверить основание закрытия, `Issue Closure` и применимый `Spec Closure`
 5. проверить branch hygiene tail: merged remote/local ветки, stale worktree и локальные ветки без upstream
 6. если хвост найден, остановить новую реализацию и явно сообщить об этом
    пользователю
@@ -65,11 +65,11 @@
 tail закрыт cleanup-ом или явно принят пользователем как временное исключение
 с перечислением веток, и выполнено одно из условий:
 
-- предыдущий шаг прошёл staging deploy и staging smoke, а если production входит
-  в release flow, то ещё и проведён в `main`, выкачен, проверен production
-  smoke-check, принят пользователем или оператором и имеет
-  `Issue Closure: completed | not_required` и
-  `Spec Closure: completed | not_required`
+- предыдущий code/release шаг прошёл весь release flow, production smoke и
+  принятие результата/риска; оба closure-checkpoint имеют
+  `completed | not_required`
+- предыдущий docs/process PR смержен, результат проверен, оба closure-checkpoint
+  имеют `completed | not_required`
 - предыдущий PR закрыт без merge
 - пользователь явно подтвердил, что предыдущий шаг отменяется или откладывается
 

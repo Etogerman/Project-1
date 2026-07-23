@@ -1,6 +1,6 @@
 ---
 name: ab-pr-ci-review
-description: Inspect AB Connector PR, CI, review, draft/ready state, Russian PR title/body language, PR body guard fields, Spec fields, review verdict, and allowed next PR checkpoint without editing PRs, merging, or bypassing delivery gates.
+description: Inspect AB Connector PR, CI, review, draft/ready state, Russian PR title/body language, PR body guard fields, Spec fields, review verdict, post-merge Issue/Spec Closure, and the allowed next checkpoint without editing PRs, merging, or bypassing delivery gates.
 ---
 
 # Проверка PR, CI и review
@@ -42,7 +42,8 @@ Merge в `staging` или `main` выполняет только пользов�
 - release-process-guard;
 - ab-readiness-check;
 - PR body;
-- следующим PR checkpoint.
+- следующим PR checkpoint;
+- post-merge `Issue Closure` или `Spec Closure`.
 
 Этот skill проверяет наличие и статус review comments. После Copilot/reviewer
 review skill разбирает comments только для технического вердикта, но не
@@ -97,11 +98,10 @@ checkpoint строится по delivery rules, CI/review status и полям 
 
 ### Свежесть pre-merge evidence
 
-Перед `готово к merge` одним live snapshot собери CI, review submissions/bodies,
-inline review comments, PR issue comments, все страницы `reviewThreads`,
-`closingIssuesReferences(userLinkedOnly: false)` и commits; зафиксируй
-`checkedAt/headRefOid/body.updatedAt/Issue numbers/commit SHAs`. Closing evidence
-или последующее изменение PR блокирует verdict.
+Перед `готово к merge` одним live snapshot собери CI, review bodies/comments, все
+`reviewThreads`, `closingIssuesReferences` и commits; зафиксируй
+`checkedAt/headRefOid/body.updatedAt/Issue numbers/commit SHAs`. Последующее
+изменение evidence аннулирует verdict.
 
 ## Обязательные правила
 
@@ -136,9 +136,9 @@ PR в `staging` не включает merge в `staging`, staging smoke, PR в `
 
 ## Post-merge Issue/Spec Closure
 
-По отдельной команде skill проверяет closure-route и точные merged-PR records из
-`docs/task-delivery-workflow.md`. Missing/mismatched evidence оставляет checkpoint
-pending; `left_open` создаёт `issue/admin tail`.
+По отдельной команде сверяй closure-route и merged-PR records с
+`docs/task-delivery-workflow.md`; missing/mismatched evidence означает pending,
+`left_open` — `issue/admin tail`.
 
 ## PR title и body
 
@@ -208,9 +208,8 @@ Staging smoke: https://github.com/.../actions/runs/...
 - вердикт агента `нужны правки` -> рекомендовать исправление в текущем scope;
 - вердикт агента `нужен выбор пользователя` -> показать риск и запросить решение пользователя;
 - review status/comments/threads или CI status недоступны либо неоднозначны -> запросить недостающие данные или решение пользователя;
-- merge выполнен пользователем -> агент может проверить результат по отдельной
-  команде; cleanup определяется closure-route из
-  `docs/task-delivery-workflow.md`;
+- merge выполнен пользователем -> по отдельной команде проверить результат;
+  cleanup — только по closure-route;
 - PR body невалиден -> рекомендовать отдельный шаг на исправление PR metadata,
   не исправляя metadata из этого skill.
 

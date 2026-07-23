@@ -557,7 +557,9 @@ Staging smoke: https://github.com/Etogerman/Project-1/actions/runs/123
 
 Правило рекомендации:
 
-Правила читаются сверху вниз; применяется первый подходящий пункт. Если операторское решение о выкладке ещё не зафиксировано, любые publish-шаги ниже не считаются доступными.
+Правила читаются сверху вниз; применяется первый подходящий пункт, а закрытые
+результаты/checkpoints пропускаются. Без зафиксированного операторского решения
+о выкладке publish-шаги ниже недоступны.
 
 1. Пока согласованный `Локальный MVP` не достигнут и blocker-ов нет, рекомендуемый вариант — `1. Продолжить локальную реализацию`.
 2. Если `Локальный MVP` достигнут, локальный контур закрыт, но операторское решение о выкладке ещё не зафиксировано, рекомендуемый вариант — `1. Провести операторскую приёмку`.
@@ -577,9 +579,10 @@ Staging smoke: https://github.com/Etogerman/Project-1/actions/runs/123
 16. Если `merge` в `main` уже выполнен для code/release stream, рекомендуемый вариант — `1. Ручной production deploy`.
 17. Если ручной production deploy уже выполнен для code/release stream, рекомендуемый вариант — `1. Production Post-Deploy Smoke`.
 18. Если production smoke закрыт успешно, но production-результат или риск ещё не принят, рекомендуемый вариант — `1. Пользователь или оператор принимает production-результат или риск`.
-19. Если production-результат принят и в `Связанные задачи` указаны `#NNN`, рекомендуемый вариант — `1. Агент сверяет все связанные Issues; пользователь по каждой решает: закрыть или оставить открытой`. При `Связанные задачи: не требуется` checkpoint получает `Issue Closure: not_required`.
-20. Если `Issue Closure` имеет состояние `completed` или `not_required`, но применимый `Spec Closure` ещё не закрыт, рекомендуемый вариант — `1. Выполнить Spec Closure`. Если внешний Spec неприменим, фиксируется `Spec Closure: not_required` с причиной.
-21. После `Issue Closure: completed | not_required` и `Spec Closure: completed | not_required` рекомендуемый вариант — `1. Cleanup`. До cleanup запрещён новый code implementation step; допустим только docs-only/spec/admin follow-up без runtime/code diff.
+19. Если docs/process PR смержен, но merged result не проверен, рекомендуемый вариант — `1. Агент проверяет merged result`.
+20. Если основание закрытия выполнено, а `Issue Closure` pending, рекомендуемый вариант — `1. Пройти Issue Closure Checklist`.
+21. Если `Issue Closure: completed | not_required`, а `Spec Closure` pending, рекомендуемый вариант — `1. Пройти Spec Closure Checklist`.
+22. Если оба closure-checkpoint закрыты, а cleanup pending, рекомендуемый вариант — `1. Cleanup`. До него допустим только docs-only/spec/admin follow-up без runtime/code diff.
 
 Если вердикт агента по review — `нужны правки`, следующим шагом считается
 исправление в текущем scope. Агент не переводит PR обратно в draft и не меняет
@@ -827,20 +830,16 @@ Stream считается полностью закрытым только ко�
 
 ### Issue Closure Checklist
 
-Checkpoint начинается после принятия production-результата/риска для code/release
-и после проверки merged result для docs/process.
+Основание закрытия: принятый production-результат/риск для code/release либо
+проверенный merged result для docs/process.
 
 1. `Связанные задачи: не требуется` даёт `Issue Closure: not_required`.
-2. Для `#NNN` или `#NNN, #MMM` агент сверяет актуальное состояние каждой Issue с
-   принятым результатом.
-3. Пользователь решает и выполняет действие; close/reopen Issue агент не делает.
-4. На merged PR пользователь публикует одну запись: `Issue Closure: completed`
-   и по каждой Issue ровно одну строку `Issue #NNN: closed | left_open`.
-5. `closed` должно совпадать с CLOSED, `left_open` — с OPEN и создаёт
-   `issue/admin tail`.
-
-Без полной записи или при расхождении live-состояния `Issue Closure` остаётся
-pending. Завершённый `left_open` не блокирует `Spec Closure` и cleanup.
+2. Для `#NNN` агент сверяет каждую live Issue с основанием закрытия.
+3. Пользователь выполняет close/reopen и публикует на merged PR
+   `Issue Closure: completed` плюс по одной строке
+   `Issue #NNN: closed | left_open`.
+4. Record должен совпадать с live-состоянием; иначе checkpoint pending.
+   `left_open` создаёт `issue/admin tail`, но не блокирует следующий checkpoint.
 
 ### Spec Closure Checklist
 

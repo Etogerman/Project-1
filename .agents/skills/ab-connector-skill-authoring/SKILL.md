@@ -40,10 +40,9 @@ Use this skill to design focused repo-scoped skills for AB Connector. Keep the w
    - New code/runtime streams are staging-first after local MVP and operator decision.
    - Docs-only/policy-only skills may use the docs-only path from clean `origin/main`.
    - Skills must not create shortcuts around Spec repo, Spec doc, Spec revision, PR checkpoints, CI, ready, merge, deploy, or smoke gates.
-   - If a skill describes PR handoff, it must label `merge` in `staging` or `main` as user-performed; Codex only verifies before/after, follows the applicable post-merge checkpoints, and handles cleanup only after the required closure checkpoints.
-   - If a skill describes post-merge or post-deploy flow, it must preserve the ordered route: accepted result -> `Issue Closure` -> applicable `Spec Closure` -> cleanup. A non-applicable Spec requires the exact merged-PR `not_required` record from `docs/task-delivery-workflow.md`.
-   - The skill must treat `Связанные задачи: не требуется` as `Issue Closure: not_required`; for `#NNN`, require the exact merged-PR closure record from `docs/task-delivery-workflow.md`. Codex reconciles evidence, and `left_open` becomes `issue/admin tail`.
-   - Closing or reopening a GitHub Issue is user-performed; a skill must not assign that control action to Codex.
+   - PR handoff keeps `merge` user-performed; Codex verifies before/after and permits cleanup only after both closure checkpoints.
+   - Closure basis: accepted production result/risk for code/release; verified merged result for docs/process. Then preserve `Issue Closure` -> applicable `Spec Closure` -> cleanup and the exact records from `docs/task-delivery-workflow.md`.
+   - `не требуется` gives `Issue Closure: not_required`; `#NNN` requires the exact merged-PR record, and `left_open` creates `issue/admin tail`. Close/reopen Issue is user-performed.
    - If a skill could touch Bitrix24, Open Lines, Telegram, MAX, queues, scheduler, env, config, or runtime, classify it as code/runtime unless proven otherwise.
 
 6. Write the files.
