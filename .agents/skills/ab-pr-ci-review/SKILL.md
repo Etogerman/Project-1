@@ -95,10 +95,11 @@ checkpoint строится по delivery rules, CI/review status и полям 
 
 ### Свежесть pre-merge evidence
 
-Перед `готово к merge` одним live snapshot собери CI, review bodies/comments,
-все страницы `reviewThreads` / `closingIssuesReferences(userLinkedOnly: false)`
-и commits; зафиксируй `checkedAt/headRefOid/body.updatedAt/Issue numbers/commit
-SHAs`. Closing evidence или последующее изменение PR блокирует verdict.
+Перед `готово к merge` одним live snapshot собери CI, review submissions/bodies,
+inline review comments, PR issue comments, все страницы `reviewThreads`,
+`closingIssuesReferences(userLinkedOnly: false)` и commits; зафиксируй
+`checkedAt/headRefOid/body.updatedAt/Issue numbers/commit SHAs`. Closing evidence
+или последующее изменение PR блокирует verdict.
 
 ## Обязательные правила
 

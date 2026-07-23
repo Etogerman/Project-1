@@ -154,8 +154,9 @@ export function analyzePrematureIssueClosing({ closingIssueReferences = [], comm
   };
 }
 
-export async function collectClosingIssueReferences(loadPage) {
-  const references = [];
+async function collectConnectionNodes(loadPage, isValidNode, label) {
+  const nodes = [];
+  const seenCursors = new Set();
   let cursor = null;
 
   for (;;) {
@@ -164,19 +165,42 @@ export async function collectClosingIssueReferences(loadPage) {
     if (
       !connection
       || !Array.isArray(connection.nodes)
-      || connection.nodes.some((reference) => !reference || !Number.isSafeInteger(reference.number))
+      || connection.nodes.some((node) => !isValidNode(node))
       || !connection.pageInfo
-    ) throw new Error("GitHub closingIssuesReferences returned incomplete data.");
+      || typeof connection.pageInfo.hasNextPage !== "boolean"
+    ) throw new Error(`${label} returned incomplete data.`);
 
-    references.push(...connection.nodes);
+    nodes.push(...connection.nodes);
 
-    if (!connection.pageInfo.hasNextPage) return references;
-    if (!connection.pageInfo.endCursor || connection.pageInfo.endCursor === cursor) {
-      throw new Error("GitHub closingIssuesReferences pagination did not advance.");
+    if (!connection.pageInfo.hasNextPage) return nodes;
+    if (!connection.pageInfo.endCursor || seenCursors.has(connection.pageInfo.endCursor)) {
+      throw new Error(`${label} pagination did not advance.`);
     }
 
+    seenCursors.add(connection.pageInfo.endCursor);
     cursor = connection.pageInfo.endCursor;
   }
+}
+
+export function collectClosingIssueReferences(loadPage) {
+  return collectConnectionNodes(
+    loadPage,
+    (reference) => reference && Number.isSafeInteger(reference.number),
+    "GitHub closingIssuesReferences",
+  );
+}
+
+export function collectPullRequestCommits(loadPage) {
+  return collectConnectionNodes(
+    loadPage,
+    (node) => (
+      node?.commit
+      && typeof node.commit.oid === "string"
+      && node.commit.oid !== ""
+      && typeof node.commit.message === "string"
+    ),
+    "GitHub pull request commits",
+  );
 }
 
 export function formatIssueNumbers(issueNumbers) {

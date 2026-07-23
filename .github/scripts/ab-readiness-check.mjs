@@ -8,6 +8,7 @@ import {
   analyzePullRequestBodyContract,
   analyzePrematureIssueClosing,
   collectClosingIssueReferences,
+  collectPullRequestCommits,
   SPEC_PR_BODY_FIELDS,
 } from "./lib/pr-body-contract.mjs";
 
@@ -352,23 +353,26 @@ async function listPullRequestClosingIssueReferences({ owner, repo, pullNumber, 
 }
 
 async function listPullRequestCommits({ owner, repo, pullNumber, token }) {
-  const commits = [];
-
-  for (let page = 1; ; page += 1) {
-    const batch = await githubRequest(
-      `/repos/${owner}/${repo}/pulls/${pullNumber}/commits?per_page=100&page=${page}`,
+  const query = `query PullRequestCommits($owner:String!,$repo:String!,$pullNumber:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$pullNumber){commits(first:100,after:$after){nodes{commit{oid message}}pageInfo{hasNextPage endCursor}}}}}`;
+  const nodes = await collectPullRequestCommits(async (after) => {
+    const data = await githubGraphqlRequest({
+      query,
+      variables: { owner, repo, pullNumber, after },
       token,
-    );
+    });
+    const pullRequest = data?.repository?.pullRequest;
 
-    commits.push(...batch.map((commit) => ({
-      sha: commit.sha || "unknown",
-      message: commit.commit?.message || "",
-    })));
-
-    if (batch.length < 100) {
-      return commits;
+    if (!pullRequest) {
+      throw new Error(`GitHub GraphQL did not return PR #${pullNumber}.`);
     }
-  }
+
+    return pullRequest.commits;
+  });
+
+  return nodes.map(({ commit }) => ({
+    sha: commit.oid,
+    message: commit.message,
+  }));
 }
 
 async function listPullRequestFiles({ owner, repo, pullNumber, token }) {

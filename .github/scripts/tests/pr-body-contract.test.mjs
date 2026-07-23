@@ -4,8 +4,8 @@ import test from "node:test";
 import { analyzeMarkdown, restoreInlineCodeTokens } from "../lib/markdown-visibility.mjs";
 import {
   analyzePullRequestBodyContract, analyzePrematureIssueClosing, collectClosingIssueReferences,
-  findCommitClosingCommands, ISSUE_LINKAGE_DOCUMENTATION_LINES, parseLinkedIssuesFromBody,
-  PR_BODY_FIELD_DEFINITIONS,
+  collectPullRequestCommits, findCommitClosingCommands, ISSUE_LINKAGE_DOCUMENTATION_LINES,
+  parseLinkedIssuesFromBody, PR_BODY_FIELD_DEFINITIONS,
 } from "../lib/pr-body-contract.mjs";
 
 const linkedBody = (issues, basis) => (
@@ -40,7 +40,10 @@ test("PR body contract matrix", async () => {
     linkedBody("#0", "причина"), linkedBody("#708,#712", "причина"),
     linkedBody("Closes #708", "причина"), linkedBody("не требуется", "обсуждение"),
     linkedBody("`#708"), linkedBody("#708`"), `${linkedBody("#708", "причина")}\nСвязанные задачи: #712`,
-    `\`\`\`text\n${linkedBody("#708")}`, `    ${linkedBody("#708")}`,
+    `\`\`${linkedBody("#708")}\`\``, `\`\`\`text\n${linkedBody("#708")}`,
+    `~~~text\n${linkedBody("#708")}`,
+    `\`\`\`text\`x\n${linkedBody("не требуется")}\nСвязанные задачи: #708`,
+    `    ${linkedBody("#708")}`,
     `<!--\n${linkedBody("#708")}`, `> ${linkedBody("#708")}`,
   ]) assert.equal(parseLinkedIssuesFromBody(body).valid, false, body);
   for (const message of [
@@ -55,9 +58,32 @@ test("PR body contract matrix", async () => {
     ? { nodes: [{ number: 708 }], pageInfo: { hasNextPage: true, endCursor: "next" } }
     : { nodes: [{ number: 712 }], pageInfo: { hasNextPage: false, endCursor: "next" } }));
   assert.deepEqual(references.map(({ number }) => number), [708, 712]);
+  const commits = await collectPullRequestCommits(async (cursor) => (cursor === null
+    ? {
+        nodes: [{ commit: { oid: "first", message: "Обычный commit" } }],
+        pageInfo: { hasNextPage: true, endCursor: "next" },
+      }
+    : {
+        nodes: [{ commit: { oid: "last", message: "Closes #708" } }],
+        pageInfo: { hasNextPage: false, endCursor: "next" },
+      }));
+  assert.deepEqual(
+    commits.map(({ commit }) => [commit.oid, commit.message]),
+    [["first", "Обычный commit"], ["last", "Closes #708"]],
+  );
   await assert.rejects(collectClosingIssueReferences(async () => ({ nodes: [], pageInfo: { hasNextPage: true, endCursor: null } })), /did not advance/);
+  await assert.rejects(collectClosingIssueReferences(async (cursor) => ({
+    nodes: [],
+    pageInfo: { hasNextPage: true, endCursor: cursor === null ? "first" : cursor === "first" ? "second" : "first" },
+  })), /did not advance/);
   await assert.rejects(collectClosingIssueReferences(async () => ({ nodes: [null], pageInfo: { hasNextPage: false } })), /incomplete/);
+  await assert.rejects(collectClosingIssueReferences(async () => ({ nodes: [], pageInfo: {} })), /incomplete/);
   await assert.rejects(collectClosingIssueReferences(async () => { throw new Error("offline"); }), /offline/);
+  await assert.rejects(collectPullRequestCommits(async () => ({ nodes: [null], pageInfo: { hasNextPage: false } })), /incomplete/);
+  await assert.rejects(collectPullRequestCommits(async () => ({
+    nodes: [],
+    pageInfo: { hasNextPage: "false", endCursor: null },
+  })), /incomplete/);
 });
 
 test("agent documentation follows the executable issue linkage contract", async () => {
