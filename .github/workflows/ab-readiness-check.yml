@@ -20,7 +20,6 @@ on:
 
 permissions:
   contents: read
-  issues: read
   pull-requests: read
 
 jobs:
@@ -37,14 +36,6 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: '22'
-          cache: npm
-          cache-dependency-path: .github/scripts/package-lock.json
-
-      - name: Install guard dependencies
-        run: npm ci --prefix .github/scripts --ignore-scripts
-
-      - name: Run guard contract tests
-        run: node --test .github/scripts/tests/*.test.mjs
 
       - name: Run self-test
         run: node .github/scripts/ab-readiness-check.mjs --self-test

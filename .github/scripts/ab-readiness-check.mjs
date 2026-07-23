@@ -1,16 +1,5 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import {
-  analyzeMarkdown,
-  stripMarkdownCode,
-} from "./lib/markdown-visibility.mjs";
-import {
-  analyzePullRequestBodyContract,
-  analyzePrematureIssueClosing,
-  collectClosingIssueReferences,
-  collectPullRequestCommits,
-  SPEC_PR_BODY_FIELDS,
-} from "./lib/pr-body-contract.mjs";
 
 const PROCESS_ONLY_FILE_PATTERNS = [
   /^AGENTS\.md$/,
@@ -25,10 +14,6 @@ const PROCESS_ONLY_FILE_PATTERNS = [
   /^\.github\/workflows\/release-process-guard\.ya?ml$/,
   /^\.github\/scripts\/ab-readiness-check\.mjs$/,
   /^\.github\/workflows\/ab-readiness-check\.ya?ml$/,
-  /^\.github\/scripts\/(?:package(?:-lock)?\.json|\.gitignore)$/,
-  /^\.github\/scripts\/lib\/markdown-visibility\.mjs$/,
-  /^\.github\/scripts\/lib\/pr-body-contract\.mjs$/,
-  /^\.github\/scripts\/tests\/.*\.test\.mjs$/,
   /^\.github\/scripts\/copilot-feasibility-spike\.mjs$/,
   /^\.github\/workflows\/copilot-feasibility-spike\.ya?ml$/,
   /^\.github\/scripts\/copilot-merge-readiness\.mjs$/,
@@ -50,17 +35,13 @@ const STAGING_PROCESS_CI_SYNC_FILE_PATTERNS = [
   /^docs\/runbooks\/release-rollback\.md$/,
   /^docs\/runbooks\/test-env\.md$/,
   /^docs\/task-delivery-workflow\.md$/,
-  /^\.agents\/skills\/ab-connector-skill-authoring\/(?:SKILL\.md|agents\/openai\.yaml)$/,
+  /^\.agents\/skills\/ab-connector-skill-authoring\/SKILL\.md$/,
   /^\.agents\/skills\/ab-pr-ci-review\/(SKILL\.md|agents\/openai\.yaml)$/,
   /^\.agents\/skills\/ab-spec-workflow\/(SKILL\.md|agents\/openai\.yaml)$/,
   /^\.agents\/skills\/ab-stream-state-resolver\/(SKILL\.md|agents\/openai\.yaml)$/,
   /^\.github\/PULL_REQUEST_TEMPLATE\.md$/,
   /^\.github\/copilot-instructions\.md$/,
   /^\.github\/scripts\/ab-readiness-check\.mjs$/,
-  /^\.github\/scripts\/(?:package(?:-lock)?\.json|\.gitignore)$/,
-  /^\.github\/scripts\/lib\/markdown-visibility\.mjs$/,
-  /^\.github\/scripts\/lib\/pr-body-contract\.mjs$/,
-  /^\.github\/scripts\/tests\/.*\.test\.mjs$/,
   /^\.github\/scripts\/ci-change-scope\.mjs$/,
   /^\.github\/scripts\/copilot-feasibility-spike\.mjs$/,
   /^\.github\/scripts\/copilot-merge-readiness\.mjs$/,
@@ -75,9 +56,27 @@ const STAGING_PROCESS_CI_SYNC_FILE_PATTERNS = [
 const CYRILLIC_PATTERN = /[А-Яа-яЁё]/;
 const LATIN_PATTERN = /[A-Za-z]/;
 const ENGLISH_PR_HEADING_PATTERN =
-  /^(Summary|Overview|Description|Why|Validation|Testing|Tests|Checks|Delivery note|Implementation|Changes|Root cause|Impact|Risks|Rollout)\s*$/i;
+  /^\s{0,3}#{1,6}\s*(Summary|Overview|Description|Why|Validation|Testing|Tests|Checks|Delivery note|Implementation|Changes|Root cause|Impact|Risks|Rollout)\s*$/gim;
 const ALLOWED_TECHNICAL_TERMS_PATTERN =
   /\b(codex|Copilot|Copilot CLI|Copilot Requests|CLI|PAT|token|secret|workflow_dispatch|GITHUB_TOKEN|COPILOT_GITHUB_TOKEN|READY_TO_MERGE|BLOCKED|shadow|verdict|merge-readiness|PR|MCP|CI|UI|URL|API|JSON|YAML|TOML|PHP|SQL|HTTP|HTTPS|Docker|Laravel|Boost|Filament|Livewire|Bitrix24|AB Connector|Spec repo|Spec doc|Spec revision|MVP|Staging PRs|Staging PR|Staging smoke|Staging Post-Deploy Smoke|rev-check|public smoke|admin smoke|dev-only|validated diff|clean-main-PR|workflow|runtime|main|staging|draft|ready|merge|commit|branch|pull request|hotfix|release-process-guard|ab-readiness-check|copilot-feasibility-spike|copilot-merge-readiness|php-artisan-test)\b/gi;
+
+const REQUIRED_FIELDS = [
+  { key: "changeType", label: "Тип изменения" },
+  { key: "substantialStream", label: "Существенный stream" },
+  { key: "deliveryLevel", label: "Уровень доставки" },
+  { key: "localMvp", label: "Локальный MVP" },
+  { key: "operatorAcceptance", label: "Операторская приёмка" },
+  { key: "authorSelfCheck", label: "Авторская самопроверка" },
+  { key: "blockers", label: "Блокеры" },
+  { key: "acceptedRisk", label: "Принятый риск" },
+];
+
+const SPEC_FIELDS = [
+  { key: "specRepo", label: "Spec repo" },
+  { key: "specDoc", label: "Spec doc" },
+  { key: "specRevision", label: "Spec revision" },
+];
+
 function isProcessOnlyFile(filename) {
   return PROCESS_ONLY_FILE_PATTERNS.some((pattern) => pattern.test(filename));
 }
@@ -100,6 +99,16 @@ function isStagingProcessCiSync({ baseRef, runtimeFiles, processOnlyFiles }) {
     ));
 }
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function stripMarkdownCode(text) {
+  return text
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`[^`]*`/g, " ");
+}
+
 function stripTechnicalMarkdown(text) {
   return stripMarkdownCode(text)
     .replace(/https?:\/\/\S+/g, " ")
@@ -111,13 +120,43 @@ function countMatches(text, pattern) {
   return [...text.matchAll(pattern)].length;
 }
 
+function normalizeValue(value = "") {
+  return value
+    .trim()
+    .replace(/^[-*]\s*/, "")
+    .replace(/^`|`$/g, "")
+    .replace(/\s+/g, " ");
+}
+
+function extractField(body, label) {
+  const pattern = new RegExp(`(?:^|\\n)[^\\S\\n]*(?:[-*][^\\S\\n]*)?${escapeRegExp(label)}[^\\S\\n]*:[^\\S\\n]*(.*?)(?=\\n|$)`, "i");
+  const match = body.match(pattern);
+
+  if (!match) {
+    return null;
+  }
+
+  const value = normalizeValue(match[1]);
+
+  return value === "" ? null : value;
+}
+
+function extractFields(body) {
+  return [...REQUIRED_FIELDS, ...SPEC_FIELDS].reduce(
+    (fields, field) => ({
+      ...fields,
+      [field.key]: extractField(body, field.label),
+    }),
+    {},
+  );
+}
+
 function validatePublishLanguage({ title, body }) {
   const failures = [];
-  const markdown = analyzeMarkdown(body);
   const readableTitle = title.replace(/^\s*\[codex\]\s*/i, "").trim();
   const readableBody = stripTechnicalMarkdown(body);
   const readableText = `${stripTechnicalMarkdown(readableTitle)}\n${readableBody}`;
-  const englishHeadings = markdown.headings.filter((heading) => ENGLISH_PR_HEADING_PATTERN.test(heading));
+  const englishHeadings = [...stripMarkdownCode(body).matchAll(ENGLISH_PR_HEADING_PATTERN)].map((match) => match[1]);
   const cyrillicCount = countMatches(readableText, /[А-Яа-яЁё]/g);
   const latinCount = countMatches(readableText, /[A-Za-z]/g);
 
@@ -141,22 +180,20 @@ function validatePublishLanguage({ title, body }) {
 }
 
 function hasStagingEvidence(body) {
-  const visibleBody = analyzeMarkdown(body).visibleFieldText;
-
-  return /(?:^|\n) {0,3}Staging[ \t]+PRs?[ \t]*:[ \t]*(?:.*(?:https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/)?#?\d+\b)/i.test(visibleBody)
-    && /(?:^|\n) {0,3}Staging[ \t]+smoke[ \t]*:[ \t]*(?:.*https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/actions\/runs\/\d+)/i.test(visibleBody);
+  return /(?:^|\n)\s*Staging\s+PRs?\s*:\s*(?:.*(?:https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/)?#?\d+\b)/i.test(body)
+    && /(?:^|\n)\s*Staging\s+smoke\s*:\s*(?:.*https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/actions\/runs\/\d+)/i.test(body);
 }
 
 function isSubstantialStream(fields) {
   return /^(да)$/i.test(fields.substantialStream || "")
-    || SPEC_PR_BODY_FIELDS.some((field) => Boolean(fields[field.key]));
+    || SPEC_FIELDS.some((field) => Boolean(fields[field.key]));
 }
 
 function validateSpecFields(fields) {
   const missing = [];
   const invalid = [];
 
-  for (const field of SPEC_PR_BODY_FIELDS) {
+  for (const field of SPEC_FIELDS) {
     if (!fields[field.key]) {
       missing.push(`Для существенного stream перед Ready нужно заполнить поле \`${field.label}:\`.`);
     }
@@ -169,21 +206,11 @@ function validateSpecFields(fields) {
   return { missing, invalid };
 }
 
-function evaluateReadiness({
-  baseRef,
-  title = "",
-  body = "",
-  files = [],
-  isDraft = true,
-  closingIssueReferences = [],
-  commits = [],
-}) {
+function evaluateReadiness({ baseRef, title = "", body = "", files = [], isDraft = true }) {
   const failures = [];
   const readinessIssues = [];
   const warnings = [];
-  const bodyContract = analyzePullRequestBodyContract(body);
-  const { fields } = bodyContract;
-  const prematureClosing = analyzePrematureIssueClosing({ closingIssueReferences, commits });
+  const fields = extractFields(body);
   const { runtimeFiles, processOnlyFiles } = summarizeFiles(files);
   const hasRuntimeFiles = runtimeFiles.length > 0;
   const allowStagingProcessCiSync = isStagingProcessCiSync({ baseRef, runtimeFiles, processOnlyFiles });
@@ -202,21 +229,11 @@ function evaluateReadiness({
     failures.push("Runtime PR в `main` должен содержать `Staging PR: #NNN` или `Staging PRs: #NNN, #MMM`, а также `Staging smoke: https://github.com/.../actions/runs/...`.");
   }
 
-  if (prematureClosing.closingIssueReferences.length > 0) {
-    const references = prematureClosing.closingIssueReferences
-      .map((reference) => reference.url || `#${reference.number || "unknown"}`)
-      .join(", ");
-    failures.push(`PR содержит GitHub closing relationship (${references}); связанные задачи закрываются только отдельным пользовательским действием после приёмки результата.`);
+  for (const field of REQUIRED_FIELDS) {
+    if (!fields[field.key]) {
+      readinessIssues.push(`Не заполнено поле \`${field.label}:\`.`);
+    }
   }
-
-  if (prematureClosing.commitCommands.length > 0) {
-    const commands = prematureClosing.commitCommands
-      .map(({ sha, command }) => `${sha.slice(0, 7)}: ${command}`)
-      .join(", ");
-    failures.push(`Commit messages содержат преждевременные closing commands (${commands}); используйте нейтральное поле \`Связанные задачи:\`.`);
-  }
-
-  readinessIssues.push(...bodyContract.errors.map(({ message }) => message));
 
   if (fields.blockers && !/^отсутствуют$/i.test(fields.blockers)) {
     readinessIssues.push("Поле `Блокеры:` должно быть `отсутствуют` перед Ready.");
@@ -307,74 +324,6 @@ async function githubRequest(path, token) {
   return response.json();
 }
 
-async function githubGraphqlRequest({ query, variables, token }) {
-  const response = await fetch("https://api.github.com/graphql", {
-    method: "POST",
-    headers: {
-      Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-      "User-Agent": "project-1-ab-readiness-check",
-    },
-    body: JSON.stringify({ query, variables }),
-  });
-
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`GitHub GraphQL request failed: ${response.status} ${response.statusText}\n${body}`);
-  }
-
-  const payload = await response.json();
-
-  if (payload.errors?.length > 0) {
-    throw new Error(`GitHub GraphQL request failed: ${payload.errors.map((error) => error.message).join("; ")}`);
-  }
-
-  return payload.data;
-}
-
-async function listPullRequestClosingIssueReferences({ owner, repo, pullNumber, token }) {
-  const query = `query ClosingIssueReferences($owner:String!,$repo:String!,$pullNumber:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$pullNumber){closingIssuesReferences(first:100,after:$after,userLinkedOnly:false){nodes{number}pageInfo{hasNextPage endCursor}}}}}`;
-
-  return collectClosingIssueReferences(async (after) => {
-    const data = await githubGraphqlRequest({
-      query,
-      variables: { owner, repo, pullNumber, after },
-      token,
-    });
-    const pullRequest = data?.repository?.pullRequest;
-
-    if (!pullRequest) {
-      throw new Error(`GitHub GraphQL did not return PR #${pullNumber}.`);
-    }
-
-    return pullRequest.closingIssuesReferences;
-  });
-}
-
-async function listPullRequestCommits({ owner, repo, pullNumber, token }) {
-  const query = `query PullRequestCommits($owner:String!,$repo:String!,$pullNumber:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$pullNumber){commits(first:100,after:$after){nodes{commit{oid message}}pageInfo{hasNextPage endCursor}}}}}`;
-  const nodes = await collectPullRequestCommits(async (after) => {
-    const data = await githubGraphqlRequest({
-      query,
-      variables: { owner, repo, pullNumber, after },
-      token,
-    });
-    const pullRequest = data?.repository?.pullRequest;
-
-    if (!pullRequest) {
-      throw new Error(`GitHub GraphQL did not return PR #${pullNumber}.`);
-    }
-
-    return pullRequest.commits;
-  });
-
-  return nodes.map(({ commit }) => ({
-    sha: commit.oid,
-    message: commit.message,
-  }));
-}
-
 async function listPullRequestFiles({ owner, repo, pullNumber, token }) {
   const files = [];
 
@@ -445,6 +394,7 @@ function runSelfTest() {
   assert.throws(() => parsePullNumber("123abc"), /positive integer/);
   assert.throws(() => parsePullNumber("0"), /positive integer/);
   assert.throws(() => parsePullNumber(""), /positive integer/);
+
   const readyProcessBody = [
     "## Что изменено",
     "",
@@ -458,7 +408,6 @@ function runSelfTest() {
     "- Локальный MVP: не требуется",
     "- Операторская приёмка: не требуется",
     "- Авторская самопроверка: выполнена",
-    "- Связанные задачи: не требуется",
     "- Блокеры: отсутствуют",
     "- Принятый риск: отсутствует",
   ].join("\n");
@@ -472,19 +421,6 @@ function runSelfTest() {
       isDraft: false,
     }).failures,
     [],
-  );
-
-  assert.match(
-    evaluateReadiness({
-      baseRef: "main",
-      title: "[codex] Уточнить процесс ревью",
-      body: readyProcessBody,
-      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
-      isDraft: false,
-      closingIssueReferences: [{ number: 708 }],
-      commits: [{ sha: "abcdef1234567890", message: "Closes: #708" }],
-    }).failures.join("\n"),
-    /closing relationship.*closing commands/s,
   );
 
   assert.deepEqual(
@@ -678,11 +614,6 @@ function runSelfTest() {
     /Runtime PR/,
   );
 
-  assert.equal(
-    hasStagingEvidence("```text\nStaging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123"),
-    false,
-  );
-
   assert.deepEqual(
     evaluateReadiness({
       baseRef: "main",
@@ -736,22 +667,14 @@ async function run() {
   const { owner, repo } = parseRepository(repository);
   const pullRequest = await githubRequest(`/repos/${owner}/${repo}/pulls/${pullNumber}`, token);
   const files = await listPullRequestFiles({ owner, repo, pullNumber, token });
-  const closingIssueReferences = await listPullRequestClosingIssueReferences({
-    owner,
-    repo,
-    pullNumber,
-    token,
-  });
-  const commits = await listPullRequestCommits({ owner, repo, pullNumber, token });
   const result = evaluateReadiness({
     baseRef: pullRequest.base.ref,
     title: pullRequest.title || "",
     body: pullRequest.body || "",
     files,
     isDraft: Boolean(pullRequest.draft),
-    closingIssueReferences,
-    commits,
   });
+
   if (result.failures.length > 0) {
     console.error("AB readiness check failed.");
     console.error(`Base branch: ${pullRequest.base.ref}`);

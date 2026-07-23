@@ -73,7 +73,7 @@ GitHub или `gh`. Детальную проверку PR, CI, review, PR body 
 передавай в `ab-pr-ci-review`, если этот skill активен.
 
 Не создавай, не редактируй, не переводи в ready, не merge, не закрывай и не
-комментируй PR из этого skill.
+комментируй PR или Issue из этого skill.
 
 Не используй `git add`, `git commit`, `git push` и другие команды, которые
 меняют файлы, git-состояние, PR или внешние системы.
@@ -109,6 +109,10 @@ integration/runtime или release контуром, пока не доказа�
   review или пользовательский merge;
 - staging/main/release follow-up;
 - production deploy или smoke follow-up;
+- принятый результат без завершённого `Issue Closure` или применимого
+  `Spec Closure`;
+- `issue/admin tail`: связанная Issue, которую пользователь решил оставить
+  открытой после принятия результата;
 - branch hygiene tail: слитая удалённая или локальная ветка, stale worktree или
   локальная ветка без upstream;
 - spec/admin tail во внешнем репозитории документации;
@@ -128,7 +132,9 @@ integration/runtime или release контуром, пока не доказа�
 5. статус локального MVP, если применимо;
 6. статус операторской приёмки, если применимо;
 7. нужны ли сейчас Spec repo / Spec doc / Spec revision;
-8. требует ли следующий шаг отдельной команды пользователя.
+8. состояния `Issue Closure` и применимого `Spec Closure`, если stream уже дошёл
+   до post-acceptance checkpoint;
+9. требует ли следующий шаг отдельной команды пользователя.
 
 Не выводи следующий delivery-шаг только из топологии веток.
 
@@ -153,9 +159,18 @@ merge`. Агент может проверять до или после поль
 
 GitHub-контрольные действия выполняет пользователь: пользовательский перевод PR в
 ready, пользовательский перевод PR обратно в draft, пользовательский merge,
-close/reopen PR, approve/request changes, GitHub deploy/promote, environment
+close/reopen PR или Issue, approve/request changes, GitHub deploy/promote, environment
 approval, branch protection, required checks и secrets. Агент не предлагает себя
 исполнителем таких действий и в меню указывает пользователя.
+
+После успешного production smoke для code/release stream следующим шагом является
+принятие production-результата, затем `Issue Closure`, применимый `Spec Closure`
+и cleanup. Для docs/process stream тот же closure-route начинается после merge и
+проверки результата. При `Связанные задачи: не требуется` фиксируется
+`Issue Closure: not_required`; при нескольких Issues пользователь принимает
+решение по каждой. Оставленная открытой Issue становится `issue/admin tail` и не
+исчезает из отчёта. Если `Spec Closure` неприменим, фиксируется явное
+`Spec Closure: not_required` с причиной.
 
 Исключение branch cleanup: после явной команды пользователя агент может удалить
 remote head branch уже слитого PR, если проверил `MERGED`, соответствие branch
@@ -181,6 +196,7 @@ blocker. PR, закрытый без merge, считается blocker-ом bran
 - текущий delivery level;
 - execution ceiling;
 - blockers или недостающие факты;
+- `Issue Closure` / `Spec Closure` status, если применимо;
 - следующий правильный шаг;
 - требуется ли решение пользователя.
 

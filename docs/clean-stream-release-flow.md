@@ -38,6 +38,8 @@
 - staging smoke завершён, но тот же validated diff ещё не проведён отдельным PR в `main`
 - смерженный PR в `main`, который ещё не выкачен в production, если production входит в release flow
 - завершившийся production deploy без закрытого production smoke-check
+- успешный production smoke без принятого production-результата
+- принятый результат без `Issue Closure` или применимого `Spec Closure`
 - незакрытый branch hygiene tail: merged remote/local ветки, stale worktree или локальные ветки без upstream, не классифицированные как допустимый остаток
 
 Пока такой хвост существует, допустимы только четыре действия:
@@ -53,8 +55,10 @@
 1. проверить, есть ли активный PR по предыдущему шагу
 2. проверить, есть ли незавершённый staging deploy или staging smoke
 3. проверить, есть ли незавершённый production deploy или production smoke
-4. проверить branch hygiene tail: merged remote/local ветки, stale worktree и локальные ветки без upstream
-5. если хвост найден, остановить новую реализацию и явно сообщить об этом
+4. проверить принятие production-результата, `Issue Closure` и применимый
+   `Spec Closure`
+5. проверить branch hygiene tail: merged remote/local ветки, stale worktree и локальные ветки без upstream
+6. если хвост найден, остановить новую реализацию и явно сообщить об этом
    пользователю
 
 Переход к следующему code implementation step разрешён только если branch hygiene
@@ -62,7 +66,10 @@ tail закрыт cleanup-ом или явно принят пользовате
 с перечислением веток, и выполнено одно из условий:
 
 - предыдущий шаг прошёл staging deploy и staging smoke, а если production входит
-  в release flow, то ещё и проведён в `main`, выкачен и проверен production smoke-check
+  в release flow, то ещё и проведён в `main`, выкачен, проверен production
+  smoke-check, принят пользователем или оператором и имеет
+  `Issue Closure: completed | not_required` и
+  `Spec Closure: completed | not_required`
 - предыдущий PR закрыт без merge
 - пользователь явно подтвердил, что предыдущий шаг отменяется или откладывается
 
@@ -176,12 +183,24 @@ scope с drift относительно `origin/main`.
 Если staging deploy уходит автоматически после push в `staging`:
 
 - релиз не считается закрытым, пока не пройден post-deploy smoke-check
+- успешный production smoke передаёт результат на пользовательское принятие, а
+  не прямо в cleanup
+- после принятия результата агент сверяет все связанные Issues, пользователь по
+  каждой решает и выполняет `закрыть` или `оставить открытой`
+- `Связанные задачи: не требуется` даёт `Issue Closure: not_required`;
+  оставленная открытой Issue становится `issue/admin tail`
+- если `Spec Closure` неприменим, фиксируется явное
+  `Spec Closure: not_required` с причиной
+- cleanup доступен только после `Issue Closure` и применимого `Spec Closure`
 - smoke-check проводится по реально рабочим окружениям текущего release flow
 - если production не автодеплоится, production smoke запускается только после
   фактического production deploy
 - automatic smoke по production без нового deploy не должен считаться
   подтверждением релиза
 - destructive maintenance-команды не запускаются просто ради проверки
+
+Для docs/process stream closure-route начинается после пользовательского merge и
+проверки результата: `Issue Closure` -> применимый `Spec Closure` -> cleanup.
 
 Подробный checklist см. в `docs/post-deploy-smoke.md`.
 
@@ -217,6 +236,10 @@ scope с drift относительно `origin/main`.
 - merge
 - deploy
 - post-deploy smoke-check
+- принятие результата
+- Issue Closure
+- применимый Spec Closure
+- cleanup
 
 Это дешевле и безопаснее, чем пытаться тащить всю mixed-ветку до конца как
 один большой пакет.

@@ -17,10 +17,6 @@ const PROCESS_ONLY_FILE_PATTERNS = [
   /^\.github\/scripts\/ci-change-scope\.mjs$/,
   /^\.github\/scripts\/release-process-guard\.mjs$/,
   /^\.github\/scripts\/ab-readiness-check\.mjs$/,
-  /^\.github\/scripts\/(?:package(?:-lock)?\.json|\.gitignore)$/,
-  /^\.github\/scripts\/lib\/markdown-visibility\.mjs$/,
-  /^\.github\/scripts\/lib\/pr-body-contract\.mjs$/,
-  /^\.github\/scripts\/tests\/.*\.test\.mjs$/,
   /^\.github\/scripts\/copilot-feasibility-spike\.mjs$/,
   /^\.github\/scripts\/copilot-merge-readiness\.mjs$/,
   /^\.github\/workflows\/php-artisan-test\.ya?ml$/,
@@ -124,12 +120,6 @@ function selfTest() {
   });
 
   assert.deepEqual(classifyFiles([".github/instructions/release.instructions.md"]), {
-    scope: "process-only",
-    runPhpTests: false,
-    reason: "only process or CI files changed",
-  });
-
-  assert.deepEqual(classifyFiles([".github/scripts/lib/markdown-visibility.mjs"]), {
     scope: "process-only",
     runPhpTests: false,
     reason: "only process or CI files changed",

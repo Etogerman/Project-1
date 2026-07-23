@@ -15,7 +15,7 @@ checkpoint, но не выполняет его.
 
 Skill не создаёт PR, не редактирует PR title/body, не комментирует PR, не
 approve, не request changes, не dismiss review, не переводит PR в ready, не делает
-merge, deploy или smoke.
+merge, deploy или smoke и не закрывает/переоткрывает Issue.
 
 Skill не меняет code diff и не меняет git-состояние.
 
@@ -28,6 +28,7 @@ Skill не меняет code diff и не меняет git-состояние.
 только по отдельной команде пользователя вне этого skill.
 
 Merge в `staging` или `main` выполняет только пользователь.
+Закрытие или переоткрытие связанной Issue выполняет только пользователь.
 
 ## Когда использовать
 
@@ -77,6 +78,7 @@ review skill разбирает comments только для техническ�
 - PR body по шаблону проекта;
 - поля готовности;
 - Spec-поля и `Spec revision`, если они присутствуют;
+- точное значение `Связанные задачи` и `Основание связи`;
 - наличие guard-полей для `main` PR после staging;
 - соответствует ли PR текущему delivery level.
 
@@ -131,6 +133,19 @@ Copilot/reviewer review считается выполненным только �
 
 PR в `staging` не включает merge в `staging`, staging smoke, PR в `main` или merge
 в `main`.
+
+## Post-merge Issue/Spec Closure
+
+По отдельной команде skill проверяет ordered route:
+
+- code/release: production smoke -> принятие результата -> `Issue Closure`;
+- docs/process: проверка merged result -> `Issue Closure`;
+- `не требуется` даёт `Issue Closure: not_required`; иначе skill сверяет каждую
+  Issue, а пользователь решает и выполняет `закрыть` / `оставить открытой`;
+- открытая Issue становится `issue/admin tail`;
+- затем идёт применимый `Spec Closure` или явное
+  `Spec Closure: not_required` с причиной; cleanup до обоих closure-checkpoint
+  недоступен.
 
 ## PR title и body
 
@@ -200,7 +215,9 @@ Staging smoke: https://github.com/.../actions/runs/...
 - вердикт агента `нужны правки` -> рекомендовать исправление в текущем scope;
 - вердикт агента `нужен выбор пользователя` -> показать риск и запросить решение пользователя;
 - review status/comments/threads или CI status недоступны либо неоднозначны -> запросить недостающие данные или решение пользователя;
-- merge выполнен пользователем -> агент может проверить результат по отдельной команде; cleanup определяется применимыми closure-gates из `docs/task-delivery-workflow.md`;
+- merge выполнен пользователем -> агент может проверить результат по отдельной
+  команде; cleanup определяется closure-route из
+  `docs/task-delivery-workflow.md`;
 - PR body невалиден -> рекомендовать отдельный шаг на исправление PR metadata,
   не исправляя metadata из этого skill.
 
@@ -215,6 +232,7 @@ Staging smoke: https://github.com/.../actions/runs/...
 - review status;
 - review verdict;
 - PR body/readiness status;
+- Issue/Spec Closure status, если PR уже дошёл до этого checkpoint;
 - текущий delivery level;
 - blockers;
 - следующий checkpoint;

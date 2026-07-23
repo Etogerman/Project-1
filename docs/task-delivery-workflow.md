@@ -576,7 +576,10 @@ Staging smoke: https://github.com/Etogerman/Project-1/actions/runs/123
 15. Если действует уровень `до merge в main`, вердикт агента по review — `готово к merge`, рекомендуемый вариант — `1. Пользователь выполняет merge в main, агент затем проверяет результат`.
 16. Если `merge` в `main` уже выполнен для code/release stream, рекомендуемый вариант — `1. Ручной production deploy`.
 17. Если ручной production deploy уже выполнен для code/release stream, рекомендуемый вариант — `1. Production Post-Deploy Smoke`.
-18. Если production smoke закрыт успешно, рекомендуемый вариант — `1. Cleanup` или `1. Следующая задача`.
+18. Если production smoke закрыт успешно, но production-результат или риск ещё не принят, рекомендуемый вариант — `1. Пользователь или оператор принимает production-результат или риск`.
+19. Если production-результат принят и в `Связанные задачи` указаны `#NNN`, рекомендуемый вариант — `1. Агент сверяет все связанные Issues; пользователь по каждой решает: закрыть или оставить открытой`. При `Связанные задачи: не требуется` checkpoint получает `Issue Closure: not_required`.
+20. Если `Issue Closure` имеет состояние `completed` или `not_required`, но применимый `Spec Closure` ещё не закрыт, рекомендуемый вариант — `1. Выполнить Spec Closure`. Если внешний Spec неприменим, фиксируется `Spec Closure: not_required` с причиной.
+21. Только если `Issue Closure` и применимый `Spec Closure` имеют состояние `completed` или `not_required`, рекомендуемый вариант — `1. Cleanup` или `1. Следующая задача`.
 
 Если вердикт агента по review — `нужны правки`, следующим шагом считается
 исправление в текущем scope. Агент не переводит PR обратно в draft и не меняет
@@ -713,6 +716,7 @@ Staging smoke: https://github.com/<owner>/<repo>/actions/runs/<run-id>
 | `через staging` | `до merge в main` |
 | `до merge в main` | `Ручной production deploy` |
 | `Ручной production deploy` | `Production Post-Deploy Smoke` |
+| `Production Post-Deploy Smoke` | `Принятие результата -> Issue Closure -> применимый Spec Closure -> Cleanup` |
 
 ## Этап 16. Dangerous ops
 
@@ -756,8 +760,11 @@ Staging smoke: https://github.com/<owner>/<repo>/actions/runs/<run-id>
 - дальше пользователь проверяет PR самостоятельно или с помощью Copilot / другого ревьюера
 - `CI` проверяет пользователь; если есть ошибки, он возвращает задачу агенту
 - финальный self-review выполняется агентом только по отдельной команде пользователя
-- `ready` и `merge` выполняет только пользователь; Copilot/reviewer review и технический вердикт агента идут после пользовательского `ready` и перед пользовательским `merge`; после merge агент проверяет результат и применимые closure-gates
-- cleanup выполняется только после применимых closure-gates
+- `ready` и `merge` выполняет только пользователь; Copilot/reviewer review и технический вердикт агента идут после пользовательского `ready` и перед пользовательским `merge`
+- после merge агент проверяет результат
+- при `Связанные задачи: #NNN, #MMM` агент сверяет все Issues, а пользователь по каждой решает `закрыть` или `оставить открытой`; при `Связанные задачи: не требуется` фиксируется `Issue Closure: not_required`
+- после `Issue Closure` выполняется применимый `Spec Closure` или фиксируется явное `Spec Closure: not_required` с причиной
+- cleanup выполняется только после обоих closure-checkpoint
 
 Отсутствие `CI` не блокирует `docs-only` path.
 
@@ -811,17 +818,37 @@ Handoff-точка — это допустимая точка остановки
 
 Stream считается полностью закрытым только когда выполнены все follow-up для того уровня, до которого он был делегирован.
 
-Для существенного stream-а полное закрытие включает `spec closure`.
+Полное закрытие включает `Issue Closure` и применимый `Spec Closure`.
 
-Нужно различать три типа хвоста:
+Нужно различать четыре типа хвоста:
 
 1. runtime/release tail: открытый PR, незавершённый `CI`, незавершённый `staging`/`main` path, deploy и smoke; это жёсткие blockers
 2. branch hygiene tail: merged remote/local ветки, stale worktree и локальные ветки без upstream; это cleanup-gate перед новым code stream-ом
-3. spec/admin tail: `Spec doc` status, `streams/README.md`, запись в `active-streams.md`, `archive pending`; это обязательные follow-up, но не отдельный rollout gate сами по себе
+3. issue/admin tail: связанная Issue, которую пользователь после принятия результата решил оставить открытой; решение по Issue принято, но сама Issue остаётся видимым follow-up
+4. spec/admin tail: `Spec doc` status, `streams/README.md`, запись в `active-streams.md`, `archive pending`; это обязательные follow-up, но не отдельный rollout gate сами по себе
+
+### Issue Closure Checklist
+
+Checkpoint начинается после принятия production-результата для code/release
+stream и после проверки merged result для docs/process stream.
+
+1. `Связанные задачи: не требуется` даёт `Issue Closure: not_required`.
+2. Для `#NNN` или `#NNN, #MMM` агент сверяет актуальное состояние каждой Issue с
+   принятым результатом.
+3. Пользователь по каждой Issue решает и выполняет `закрыть` или
+   `оставить открытой`; close/reopen Issue агент не выполняет.
+4. `Оставить открытой` завершает checkpoint по этой Issue и создаёт видимый
+   `issue/admin tail`.
+
+`Issue Closure` имеет состояние `completed`, только когда решение принято по
+каждой указанной Issue. Наличие открытого `issue/admin tail` после явного решения
+не блокирует применимый `Spec Closure` и cleanup принятого результата.
 
 ### Spec Closure Checklist
 
-Перед тем как считать существенный stream закрытым, нужно:
+После `Issue Closure: completed | not_required` для неприменимого внешнего Spec
+фиксируется `Spec Closure: not_required` с причиной. Для применимого внешнего
+Spec перед закрытием существенного stream нужно:
 
 1. сверить фактический runtime / validated diff / acceptance с внешним `Spec doc`
 2. обновить статус в самом `Spec doc`, если документ всё ещё содержит собственный статусный блок
@@ -829,13 +856,28 @@ Stream считается полностью закрытым только ко�
 4. синхронизировать внешний `active-streams.md`: оставить там только реально открытые существенные stream-ы, а закрытую запись удалить или заменить актуальной
 5. если перенос документа в `archive/` не делается в том же шаге, явно оставить документ в состоянии `implemented` с отдельным follow-up `archive pending`
 
+Запись изменений во внешний Spec repo, commit и push являются отдельными
+уровнями разрешения по `ab-spec-workflow`; завершение одного уровня не разрешает
+следующий автоматически.
+
 Статус `planned` для уже материализованного acceptance считается process-error и не является допустимым состоянием закрытия stream-а.
 Незакрытый `spec/admin tail` нужно явно перечислять перед стартом нового substantial code stream-а, но он сам по себе не запрещает unrelated `docs-only` шаг или малый локальный maintenance step.
 
-Для AB Connector `merge` в `main` остаётся только handoff-точкой для code/release stream.
-Для code/release stream хвост остаётся открытым до ручного production deploy и успешного production smoke по правилам `docs/post-deploy-smoke.md`.
-Для `docs-only` path после `merge` в `main` следующим шагом считается cleanup временных артефактов или переход к следующей задаче.
-Исключение для docs/process PR с `#NNN`: после проверки результата пользователь проходит Issue Closure checkpoint (`закрыть` / `оставить открытой`); cleanup разрешён после решения, открытая Issue становится `issue/admin tail`.
+Для AB Connector `merge` в `main` остаётся только handoff-точкой для code/release
+stream. Code/release хвост остаётся открытым до ручного production deploy,
+успешного production smoke, принятия production-результата, `Issue Closure` и
+применимого `Spec Closure`.
+
+Для docs/process path после merge агент сначала проверяет результат, затем
+проходит `Issue Closure` и применимый `Spec Closure`. Прямой переход от merge или
+проверки результата к cleanup запрещён.
+
+Cleanup разрешён, только если:
+
+```text
+issue_closure in {completed, not_required}
+&& spec_closure in {completed, not_required}
+```
 
 Результат:
 - у stream есть честная точка завершения без путаницы между локальной готовностью, `staging` и `main`.

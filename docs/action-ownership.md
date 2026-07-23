@@ -74,10 +74,27 @@ review завершён, не находится в pending/in-progress сост
 | 29 | Запустить production deploy | Только пользователь |
 | 30 | Проверить production smoke, если у агента есть доступ | Агент |
 | 31 | Принять production результат или риск | Пользователь или оператор |
-| 32 | Выполнить cleanup локальных веток/worktree | Агент |
-| 33 | Удалить remote branch после merge | GitHub auto-delete или агент после явной команды пользователя и проверок |
-| 34 | Изменить GitHub-настройки, repository rules, secrets или environments | Только пользователь |
-| 35 | Проверить, что хвост закрыт | Агент |
+| 32 | Сверить все Issues из `Связанные задачи` с принятым результатом | Агент |
+| 33 | По каждой связанной Issue решить и выполнить: закрыть или оставить открытой | Только пользователь |
+| 34 | Выполнить применимый Spec Closure или зафиксировать `Spec Closure: not_required` с причиной | Агент после отдельной команды пользователя |
+| 35 | Выполнить cleanup локальных веток/worktree | Агент |
+| 36 | Удалить remote branch после merge | GitHub auto-delete или агент после явной команды пользователя и проверок |
+| 37 | Изменить GitHub-настройки, repository rules, secrets или environments | Только пользователь |
+| 38 | Проверить, что хвост закрыт | Агент |
+
+Для docs/process path строки 32-34 выполняются после пользовательского merge и
+проверки результата. При `Связанные задачи: не требуется` агент фиксирует
+`Issue Closure: not_required`. При нескольких Issues пользователь принимает
+отдельное решение по каждой. Оставленная открытой Issue становится
+`issue/admin tail`, но решение по ней завершает checkpoint.
+
+Cleanup по строке 35 доступен только после
+`Issue Closure: completed | not_required` и
+`Spec Closure: completed | not_required`.
+
+Если применимый `Spec Closure` требует изменения внешнего Spec repo, запись
+файлов, commit и push остаются отдельными уровнями разрешения по
+`ab-spec-workflow`; одна команда не разрешает следующие уровни автоматически.
 
 Если пользователь выявил проблему CI до `ready`, он возвращает задачу агенту.
 Если агент выявил проблему guard-полей, логов или pre-ready проверки, агент
@@ -122,10 +139,11 @@ GitHub-статус. После fix commit/push поток повторяет CI
 | 2 | Перевести PR обратно в draft |
 | 3 | Выполнить merge PR |
 | 4 | Закрыть или переоткрыть PR |
-| 5 | Approve, request changes или dismiss review |
-| 6 | Нажать GitHub UI-кнопку deploy, promote, approve environment |
-| 7 | Менять branch protection, required checks или repository rules |
-| 8 | Управлять GitHub secrets и environment variables |
+| 5 | Закрыть или переоткрыть Issue |
+| 6 | Approve, request changes или dismiss review |
+| 7 | Нажать GitHub UI-кнопку deploy, promote, approve environment |
+| 8 | Менять branch protection, required checks или repository rules |
+| 9 | Управлять GitHub secrets и environment variables |
 
 Агент может читать состояние этих действий, объяснять следующий checkpoint и
 проверять результат после того, как пользователь выполнил действие.
