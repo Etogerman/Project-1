@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { analyzeMarkdown, restoreInlineCodeTokens } from "../lib/markdown-visibility.mjs";
 import {
   analyzePullRequestBodyContract, analyzePrematureIssueClosing, collectClosingIssueReferences,
-  findCommitClosingCommands, parseLinkedIssuesFromBody, PR_BODY_FIELD_DEFINITIONS,
+  findCommitClosingCommands, ISSUE_LINKAGE_DOCUMENTATION_LINES, parseLinkedIssuesFromBody,
+  PR_BODY_FIELD_DEFINITIONS,
 } from "../lib/pr-body-contract.mjs";
 
 const linkedBody = (issues, basis) => (
@@ -35,6 +37,7 @@ test("PR body contract matrix", async () => {
   ]) assert.equal(parseLinkedIssuesFromBody(body).valid, true, body);
   for (const body of [
     linkedBody("#708"), linkedBody("#708", "не требуется"), linkedBody("#708, #708", "причина"),
+    linkedBody("#0", "причина"), linkedBody("#708,#712", "причина"),
     linkedBody("Closes #708", "причина"), linkedBody("не требуется", "обсуждение"),
     linkedBody("`#708"), linkedBody("#708`"), `${linkedBody("#708", "причина")}\nСвязанные задачи: #712`,
     `\`\`\`text\n${linkedBody("#708")}`, `    ${linkedBody("#708")}`,
@@ -55,4 +58,23 @@ test("PR body contract matrix", async () => {
   await assert.rejects(collectClosingIssueReferences(async () => ({ nodes: [], pageInfo: { hasNextPage: true, endCursor: null } })), /did not advance/);
   await assert.rejects(collectClosingIssueReferences(async () => ({ nodes: [null], pageInfo: { hasNextPage: false } })), /incomplete/);
   await assert.rejects(collectClosingIssueReferences(async () => { throw new Error("offline"); }), /offline/);
+});
+
+test("agent documentation follows the executable issue linkage contract", async () => {
+  const sources = [
+    "../../../docs/task-delivery-workflow.md",
+    "../../../.agents/skills/ab-pr-ci-review/SKILL.md",
+  ];
+
+  for (const source of sources) {
+    const content = await readFile(new URL(source, import.meta.url), "utf8");
+
+    for (const line of ISSUE_LINKAGE_DOCUMENTATION_LINES) {
+      assert.equal(
+        content.split(`- ${line}`).length - 1,
+        1,
+        `${source} должен содержать одну точную строку контракта: ${line}`,
+      );
+    }
+  }
 });

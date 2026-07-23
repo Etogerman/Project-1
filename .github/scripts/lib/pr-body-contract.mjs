@@ -1,5 +1,12 @@
 import { analyzeMarkdown, restoreInlineCodeTokens } from "./markdown-visibility.mjs";
 
+const NO_LINKED_ISSUES_VALUE = "не требуется";
+
+export const ISSUE_LINKAGE_DOCUMENTATION_LINES = Object.freeze([
+  `\`Связанные задачи: ${NO_LINKED_ISSUES_VALUE} | #NNN | #NNN, #MMM\` — номера Issue должны быть положительными и уникальными; несколько номеров разделяются запятой и пробелом.`,
+  `\`Основание связи: <профильная причина>\` — обязательно при указанных Issue; при \`Связанные задачи: ${NO_LINKED_ISSUES_VALUE}\` поле должно отсутствовать, быть пустым или содержать \`${NO_LINKED_ISSUES_VALUE}\`.`,
+]);
+
 export const PR_BODY_FIELD_DEFINITIONS = [
   ["changeType", "Тип изменения", true],
   ["substantialStream", "Существенный stream", true],
@@ -19,6 +26,7 @@ export const PR_BODY_FIELD_DEFINITIONS = [
 export const SPEC_PR_BODY_FIELDS = PR_BODY_FIELD_DEFINITIONS.slice(9, 12);
 
 const LINKED_ISSUES_VALUE_PATTERN = /^#[1-9]\d*(?:, #[1-9]\d*)*$/;
+const NO_LINKED_ISSUES_VALUE_PATTERN = new RegExp(`^${NO_LINKED_ISSUES_VALUE}$`, "i");
 const CLOSING_COMMAND_SOURCE = String.raw`\b(?:close(?:s|d)?|fix(?:es|ed)?|resolve(?:s|d)?)\b[ \t]*:?[ \t]+(?:https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/issues\/[1-9]\d*|(?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?#[1-9]\d*)\b`;
 
 function error(code, field, message) {
@@ -32,7 +40,7 @@ function invalidLinkedIssues(code, message) {
 function parseLinkedIssuesValue(value) {
   const normalized = String(value || "").trim();
 
-  if (/^не требуется$/i.test(normalized)) {
+  if (NO_LINKED_ISSUES_VALUE_PATTERN.test(normalized)) {
     return { valid: true, noneRequired: true, issues: [] };
   }
 
@@ -97,13 +105,13 @@ export function analyzePullRequestBodyContract(body = "") {
   }
 
   if (linkedIssues.valid && occurrences.linkBasis <= 1) {
-    if (linkedIssues.noneRequired && fields.linkBasis && !/^не требуется$/i.test(fields.linkBasis)) {
+    if (linkedIssues.noneRequired && fields.linkBasis && !NO_LINKED_ISSUES_VALUE_PATTERN.test(fields.linkBasis)) {
       errors.push(error(
         "unexpected_link_basis",
         "linkBasis",
         "Для `Связанные задачи: не требуется` основание должно отсутствовать, быть пустым или `не требуется`.",
       ));
-    } else if (!linkedIssues.noneRequired && (!fields.linkBasis || /^не требуется$/i.test(fields.linkBasis))) {
+    } else if (!linkedIssues.noneRequired && (!fields.linkBasis || NO_LINKED_ISSUES_VALUE_PATTERN.test(fields.linkBasis))) {
       errors.push(error(
         "missing_link_basis",
         "linkBasis",
