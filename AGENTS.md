@@ -106,7 +106,7 @@
 65. Задание на реализацию существенного stream-а обязано указывать: рабочую копию, имя ветки, `Spec repo` / `Spec doc` / `Spec revision`, базу первого PR и точку остановки агента. Если любое поле отсутствует или задание расходится с rollout path, агент останавливается и спрашивает; молчаливая интерпретация запрещена.
 66. Маршрут из правила 51 не заканчивается production smoke. Для code/release stream после smoke идут принятие production-результата и `Issue Closure`; для docs/process stream `Issue Closure` идёт после проверки результата merge. Агент сверяет все связанные Issues, пользователь решает и выполняет по каждой: `закрыть` или `оставить открытой`; close/reopen Issue является пользовательским GitHub-действием.
 67. `Связанные задачи: не требуется` означает `Issue Closure: not_required`. Для `#NNN` checkpoint получает `completed` только после записи на merged PR, которая перечисляет каждую Issue ровно один раз как `closed` или `left_open`; `left_open` создаёт явный `issue/admin tail`.
-68. После `Issue Closure` выполняется применимый `Spec Closure`; затем разрешён cleanup. Оба checkpoint должны иметь состояние `completed` или явное `not_required`; для неприменимого Spec фиксируется `Spec Closure: not_required` с причиной.
+68. После `Issue Closure` выполняется применимый `Spec Closure`; затем разрешён cleanup. Оба checkpoint должны иметь `completed` или `not_required`; неприменимость Spec фиксируется на merged PR с причиной. GitHub auto-delete ветки при merge не считается cleanup и не заменяет checkpoint.
 
 ## Solo-dev документация и доказательства
 

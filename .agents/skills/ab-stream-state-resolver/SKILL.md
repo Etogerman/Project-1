@@ -163,20 +163,18 @@ close/reopen PR или Issue, approve/request changes, GitHub deploy/promote, en
 approval, branch protection, required checks и secrets. Агент не предлагает себя
 исполнителем таких действий и в меню указывает пользователя.
 
-После принятого production smoke либо проверки merged docs/process PR используй
-closure-route из `docs/task-delivery-workflow.md`. Для `#NNN` сверяй live Issue и
-closure-запись merged PR; без записи checkpoint pending, `left_open` создаёт
-`issue/admin tail`. Неприменимый Spec требует `Spec Closure: not_required` с
-причиной.
+После принятия production-результата/риска либо проверки merged docs/process PR
+используй closure-route и records из `docs/task-delivery-workflow.md`.
+Missing/mismatched evidence означает pending; `left_open` — `issue/admin tail`.
 
-Исключение branch cleanup: после явной команды пользователя агент может удалить
-remote head branch уже слитого PR, если проверил `MERGED`, соответствие branch
-этому PR, отсутствие другого открытого PR по branch и отсутствие статуса
+Исключение branch cleanup: после closure-checkpoint и явной команды пользователя
+агент может удалить remote head branch слитого PR, если проверил `MERGED`,
+соответствие branch этому PR, отсутствие другого открытого PR и статуса
 защищённой ветки, активного stream-а или backup-ветки. Если любой признак нельзя
 подтвердить read-only проверкой, агент не удаляет remote branch и показывает
 blocker. PR, закрытый без merge, считается blocker-ом branch cleanup для агента:
 агент показывает blocker и ждёт действия пользователя, а remote branch удаляет
-только пользователь.
+только пользователь. GitHub auto-delete при merge не завершает cleanup/checkpoint.
 
 Если правильный следующий шаг требует отдельной команды пользователя, скажи это
 прямо.

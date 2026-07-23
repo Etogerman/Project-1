@@ -12,7 +12,7 @@
 - Для `main` PR с runtime-изменениями проверь, что указанный `Staging PR` уже смержен, текущий `main` PR содержит validated diff из этого staging PR, а не накопленное состояние ветки `staging`, и ссылка `Staging smoke` ведет на успешный GitHub Actions run для staging merge commit.
 - Если staging-доказательств нет, явно напиши, что PR нарушает release process и должен сначала пройти через `staging`.
 - При ревью всегда проверяй статус GitHub Actions job `release-process-guard`.
-- После принятого production smoke либо проверки merged docs/process PR следуй
+- После принятия production-результата/риска либо проверки merged docs/process PR следуй
   `docs/task-delivery-workflow.md`: `Issue Closure` -> `Spec Closure` -> cleanup.
 - Для `#NNN` без совпавших live-состояния и closure-записи на merged PR checkpoint
   pending; `не требуется` даёт `not_required`, `left_open` — `issue/admin tail`.

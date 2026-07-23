@@ -2,8 +2,7 @@
 
 ## Цель
 
-Подтверждать production-результат smoke-check на реальном рабочем окружении и
-передавать его в обязательные post-acceptance checkpoint. Сам smoke не закрывает
+Подтвердить production-результат на рабочем окружении. Smoke не закрывает
 Issue/Spec Closure и не разрешает cleanup.
 
 ## Обязательное правило
@@ -138,12 +137,9 @@ Production smoke делать только после фактического p
 
 ## Следующий checkpoint после success
 
-Успешный smoke подтверждает технический результат, но не закрывает stream:
-
 1. Зафиксировать environment, release ref, результат и ограничения.
 2. Пользователь или оператор принимает результат либо риск.
-3. Пройти `Issue Closure` и `Spec Closure` по
-   `docs/task-delivery-workflow.md`.
+3. Пройти closure-route по `docs/task-delivery-workflow.md`.
 4. Только затем выполнить cleanup.
 
 ## Если доступа к логам нет

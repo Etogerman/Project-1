@@ -761,10 +761,8 @@ Staging smoke: https://github.com/<owner>/<repo>/actions/runs/<run-id>
 - `CI` проверяет пользователь; если есть ошибки, он возвращает задачу агенту
 - финальный self-review выполняется агентом только по отдельной команде пользователя
 - `ready` и `merge` выполняет только пользователь; Copilot/reviewer review и технический вердикт агента идут после пользовательского `ready` и перед пользовательским `merge`
-- после merge агент проверяет результат
-- при `Связанные задачи: #NNN, #MMM` агент сверяет все Issues, а пользователь по каждой решает `закрыть` или `оставить открытой`; при `Связанные задачи: не требуется` фиксируется `Issue Closure: not_required`
-- после `Issue Closure` выполняется применимый `Spec Closure` или фиксируется явное `Spec Closure: not_required` с причиной
-- cleanup выполняется только после обоих closure-checkpoint
+- после merge агент проверяет результат и проходит канонический closure-route
+  `Issue Closure -> Spec Closure -> cleanup`
 
 Отсутствие `CI` не блокирует `docs-only` path.
 
@@ -829,8 +827,8 @@ Stream считается полностью закрытым только ко�
 
 ### Issue Closure Checklist
 
-Checkpoint начинается после принятия production-результата для code/release
-stream и после проверки merged result для docs/process stream.
+Checkpoint начинается после принятия production-результата/риска для code/release
+и после проверки merged result для docs/process.
 
 1. `Связанные задачи: не требуется` даёт `Issue Closure: not_required`.
 2. Для `#NNN` или `#NNN, #MMM` агент сверяет актуальное состояние каждой Issue с
@@ -846,9 +844,10 @@ pending. Завершённый `left_open` не блокирует `Spec Closur
 
 ### Spec Closure Checklist
 
-После `Issue Closure: completed | not_required` для неприменимого внешнего Spec
-фиксируется `Spec Closure: not_required` с причиной. Для применимого внешнего
-Spec перед закрытием существенного stream нужно:
+После `Issue Closure: completed | not_required` для неприменимого Spec агент по
+отдельной команде публикует на merged PR одну запись:
+`Spec Closure: not_required` и `Spec Closure reason: <причина>`. Без обеих строк
+состояние pending. Для применимого внешнего Spec перед закрытием stream нужно:
 
 1. сверить фактический runtime / validated diff / acceptance с внешним `Spec doc`
 2. обновить статус в самом `Spec doc`, если документ всё ещё содержит собственный статусный блок
@@ -863,21 +862,10 @@ Spec перед закрытием существенного stream нужно:
 Статус `planned` для уже материализованного acceptance считается process-error и не является допустимым состоянием закрытия stream-а.
 Незакрытый `spec/admin tail` нужно явно перечислять перед стартом нового substantial code stream-а, но он сам по себе не запрещает unrelated `docs-only` шаг или малый локальный maintenance step.
 
-Для AB Connector `merge` в `main` остаётся только handoff-точкой для code/release
-stream. Code/release хвост остаётся открытым до ручного production deploy,
-успешного production smoke, принятия production-результата, `Issue Closure` и
-применимого `Spec Closure`.
-
-Для docs/process path после merge агент сначала проверяет результат, затем
-проходит `Issue Closure` и применимый `Spec Closure`. Прямой переход от merge или
-проверки результата к cleanup запрещён.
-
-Cleanup разрешён, только если:
-
-```text
-issue_closure in {completed, not_required}
-&& spec_closure in {completed, not_required}
-```
+Code/release после merge в `main` продолжает deploy -> smoke -> принятие
+результата/риска; docs/process начинает после проверки merged result. Далее оба
+идут `Issue Closure -> Spec Closure -> cleanup`. Cleanup разрешён только при
+`issue_closure` и `spec_closure` в `completed | not_required`.
 
 Результат:
 - у stream есть честная точка завершения без путаницы между локальной готовностью, `staging` и `main`.
@@ -885,7 +873,8 @@ issue_closure in {completed, not_required}
 ## Этап 19. Cleanup
 
 После обоих closure-checkpoint агент предлагает cleanup; полное закрытие stream
-фиксируется после cleanup.
+фиксируется после cleanup. Все ручные действия этапа требуют закрытых checkpoint.
+GitHub auto-delete ветки при merge не считается cleanup и не заменяет checkpoint.
 Если stream дошёл до `merge`, branch cleanup является обязательным closure-подшагом:
 агент должен показать конкретный dry-run список и выполнить удаление только после
 явного подтверждения пользователя, если удаление затрагивает remote branch,

@@ -229,10 +229,7 @@ scope с drift относительно `origin/main`.
 - merge
 - deploy
 - post-deploy smoke-check
-- принятие результата
-- Issue Closure
-- применимый Spec Closure
-- cleanup
+- принятие результата -> Issue Closure -> Spec Closure -> cleanup
 
 Это дешевле и безопаснее, чем пытаться тащить всю mixed-ветку до конца как
 один большой пакет.

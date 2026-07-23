@@ -136,11 +136,9 @@ PR в `staging` не включает merge в `staging`, staging smoke, PR в `
 
 ## Post-merge Issue/Spec Closure
 
-По отдельной команде skill проверяет route из `docs/task-delivery-workflow.md`:
-принятый результат -> `Issue Closure` -> `Spec Closure` -> cleanup.
-`не требуется` даёт `not_required`; для `#NNN` нужны совпавшие live-состояние и
-closure-запись merged PR, иначе checkpoint pending. `left_open` создаёт
-`issue/admin tail`.
+По отдельной команде skill проверяет closure-route и точные merged-PR records из
+`docs/task-delivery-workflow.md`. Missing/mismatched evidence оставляет checkpoint
+pending; `left_open` создаёт `issue/admin tail`.
 
 ## PR title и body
 

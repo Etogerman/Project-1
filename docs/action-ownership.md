@@ -76,21 +76,16 @@ review завершён, не находится в pending/in-progress сост
 | 31 | Принять production результат или риск | Пользователь или оператор |
 | 32 | Сверить все Issues из `Связанные задачи` с принятым результатом | Агент |
 | 33 | Решить и выполнить действие по каждой Issue, затем опубликовать closure-запись на merged PR | Только пользователь |
-| 34 | Выполнить применимый Spec Closure или зафиксировать `Spec Closure: not_required` с причиной | Агент после отдельной команды пользователя |
+| 34 | Выполнить Spec Closure или опубликовать на merged PR запись `not_required` с причиной | Агент после отдельной команды пользователя |
 | 35 | Выполнить cleanup локальных веток/worktree | Агент |
 | 36 | Удалить remote branch после merge | GitHub auto-delete или агент после явной команды пользователя и проверок |
 | 37 | Изменить GitHub-настройки, repository rules, secrets или environments | Только пользователь |
 | 38 | Проверить, что хвост закрыт | Агент |
 
-Для docs/process path строки 32-34 выполняются после пользовательского merge и
-проверки результата. При `Связанные задачи: не требуется` агент фиксирует
-`Issue Closure: not_required`. Для `#NNN` пользователь фиксирует каждую Issue как
-`closed` или `left_open` по `docs/task-delivery-workflow.md`; `left_open`
-становится `issue/admin tail`.
-
-Cleanup по строке 35 доступен только после
-`Issue Closure: completed | not_required` и
-`Spec Closure: completed | not_required`.
+Для docs/process строки 32-34 идут после проверки merged result; records заданы в
+`docs/task-delivery-workflow.md`. Ручные строки 35-36 доступны только после обоих
+closure-checkpoint. GitHub auto-delete при merge не считается cleanup и не
+закрывает/обходит checkpoint.
 
 Если применимый `Spec Closure` требует изменения внешнего Spec repo, запись
 файлов, commit и push остаются отдельными уровнями разрешения по
