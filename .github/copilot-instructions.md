@@ -3,20 +3,13 @@
 ## Release process
 
 - Для любых кодовых или runtime-изменений соблюдай staging-first маршрут:
-  локальная реализация -> операторская приемка -> draft PR в `staging` -> зеленые проверки -> merge в `staging` -> staging smoke -> draft PR в `main` -> зеленые проверки -> merge в `main` -> ручной production deploy -> production smoke -> принятие production-результата -> reconciliation связанных Issues -> пользовательское решение по Issues -> применимый Spec closure -> cleanup.
+  локальная реализация -> операторская приемка -> draft PR в `staging` -> зеленые проверки -> merge в `staging` -> staging smoke -> draft PR в `main` -> зеленые проверки -> merge в `main` -> ручной production deploy -> production smoke.
 - Не предлагай прямой merge в `main` для кодовых или runtime-изменений без явного исключения от владельца проекта.
 - Merge в `main` не является production deploy. Production deploy выполняется отдельно и вручную.
 - Если PR направлен в `main` и меняет код, тесты, маршруты, миграции, сборку, Docker, frontend/backend runtime или сценарии, проверь, что описание PR содержит:
   - `Staging PR: #NNN`
   - `Staging smoke: https://...`
 - Для `main` PR с runtime-изменениями проверь, что указанный `Staging PR` уже смержен, текущий `main` PR содержит validated diff из этого staging PR, а не накопленное состояние ветки `staging`, и ссылка `Staging smoke` ведет на успешный GitHub Actions run для staging merge commit.
-- Для каждого PR проверь поле `Связанные задачи:`. Допустим строгий список
-  `#NNN, #MMM` либо `не требуется`. Для runtime PR в `main` набор должен точно
-  совпадать с объединением связанных задач из всех указанных staging PR.
-- Не предлагай `Closes`, `Fixes` или `Resolves` для этих задач до конечной
-  приёмки соответствующего delivery path: после production deploy, smoke и
-  пользовательской приёмки для code/release stream либо после `merge` в `main`
-  и проверки результата merge для docs/process-only stream.
 - Если staging-доказательств нет, явно напиши, что PR нарушает release process и должен сначала пройти через `staging`.
 - При ревью всегда проверяй статус GitHub Actions job `release-process-guard`.
 
@@ -31,15 +24,7 @@
 ## Review focus
 
 - Сначала ищи риски поведения, регрессии, пропущенные проверки и нарушения процесса релиза.
-- Если один semantic-механизм продублирован в нескольких файлах, проверяй общий
-  инвариант и требуй один канонический механизм с общей conformance-матрицей, а
-  не независимые точечные исправления каждого consumer-а.
-- Если новый review после fix снова находит дефект того же корневого класса,
-  явно отмечай недоказанность подхода и требуй `approach reset` вместо ещё одной
-  локальной латки.
 - Отмечай только конкретные проблемы с указанием файла и причины; не оставляй общие замечания без actionable вывода.
 - Формулируй замечания как конкретный риск: что может сломаться, где именно и почему.
 - Не ставь формальное одобрение процессу, если PR обходит `staging`.
-- Для документационных или process-only изменений проверяй ясность формулировок,
-  отсутствие противоречий с `AGENTS.md` и запрет преждевременного cleanup до
-  closure-gates из `docs/task-delivery-workflow.md`.
+- Для документационных или process-only изменений проверяй ясность формулировок и отсутствие противоречий с `AGENTS.md`.

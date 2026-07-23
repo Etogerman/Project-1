@@ -48,7 +48,6 @@
 - `Хвост` — незавершённый diff, незапушенная работа, открытый PR, незавершённый CI, deploy, smoke, cleanup или другой обязательный follow-up текущего stream
 - `Branch hygiene tail` — cleanup-хвост по веткам: merged remote branch, merged локальная ветка, локальная ветка без upstream или stale worktree, которые остались после фактического закрытия stream-а
 - `Branch hygiene gate` — preflight/cleanup-проверка `Branch hygiene tail` перед новым code stream; gate требует закрыть такой хвост cleanup-ом или явно принять его как временное исключение с перечислением оставшихся веток/worktree и рисков
-- `Issue/admin tail` — связанная GitHub Issue, по которой после конечной приёмки соответствующего delivery path ещё не зафиксировано итоговое решение: закрыть, оставить открытой с причиной и следующим follow-up или переоткрыть. Для code/release stream конечная приёмка наступает после production smoke и принятия production-результата; для docs/process-only stream — после `merge` в `main` и проверки результата merge
 - `Validated PR` — опубликованный PR текущего stream, по которому пользователь подтвердил, что `CI` зелёный и в рамках текущего scope не осталось blocker-ов. Если `CI` красный или неоднозначный, пользователь возвращает задачу агенту для разбора ошибки и исправления.
 - `Технический вердикт агента по review` — read-only заключение после Copilot/reviewer review: `готово к merge`, `нужны правки` или `нужен выбор пользователя`. Вердикт не является GitHub approve, request changes, dismiss review, переводом статуса или merge.
 - `Внешняя публикация` — `push`, создание или обновление PR, `merge`, `deploy`, `migrate`, `staging`, VPS, секреты, smoke внешней среды и действия во внешних системах
@@ -65,7 +64,7 @@
 4. Branch hygiene gate является частью проверки хвоста перед новым code stream: merged remote/local ветки, stale worktree и локальные ветки без upstream должны быть либо очищены, либо явно классифицированы как допустимый остаток.
 5. По умолчанию реализация идёт только после read-only анализа и согласованного ТЗ.
 6. Если пользователь явно ограничил шаг локальной работой или явно запретил публикацию, действует локальный режим.
-7. Если ТЗ согласовано, пользователь дал команду на реализацию и явно не запретил публикацию, для нового code stream normal default rollout path: `локальная реализация до локального MVP -> операторская приёмка и решение о выкладке -> фиксация существенного ТЗ во внешнем репозитории документации -> draft PR в staging -> пользовательский ready в staging -> Copilot/reviewer review в staging -> вердикт агента по review в staging -> пользовательский merge в staging -> staging smoke -> draft PR в main -> пользовательский ready в main -> Copilot/reviewer review в main -> вердикт агента по review в main -> пользовательский merge в main -> production deploy -> production smoke -> принятие production-результата -> reconciliation связанных Issues -> пользовательское решение по Issues -> cleanup`. Для срочного hotfix-а пользователь может отдельно разрешить `Spec pending draft PR` до внешней `Spec revision`.
+7. Если ТЗ согласовано, пользователь дал команду на реализацию и явно не запретил публикацию, для нового code stream normal default rollout path: `локальная реализация до локального MVP -> операторская приёмка и решение о выкладке -> фиксация существенного ТЗ во внешнем репозитории документации -> draft PR в staging -> пользовательский ready в staging -> Copilot/reviewer review в staging -> вердикт агента по review в staging -> пользовательский merge в staging -> staging smoke -> draft PR в main -> пользовательский ready в main -> Copilot/reviewer review в main -> вердикт агента по review в main -> пользовательский merge в main -> production deploy -> production smoke`. Для срочного hotfix-а пользователь может отдельно разрешить `Spec pending draft PR` до внешней `Spec revision`.
 8. Default trigger после достижения согласованного `Локального MVP` — операторская приёмка локального контура.
 9. Команда `реализовать` по умолчанию разрешает агенту вести stream локально до `Локального MVP` и подготовки к операторской приёмке; ближайший внешний publish-level открывается только после явного решения о выкладке.
 10. Если пользователь явно решил идти в `staging` раньше или позже операторской приёмки, это фиксируется как override относительно default-правила.
@@ -384,46 +383,6 @@ Copilot/reviewer review считается закрытым для технич�
 review завершён, не находится в pending/in-progress состоянии и агент может
 прочитать актуальный результат review.
 
-### Approach Reset Gate
-
-`Approach reset` включается, если после уже внесённого исправления новый review
-снова находит нарушение того же корневого инварианта. Класс замечания определяется
-по поведению и инварианту, а не по файлу, строке или формулировке reviewer-а.
-
-Дополнительные признаки недоказанного подхода:
-
-- один semantic-механизм скопирован в несколько consumers, и замечания расходятся
-  только по месту проявления;
-- локальный тест подтверждает отдельный пример, но авторитетный стандарт, oracle
-  или следующий review опровергает другой вход того же класса;
-- policy-переход описан в нескольких активных документах и допускает разные
-  следующие checkpoints.
-
-Пока gate активен, агент не делает очередную точечную латку, commit/push, не
-заявляет замечание закрытым и не даёт вердикт `готово к merge`. Зелёный CI
-показывает только прохождение прежней тестовой матрицы и сам по себе не закрывает
-`approach reset`.
-
-Обязательный read-only редизайн:
-
-1. собрать актуальные, outdated, resolved и suppressed замечания этого класса;
-2. сформулировать один корневой инвариант и весь класс входов или переходов;
-3. выбрать авторитетный стандарт, oracle или reference implementation;
-4. найти все дублированные consumers и определить один канонический механизм;
-5. составить общую conformance-матрицу: positive, negative, container/context,
-   EOF и adversarial cases;
-6. показать пользователю изменение зависимости, архитектуры или scope до
-   продолжения реализации.
-
-Ручной частичный parser, protocol emulator, security-filter или дублированная
-state machine после `approach reset` допустимы только с явным обоснованием, общей
-conformance-матрицей и проверкой относительно выбранного oracle.
-
-Gate закрывается, когда единый механизм реализован, все consumers используют его,
-общая матрица и consumer-level regressions проходят, а полный self-review не
-находит оставшихся проявлений корневого инварианта. Для опубликованного PR после
-этого всё равно требуется новый Copilot/reviewer review.
-
 Для docs-only и локальных micro-slice обычно достаточно `author self-check`, если slice не дошёл до boundary point.
 
 Результат:
@@ -529,9 +488,8 @@ Helper-review не заменяет `author self-check` и не заменяет
 
 Назначение проверки:
 - показать, заполнены ли обязательные readiness-поля PR
-- проверить наличие и формат машинно-читаемого поля `Связанные задачи:`
 - подсветить незакрытые условия `Локального MVP`, операторской приёмки, self-check, блокеров и принятого риска
-- отделить pre-ready gate от `release-process-guard`, который защищает язык PR, staging-first, validated diff и точное наследование связанных Issues в runtime PR в `main`
+- отделить pre-ready gate от `release-process-guard`, который защищает язык PR, staging-first и validated diff
 
 На `draft` PR незакрытые readiness-поля отображаются как warnings и не означают готовность к `ready`.
 После события `ready_for_review` те же незакрытые readiness-поля становятся blocker-ами.
@@ -552,7 +510,6 @@ Helper-review не заменяет `author self-check` и не заменяет
 - отсутствие англоязычной prose вне технических токенов
 - наличие всех readiness-полей
 - допустимые значения readiness-полей
-- наличие и допустимый формат поля `Связанные задачи:`
 - для runtime/code PR в `main` после `staging` — точные строки `Staging PR:` /
   `Staging PRs:` и `Staging smoke:`
 
@@ -567,20 +524,6 @@ Helper-review не заменяет `author self-check` и не заменяет
 - `Блокеры: отсутствуют`
 - `Принятый риск: отсутствует | принят: <краткая причина>`
 
-Обязательное поле связи с исходными GitHub Issues:
-
-- `Связанные задачи: #NNN[, #MMM]`
-- `Связанные задачи: не требуется`
-
-Поле содержит нейтральные ссылки без auto-close keywords. Формулировки
-`Closes #NNN`, `Fixes #NNN` и `Resolves #NNN` не используются до конечной
-приёмки соответствующего delivery path: после production deploy, smoke и
-принятия production-результата для code/release stream либо после `merge` в
-`main` и проверки результата merge для docs/process-only stream. В PR в `main`
-поле переносится без потери номеров из связанных staging PR; если staging PR
-несколько, значение должно точно совпадать с объединением их наборов связанных
-задач.
-
 Недопустимо:
 
 - `Локальный MVP: выполнен локально`
@@ -593,7 +536,6 @@ Helper-review не заменяет `author self-check` и не заменяет
 ```text
 Staging PR: #639
 Staging smoke: https://github.com/Etogerman/Project-1/actions/runs/28181486011
-Связанные задачи: #708
 
 Локальный MVP: принят
 Операторская приёмка: принята
@@ -604,7 +546,6 @@ Staging smoke: https://github.com/Etogerman/Project-1/actions/runs/28181486011
 ```text
 Staging PRs: #614, #615
 Staging smoke: https://github.com/Etogerman/Project-1/actions/runs/123
-Связанные задачи: #708, #709
 ```
 
 Если PR уже создан, агент не должен отдавать его как готовый checkpoint, пока
@@ -631,14 +572,9 @@ Staging smoke: https://github.com/Etogerman/Project-1/actions/runs/123
 13. Если действует уровень `до merge в main`, PR в `main` уже `ready`, но Copilot/reviewer review ещё не закрыт, рекомендуемый вариант — `1. Copilot/reviewer выполняет review`.
 14. Если действует уровень `до merge в main`, Copilot/reviewer review закрыт, агенту доступны review status, comments/threads и CI status, но агент ещё не дал вердикт по review, рекомендуемый вариант — `1. Агент читает review и даёт технический вердикт`.
 15. Если действует уровень `до merge в main`, вердикт агента по review — `готово к merge`, рекомендуемый вариант — `1. Пользователь выполняет merge в main, агент затем проверяет результат`.
-16. Если `merge` в `main` уже выполнен для docs/process-only stream и результат merge проверен, но связанные Issues ещё не сверены, рекомендуемый вариант — `1. Агент выполняет reconciliation связанных Issues и даёт вердикт по каждой`.
-17. Если для docs/process-only stream поле `Связанные задачи:` содержит `не требуется`, рекомендуемый вариант после проверки результата merge — `1. Cleanup` или `1. Следующая задача`.
-18. Если `merge` в `main` уже выполнен для code/release stream, рекомендуемый вариант — `1. Ручной production deploy`.
-19. Если ручной production deploy уже выполнен для code/release stream, рекомендуемый вариант — `1. Production Post-Deploy Smoke`.
-20. Если production smoke закрыт успешно, но production-результат ещё не принят, рекомендуемый вариант — `1. Пользователь или оператор принимает production-результат или риск`.
-21. Если production-результат принят, но связанные Issues ещё не сверены, рекомендуемый вариант — `1. Агент выполняет reconciliation связанных Issues и даёт вердикт по каждой`.
-22. Если reconciliation завершён и по Issue требуется GitHub-контрольное действие, рекомендуемый вариант — `1. Пользователь закрывает или переоткрывает Issue либо подтверждает решение оставить её открытой с причиной и следующим follow-up`.
-23. Если по всем связанным Issues зафиксировано итоговое решение или поле содержит `не требуется`, рекомендуемый вариант — `1. Cleanup` или `1. Следующая задача`.
+16. Если `merge` в `main` уже выполнен для code/release stream, рекомендуемый вариант — `1. Ручной production deploy`.
+17. Если ручной production deploy уже выполнен для code/release stream, рекомендуемый вариант — `1. Production Post-Deploy Smoke`.
+18. Если production smoke закрыт успешно, рекомендуемый вариант — `1. Cleanup` или `1. Следующая задача`.
 
 Если вердикт агента по review — `нужны правки`, следующим шагом считается
 исправление в текущем scope. Агент не переводит PR обратно в draft и не меняет
@@ -818,7 +754,7 @@ Staging smoke: https://github.com/<owner>/<repo>/actions/runs/<run-id>
 - дальше пользователь проверяет PR самостоятельно или с помощью Copilot / другого ревьюера
 - `CI` проверяет пользователь; если есть ошибки, он возвращает задачу агенту
 - финальный self-review выполняется агентом только по отдельной команде пользователя
-- `ready` и `merge` выполняет только пользователь; Copilot/reviewer review и технический вердикт агента идут после пользовательского `ready` и перед пользовательским `merge`; после merge агент проверяет результат в `main`, выполняет reconciliation связанных Issues при необходимости и только затем передаёт cleanup
+- `ready` и `merge` выполняет только пользователь; Copilot/reviewer review и технический вердикт агента идут после пользовательского `ready` и перед пользовательским `merge`; агент после merge проверяет `main`/`staging`, deployment status при необходимости и cleanup
 - cleanup
 
 Отсутствие `CI` не блокирует `docs-only` path.
@@ -867,7 +803,7 @@ Stream может быть доведён до разных handoff-точек:
 
 Handoff-точка — это допустимая точка остановки и следующего решения пользователя, но не автоматически закрытый хвост.
 
-Открытый PR, незавершённый `CI`, незавершённый `staging`/`main` path, deploy, smoke, связанная Issue без итогового решения и cleanup остаются хвостом до их фактического завершения.
+Открытый PR, незавершённый `CI`, незавершённый `staging`/`main` path, deploy, smoke и cleanup остаются хвостом до их фактического завершения.
 
 Новый code stream по умолчанию не начинается, пока этот хвост не закрыт или пользователь явно не разрешил исключение после перечисления хвоста и связанных рисков.
 
@@ -875,12 +811,11 @@ Stream считается полностью закрытым только ко�
 
 Для существенного stream-а полное закрытие включает `spec closure`.
 
-Нужно различать четыре типа хвоста:
+Нужно различать три типа хвоста:
 
 1. runtime/release tail: открытый PR, незавершённый `CI`, незавершённый `staging`/`main` path, deploy и smoke; это жёсткие blockers
 2. branch hygiene tail: merged remote/local ветки, stale worktree и локальные ветки без upstream; это cleanup-gate перед новым code stream-ом
 3. spec/admin tail: `Spec doc` status, `streams/README.md`, запись в `active-streams.md`, `archive pending`; это обязательные follow-up, но не отдельный rollout gate сами по себе
-4. issue/admin tail: связанные GitHub Issues, по которым после конечной приёмки соответствующего delivery path не зафиксировано итоговое решение; это обязательный closure follow-up, но не runtime blocker после закрытия runtime gate
 
 ### Spec Closure Checklist
 
@@ -895,43 +830,10 @@ Stream считается полностью закрытым только ко�
 Статус `planned` для уже материализованного acceptance считается process-error и не является допустимым состоянием закрытия stream-а.
 Незакрытый `spec/admin tail` нужно явно перечислять перед стартом нового substantial code stream-а, но он сам по себе не запрещает unrelated `docs-only` шаг или малый локальный maintenance step.
 
-### Issue Closure Checklist
-
-`Issue Closure Checklist` запускается после конечной приёмки текущего delivery path:
-
-- для code/release stream — после успешного production smoke и принятия production-результата
-- для docs/process-only stream — после `merge` в `main` и проверки, что merged PR содержит принятый документационный или процессный результат
-
-После этого агент обязан:
-
-1. прочитать поле `Связанные задачи:` в итоговом PR; для runtime PR в `main` дополнительно восстановить полный набор Issues из связанных staging PR
-2. для каждой Issue сопоставить исходный acceptance с итоговым результатом текущего delivery path
-3. дать по каждой Issue один вердикт: `закрыть`, `оставить открытой: <причина и следующий follow-up>` или `переоткрыть: <причина>`
-4. подготовить короткий русскоязычный итоговый комментарий со ссылкой на итоговый PR и доказательства приёмки: production deploy/smoke для code/release stream либо merged PR и проверенный результат merge для docs/process-only stream
-5. передать пользователю точный список GitHub-действий; после его действий read-only проверить фактическое состояние Issues
-
-Если поле содержит `Связанные задачи: не требуется`, reconciliation считается
-завершённым без GitHub-действий по Issues.
-
-Stream не считается полностью закрытым, пока каждая связанная Issue не закрыта
-либо явно оставлена открытой с причиной и следующим follow-up. Агент не
-закрывает и не переоткрывает Issue.
-
 Для AB Connector `merge` в `main` остаётся только handoff-точкой для code/release stream.
-Для code/release stream хвост остаётся открытым до ручного production deploy, успешного production smoke, принятия production-результата и reconciliation связанных Issues по правилам `docs/post-deploy-smoke.md` и этого раздела.
-Для docs/process-only path после `merge` в `main` агент сначала проверяет результат merge. Если поле `Связанные задачи:` содержит номера, до cleanup выполняется `Issue Closure Checklist`; если поле содержит `не требуется`, следующим шагом считается cleanup временных артефактов или переход к следующей задаче.
-
-Каноническая последовательность после merge:
-
-| Событие | Следующий обязательный checkpoint | Cleanup доступен |
-|---|---|---|
-| Code/release merge в `staging` | staging deploy-check, smoke и staging QA | нет |
-| Code/release merge в `main` | ручной production deploy | нет |
-| Production smoke завершён | принятие production-результата, затем Issue reconciliation | только после итоговых решений по Issues и применимого Spec closure |
-| Docs/process-only merge в `main` | проверка merged-результата, затем Issue reconciliation при наличии номеров | после reconciliation или сразу при `Связанные задачи: не требуется` |
-
-Общая формула `merge -> cleanup` запрещена: merge является промежуточной
-handoff-точкой, пока текущая строка этой таблицы не доведена до closure-gates.
+Для code/release stream хвост остаётся открытым до ручного production deploy и успешного production smoke по правилам `docs/post-deploy-smoke.md`.
+Для `docs-only` path после `merge` в `main` следующим шагом считается cleanup временных артефактов или переход к следующей задаче.
+Исключение для docs/process PR с `#NNN`: после проверки результата пользователь проходит Issue Closure checkpoint (`закрыть` / `оставить открытой`); cleanup разрешён после решения, открытая Issue становится `issue/admin tail`.
 
 Результат:
 - у stream есть честная точка завершения без путаницы между локальной готовностью, `staging` и `main`.

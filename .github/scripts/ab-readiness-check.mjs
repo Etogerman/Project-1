@@ -2,9 +2,14 @@
 import assert from "node:assert/strict";
 import {
   analyzeMarkdown,
-  restoreInlineCodeTokens,
   stripMarkdownCode,
 } from "./lib/markdown-visibility.mjs";
+import {
+  analyzePullRequestBodyContract,
+  analyzePrematureIssueClosing,
+  collectClosingIssueReferences,
+  SPEC_PR_BODY_FIELDS,
+} from "./lib/pr-body-contract.mjs";
 
 const PROCESS_ONLY_FILE_PATTERNS = [
   /^AGENTS\.md$/,
@@ -21,7 +26,8 @@ const PROCESS_ONLY_FILE_PATTERNS = [
   /^\.github\/workflows\/ab-readiness-check\.ya?ml$/,
   /^\.github\/scripts\/(?:package(?:-lock)?\.json|\.gitignore)$/,
   /^\.github\/scripts\/lib\/markdown-visibility\.mjs$/,
-  /^\.github\/scripts\/tests\/markdown-visibility\.test\.mjs$/,
+  /^\.github\/scripts\/lib\/pr-body-contract\.mjs$/,
+  /^\.github\/scripts\/tests\/.*\.test\.mjs$/,
   /^\.github\/scripts\/copilot-feasibility-spike\.mjs$/,
   /^\.github\/workflows\/copilot-feasibility-spike\.ya?ml$/,
   /^\.github\/scripts\/copilot-merge-readiness\.mjs$/,
@@ -52,7 +58,8 @@ const STAGING_PROCESS_CI_SYNC_FILE_PATTERNS = [
   /^\.github\/scripts\/ab-readiness-check\.mjs$/,
   /^\.github\/scripts\/(?:package(?:-lock)?\.json|\.gitignore)$/,
   /^\.github\/scripts\/lib\/markdown-visibility\.mjs$/,
-  /^\.github\/scripts\/tests\/markdown-visibility\.test\.mjs$/,
+  /^\.github\/scripts\/lib\/pr-body-contract\.mjs$/,
+  /^\.github\/scripts\/tests\/.*\.test\.mjs$/,
   /^\.github\/scripts\/ci-change-scope\.mjs$/,
   /^\.github\/scripts\/copilot-feasibility-spike\.mjs$/,
   /^\.github\/scripts\/copilot-merge-readiness\.mjs$/,
@@ -70,28 +77,6 @@ const ENGLISH_PR_HEADING_PATTERN =
   /^(Summary|Overview|Description|Why|Validation|Testing|Tests|Checks|Delivery note|Implementation|Changes|Root cause|Impact|Risks|Rollout)\s*$/i;
 const ALLOWED_TECHNICAL_TERMS_PATTERN =
   /\b(codex|Copilot|Copilot CLI|Copilot Requests|CLI|PAT|token|secret|workflow_dispatch|GITHUB_TOKEN|COPILOT_GITHUB_TOKEN|READY_TO_MERGE|BLOCKED|shadow|verdict|merge-readiness|PR|MCP|CI|UI|URL|API|JSON|YAML|TOML|PHP|SQL|HTTP|HTTPS|Docker|Laravel|Boost|Filament|Livewire|Bitrix24|AB Connector|Spec repo|Spec doc|Spec revision|MVP|Staging PRs|Staging PR|Staging smoke|Staging Post-Deploy Smoke|rev-check|public smoke|admin smoke|dev-only|validated diff|clean-main-PR|workflow|runtime|main|staging|draft|ready|merge|commit|branch|pull request|hotfix|release-process-guard|ab-readiness-check|copilot-feasibility-spike|copilot-merge-readiness|php-artisan-test)\b/gi;
-const LINKED_ISSUES_PATTERN = /^#[1-9]\d*(?:, #[1-9]\d*)*$/;
-const CLOSING_KEYWORD_PATTERN =
-  /\b(?:close(?:s|d)?|fix(?:es|ed)?|resolve(?:s|d)?)\s+(?:https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/issues\/[1-9]\d*|(?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?#[1-9]\d*)\b/i;
-
-const REQUIRED_FIELDS = [
-  { key: "changeType", label: "Тип изменения" },
-  { key: "substantialStream", label: "Существенный stream" },
-  { key: "deliveryLevel", label: "Уровень доставки" },
-  { key: "localMvp", label: "Локальный MVP" },
-  { key: "operatorAcceptance", label: "Операторская приёмка" },
-  { key: "authorSelfCheck", label: "Авторская самопроверка" },
-  { key: "linkedIssues", label: "Связанные задачи" },
-  { key: "blockers", label: "Блокеры" },
-  { key: "acceptedRisk", label: "Принятый риск" },
-];
-
-const SPEC_FIELDS = [
-  { key: "specRepo", label: "Spec repo" },
-  { key: "specDoc", label: "Spec doc" },
-  { key: "specRevision", label: "Spec revision" },
-];
-
 function isProcessOnlyFile(filename) {
   return PROCESS_ONLY_FILE_PATTERNS.some((pattern) => pattern.test(filename));
 }
@@ -114,10 +99,6 @@ function isStagingProcessCiSync({ baseRef, runtimeFiles, processOnlyFiles }) {
     ));
 }
 
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function stripTechnicalMarkdown(text) {
   return stripMarkdownCode(text)
     .replace(/https?:\/\/\S+/g, " ")
@@ -127,90 +108,6 @@ function stripTechnicalMarkdown(text) {
 
 function countMatches(text, pattern) {
   return [...text.matchAll(pattern)].length;
-}
-
-function normalizeValue(value = "") {
-  return value
-    .trim()
-    .replace(/^[-*]\s*/, "")
-    .replace(/^`|`$/g, "")
-    .replace(/\s+/g, " ");
-}
-
-function extractField(
-  source,
-  label,
-  { preserveInternalWhitespace = false, inlineCodeTokens = [] } = {},
-) {
-  const patternSource = `^ {0,3}(?:[-*][^\\S\\n]*)?${escapeRegExp(label)}[^\\S\\n]*:[^\\S\\n]*(.*?)\\r?$`;
-  const match = String(source).match(new RegExp(patternSource, "im"));
-
-  if (!match) {
-    return null;
-  }
-
-  const restoredValue = restoreInlineCodeTokens(match[1], inlineCodeTokens);
-
-  const value = preserveInternalWhitespace
-    ? restoredValue.trim().replace(/^`|`$/g, "")
-    : normalizeValue(restoredValue);
-
-  return value === "" ? null : value;
-}
-
-function extractFields(body) {
-  const markdown = analyzeMarkdown(body);
-  const fields = [...REQUIRED_FIELDS, ...SPEC_FIELDS].reduce(
-    (fields, field) => ({
-      ...fields,
-      [field.key]: extractField(markdown.fieldText, field.label, {
-        inlineCodeTokens: markdown.inlineCodeTokens,
-      }),
-    }),
-    {},
-  );
-
-  fields.linkedIssues = extractField(
-    markdown.visibleFieldText,
-    "Связанные задачи",
-    { preserveInternalWhitespace: true },
-  );
-
-  return fields;
-}
-
-function countFieldOccurrences(body, label) {
-  const pattern = new RegExp(`(?:^|\\n) {0,3}(?:[-*][^\\S\\n]*)?${escapeRegExp(label)}[^\\S\\n]*:`, "gi");
-
-  return [...analyzeMarkdown(body).visibleFieldText.matchAll(pattern)].length;
-}
-
-function parseLinkedIssues(value) {
-  const normalized = String(value || "").trim().replace(/^[-*]\s*/, "").replace(/^`|`$/g, "");
-
-  if (/^не требуется$/i.test(normalized)) {
-    return { valid: true, noneRequired: true, issueNumbers: [] };
-  }
-
-  if (!LINKED_ISSUES_PATTERN.test(normalized)) {
-    return { valid: false, noneRequired: false, issueNumbers: [] };
-  }
-
-  const issueNumbers = normalized
-    .split(",")
-    .map((reference) => Number(reference.trim().slice(1)));
-  const hasUnsafeNumber = issueNumbers.some((issueNumber) => !Number.isSafeInteger(issueNumber));
-  const hasDuplicates = new Set(issueNumbers).size !== issueNumbers.length;
-
-  return {
-    valid: !hasUnsafeNumber && !hasDuplicates,
-    noneRequired: false,
-    issueNumbers,
-  };
-}
-
-function hasClosingIssueKeyword(body) {
-  return CLOSING_KEYWORD_PATTERN.test(stripMarkdownCode(body));
 }
 
 function validatePublishLanguage({ title, body }) {
@@ -251,14 +148,14 @@ function hasStagingEvidence(body) {
 
 function isSubstantialStream(fields) {
   return /^(да)$/i.test(fields.substantialStream || "")
-    || SPEC_FIELDS.some((field) => Boolean(fields[field.key]));
+    || SPEC_PR_BODY_FIELDS.some((field) => Boolean(fields[field.key]));
 }
 
 function validateSpecFields(fields) {
   const missing = [];
   const invalid = [];
 
-  for (const field of SPEC_FIELDS) {
+  for (const field of SPEC_PR_BODY_FIELDS) {
     if (!fields[field.key]) {
       missing.push(`Для существенного stream перед Ready нужно заполнить поле \`${field.label}:\`.`);
     }
@@ -271,11 +168,21 @@ function validateSpecFields(fields) {
   return { missing, invalid };
 }
 
-function evaluateReadiness({ baseRef, title = "", body = "", files = [], isDraft = true }) {
+function evaluateReadiness({
+  baseRef,
+  title = "",
+  body = "",
+  files = [],
+  isDraft = true,
+  closingIssueReferences = [],
+  commits = [],
+}) {
   const failures = [];
   const readinessIssues = [];
   const warnings = [];
-  const fields = extractFields(body);
+  const bodyContract = analyzePullRequestBodyContract(body);
+  const { fields } = bodyContract;
+  const prematureClosing = analyzePrematureIssueClosing({ closingIssueReferences, commits });
   const { runtimeFiles, processOnlyFiles } = summarizeFiles(files);
   const hasRuntimeFiles = runtimeFiles.length > 0;
   const allowStagingProcessCiSync = isStagingProcessCiSync({ baseRef, runtimeFiles, processOnlyFiles });
@@ -294,23 +201,21 @@ function evaluateReadiness({ baseRef, title = "", body = "", files = [], isDraft
     failures.push("Runtime PR в `main` должен содержать `Staging PR: #NNN` или `Staging PRs: #NNN, #MMM`, а также `Staging smoke: https://github.com/.../actions/runs/...`.");
   }
 
-  if (hasClosingIssueKeyword(body)) {
-    failures.push("PR не должен содержать закрывающие ключевые слова `close`, `fix` или `resolve`: итоговое решение по связанным задачам фиксируется отдельно после приёмки результата.");
+  if (prematureClosing.closingIssueReferences.length > 0) {
+    const references = prematureClosing.closingIssueReferences
+      .map((reference) => reference.url || `#${reference.number || "unknown"}`)
+      .join(", ");
+    failures.push(`PR содержит GitHub closing relationship (${references}); связанные задачи закрываются только отдельным пользовательским действием после приёмки результата.`);
   }
 
-  for (const field of REQUIRED_FIELDS) {
-    if (!fields[field.key]) {
-      readinessIssues.push(`Не заполнено поле \`${field.label}:\`.`);
-    }
+  if (prematureClosing.commitCommands.length > 0) {
+    const commands = prematureClosing.commitCommands
+      .map(({ sha, command }) => `${sha.slice(0, 7)}: ${command}`)
+      .join(", ");
+    failures.push(`Commit messages содержат преждевременные closing commands (${commands}); используйте нейтральное поле \`Связанные задачи:\`.`);
   }
 
-  if (fields.linkedIssues && !parseLinkedIssues(fields.linkedIssues).valid) {
-    readinessIssues.push("Поле `Связанные задачи:` должно быть `#NNN`, списком `#NNN, #MMM` или `не требуется`; повторы задач запрещены.");
-  }
-
-  if (countFieldOccurrences(body, "Связанные задачи") > 1) {
-    readinessIssues.push("Поле `Связанные задачи:` должно встречаться ровно один раз.");
-  }
+  readinessIssues.push(...bodyContract.errors.map(({ message }) => message));
 
   if (fields.blockers && !/^отсутствуют$/i.test(fields.blockers)) {
     readinessIssues.push("Поле `Блокеры:` должно быть `отсутствуют` перед Ready.");
@@ -401,6 +306,71 @@ async function githubRequest(path, token) {
   return response.json();
 }
 
+async function githubGraphqlRequest({ query, variables, token }) {
+  const response = await fetch("https://api.github.com/graphql", {
+    method: "POST",
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      "User-Agent": "project-1-ab-readiness-check",
+    },
+    body: JSON.stringify({ query, variables }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`GitHub GraphQL request failed: ${response.status} ${response.statusText}\n${body}`);
+  }
+
+  const payload = await response.json();
+
+  if (payload.errors?.length > 0) {
+    throw new Error(`GitHub GraphQL request failed: ${payload.errors.map((error) => error.message).join("; ")}`);
+  }
+
+  return payload.data;
+}
+
+async function listPullRequestClosingIssueReferences({ owner, repo, pullNumber, token }) {
+  const query = `query ClosingIssueReferences($owner:String!,$repo:String!,$pullNumber:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$pullNumber){closingIssuesReferences(first:100,after:$after,userLinkedOnly:false){nodes{number}pageInfo{hasNextPage endCursor}}}}}`;
+
+  return collectClosingIssueReferences(async (after) => {
+    const data = await githubGraphqlRequest({
+      query,
+      variables: { owner, repo, pullNumber, after },
+      token,
+    });
+    const pullRequest = data?.repository?.pullRequest;
+
+    if (!pullRequest) {
+      throw new Error(`GitHub GraphQL did not return PR #${pullNumber}.`);
+    }
+
+    return pullRequest.closingIssuesReferences;
+  });
+}
+
+async function listPullRequestCommits({ owner, repo, pullNumber, token }) {
+  const commits = [];
+
+  for (let page = 1; ; page += 1) {
+    const batch = await githubRequest(
+      `/repos/${owner}/${repo}/pulls/${pullNumber}/commits?per_page=100&page=${page}`,
+      token,
+    );
+
+    commits.push(...batch.map((commit) => ({
+      sha: commit.sha || "unknown",
+      message: commit.commit?.message || "",
+    })));
+
+    if (batch.length < 100) {
+      return commits;
+    }
+  }
+}
+
 async function listPullRequestFiles({ owner, repo, pullNumber, token }) {
   const files = [];
 
@@ -459,9 +429,6 @@ function printWarning(message) {
 
 function runSelfTest() {
   assert.equal(isProcessOnlyFile(".github/scripts/ab-readiness-check.mjs"), true);
-  assert.equal(isProcessOnlyFile(".github/scripts/package-lock.json"), true);
-  assert.equal(isProcessOnlyFile(".github/scripts/lib/markdown-visibility.mjs"), true);
-  assert.equal(isProcessOnlyFile(".github/scripts/tests/markdown-visibility.test.mjs"), true);
   assert.equal(isProcessOnlyFile(".github/workflows/ab-readiness-check.yml"), true);
   assert.equal(isProcessOnlyFile(".github/scripts/copilot-feasibility-spike.mjs"), true);
   assert.equal(isProcessOnlyFile(".github/workflows/copilot-feasibility-spike.yml"), true);
@@ -474,71 +441,6 @@ function runSelfTest() {
   assert.throws(() => parsePullNumber("123abc"), /positive integer/);
   assert.throws(() => parsePullNumber("0"), /positive integer/);
   assert.throws(() => parsePullNumber(""), /positive integer/);
-  assert.deepEqual(parseLinkedIssues("#708"), {
-    valid: true,
-    noneRequired: false,
-    issueNumbers: [708],
-  });
-  assert.deepEqual(parseLinkedIssues("#708, #712"), {
-    valid: true,
-    noneRequired: false,
-    issueNumbers: [708, 712],
-  });
-  assert.deepEqual(parseLinkedIssues("не требуется"), {
-    valid: true,
-    noneRequired: true,
-    issueNumbers: [],
-  });
-
-  for (const invalidLinkedIssues of [
-    "708",
-    "#708 #712",
-    "#708,#712",
-    "#708,  #712",
-    "https://github.com/Etogerman/Project-1/issues/708",
-    "Closes #708",
-    "#0",
-    "#708, #708",
-    "#9999999999999999999999",
-  ]) {
-    assert.equal(parseLinkedIssues(invalidLinkedIssues).valid, false);
-  }
-
-  for (const closingReference of [
-    "Closes #708",
-    "closed Etogerman/Project-1#708",
-    "Fixes https://github.com/Etogerman/Project-1/issues/708",
-    "fixed #708",
-    "Resolves #708",
-    "resolved #708",
-  ]) {
-    assert.equal(hasClosingIssueKeyword(closingReference), true);
-  }
-
-  assert.equal(hasClosingIssueKeyword("Связанные задачи: #708"), false);
-  assert.equal(hasClosingIssueKeyword("Пример: `Fixes #708` использовать нельзя."), false);
-  assert.equal(hasClosingIssueKeyword("Пример: ``Fixes #708`` использовать нельзя."), false);
-  assert.equal(hasClosingIssueKeyword("```text\nFixes #708\n```"), false);
-  assert.equal(hasClosingIssueKeyword("    Fixes #708"), false);
-  assert.equal(hasClosingIssueKeyword("Обычный текст\n    Fixes #708"), true);
-  assert.equal(hasClosingIssueKeyword("Обычный текст\n\tFixes #708"), true);
-  assert.equal(hasClosingIssueKeyword("- Обычный текст\n    Fixes #708"), true);
-  assert.equal(hasClosingIssueKeyword("- Обычный текст\n\n    Fixes #708"), true);
-  assert.equal(hasClosingIssueKeyword("Обычный текст\n\n    Fixes #708"), false);
-  assert.equal(hasClosingIssueKeyword("# Заголовок\n    Fixes #708"), false);
-  assert.equal(hasClosingIssueKeyword("Заголовок\n---\n    Fixes #708"), false);
-  assert.equal(extractFields("``Авторская самопроверка: выполнена``").authorSelfCheck, null);
-  assert.equal(extractFields("```text\nАвторская самопроверка: выполнена\n```").authorSelfCheck, null);
-  assert.equal(extractFields("    Авторская самопроверка: выполнена").authorSelfCheck, null);
-  assert.equal(
-    countFieldOccurrences("Связанные задачи: не требуется\n```text`x\nСвязанные задачи: #708", "Связанные задачи"),
-    2,
-  );
-  assert.equal(
-    extractFields("Spec revision: `abcdef1`\nСвязанные задачи: #708").specRevision,
-    "abcdef1",
-  );
-
   const readyProcessBody = [
     "## Что изменено",
     "",
@@ -566,6 +468,19 @@ function runSelfTest() {
       isDraft: false,
     }).failures,
     [],
+  );
+
+  assert.match(
+    evaluateReadiness({
+      baseRef: "main",
+      title: "[codex] Уточнить процесс ревью",
+      body: readyProcessBody,
+      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
+      isDraft: false,
+      closingIssueReferences: [{ number: 708 }],
+      commits: [{ sha: "abcdef1234567890", message: "Closes: #708" }],
+    }).failures.join("\n"),
+    /closing relationship.*closing commands/s,
   );
 
   assert.deepEqual(
@@ -641,189 +556,6 @@ function runSelfTest() {
       isDraft: true,
     }).warnings.length > 0,
     true,
-  );
-
-  assert.match(
-    evaluateReadiness({
-      baseRef: "main",
-      title: "[codex] Уточнить процесс ревью",
-      body: readyProcessBody.replace("- Связанные задачи: не требуется\n", ""),
-      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
-      isDraft: false,
-    }).failures.join("\n"),
-    /Связанные задачи/,
-  );
-
-  assert.match(
-    evaluateReadiness({
-      baseRef: "main",
-      title: "[codex] Уточнить процесс ревью",
-      body: readyProcessBody.replace(
-        "- Связанные задачи: не требуется",
-        "``Связанные задачи: #708``",
-      ),
-      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
-      isDraft: false,
-    }).failures.join("\n"),
-    /Связанные задачи/,
-  );
-
-  assert.match(
-    evaluateReadiness({
-      baseRef: "main",
-      title: "[codex] Уточнить процесс ревью",
-      body: readyProcessBody.replace(
-        "- Связанные задачи: не требуется",
-        "~~~text\nСвязанные задачи: #708",
-      ),
-      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
-      isDraft: false,
-    }).failures.join("\n"),
-    /Связанные задачи/,
-  );
-
-  assert.match(
-    evaluateReadiness({
-      baseRef: "main",
-      title: "[codex] Уточнить процесс ревью",
-      body: readyProcessBody.replace(
-        "- Связанные задачи: не требуется",
-        "~~~text\nСвязанные задачи: #708\n~~~",
-      ),
-      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
-      isDraft: false,
-    }).failures.join("\n"),
-    /Связанные задачи/,
-  );
-
-  assert.match(
-    evaluateReadiness({
-      baseRef: "main",
-      title: "[codex] Уточнить процесс ревью",
-      body: [
-        "    Связанные задачи: #708",
-        "",
-        readyProcessBody.replace("- Связанные задачи: не требуется\n", ""),
-      ].join("\n"),
-      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
-      isDraft: false,
-    }).failures.join("\n"),
-    /Связанные задачи/,
-  );
-
-  assert.match(
-    evaluateReadiness({
-      baseRef: "main",
-      title: "[codex] Уточнить процесс ревью",
-      body: readyProcessBody.replace(
-        "- Связанные задачи: не требуется",
-        "```text\nСвязанные задачи: #708",
-      ),
-      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
-      isDraft: false,
-    }).failures.join("\n"),
-    /Связанные задачи/,
-  );
-
-  assert.match(
-    evaluateReadiness({
-      baseRef: "main",
-      title: "[codex] Уточнить процесс ревью",
-      body: readyProcessBody.replace(
-        "- Связанные задачи: не требуется",
-        "<!--\nСвязанные задачи: #708",
-      ),
-      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
-      isDraft: false,
-    }).failures.join("\n"),
-    /Связанные задачи/,
-  );
-
-  assert.match(
-    evaluateReadiness({
-      baseRef: "main",
-      title: "[codex] Уточнить процесс ревью",
-      body: readyProcessBody.replace(
-        "- Связанные задачи: не требуется",
-        "<!--\nСвязанные задачи: #708\n-->",
-      ),
-      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
-      isDraft: false,
-    }).failures.join("\n"),
-    /Связанные задачи/,
-  );
-
-  assert.match(
-    evaluateReadiness({
-      baseRef: "main",
-      title: "[codex] Уточнить процесс ревью",
-      body: `${readyProcessBody}\n- Связанные задачи: #708`,
-      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
-      isDraft: false,
-    }).failures.join("\n"),
-    /ровно один раз/,
-  );
-
-  assert.match(
-    evaluateReadiness({
-      baseRef: "main",
-      title: "[codex] Уточнить процесс ревью",
-      body: readyProcessBody.replace(
-        "- Связанные задачи: не требуется",
-        "```text\nСвязанные задачи: #708\n```",
-      ),
-      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
-      isDraft: false,
-    }).failures.join("\n"),
-    /Связанные задачи/,
-  );
-
-  assert.match(
-    evaluateReadiness({
-      baseRef: "main",
-      title: "[codex] Уточнить процесс ревью",
-      body: `${readyProcessBody}\n\nFixes #708`,
-      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
-      isDraft: true,
-    }).failures.join("\n"),
-    /закрывающие ключевые слова/,
-  );
-
-  assert.match(
-    evaluateReadiness({
-      baseRef: "main",
-      title: "[codex] Уточнить процесс ревью",
-      body: readyProcessBody.replace("Связанные задачи: не требуется", "Связанные задачи: #708 #712"),
-      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
-      isDraft: false,
-    }).failures.join("\n"),
-    /Связанные задачи/,
-  );
-
-  assert.match(
-    evaluateReadiness({
-      baseRef: "main",
-      title: "[codex] Уточнить процесс ревью",
-      body: readyProcessBody.replace("- Связанные задачи: не требуется\n", ""),
-      files: [{ filename: ".github/PULL_REQUEST_TEMPLATE.md" }],
-      isDraft: true,
-    }).warnings.join("\n"),
-    /Связанные задачи/,
-  );
-
-  assert.match(
-    evaluateReadiness({
-      baseRef: "staging",
-      title: "[codex] Исправить синхронизацию Bitrix24",
-      body: readyProcessBody
-        .replace("процессное", "кодовое")
-        .replace("документационный путь", "PR в staging")
-        .replace("Связанные задачи: не требуется", "Связанные задачи: #708")
-        .concat("\n\nFixes #708"),
-      files: [{ filename: "app/Services/Bitrix24ContactSyncService.php" }],
-      isDraft: true,
-    }).failures.join("\n"),
-    /закрывающие ключевые слова/,
   );
 
   assert.match(
@@ -942,29 +674,9 @@ function runSelfTest() {
     /Runtime PR/,
   );
 
-  assert.match(
-    evaluateReadiness({
-      baseRef: "main",
-      title: "[codex] Исправить синхронизацию Bitrix24",
-      body: `${readyProcessBody.replace("процессное", "кодовое").replace("документационный путь", "до merge в main")}\n\n<!-- -->\n\n    Staging PR: #614\n    Staging smoke: https://github.com/Etogerman/Project-1/actions/runs/123`,
-      files: [{ filename: "app/Services/Bitrix24ContactSyncService.php" }],
-      isDraft: false,
-    }).failures.join("\n"),
-    /Runtime PR/,
-  );
-
-  assert.match(
-    evaluateReadiness({
-      baseRef: "main",
-      title: "[codex] Исправить синхронизацию Bitrix24",
-      body: readyProcessBody
-        .replace("процессное", "кодовое")
-        .replace("документационный путь", "до merge в main")
-        .concat("\n\n``Staging PR: #614``\n``Staging smoke: https://github.com/Etogerman/Project-1/actions/runs/123``"),
-      files: [{ filename: "app/Services/Bitrix24ContactSyncService.php" }],
-      isDraft: false,
-    }).failures.join("\n"),
-    /Runtime PR/,
+  assert.equal(
+    hasStagingEvidence("```text\nStaging PR: #614\nStaging smoke: https://github.com/Etogerman/Project-1/actions/runs/123"),
+    false,
   );
 
   assert.deepEqual(
@@ -1020,14 +732,22 @@ async function run() {
   const { owner, repo } = parseRepository(repository);
   const pullRequest = await githubRequest(`/repos/${owner}/${repo}/pulls/${pullNumber}`, token);
   const files = await listPullRequestFiles({ owner, repo, pullNumber, token });
+  const closingIssueReferences = await listPullRequestClosingIssueReferences({
+    owner,
+    repo,
+    pullNumber,
+    token,
+  });
+  const commits = await listPullRequestCommits({ owner, repo, pullNumber, token });
   const result = evaluateReadiness({
     baseRef: pullRequest.base.ref,
     title: pullRequest.title || "",
     body: pullRequest.body || "",
     files,
     isDraft: Boolean(pullRequest.draft),
+    closingIssueReferences,
+    commits,
   });
-
   if (result.failures.length > 0) {
     console.error("AB readiness check failed.");
     console.error(`Base branch: ${pullRequest.base.ref}`);

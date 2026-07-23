@@ -20,6 +20,7 @@ on:
 
 permissions:
   contents: read
+  issues: read
   pull-requests: read
 
 jobs:
@@ -42,8 +43,8 @@ jobs:
       - name: Install guard dependencies
         run: npm ci --prefix .github/scripts --ignore-scripts
 
-      - name: Run Markdown visibility tests
-        run: node --test .github/scripts/tests/markdown-visibility.test.mjs
+      - name: Run guard contract tests
+        run: node --test .github/scripts/tests/*.test.mjs
 
       - name: Run self-test
         run: node .github/scripts/ab-readiness-check.mjs --self-test

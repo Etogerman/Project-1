@@ -1,179 +1,76 @@
 import * as commonmark from "commonmark";
 
 const parser = new commonmark.Parser();
-const INLINE_CODE_TOKEN_PREFIX = "\uE000ab-inline-code:";
-const INLINE_CODE_TOKEN_END = "\uE001";
+const TOKEN_PREFIX = "\uE000ab-inline-code:";
+const TOKEN_END = "\uE001";
 
-function emptyRenderedText(value = "") {
-  return {
-    visibleText: value,
-    visibleFieldText: value,
-    fieldText: value,
-  };
-}
-
-function appendRenderedText(target, source) {
-  target.visibleText += source.visibleText;
-  target.visibleFieldText += source.visibleFieldText;
-  target.fieldText += source.fieldText;
-}
-
-function chooseInlineCodeTokenPrefix(source) {
+function chooseTokenPrefix(source) {
   let nonce = 0;
-  let prefix = `${INLINE_CODE_TOKEN_PREFIX}${nonce}:`;
-
-  while (source.includes(prefix)) {
-    nonce += 1;
-    prefix = `${INLINE_CODE_TOKEN_PREFIX}${nonce}:`;
-  }
-
-  return prefix;
-}
-
-function inlineCodeToken(context, index) {
-  return `${context.inlineCodeTokenPrefix}${index}${INLINE_CODE_TOKEN_END}`;
-}
-
-function isHtmlComment(literal) {
-  return /^\s*<!--/.test(String(literal || ""));
-}
-
-function renderChildren(node, context, allowMachineFields) {
-  const rendered = emptyRenderedText();
-
-  for (let child = node.firstChild; child; child = child.next) {
-    appendRenderedText(rendered, renderNode(child, context, allowMachineFields));
-  }
-
-  return rendered;
-}
-
-function renderNode(node, context, allowMachineFields) {
-  switch (node.type) {
-    case "text":
-      return emptyRenderedText(node.literal || "");
-
-    case "softbreak":
-    case "linebreak":
-      return emptyRenderedText("\n");
-
-    case "code": {
-      const token = inlineCodeToken(context, context.inlineCodeTokens.length);
-      context.inlineCodeTokens.push({
-        token,
-        value: node.literal || "",
-      });
-
-      return {
-        visibleText: " ",
-        visibleFieldText: " ",
-        fieldText: token,
-      };
-    }
-
-    case "code_block":
-    case "thematic_break":
-      return emptyRenderedText("\n");
-
-    case "html_inline": {
-      if (isHtmlComment(node.literal)) {
-        return emptyRenderedText(" ");
-      }
-
-      return emptyRenderedText(node.literal || "");
-    }
-
-    case "html_block": {
-      if (isHtmlComment(node.literal)) {
-        return emptyRenderedText("\n");
-      }
-
-      const literal = node.literal || "";
-      const suffix = literal.endsWith("\n") ? "" : "\n";
-
-      return {
-        visibleText: `${literal}${suffix}`,
-        visibleFieldText: "\n",
-        fieldText: "\n",
-      };
-    }
-
-    case "heading": {
-      const rendered = renderChildren(node, context, false);
-      const headingText = rendered.visibleText.replace(/\s+/g, " ").trim();
-
-      if (headingText !== "") {
-        context.headings.push(headingText);
-      }
-
-      return {
-        visibleText: `${rendered.visibleText}\n`,
-        visibleFieldText: "\n",
-        fieldText: "\n",
-      };
-    }
-
-    case "paragraph": {
-      const rendered = renderChildren(node, context, allowMachineFields);
-
-      return {
-        visibleText: `${rendered.visibleText}\n`,
-        visibleFieldText: allowMachineFields ? `${rendered.visibleFieldText}\n` : "\n",
-        fieldText: allowMachineFields ? `${rendered.fieldText}\n` : "\n",
-      };
-    }
-
-    case "block_quote": {
-      const rendered = renderChildren(node, context, false);
-
-      return {
-        visibleText: rendered.visibleText,
-        visibleFieldText: "\n",
-        fieldText: "\n",
-      };
-    }
-
-    case "link": {
-      const rendered = renderChildren(node, context, allowMachineFields);
-      const destination = node.destination ? ` ${node.destination}` : "";
-
-      return {
-        visibleText: rendered.visibleText,
-        visibleFieldText: `${rendered.visibleFieldText}${destination}`,
-        fieldText: `${rendered.fieldText}${destination}`,
-      };
-    }
-
-    default:
-      return renderChildren(node, context, allowMachineFields);
-  }
+  while (source.includes(`${TOKEN_PREFIX}${nonce}:`)) nonce += 1;
+  return `${TOKEN_PREFIX}${nonce}:`;
 }
 
 export function analyzeMarkdown(text) {
   const source = String(text);
-  const context = {
-    headings: [],
-    inlineCodeTokenPrefix: chooseInlineCodeTokenPrefix(source),
-    inlineCodeTokens: [],
-  };
-  const document = parser.parse(source);
-  const rendered = renderNode(document, context, true);
+  const result = { visibleText: "", fieldText: "", headings: [], inlineCodeTokens: [] };
+  const tokenPrefix = chooseTokenPrefix(source);
+  const walker = parser.parse(source).walker();
+  let quoteDepth = 0;
+  let fieldParagraph = false;
+  let headingText = null;
 
-  return {
-    ...rendered,
-    headings: context.headings,
-    inlineCodeTokens: context.inlineCodeTokens,
+  const append = (visible, field = visible) => {
+    result.visibleText += visible;
+    if (fieldParagraph) result.fieldText += field;
+    if (headingText !== null) headingText += visible;
   };
+
+  for (let event = walker.next(); event; event = walker.next()) {
+    const { node, entering } = event;
+
+    if (node.type === "block_quote") {
+      quoteDepth += entering ? 1 : -1;
+    } else if (node.type === "paragraph") {
+      if (entering) fieldParagraph = quoteDepth === 0;
+      else {
+        result.visibleText += "\n";
+        result.fieldText += "\n";
+        fieldParagraph = false;
+      }
+    } else if (node.type === "heading") {
+      if (entering) headingText = "";
+      else {
+        const heading = headingText.replace(/\s+/g, " ").trim();
+        if (heading) result.headings.push(heading);
+        result.visibleText += "\n";
+        result.fieldText += "\n";
+        headingText = null;
+      }
+    } else if (entering && node.type === "text") append(node.literal || "");
+    else if (entering && ["softbreak", "linebreak"].includes(node.type)) append("\n");
+    else if (entering && node.type === "code") {
+      const token = `${tokenPrefix}${result.inlineCodeTokens.length}${TOKEN_END}`;
+      result.inlineCodeTokens.push({ token, value: node.literal || "" });
+      append(" ", token);
+    } else if (!entering && node.type === "link" && fieldParagraph && node.destination) {
+      result.fieldText += ` ${node.destination}`;
+    } else if (entering && node.type === "html_inline" && !/^\s*<!--/.test(node.literal || "")) {
+      append(node.literal || "");
+    } else if (entering && node.type === "html_block") {
+      if (!/^\s*<!--/.test(node.literal || "")) result.visibleText += node.literal || "";
+      result.visibleText += "\n";
+      result.fieldText += "\n";
+    } else if (entering && ["code_block", "thematic_break"].includes(node.type)) {
+      result.visibleText += "\n";
+      result.fieldText += "\n";
+    }
+  }
+
+  return { ...result, visibleFieldText: result.fieldText };
 }
 
-export function restoreInlineCodeTokens(text, inlineCodeTokens) {
-  let restored = String(text);
-
-  inlineCodeTokens.forEach(({ token, value }) => {
-    restored = restored.replaceAll(token, value);
-  });
-
-  return restored;
+export function restoreInlineCodeTokens(text, tokens) {
+  return tokens.reduce((value, token) => value.replaceAll(token.token, token.value), String(text));
 }
 
 export function stripMarkdownCode(text) {

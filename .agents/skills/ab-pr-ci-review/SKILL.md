@@ -41,7 +41,6 @@ Merge в `staging` или `main` выполняет только пользов�
 - release-process-guard;
 - ab-readiness-check;
 - PR body;
-- связанные GitHub Issues и сохранение их lineage между staging и main;
 - следующим PR checkpoint.
 
 Этот skill проверяет наличие и статус review comments. После Copilot/reviewer
@@ -79,10 +78,6 @@ review skill разбирает comments только для техническ�
 - поля готовности;
 - Spec-поля и `Spec revision`, если они присутствуют;
 - наличие guard-полей для `main` PR после staging;
-- поле `Связанные задачи:` и, для runtime/code PR в `main`, точное совпадение
-  его набора с объединением связанных задач из всех указанных staging PR;
-- отсутствие `Closes`, `Fixes` и `Resolves` для связанных задач до конечной
-  приёмки соответствующего delivery path;
 - соответствует ли PR текущему delivery level.
 
 ## CI и review
@@ -94,28 +89,16 @@ Copilot/reviewer review нужен технический вердикт пер�
 Skill не запускает ожидание CI, не мониторит проверки до зелёного состояния и не
 считает CI подтверждённым по памяти.
 
-Для технического вердикта читай все review-surfaces: review submissions и их
-body, включая секцию suppressed comments; inline comments; top-level PR
-comments; GraphQL `reviewThreads` с `isResolved` и `isOutdated`. Suppressed
-actionable finding учитывается как замечание даже при отсутствии отдельного
-review thread. Outdated thread не является самостоятельным текущим blocker-ом,
-но используется как история класса дефекта.
-
 `mergeability` используется только как справочный сигнал. Решение о следующем
 checkpoint строится по delivery rules, CI/review status и полям готовности, а не
 только по mergeability.
 
-## Повторное замечание и approach reset
+### Свежесть pre-merge evidence
 
-Кластеризуй замечания по корневому инварианту, а не по файлам и строкам. Если
-после уже внесённого fix новый review снова находит нарушение того же инварианта,
-вердикт остаётся `нужны правки`, а blocker называется `approach reset`.
-
-В этом состоянии не рекомендуй ещё одну точечную правку. Следующий checkpoint —
-read-only редизайн по `Approach Reset Gate` из `docs/task-delivery-workflow.md`:
-полный класс входов, стандарт/oracle, один канонический механизм и общая
-conformance-матрица. Если редизайн меняет зависимость, архитектуру или scope,
-нужен выбор пользователя.
+Перед `готово к merge` одним live snapshot собери CI, review bodies/comments,
+все страницы `reviewThreads` / `closingIssuesReferences(userLinkedOnly: false)`
+и commits; зафиксируй `checkedAt/headRefOid/body.updatedAt/Issue numbers/commit
+SHAs`. Closing evidence или последующее изменение PR блокирует verdict.
 
 ## Обязательные правила
 
@@ -172,12 +155,6 @@ guard-скриптами `.github/scripts/ab-readiness-check.mjs` и
 - `Авторская самопроверка: выполнена`
 - `Блокеры: отсутствуют`
 - `Принятый риск: отсутствует | принят: <краткая причина>`
-- `Связанные задачи: #NNN[, #MMM] | не требуется`
-
-Поле `Связанные задачи:` должно содержать только строгий список номеров через
-запятую и пробел либо точное значение `не требуется`. URL, дубли номеров,
-поясняющий текст и closing keywords (`Closes`, `Fixes`, `Resolves`) не считаются
-валидной связью с задачами.
 
 Spec-поля:
 
@@ -204,11 +181,6 @@ Staging smoke: https://github.com/.../actions/runs/...
 
 Свободная проза вместо этих строк не считается выполнением правила.
 
-Для runtime/code PR в `main` набор в поле `Связанные задачи:` должен точно
-совпадать с объединением наборов из всех перечисленных `Staging PR` / `Staging
-PRs`. Пропуск и необъяснённое добавление задачи являются blocker-ом. Порядок
-номеров значения не имеет.
-
 ## Следующий checkpoint
 
 Назови следующий допустимый checkpoint, но не выполняй его.
@@ -225,16 +197,7 @@ PRs`. Пропуск и необъяснённое добавление зада
 - вердикт агента `нужны правки` -> рекомендовать исправление в текущем scope;
 - вердикт агента `нужен выбор пользователя` -> показать риск и запросить решение пользователя;
 - review status/comments/threads или CI status недоступны либо неоднозначны -> запросить недостающие данные или решение пользователя;
-- code/release merge в `staging` выполнен пользователем -> агент может проверить результат; следующий checkpoint — staging deploy-check/smoke/QA, cleanup недоступен;
-- code/release merge в `main` выполнен пользователем -> агент может проверить результат; следующий checkpoint — ручной production deploy, cleanup недоступен;
-- production deploy, production smoke и пользовательская приёмка завершены ->
-  агент сверяет все связанные Issues, готовит по каждой вердикт и русский
-  итоговый комментарий; закрывает или переоткрывает Issue только пользователь;
-- docs/process-only PR смержен в `main` и результат merge проверен -> агент
-  сверяет связанные Issues до cleanup; если поле содержит `не требуется`,
-  reconciliation считается завершённым;
-- связанная выполненная Issue остаётся открытой без явной причины -> считать её
-  `issue/admin tail`, а не закрытым stream;
+- merge выполнен пользователем -> агент может проверить результат по отдельной команде; cleanup определяется применимыми closure-gates из `docs/task-delivery-workflow.md`;
 - PR body невалиден -> рекомендовать отдельный шаг на исправление PR metadata,
   не исправляя metadata из этого skill.
 
@@ -248,11 +211,7 @@ PRs`. Пропуск и необъяснённое добавление зада
 - CI status;
 - review status;
 - review verdict;
-- статус `approach reset`, если повторился тот же корневой инвариант;
 - PR body/readiness status;
-- связанные задачи и status их lineage;
-- наличие `issue/admin tail`, если проверка выполняется после конечной приёмки
-  соответствующего delivery path;
 - текущий delivery level;
 - blockers;
 - следующий checkpoint;
