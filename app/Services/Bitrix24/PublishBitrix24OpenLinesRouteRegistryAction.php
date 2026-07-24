@@ -46,6 +46,7 @@ class PublishBitrix24OpenLinesRouteRegistryAction
             }
 
             $this->ensureUniqueLineIds($snapshots);
+            $this->ensureCompatibleConnectorTypes($snapshots);
 
             foreach ($snapshots as $snapshot) {
                 $response = $this->client->publish($profile, $snapshot);
@@ -106,6 +107,41 @@ class PublishBitrix24OpenLinesRouteRegistryAction
                 }
 
                 $lineIds[$lineId] = true;
+            }
+        }
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $snapshots
+     */
+    private function ensureCompatibleConnectorTypes(array $snapshots): void
+    {
+        $connectorTypes = [];
+
+        foreach ($snapshots as $snapshot) {
+            $connectors = is_array($snapshot['connectors'] ?? null) ? $snapshot['connectors'] : [];
+
+            foreach ($connectors as $connector) {
+                if (! is_array($connector)) {
+                    continue;
+                }
+
+                $connectorCode = trim((string) ($connector['connector_code'] ?? ''));
+                $connectorType = trim((string) ($connector['connector_type'] ?? ''));
+
+                if ($connectorCode !== ''
+                    && isset($connectorTypes[$connectorCode])
+                    && $connectorTypes[$connectorCode] !== $connectorType
+                ) {
+                    throw new Bitrix24OpenLinesRouteRegistryException(
+                        'route_registry_connector_type_conflict',
+                        'Один connector code связан с несовместимыми типами каналов.',
+                    );
+                }
+
+                if ($connectorCode !== '') {
+                    $connectorTypes[$connectorCode] = $connectorType;
+                }
             }
         }
     }

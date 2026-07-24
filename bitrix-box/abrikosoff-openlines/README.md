@@ -92,11 +92,22 @@ require_once $_SERVER['DOCUMENT_ROOT'].'/local/php_interface/include/abrikosoff_
 - `openlines_callback_url`
 
 `openlines_callback_url` остаётся глобальным fallback URL. Если одна коробка
-Bitrix обслуживает несколько Laravel-контуров, для каждой линии нужно добавить
-entry в `connectors.*.lines` и заполнить `owner_callback_base_url`. Для такой
-линии `OnInfoLine` и operator message callbacks будут отправляться на:
+Bitrix обслуживает несколько Laravel-контуров, актуальные Telegram/MAX
+`connector_code`, типы коннекторов, линии и `owner_callback_base_url` поступают
+из включённого и валидного route registry. Для registry-defined коннекторов
+ручная запись в `connectors.*.lines` не требуется.
+
+При `route_registry.enabled = false` именно `connectors.*.lines` остаётся штатным
+источником статических линий. Ограничение «только переходный fallback или
+совместимость с legacy snapshot без connector catalog» применяется после
+включения registry. Для registry-defined линии `OnInfoLine` и operator message
+callbacks отправляются на:
 
 - `{owner_callback_base_url}/callbacks/bitrix24/openlines`
+
+Registry connector catalog принимает только `telegram_bot -> telegram` и
+`max -> max`. Рабочий `telegram_account` route блокирует publish до HTTP-запроса
+как `route_registry_connector_type_invalid`.
 
 Текущий production handoff:
 
