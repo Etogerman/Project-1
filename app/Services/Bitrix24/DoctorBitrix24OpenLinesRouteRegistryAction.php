@@ -95,6 +95,12 @@ class DoctorBitrix24OpenLinesRouteRegistryAction
                 $diffs[] = "owner {$ownerKey}: callback_url";
             }
 
+            $actualConnectors = is_array($actual['connectors'] ?? null) ? $actual['connectors'] : [];
+
+            if ($actualConnectors != $expected['connectors']) {
+                $diffs[] = "owner {$ownerKey}: connectors";
+            }
+
             $actualRoutes = is_array($actual['routes'] ?? null) ? $actual['routes'] : [];
 
             if ($actualRoutes != $expected['routes']) {

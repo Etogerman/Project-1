@@ -92,9 +92,15 @@ require_once $_SERVER['DOCUMENT_ROOT'].'/local/php_interface/include/abrikosoff_
 - `openlines_callback_url`
 
 `openlines_callback_url` остаётся глобальным fallback URL. Если одна коробка
-Bitrix обслуживает несколько Laravel-контуров, для каждой линии нужно добавить
-entry в `connectors.*.lines` и заполнить `owner_callback_base_url`. Для такой
-линии `OnInfoLine` и operator message callbacks будут отправляться на:
+Bitrix обслуживает несколько Laravel-контуров, актуальные Telegram/MAX
+`connector_code`, типы коннекторов, линии и `owner_callback_base_url` поступают
+из включённого и валидного route registry. Для registry-defined коннекторов
+ручная запись в `connectors.*.lines` не требуется.
+
+`connectors.*.lines` используется только для явно разрешённого переходного
+fallback или совместимости с legacy snapshot без connector catalog. Для
+registry-defined линии `OnInfoLine` и operator message callbacks отправляются
+на:
 
 - `{owner_callback_base_url}/callbacks/bitrix24/openlines`
 

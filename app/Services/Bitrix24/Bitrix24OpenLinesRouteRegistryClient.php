@@ -55,7 +55,7 @@ class Bitrix24OpenLinesRouteRegistryClient
         $method = strtoupper($method);
         $rawBody = $payload === null
             ? ''
-            : (json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '');
+            : (json_encode($this->payloadForEncoding($payload), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '');
         $timestamp = (string) now()->timestamp;
         $requestId = (string) Str::uuid();
         $signature = $this->signature($secret, $method, $path, $query, $timestamp, $requestId, $rawBody);
@@ -84,6 +84,19 @@ class Bitrix24OpenLinesRouteRegistryClient
         }
 
         return $this->decodeResponse($response);
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    private function payloadForEncoding(array $payload): array
+    {
+        if (is_array($payload['connectors'] ?? null)) {
+            $payload['connectors'] = (object) $payload['connectors'];
+        }
+
+        return $payload;
     }
 
     private function signature(

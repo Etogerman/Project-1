@@ -18,6 +18,24 @@ final class Runtime
     private const MAX_COMPONENT = 'abrikosoff:imconnector.max';
 
     /**
+     * @var array<string, array{component: string, name: string, color: string, label: string}>
+     */
+    private const REGISTRY_CONNECTOR_META = [
+        'telegram' => [
+            'component' => self::TELEGRAM_COMPONENT,
+            'name' => 'Abrikosoff Telegram',
+            'color' => '#27A7E7',
+            'label' => 'TG',
+        ],
+        'max' => [
+            'component' => self::MAX_COMPONENT,
+            'name' => 'Abrikosoff MAX',
+            'color' => '#7B4DFF',
+            'label' => 'MX',
+        ],
+    ];
+
+    /**
      * @var array<string, mixed>|null
      */
     private static ?array $config = null;
@@ -438,22 +456,55 @@ final class Runtime
 
     private static function resolveConnectorByLineId(string $lineId): ?string
     {
-        $matches = [];
+        $lineId = trim($lineId);
 
-        foreach (self::connectors() as $connectorCode => $meta) {
-            if (self::connectorLineMeta((string) $connectorCode, $lineId) !== null) {
-                $matches[] = (string) $connectorCode;
+        if ($lineId === '') {
+            return null;
+        }
+
+        $staticConnectors = self::staticConnectors();
+        $staticMatches = [];
+
+        foreach ($staticConnectors as $connectorCode => $meta) {
+            if (is_array($meta) && self::connectorLineMetaFromMeta($meta, $lineId) !== null) {
+                $staticMatches[] = (string) $connectorCode;
             }
         }
 
-        if (count($matches) === 1) {
-            return $matches[0];
+        if (class_exists(__NAMESPACE__.'\\RouteRegistry')) {
+            $registryDecision = RouteRegistry::resolveRuntimeLine(
+                $lineId,
+                array_map(
+                    static fn ($connectorCode): string => (string) $connectorCode,
+                    array_keys($staticConnectors),
+                ),
+                $staticMatches,
+                self::config(),
+            );
+
+            if (in_array($registryDecision['decision'], ['active', 'fallback'], true)
+                && is_array($registryDecision['route'])
+            ) {
+                $connectorCode = trim((string) ($registryDecision['route']['connector_code'] ?? ''));
+
+                return $connectorCode !== '' && self::supportsConnector($connectorCode)
+                    ? $connectorCode
+                    : null;
+            }
+
+            if ($registryDecision['decision'] === 'blocked') {
+                return null;
+            }
         }
 
-        if (count($matches) > 1) {
+        if (count($staticMatches) === 1) {
+            return $staticMatches[0];
+        }
+
+        if (count($staticMatches) > 1) {
             self::logStructured('duplicate_line_id_ignored', [
                 'line_id' => $lineId,
-                'connector_codes' => $matches,
+                'connector_codes' => $staticMatches,
             ]);
         }
 
@@ -473,9 +524,10 @@ final class Runtime
         $codes = [];
 
         foreach (self::connectors() as $connectorCode => $meta) {
+            $connectorCode = trim((string) $connectorCode);
+
             if (
-                ! is_string($connectorCode)
-                || trim($connectorCode) === ''
+                $connectorCode === ''
                 || ! is_array($meta)
                 || trim((string) ($meta['component'] ?? '')) === ''
             ) {
@@ -713,6 +765,43 @@ final class Runtime
      * @return array<string, mixed>
      */
     private static function connectors(): array
+    {
+        $connectors = self::staticConnectors();
+
+        if (! class_exists(__NAMESPACE__.'\\RouteRegistry')) {
+            return $connectors;
+        }
+
+        foreach (RouteRegistry::activeConnectorDefinitions(self::config()) as $connectorCode => $definition) {
+            $connectorCode = trim((string) ($definition['connector_code'] ?? $connectorCode));
+            $connectorType = trim((string) ($definition['connector_type'] ?? ''));
+            $registryMeta = self::REGISTRY_CONNECTOR_META[$connectorType] ?? null;
+
+            if ($connectorCode === '' || ! is_array($registryMeta)) {
+                continue;
+            }
+
+            $staticMeta = $connectors[$connectorCode] ?? [];
+            $staticMeta = is_array($staticMeta) ? $staticMeta : [];
+            $merged = $staticMeta;
+            $merged['component'] = $registryMeta['component'];
+
+            foreach (['name', 'color', 'label'] as $presentationKey) {
+                if (trim((string) ($merged[$presentationKey] ?? '')) === '') {
+                    $merged[$presentationKey] = $registryMeta[$presentationKey];
+                }
+            }
+
+            $connectors[$connectorCode] = $merged;
+        }
+
+        return $connectors;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private static function staticConnectors(): array
     {
         $connectors = self::cfg('connectors', []);
 
