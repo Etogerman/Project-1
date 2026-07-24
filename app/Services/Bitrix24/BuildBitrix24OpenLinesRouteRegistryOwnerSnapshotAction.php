@@ -23,6 +23,7 @@ class BuildBitrix24OpenLinesRouteRegistryOwnerSnapshotAction
             );
         }
 
+        $connectors = [];
         $routes = [];
         $lineIds = [];
 
@@ -36,7 +37,7 @@ class BuildBitrix24OpenLinesRouteRegistryOwnerSnapshotAction
                 ->orderBy('connector_code')
                 ->orderBy('line_id')
                 ->get()
-                ->each(function (Bitrix24OpenLineRoute $route) use (&$routes, &$lineIds): void {
+                ->each(function (Bitrix24OpenLineRoute $route) use (&$connectors, &$routes, &$lineIds): void {
                     $connectorCode = trim((string) $route->connector_code);
                     $lineId = trim((string) $route->line_id);
 
@@ -60,6 +61,20 @@ class BuildBitrix24OpenLinesRouteRegistryOwnerSnapshotAction
                         );
                     }
 
+                    $connectorType = $this->connectorType((string) $route->channel_type);
+                    $knownConnectorType = $connectors[$connectorCode]['connector_type'] ?? null;
+
+                    if (is_string($knownConnectorType) && $knownConnectorType !== $connectorType) {
+                        throw new Bitrix24OpenLinesRouteRegistryException(
+                            'route_registry_connector_type_conflict',
+                            'Один connector code связан с несовместимыми типами каналов.',
+                        );
+                    }
+
+                    $connectors[$connectorCode] = [
+                        'connector_code' => $connectorCode,
+                        'connector_type' => $connectorType,
+                    ];
                     $lineIds[$lineId] = true;
 
                     $routes[$routeKey] = [
@@ -76,7 +91,22 @@ class BuildBitrix24OpenLinesRouteRegistryOwnerSnapshotAction
             'portal_domain' => trim((string) $profile->portal_domain),
             'owner_profile_key' => $ownerKey,
             'owner_callback_base_url' => $callbackBaseUrl,
+            'connectors' => $connectors,
             'routes' => $routes,
         ];
+    }
+
+    private function connectorType(string $channelType): string
+    {
+        $connectorType = Bitrix24OpenLineRoute::openLinesConnectorTypeForChannelType($channelType);
+
+        if ($connectorType === null) {
+            throw new Bitrix24OpenLinesRouteRegistryException(
+                'route_registry_connector_type_invalid',
+                'Тип канала не поддерживается OpenLines connector registry.',
+            );
+        }
+
+        return $connectorType;
     }
 }
