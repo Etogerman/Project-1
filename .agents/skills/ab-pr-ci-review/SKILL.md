@@ -98,10 +98,10 @@ checkpoint строится по delivery rules, CI/review status и полям 
 
 ### Свежесть pre-merge evidence
 
-Перед `готово к merge` одним live snapshot собери CI, review bodies/comments, все
-`reviewThreads`, `closingIssuesReferences` и commits; зафиксируй
-`checkedAt/headRefOid/body.updatedAt/Issue numbers/commit SHAs`. Непустые closing
-references и последующие изменения evidence блокируют verdict.
+Перед `готово к merge` одним live snapshot собери CI, review bodies/comments,
+`reviewThreads`, `closingIssuesReferences` и полный subject/body каждого commit;
+зафиксируй `checkedAt/headRefOid/body.updatedAt/Issues/commit SHAs`. Closing
+references, closing keyword в commit или изменение evidence блокируют verdict.
 
 ## Обязательные правила
 

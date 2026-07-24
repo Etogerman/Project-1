@@ -834,7 +834,7 @@ Stream считается полностью закрытым только ко�
 проверенный merged result для docs/process.
 
 1. `Связанные задачи: не требуется` даёт `Issue Closure: not_required`.
-   Непустой pre-merge closing reference блокирует verdict до удаления.
+   Closing reference/keyword в PR или commit блокирует pre-merge verdict.
 2. Для `#NNN` агент сверяет каждую live Issue с основанием закрытия.
 3. Пользователь выполняет close/reopen и публикует на merged PR
    `Issue Closure: completed` плюс по одной строке

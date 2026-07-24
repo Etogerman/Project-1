@@ -42,7 +42,7 @@ Use this skill to design focused repo-scoped skills for AB Connector. Keep the w
    - Skills must not create shortcuts around Spec repo, Spec doc, Spec revision, PR checkpoints, CI, ready, merge, deploy, or smoke gates.
    - PR handoff keeps `merge` user-performed; Codex verifies before/after and permits cleanup only after both closure checkpoints.
    - Closure basis: accepted production result/risk for code/release; verified merged result for docs/process. Then preserve `Issue Closure` -> applicable `Spec Closure` -> cleanup and the exact records from `docs/task-delivery-workflow.md`.
-   - `не требуется` gives `Issue Closure: not_required`; `#NNN` needs the exact merged-PR record. Closing references block pre-merge; `left_open` is non-blocking after cleanup. Close/reopen is user-performed.
+   - `не требуется` gives `Issue Closure: not_required`; `#NNN` needs the exact merged-PR record. Closing references/keywords in PR or commits block pre-merge; `left_open` is non-blocking after cleanup. Close/reopen is user-performed.
    - If a skill could touch Bitrix24, Open Lines, Telegram, MAX, queues, scheduler, env, config, or runtime, classify it as code/runtime unless proven otherwise.
 
 6. Write the files.

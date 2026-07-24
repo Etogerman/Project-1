@@ -14,9 +14,9 @@
 - При ревью всегда проверяй статус GitHub Actions job `release-process-guard`.
 - После принятия production-результата/риска либо проверки merged docs/process PR следуй
   `docs/task-delivery-workflow.md`: `Issue Closure` -> `Spec Closure` -> cleanup.
-- Closing references блокируют pre-merge verdict. Для `#NNN` без совпавших
-  live-состояния и merged-PR record checkpoint pending; `не требуется` даёт
-  `not_required`, `left_open` после cleanup — неблокирующий `issue/admin tail`.
+- Closing references/keywords в PR или commits блокируют pre-merge verdict. Для
+  `#NNN` без совпавших live-состояния и merged-PR record checkpoint pending;
+  `не требуется` даёт `not_required`, `left_open` после cleanup — неблокирующий tail.
 - Close/reopen Issue выполняет пользователь.
 
 ## Language policy

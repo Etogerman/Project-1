@@ -105,7 +105,7 @@
 64. Для code/runtime stream-а после deploy в `staging` обязателен staging QA на живом staging-контуре. Автоматический `Staging Post-Deploy Smoke` не заменяет staging QA. Переход к `draft PR` в `main` запрещён, пока staging QA не подтверждён или пока пользователь явно не принял риск с описанием незакрытого сценария.
 65. Задание на реализацию существенного stream-а обязано указывать: рабочую копию, имя ветки, `Spec repo` / `Spec doc` / `Spec revision`, базу первого PR и точку остановки агента. Если любое поле отсутствует или задание расходится с rollout path, агент останавливается и спрашивает; молчаливая интерпретация запрещена.
 66. Основание `Issue Closure`: принятый production-результат/риск для code/release либо проверенный merged result для docs/process. Агент сверяет связанные Issues; close/reopen и решение `закрыть | оставить открытой` выполняет пользователь.
-67. `Связанные задачи: не требуется` даёт `Issue Closure: not_required`. Для `#NNN` нужен merged-PR record `closed | left_open` по каждой Issue; closing reference блокирует pre-merge verdict. После cleanup `left_open` — неблокирующий `issue/admin tail`, исключение из правила 4.
+67. `Связанные задачи: не требуется` даёт `Issue Closure: not_required`. Для `#NNN` нужен merged-PR record `closed | left_open` по каждой Issue; closing reference/keyword в PR или commit блокирует pre-merge verdict. После cleanup `left_open` — неблокирующий `issue/admin tail`, исключение из правила 4.
 68. Затем идёт применимый `Spec Closure`, после обоих состояний `completed | not_required` — cleanup. Неприменимость Spec фиксируется на merged PR с причиной; GitHub auto-delete не заменяет checkpoint/cleanup.
 
 ## Solo-dev документация и доказательства
