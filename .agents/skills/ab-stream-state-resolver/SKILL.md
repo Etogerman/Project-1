@@ -109,7 +109,7 @@ integration/runtime или release контуром, пока не доказа�
   review или пользовательский merge;
 - staging/main/release follow-up;
 - production deploy или smoke follow-up;
-- принятый результат без завершённого `Issue Closure` или применимого
+- выполненное основание закрытия без завершённого `Issue Closure` или применимого
   `Spec Closure`;
 - `issue/admin tail`: Issue, оставленная открытой после основания закрытия;
   после cleanup не блокирует новый stream;
@@ -133,7 +133,7 @@ integration/runtime или release контуром, пока не доказа�
 6. статус операторской приёмки, если применимо;
 7. нужны ли сейчас Spec repo / Spec doc / Spec revision;
 8. состояния `Issue Closure` и применимого `Spec Closure`, если stream уже дошёл
-   до post-acceptance checkpoint;
+   до closure checkpoint;
 9. требует ли следующий шаг отдельной команды пользователя.
 
 Не выводи следующий delivery-шаг только из топологии веток.
