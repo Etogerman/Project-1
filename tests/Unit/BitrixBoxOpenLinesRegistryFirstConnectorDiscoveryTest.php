@@ -24,6 +24,7 @@ class BitrixBoxOpenLinesRegistryFirstConnectorDiscoveryTest extends TestCase
     {
         parent::setUp();
 
+        $this->setRouteRegistrySnapshots([]);
         $this->storageDir = sys_get_temp_dir().'/abrikosoff-route-registry-test-'.bin2hex(random_bytes(8));
         mkdir($this->storageDir, 0700, true);
     }
@@ -31,6 +32,7 @@ class BitrixBoxOpenLinesRegistryFirstConnectorDiscoveryTest extends TestCase
     protected function tearDown(): void
     {
         $this->setRuntimeConfig(null);
+        $this->setRouteRegistrySnapshots([]);
 
         foreach (glob($this->storageDir.'/*') ?: [] as $path) {
             if (is_file($path)) {
@@ -92,6 +94,100 @@ class BitrixBoxOpenLinesRegistryFirstConnectorDiscoveryTest extends TestCase
             Runtime::laravelOpenlinesCallbackUrlForLine('dynamic_max', '14'),
         );
         $this->assertSame(0, $this->eventCount('route_registry_miss'));
+    }
+
+    public function test_runtime_reuses_validated_registry_snapshot_during_request(): void
+    {
+        $this->writeRegistry([
+            'local-1' => $this->ownerSnapshot(
+                connectors: [
+                    'dynamic_max' => $this->connector('dynamic_max', 'max'),
+                ],
+                routes: [
+                    'dynamic_max:14' => $this->route('dynamic_max', '14', 'Dynamic MAX'),
+                ],
+            ),
+        ]);
+        $config = $this->runtimeConfig();
+        $this->setRuntimeConfig($config);
+
+        $this->assertArrayHasKey(
+            'dynamic_max',
+            RouteRegistry::activeConnectorDefinitions($config),
+        );
+
+        file_put_contents($this->storageDir.'/route_registry.json', '{"schema_version":');
+
+        $lineInfo = Runtime::onInfoLine('14');
+
+        $this->assertIsArray($lineInfo);
+        $this->assertSame('dynamic_max', $lineInfo['connector_id']);
+        $this->assertSame('Dynamic MAX', $lineInfo['name']);
+        $this->assertSame(0, $this->eventCount('route_registry_invalid'));
+    }
+
+    public function test_publish_refreshes_and_invalidates_validated_registry_snapshot(): void
+    {
+        $this->writeRegistry([
+            'local-1' => $this->ownerSnapshot(
+                connectors: [
+                    'dynamic_max' => $this->connector('dynamic_max', 'max'),
+                ],
+                routes: [
+                    'dynamic_max:14' => $this->route('dynamic_max', '14', 'Dynamic MAX'),
+                ],
+            ),
+        ]);
+        $config = $this->runtimeConfig();
+
+        $this->assertArrayHasKey(
+            'dynamic_max',
+            RouteRegistry::activeConnectorDefinitions($config),
+        );
+
+        $this->writeRegistry([
+            'local-2' => $this->ownerSnapshot(
+                connectors: [
+                    'dynamic_telegram' => $this->connector('dynamic_telegram', 'telegram'),
+                ],
+                routes: [
+                    'dynamic_telegram:15' => $this->route('dynamic_telegram', '15', 'Dynamic Telegram'),
+                ],
+                ownerKey: 'local-2',
+            ),
+        ]);
+
+        $result = $this->publishRequest(
+            $this->publishPayload(
+                ownerKey: 'local-1',
+                connectors: [
+                    'dynamic_max' => $this->connector('dynamic_max', 'max'),
+                ],
+                routes: [
+                    'dynamic_max:14' => $this->route('dynamic_max', '14', 'Dynamic MAX'),
+                ],
+            ),
+            'snapshot-invalidation',
+        );
+
+        $this->assertSame(200, $result['status']);
+
+        $definitions = RouteRegistry::activeConnectorDefinitions($config);
+
+        $this->assertSame(
+            [
+                'connector_code' => 'dynamic_telegram',
+                'connector_type' => 'telegram',
+            ],
+            $definitions['dynamic_telegram'] ?? null,
+        );
+        $this->assertSame(
+            [
+                'connector_code' => 'dynamic_max',
+                'connector_type' => 'max',
+            ],
+            $definitions['dynamic_max'] ?? null,
+        );
     }
 
     public function test_runtime_discovers_numeric_only_max_connector_code(): void
@@ -649,6 +745,15 @@ class BitrixBoxOpenLinesRegistryFirstConnectorDiscoveryTest extends TestCase
     {
         $property = new ReflectionProperty(Runtime::class, 'config');
         $property->setValue(null, $config);
+    }
+
+    /**
+     * @param  array<string, mixed>  $snapshots
+     */
+    private function setRouteRegistrySnapshots(array $snapshots): void
+    {
+        $property = new ReflectionProperty(RouteRegistry::class, 'validatedRegistrySnapshots');
+        $property->setValue(null, $snapshots);
     }
 
     /**

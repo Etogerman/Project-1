@@ -39,6 +39,13 @@ final class RouteRegistry
     ];
 
     /**
+     * Request-scoped validated snapshots keyed by registry file and expected portal.
+     *
+     * @var array<string, array<string, array{registry: array<string, mixed>|null, error_code: string}>>
+     */
+    private static array $validatedRegistrySnapshots = [];
+
+    /**
      * @param  array<string, mixed>  $runtimeConfig
      * @return array{decision: string, route: array<string, mixed>|null, error_code: string}
      */
@@ -588,6 +595,7 @@ final class RouteRegistry
         }
 
         try {
+            self::forgetValidatedRegistrySnapshots($endpointConfig);
             $registry = self::readRegistry($endpointConfig);
 
             if (! is_array($registry)) {
@@ -738,6 +746,7 @@ final class RouteRegistry
         }
 
         @chmod($registryFile, 0600);
+        self::forgetValidatedRegistrySnapshots($endpointConfig);
 
         return '';
     }
@@ -1279,45 +1288,119 @@ final class RouteRegistry
         $file = self::storageDir($runtimeConfig).'/route_registry.json';
         $expectedPortalDomain = self::expectedPortalDomain($runtimeConfig);
 
+        if (
+            isset(self::$validatedRegistrySnapshots[$file])
+            && array_key_exists($expectedPortalDomain, self::$validatedRegistrySnapshots[$file])
+        ) {
+            $snapshot = self::$validatedRegistrySnapshots[$file][$expectedPortalDomain];
+            $errorCode = $snapshot['error_code'];
+
+            return $snapshot['registry'];
+        }
+
         if ($expectedPortalDomain === '') {
-            return null;
+            return self::rememberValidatedRegistrySnapshot(
+                $file,
+                $expectedPortalDomain,
+                null,
+                'route_registry_invalid',
+                $errorCode,
+            );
         }
 
         if (! is_file($file)) {
-            $errorCode = '';
-
-            return self::emptyRegistry($expectedPortalDomain);
+            return self::rememberValidatedRegistrySnapshot(
+                $file,
+                $expectedPortalDomain,
+                self::emptyRegistry($expectedPortalDomain),
+                '',
+                $errorCode,
+            );
         }
 
         $raw = @file_get_contents($file);
 
         if (! is_string($raw) || strlen($raw) > self::MAX_REGISTRY_BYTES) {
-            return null;
+            return self::rememberValidatedRegistrySnapshot(
+                $file,
+                $expectedPortalDomain,
+                null,
+                'route_registry_invalid',
+                $errorCode,
+            );
         }
 
         $decoded = json_decode($raw, true);
 
         if (! is_array($decoded) || (int) ($decoded['schema_version'] ?? 0) !== self::SCHEMA_VERSION) {
-            return null;
+            return self::rememberValidatedRegistrySnapshot(
+                $file,
+                $expectedPortalDomain,
+                null,
+                'route_registry_invalid',
+                $errorCode,
+            );
         }
 
         $registryPortalDomain = trim((string) ($decoded['portal_domain'] ?? ''));
 
         if ($registryPortalDomain !== $expectedPortalDomain) {
-            return null;
+            return self::rememberValidatedRegistrySnapshot(
+                $file,
+                $expectedPortalDomain,
+                null,
+                'route_registry_invalid',
+                $errorCode,
+            );
         }
 
         $storedRegistryError = self::storedRegistryValidationError($decoded);
 
         if ($storedRegistryError !== '') {
-            $errorCode = $storedRegistryError;
-
-            return null;
+            return self::rememberValidatedRegistrySnapshot(
+                $file,
+                $expectedPortalDomain,
+                null,
+                $storedRegistryError,
+                $errorCode,
+            );
         }
 
-        $errorCode = '';
+        return self::rememberValidatedRegistrySnapshot(
+            $file,
+            $expectedPortalDomain,
+            $decoded,
+            '',
+            $errorCode,
+        );
+    }
 
-        return $decoded;
+    /**
+     * @param  array<string, mixed>|null  $registry
+     * @return array<string, mixed>|null
+     */
+    private static function rememberValidatedRegistrySnapshot(
+        string $file,
+        string $expectedPortalDomain,
+        ?array $registry,
+        string $snapshotErrorCode,
+        ?string &$errorCode
+    ): ?array {
+        self::$validatedRegistrySnapshots[$file][$expectedPortalDomain] = [
+            'registry' => $registry,
+            'error_code' => $snapshotErrorCode,
+        ];
+        $errorCode = $snapshotErrorCode;
+
+        return $registry;
+    }
+
+    /**
+     * @param  array<string, mixed>  $config
+     */
+    private static function forgetValidatedRegistrySnapshots(array $config): void
+    {
+        unset(self::$validatedRegistrySnapshots[self::storageDir($config).'/route_registry.json']);
     }
 
     /**
