@@ -858,9 +858,18 @@ Spec write, commit и push — отдельные разрешения по `ab-
 
 ### No-result terminal-route
 
-Требует доказанного отсутствия merged/shared diff/эквивалента и пользовательского
-`cancelled | deferred | closed_without_merge`. Любая materialization переводит
-в result-route, rollback или forward-fix. До cleanup фиксируются:
+`Materialized result` существует, если текущий diff/эквивалент полностью либо
+частично смёржен в целевую, интеграционную или иную delivery-ветку, активирован в
+shared runtime либо опубликован для использования вне временного review evidence.
+Unmerged PR, remote head/feature branch, CI/review artifacts и локальный worktree
+сами по себе являются evidence попытки, а не materialized result. Если такая
+ветка фактически обслуживает shared runtime или используется как опубликованный
+результат, no-result запрещён.
+
+Маршрут требует read-only доказательства отсутствия materialized result и
+пользовательского `cancelled | deferred | closed_without_merge`. Любая
+materialization переводит в result-route, rollback или forward-fix. До cleanup
+фиксируются:
 
 ```text
 Terminal outcome: cancelled | deferred | closed_without_merge
