@@ -74,10 +74,17 @@ review завершён, не находится в pending/in-progress сост
 | 29 | Запустить production deploy | Только пользователь |
 | 30 | Проверить production smoke, если у агента есть доступ | Агент |
 | 31 | Принять production результат или риск | Пользователь или оператор |
-| 32 | Выполнить cleanup локальных веток/worktree | Агент |
-| 33 | Удалить remote branch после merge | GitHub auto-delete или агент после явной команды пользователя и проверок |
-| 34 | Изменить GitHub-настройки, repository rules, secrets или environments | Только пользователь |
-| 35 | Проверить, что хвост закрыт | Агент |
+| 32 | Определить result/no-result route и сверить Issues/evidence | Агент |
+| 33 | Выбрать terminal outcome при необходимости, решить Issues и опубликовать records | Только пользователь |
+| 34 | Выполнить Spec Closure или записать `not_required` с причиной | Агент после отдельной команды пользователя |
+| 35 | Выполнить cleanup локальных веток/worktree | Агент |
+| 36 | Удалить remote branch после merge | GitHub auto-delete или агент после явной команды пользователя и проверок |
+| 37 | Изменить GitHub-настройки, repository rules, secrets или environments | Только пользователь |
+| 38 | Проверить, что хвост закрыт | Агент |
+
+Routes/records — в `docs/task-delivery-workflow.md`: no-result требует отсутствия
+materialization; cleanup ждёт оба checkpoint, `deferred` остаётся dormant tail.
+Spec write/commit/push разрешаются раздельно.
 
 Если пользователь выявил проблему CI до `ready`, он возвращает задачу агенту.
 Если агент выявил проблему guard-полей, логов или pre-ready проверки, агент
@@ -121,7 +128,7 @@ GitHub-статус. После fix commit/push поток повторяет CI
 | 1 | Перевести PR из draft в ready |
 | 2 | Перевести PR обратно в draft |
 | 3 | Выполнить merge PR |
-| 4 | Закрыть или переоткрыть PR |
+| 4 | Закрыть или переоткрыть PR/Issue |
 | 5 | Approve, request changes или dismiss review |
 | 6 | Нажать GitHub UI-кнопку deploy, promote, approve environment |
 | 7 | Менять branch protection, required checks или repository rules |
@@ -130,11 +137,11 @@ GitHub-статус. После fix commit/push поток повторяет CI
 Агент может читать состояние этих действий, объяснять следующий checkpoint и
 проверять результат после того, как пользователь выполнил действие.
 
-Исключение для branch cleanup: после явной команды пользователя агент может
+Исключение для branch cleanup: после обоих closure-checkpoint и явной команды пользователя агент может
 удалить remote head branch уже слитого PR, если проверил, что PR имеет статус
 `MERGED`, branch принадлежит этому PR, branch не является `main`, `staging`,
 защищённой веткой, активным stream-ом или backup-веткой, и по branch нет другого
 открытого PR. Если любой из этих признаков нельзя подтвердить read-only
-проверкой, агент не удаляет remote branch и показывает blocker. PR, закрытый без
-merge, считается blocker-ом branch cleanup для агента: агент показывает blocker и
-ждёт действия пользователя, а remote branch удаляет только пользователь.
+проверкой, агент не удаляет remote branch и показывает blocker. Для PR,
+закрытого без merge, terminal-route обязателен; remote branch удаляет только
+пользователь либо сохраняет как dormant tail.

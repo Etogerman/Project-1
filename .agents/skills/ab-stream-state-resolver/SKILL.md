@@ -73,7 +73,7 @@ GitHub или `gh`. Детальную проверку PR, CI, review, PR body 
 передавай в `ab-pr-ci-review`, если этот skill активен.
 
 Не создавай, не редактируй, не переводи в ready, не merge, не закрывай и не
-комментируй PR из этого skill.
+комментируй PR или Issue из этого skill.
 
 Не используй `git add`, `git commit`, `git push` и другие команды, которые
 меняют файлы, git-состояние, PR или внешние системы.
@@ -109,6 +109,8 @@ integration/runtime или release контуром, пока не доказа�
   review или пользовательский merge;
 - staging/main/release follow-up;
 - production deploy или smoke follow-up;
+- незавершённые result/no-result closure records и `deferred` dormant tail;
+- `left_open` issue/admin tail; после cleanup он не блокирует новый stream;
 - branch hygiene tail: слитая удалённая или локальная ветка, stale worktree или
   локальная ветка без upstream;
 - spec/admin tail во внешнем репозитории документации;
@@ -128,7 +130,8 @@ integration/runtime или release контуром, пока не доказа�
 5. статус локального MVP, если применимо;
 6. статус операторской приёмки, если применимо;
 7. нужны ли сейчас Spec repo / Spec doc / Spec revision;
-8. требует ли следующий шаг отдельной команды пользователя.
+8. result/no-result route, materialization evidence и Issue/Spec Closure;
+9. требует ли следующий шаг отдельной команды пользователя.
 
 Не выводи следующий delivery-шаг только из топологии веток.
 
@@ -153,18 +156,23 @@ merge`. Агент может проверять до или после поль
 
 GitHub-контрольные действия выполняет пользователь: пользовательский перевод PR в
 ready, пользовательский перевод PR обратно в draft, пользовательский merge,
-close/reopen PR, approve/request changes, GitHub deploy/promote, environment
+close/reopen PR или Issue, approve/request changes, GitHub deploy/promote, environment
 approval, branch protection, required checks и secrets. Агент не предлагает себя
 исполнителем таких действий и в меню указывает пользователя.
 
-Исключение branch cleanup: после явной команды пользователя агент может удалить
-remote head branch уже слитого PR, если проверил `MERGED`, соответствие branch
-этому PR, отсутствие другого открытого PR по branch и отсутствие статуса
+После result basis либо доказанного отсутствия materialized result и
+пользовательского `cancelled | deferred | closed_without_merge` используй route
+из `docs/task-delivery-workflow.md`; materialization блокирует no-result.
+Mismatch означает pending; cleanup ждёт оба checkpoint и dormant-tail outcome.
+
+Исключение branch cleanup: после обоих closure-checkpoint и явной команды пользователя
+агент может удалить remote head branch слитого PR, если проверил `MERGED`,
+соответствие branch этому PR, отсутствие другого открытого PR и статуса
 защищённой ветки, активного stream-а или backup-ветки. Если любой признак нельзя
 подтвердить read-only проверкой, агент не удаляет remote branch и показывает
-blocker. PR, закрытый без merge, считается blocker-ом branch cleanup для агента:
-агент показывает blocker и ждёт действия пользователя, а remote branch удаляет
-только пользователь.
+blocker. Для закрытого без merge PR агент сначала проверяет terminal-route; после
+обоих checkpoint remote branch удаляет только пользователь. GitHub auto-delete
+не завершает cleanup/checkpoint.
 
 Если правильный следующий шаг требует отдельной команды пользователя, скажи это
 прямо.
@@ -181,6 +189,7 @@ blocker. PR, закрытый без merge, считается blocker-ом bran
 - текущий delivery level;
 - execution ceiling;
 - blockers или недостающие факты;
+- closure-route/status, если применимо;
 - следующий правильный шаг;
 - требуется ли решение пользователя.
 

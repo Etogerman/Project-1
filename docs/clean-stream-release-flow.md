@@ -38,6 +38,7 @@
 - staging smoke завершён, но тот же validated diff ещё не проведён отдельным PR в `main`
 - смерженный PR в `main`, который ещё не выкачен в production, если production входит в release flow
 - завершившийся production deploy без закрытого production smoke-check
+- result/no-result route без outcome/records либо закрытых Issue/Spec checkpoint
 - незакрытый branch hygiene tail: merged remote/local ветки, stale worktree или локальные ветки без upstream, не классифицированные как допустимый остаток
 
 Пока такой хвост существует, допустимы только четыре действия:
@@ -53,18 +54,22 @@
 1. проверить, есть ли активный PR по предыдущему шагу
 2. проверить, есть ли незавершённый staging deploy или staging smoke
 3. проверить, есть ли незавершённый production deploy или production smoke
-4. проверить branch hygiene tail: merged remote/local ветки, stale worktree и локальные ветки без upstream
-5. если хвост найден, остановить новую реализацию и явно сообщить об этом
+4. проверить основание закрытия, `Issue Closure` и применимый `Spec Closure`
+5. проверить branch hygiene tail: merged remote/local ветки, stale worktree и локальные ветки без upstream
+6. если хвост найден, остановить новую реализацию и явно сообщить об этом
    пользователю
 
 Переход к следующему code implementation step разрешён только если branch hygiene
 tail закрыт cleanup-ом или явно принят пользователем как временное исключение
 с перечислением веток, и выполнено одно из условий:
 
-- предыдущий шаг прошёл staging deploy и staging smoke, а если production входит
-  в release flow, то ещё и проведён в `main`, выкачен и проверен production smoke-check
-- предыдущий PR закрыт без merge
-- пользователь явно подтвердил, что предыдущий шаг отменяется или откладывается
+- code/release result принят либо merged docs/process result проверен; оба
+  closure-checkpoint закрыты
+- no-result route завершён: materialization отсутствует, пользовательский
+  outcome/records и оба checkpoint закрыты
+
+`Deferred` branch/worktree — dormant tail; новый substantial stream требует
+exception. Полный contract — в `docs/task-delivery-workflow.md`.
 
 Docs-only/spec/admin follow-up не считается новым code implementation step,
 если он не затрагивает runtime/code diff и не расширяет текущий release scope.
@@ -176,6 +181,8 @@ scope с drift относительно `origin/main`.
 Если staging deploy уходит автоматически после push в `staging`:
 
 - релиз не считается закрытым, пока не пройден post-deploy smoke-check
+- завершение идёт по result/no-result route из `docs/task-delivery-workflow.md`;
+  cleanup до обоих closure-checkpoint недоступен
 - smoke-check проводится по реально рабочим окружениям текущего release flow
 - если production не автодеплоится, production smoke запускается только после
   фактического production deploy

@@ -12,6 +12,11 @@
 - Для `main` PR с runtime-изменениями проверь, что указанный `Staging PR` уже смержен, текущий `main` PR содержит validated diff из этого staging PR, а не накопленное состояние ветки `staging`, и ссылка `Staging smoke` ведет на успешный GitHub Actions run для staging merge commit.
 - Если staging-доказательств нет, явно напиши, что PR нарушает release process и должен сначала пройти через `staging`.
 - При ревью всегда проверяй статус GitHub Actions job `release-process-guard`.
+- Проверяй result/no-result route из `docs/task-delivery-workflow.md`. No-result
+  требует отсутствия materialized результата, пользовательского outcome и exact
+  Issue/Spec/dormant records; иначе blocker.
+- Cleanup ждёт оба checkpoint; closing keywords блокируют pre-merge. Merge,
+  close/reopen и terminal outcome выполняет пользователь.
 
 ## Language policy
 
@@ -27,4 +32,5 @@
 - Отмечай только конкретные проблемы с указанием файла и причины; не оставляй общие замечания без actionable вывода.
 - Формулируй замечания как конкретный риск: что может сломаться, где именно и почему.
 - Не ставь формальное одобрение процессу, если PR обходит `staging`.
-- Для документационных или process-only изменений проверяй ясность формулировок и отсутствие противоречий с `AGENTS.md`.
+- Для docs/process проверяй согласованность с `AGENTS.md` и достижимость обоих
+  route до `Issue Closure -> Spec Closure -> cleanup`.

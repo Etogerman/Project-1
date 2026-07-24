@@ -2,8 +2,8 @@
 
 ## Цель
 
-Закрывать релиз не фактом deploy, а фактом подтверждённого smoke-check
-на реальном рабочем окружении.
+Подтвердить production-результат на рабочем окружении. Smoke не закрывает
+Issue/Spec Closure и не разрешает cleanup.
 
 ## Обязательное правило
 
@@ -12,6 +12,8 @@
 - automatic smoke не заменяет staging QA для code/runtime stream-а
 - production smoke без нового production deploy не считается подтверждением релиза
 - destructive maintenance-команды не запускаются просто ради smoke-check
+- success -> принятие результата/риска -> result-route; no-result допустим
+  только без materialization; cleanup ждёт оба checkpoint
 
 ## Автоматизация
 
@@ -132,6 +134,14 @@ Production smoke делать только после фактического p
 - после проверки нет новых `500`, если логи доступны
 - нет жалоб от операторского workflow сразу после deploy
 
+## Следующий checkpoint после success
+
+1. Зафиксировать environment/release ref/result и принять результат или риск.
+2. Пройти result-route, затем cleanup после обоих checkpoint.
+
+No-result route без materialization описан в `docs/task-delivery-workflow.md`;
+иначе нужен result-route, rollback или forward-fix.
+
 ## Если доступа к логам нет
 
 Если у агента или оператора нет прямого доступа к runtime-логам:
@@ -168,4 +178,5 @@ Production smoke делать только после фактического p
 - короткий комментарий
 - если логов нет, это ограничение фиксируется отдельной строкой
 
-Этого достаточно, чтобы релизный цикл был закрыт формально, а не “на словах”.
+Это закрывает smoke, но не stream: затем идут acceptance, Issue/Spec Closure и
+cleanup.
