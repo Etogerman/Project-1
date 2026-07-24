@@ -38,9 +38,7 @@
 - staging smoke завершён, но тот же validated diff ещё не проведён отдельным PR в `main`
 - смерженный PR в `main`, который ещё не выкачен в production, если production входит в release flow
 - завершившийся production deploy без закрытого production smoke-check
-- production smoke (code/release) или merge (docs/process) без выполненного
-  основания закрытия
-- выполненное основание закрытия без `Issue Closure` или применимого `Spec Closure`
+- result/no-result route без outcome/records либо закрытых Issue/Spec checkpoint
 - незакрытый branch hygiene tail: merged remote/local ветки, stale worktree или локальные ветки без upstream, не классифицированные как допустимый остаток
 
 Пока такой хвост существует, допустимы только четыре действия:
@@ -65,13 +63,13 @@
 tail закрыт cleanup-ом или явно принят пользователем как временное исключение
 с перечислением веток, и выполнено одно из условий:
 
-- предыдущий code/release шаг прошёл весь release flow, production smoke и
-  принятие результата/риска; оба closure-checkpoint имеют
-  `completed | not_required`
-- предыдущий docs/process PR смержен, результат проверен, оба closure-checkpoint
-  имеют `completed | not_required`
-- предыдущий PR закрыт без merge
-- пользователь явно подтвердил, что предыдущий шаг отменяется или откладывается
+- code/release result принят либо merged docs/process result проверен; оба
+  closure-checkpoint закрыты
+- no-result route завершён: materialization отсутствует, пользовательский
+  outcome/records и оба checkpoint закрыты
+
+`Deferred` branch/worktree — dormant tail; новый substantial stream требует
+exception. Полный contract — в `docs/task-delivery-workflow.md`.
 
 Docs-only/spec/admin follow-up не считается новым code implementation step,
 если он не затрагивает runtime/code diff и не расширяет текущий release scope.
@@ -183,17 +181,14 @@ scope с drift относительно `origin/main`.
 Если staging deploy уходит автоматически после push в `staging`:
 
 - релиз не считается закрытым, пока не пройден post-deploy smoke-check
-- production smoke ведёт к принятию результата, затем к closure-route из
-  `docs/task-delivery-workflow.md`; cleanup до `Issue Closure` и применимого
-  `Spec Closure` недоступен
+- завершение идёт по result/no-result route из `docs/task-delivery-workflow.md`;
+  cleanup до обоих closure-checkpoint недоступен
 - smoke-check проводится по реально рабочим окружениям текущего release flow
 - если production не автодеплоится, production smoke запускается только после
   фактического production deploy
 - automatic smoke по production без нового deploy не должен считаться
   подтверждением релиза
 - destructive maintenance-команды не запускаются просто ради проверки
-
-Для docs/process stream тот же route начинается после merge и проверки результата.
 
 Подробный checklist см. в `docs/post-deploy-smoke.md`.
 
@@ -229,7 +224,6 @@ scope с drift относительно `origin/main`.
 - merge
 - deploy
 - post-deploy smoke-check
-- принятие результата -> Issue Closure -> Spec Closure -> cleanup
 
 Это дешевле и безопаснее, чем пытаться тащить всю mixed-ветку до конца как
 один большой пакет.

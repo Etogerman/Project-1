@@ -109,10 +109,8 @@ integration/runtime или release контуром, пока не доказа�
   review или пользовательский merge;
 - staging/main/release follow-up;
 - production deploy или smoke follow-up;
-- выполненное основание закрытия без завершённого `Issue Closure` или применимого
-  `Spec Closure`;
-- `issue/admin tail`: Issue, оставленная открытой после основания закрытия;
-  после cleanup не блокирует новый stream;
+- незавершённые result/no-result closure records и `deferred` dormant tail;
+- `left_open` issue/admin tail; после cleanup он не блокирует новый stream;
 - branch hygiene tail: слитая удалённая или локальная ветка, stale worktree или
   локальная ветка без upstream;
 - spec/admin tail во внешнем репозитории документации;
@@ -132,8 +130,7 @@ integration/runtime или release контуром, пока не доказа�
 5. статус локального MVP, если применимо;
 6. статус операторской приёмки, если применимо;
 7. нужны ли сейчас Spec repo / Spec doc / Spec revision;
-8. состояния `Issue Closure` и применимого `Spec Closure`, если stream уже дошёл
-   до closure checkpoint;
+8. result/no-result route, materialization evidence и Issue/Spec Closure;
 9. требует ли следующий шаг отдельной команды пользователя.
 
 Не выводи следующий delivery-шаг только из топологии веток.
@@ -163,19 +160,19 @@ close/reopen PR или Issue, approve/request changes, GitHub deploy/promote, en
 approval, branch protection, required checks и secrets. Агент не предлагает себя
 исполнителем таких действий и в меню указывает пользователя.
 
-После принятия production-результата/риска либо проверки merged docs/process PR
-используй closure-route и records из `docs/task-delivery-workflow.md`.
-Missing/mismatched evidence означает pending; после cleanup `left_open` —
-неблокирующий `issue/admin tail`.
+После result basis либо доказанного отсутствия materialized result и
+пользовательского `cancelled | deferred | closed_without_merge` используй route
+из `docs/task-delivery-workflow.md`; materialization блокирует no-result.
+Mismatch означает pending; cleanup ждёт оба checkpoint и dormant-tail outcome.
 
 Исключение branch cleanup: после обоих closure-checkpoint и явной команды пользователя
 агент может удалить remote head branch слитого PR, если проверил `MERGED`,
 соответствие branch этому PR, отсутствие другого открытого PR и статуса
 защищённой ветки, активного stream-а или backup-ветки. Если любой признак нельзя
 подтвердить read-only проверкой, агент не удаляет remote branch и показывает
-blocker. PR, закрытый без merge, считается blocker-ом branch cleanup для агента:
-агент показывает blocker и ждёт действия пользователя, а remote branch удаляет
-только пользователь. GitHub auto-delete при merge не завершает cleanup/checkpoint.
+blocker. Для закрытого без merge PR агент сначала проверяет terminal-route; после
+обоих checkpoint remote branch удаляет только пользователь. GitHub auto-delete
+не завершает cleanup/checkpoint.
 
 Если правильный следующий шаг требует отдельной команды пользователя, скажи это
 прямо.
@@ -192,7 +189,7 @@ blocker. PR, закрытый без merge, считается blocker-ом bran
 - текущий delivery level;
 - execution ceiling;
 - blockers или недостающие факты;
-- `Issue Closure` / `Spec Closure` status, если применимо;
+- closure-route/status, если применимо;
 - следующий правильный шаг;
 - требуется ли решение пользователя.
 

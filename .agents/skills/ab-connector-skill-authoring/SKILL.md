@@ -40,9 +40,10 @@ Use this skill to design focused repo-scoped skills for AB Connector. Keep the w
    - New code/runtime streams are staging-first after local MVP and operator decision.
    - Docs-only/policy-only skills may use the docs-only path from clean `origin/main`.
    - Skills must not create shortcuts around Spec repo, Spec doc, Spec revision, PR checkpoints, CI, ready, merge, deploy, or smoke gates.
-   - PR handoff keeps `merge` user-performed; Codex verifies before/after and permits cleanup only after both closure checkpoints.
-   - Closure basis: accepted production result/risk for code/release; verified merged result for docs/process. Then preserve `Issue Closure` -> applicable `Spec Closure` -> cleanup and the exact records from `docs/task-delivery-workflow.md`.
-   - `не требуется` gives `Issue Closure: not_required`; `#NNN` needs the exact merged-PR record. Closing references/keywords in PR or commits block pre-merge; `left_open` is non-blocking after cleanup. Close/reopen is user-performed.
+   - Keep `merge`, close/reopen and terminal outcome user-performed.
+   - Preserve both routes and exact records from `docs/task-delivery-workflow.md`.
+     No-result requires no materialization plus user outcome; both routes require
+     Issue/Spec Closure before cleanup and explicit dormant tails.
    - If a skill could touch Bitrix24, Open Lines, Telegram, MAX, queues, scheduler, env, config, or runtime, classify it as code/runtime unless proven otherwise.
 
 6. Write the files.

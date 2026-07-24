@@ -12,9 +12,8 @@ Issue/Spec Closure и не разрешает cleanup.
 - automatic smoke не заменяет staging QA для code/runtime stream-а
 - production smoke без нового production deploy не считается подтверждением релиза
 - destructive maintenance-команды не запускаются просто ради smoke-check
-- после успешного production smoke пользователь или оператор принимает результат
-  или риск; затем выполняются `Issue Closure` и применимый `Spec Closure`
-- cleanup не начинается до завершения обоих closure-checkpoint
+- success -> принятие результата/риска -> result-route; no-result допустим
+  только без materialization; cleanup ждёт оба checkpoint
 
 ## Автоматизация
 
@@ -137,10 +136,11 @@ Production smoke делать только после фактического p
 
 ## Следующий checkpoint после success
 
-1. Зафиксировать environment, release ref, результат и ограничения.
-2. Пользователь или оператор принимает результат либо риск.
-3. Пройти closure-route по `docs/task-delivery-workflow.md`.
-4. Только затем выполнить cleanup.
+1. Зафиксировать environment/release ref/result и принять результат или риск.
+2. Пройти result-route, затем cleanup после обоих checkpoint.
+
+No-result route без materialization описан в `docs/task-delivery-workflow.md`;
+иначе нужен result-route, rollback или forward-fix.
 
 ## Если доступа к логам нет
 
@@ -178,6 +178,5 @@ Production smoke делать только после фактического p
 - короткий комментарий
 - если логов нет, это ограничение фиксируется отдельной строкой
 
-Этого достаточно, чтобы закрыть smoke-check формально. Полный stream закрывается
-только после принятия результата, `Issue Closure`, применимого `Spec Closure` и
+Это закрывает smoke, но не stream: затем идут acceptance, Issue/Spec Closure и
 cleanup.

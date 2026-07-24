@@ -1,6 +1,6 @@
 ---
 name: ab-pr-ci-review
-description: Read-only inspect AB Connector PR/CI/review, Russian title/body and guards, Spec fields, post-merge Issue/Spec Closure, verdict, and next checkpoint without merging or bypassing gates.
+description: Read-only inspect AB Connector PR/CI/review, Russian title/body and guards, Spec fields, result/terminal Issue/Spec Closure, verdict, and next checkpoint without merging or bypassing gates.
 ---
 
 # Проверка PR, CI и review
@@ -27,8 +27,7 @@ Skill не меняет code diff и не меняет git-состояние.
 проблему и рекомендует отдельный следующий шаг. Исправление metadata выполняется
 только по отдельной команде пользователя вне этого skill.
 
-Merge в `staging` или `main` выполняет только пользователь.
-Закрытие или переоткрытие связанной Issue выполняет только пользователь.
+Merge в `staging`/`main` и close/reopen Issue выполняет только пользователь.
 
 ## Когда использовать
 
@@ -42,8 +41,7 @@ Merge в `staging` или `main` выполняет только пользов�
 - release-process-guard;
 - ab-readiness-check;
 - PR body;
-- следующим PR checkpoint;
-- post-merge `Issue Closure` или `Spec Closure`.
+- следующим PR checkpoint или result/terminal Issue/Spec Closure.
 
 Этот skill проверяет наличие и статус review comments. После Copilot/reviewer
 review skill разбирает comments только для технического вердикта, но не
@@ -79,7 +77,7 @@ review skill разбирает comments только для техническ�
 - PR body по шаблону проекта;
 - поля готовности;
 - Spec-поля и `Spec revision`, если они присутствуют;
-- точное значение `Связанные задачи` и `Основание связи`;
+- `Связанные задачи` / `Основание связи`; для no-result — terminal evidence;
 - наличие guard-полей для `main` PR после staging;
 - соответствует ли PR текущему delivery level.
 
@@ -96,12 +94,9 @@ Skill не запускает ожидание CI, не мониторит пр�
 checkpoint строится по delivery rules, CI/review status и полям готовности, а не
 только по mergeability.
 
-### Свежесть pre-merge evidence
-
-Перед `готово к merge` одним live snapshot собери CI, review bodies/comments,
-`reviewThreads`, `closingIssuesReferences` и полный subject/body каждого commit;
-зафиксируй `checkedAt/headRefOid/body.updatedAt/Issues/commit SHAs`. Closing
-references, closing keyword в commit или изменение evidence блокируют verdict.
+Перед `готово к merge` одним live snapshot собери CI, reviews/comments/threads,
+closing Issues и полные commit messages; зафиксируй timestamp, HEAD/body revision
+и Issues/commit SHAs. Closing keyword или изменение evidence блокирует verdict.
 
 ## Обязательные правила
 
@@ -134,11 +129,11 @@ Copilot/reviewer review считается выполненным только �
 PR в `staging` не включает merge в `staging`, staging smoke, PR в `main` или merge
 в `main`.
 
-## Post-merge Issue/Spec Closure
+## Closure
 
-По отдельной команде сверяй closure-route и merged-PR records с
-`docs/task-delivery-workflow.md`; missing/mismatched evidence означает pending,
-`left_open` — неблокирующий после cleanup `issue/admin tail`.
+Сверяй result/no-result route и exact Issue/Spec/dormant records с
+`docs/task-delivery-workflow.md`. No-result требует отсутствия materialized
+result и пользовательского outcome; mismatch означает pending.
 
 ## PR title и body
 
@@ -162,8 +157,8 @@ guard-скриптами `.github/scripts/ab-readiness-check.mjs` и
 - `Локальный MVP: принят | не требуется`
 - `Операторская приёмка: принята | не требуется`
 - `Авторская самопроверка: выполнена`
-- `Связанные задачи: не требуется | #NNN | #NNN, #MMM` — номера Issue должны быть положительными и уникальными; несколько номеров разделяются запятой и пробелом.
-- `Основание связи: <профильная причина>` — обязательно при указанных Issue; при `Связанные задачи: не требуется` поле должно отсутствовать, быть пустым или содержать `не требуется`.
+- `Связанные задачи: не требуется | #NNN | #NNN, #MMM` — positive unique IDs, separator `, `.
+- `Основание связи: <профильная причина>` — для Issue обязательно; иначе пусто/`не требуется`.
 - `Блокеры: отсутствуют`
 - `Принятый риск: отсутствует | принят: <краткая причина>`
 
@@ -208,8 +203,8 @@ Staging smoke: https://github.com/.../actions/runs/...
 - вердикт агента `нужны правки` -> рекомендовать исправление в текущем scope;
 - вердикт агента `нужен выбор пользователя` -> показать риск и запросить решение пользователя;
 - review status/comments/threads или CI status недоступны либо неоднозначны -> запросить недостающие данные или решение пользователя;
-- merge выполнен пользователем -> по отдельной команде проверить результат;
-  cleanup — только по closure-route;
+- merge или terminal outcome выполнен пользователем -> проверить применимый
+  closure-route; cleanup после обоих checkpoint;
 - PR body невалиден -> рекомендовать отдельный шаг на исправление PR metadata,
   не исправляя metadata из этого skill.
 

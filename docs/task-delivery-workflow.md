@@ -46,7 +46,7 @@
 - `Локальный MVP` — минимальный локально тестируемый feature increment текущего stream-а; default trigger операторской приёмки, а не автоматического выхода в первый внешний publish-level
 - `Implementation stream` — полный цикл текущего шага от preflight до закрытия хвоста
 - `Хвост` — незавершённый diff, незапушенная работа, открытый PR, незавершённый CI, deploy, smoke, cleanup или другой обязательный follow-up текущего stream
-- `Branch hygiene tail` — merged remote/local branch, локальная ветка без upstream или stale worktree, которые после merge или closure-checkpoint ждут cleanup
+- `Branch hygiene tail` — cleanup-хвост по веткам: merged remote branch, merged локальная ветка, локальная ветка без upstream или stale worktree, которые остались после фактического закрытия stream-а
 - `Branch hygiene gate` — preflight/cleanup-проверка `Branch hygiene tail` перед новым code stream; gate требует закрыть такой хвост cleanup-ом или явно принять его как временное исключение с перечислением оставшихся веток/worktree и рисков
 - `Validated PR` — опубликованный PR текущего stream, по которому пользователь подтвердил, что `CI` зелёный и в рамках текущего scope не осталось blocker-ов. Если `CI` красный или неоднозначный, пользователь возвращает задачу агенту для разбора ошибки и исправления.
 - `Технический вердикт агента по review` — read-only заключение после Copilot/reviewer review: `готово к merge`, `нужны правки` или `нужен выбор пользователя`. Вердикт не является GitHub approve, request changes, dismiss review, переводом статуса или merge.
@@ -521,8 +521,8 @@ Helper-review не заменяет `author self-check` и не заменяет
 - `Локальный MVP: принят | не требуется`
 - `Операторская приёмка: принята | не требуется`
 - `Авторская самопроверка: выполнена`
-- `Связанные задачи: не требуется | #NNN | #NNN, #MMM` — номера Issue должны быть положительными и уникальными; несколько номеров разделяются запятой и пробелом.
-- `Основание связи: <профильная причина>` — обязательно при указанных Issue; при `Связанные задачи: не требуется` поле должно отсутствовать, быть пустым или содержать `не требуется`.
+- `Связанные задачи: не требуется | #NNN | #NNN, #MMM` — positive unique IDs, separator `, `.
+- `Основание связи: <профильная причина>` — для Issue обязательно; иначе пусто/`не требуется`.
 - `Блокеры: отсутствуют`
 - `Принятый риск: отсутствует | принят: <краткая причина>`
 
@@ -557,9 +557,8 @@ Staging smoke: https://github.com/Etogerman/Project-1/actions/runs/123
 
 Правило рекомендации:
 
-Правила читаются сверху вниз; применяется первый подходящий пункт, а закрытые
-результаты/checkpoints пропускаются. Без зафиксированного операторского решения
-о выкладке publish-шаги ниже недоступны.
+Правила читаются сверху вниз; закрытые checkpoints пропускаются, publish-шаги
+ждут зафиксированного операторского решения о выкладке.
 
 1. Пока согласованный `Локальный MVP` не достигнут и blocker-ов нет, рекомендуемый вариант — `1. Продолжить локальную реализацию`.
 2. Если `Локальный MVP` достигнут, локальный контур закрыт, но операторское решение о выкладке ещё не зафиксировано, рекомендуемый вариант — `1. Провести операторскую приёмку`.
@@ -578,11 +577,12 @@ Staging smoke: https://github.com/Etogerman/Project-1/actions/runs/123
 15. Если действует уровень `до merge в main`, вердикт агента по review — `готово к merge`, рекомендуемый вариант — `1. Пользователь выполняет merge в main, агент затем проверяет результат`.
 16. Если `merge` в `main` уже выполнен для code/release stream, рекомендуемый вариант — `1. Ручной production deploy`.
 17. Если ручной production deploy уже выполнен для code/release stream, рекомендуемый вариант — `1. Production Post-Deploy Smoke`.
-18. Если production smoke закрыт успешно, но production-результат или риск ещё не принят, рекомендуемый вариант — `1. Пользователь или оператор принимает production-результат или риск`.
-19. Если docs/process PR смержен, но merged result не проверен, рекомендуемый вариант — `1. Агент проверяет merged result`.
-20. Если основание закрытия выполнено, а `Issue Closure` pending, рекомендуемый вариант — `1. Пройти Issue Closure Checklist`.
-21. Если `Issue Closure: completed | not_required`, а `Spec Closure` pending, рекомендуемый вариант — `1. Пройти Spec Closure Checklist`.
-22. Если оба closure-checkpoint закрыты, а cleanup pending, рекомендуемый вариант — `1. Cleanup`; до него допустим только docs-only/spec/admin follow-up.
+18. Success production smoke без принятия результата/риска -> `1. Пользователь или оператор принимает результат/риск`.
+19. Merged docs/process PR без проверки результата -> `1. Агент проверяет merged result`.
+20. Нет materialized result, terminal outcome не выбран -> `1. Пользователь выбирает cancelled | deferred | closed_without_merge`.
+21. На выбранном route `Issue Closure` pending -> `1. Пройти Issue Closure`.
+22. Issue закрыт, `Spec Closure` pending -> `1. Пройти Spec Closure`.
+23. Оба checkpoint закрыты, cleanup pending -> `1. Cleanup`; до него только docs/spec/admin follow-up.
 
 Если вердикт агента по review — `нужны правки`, следующим шагом считается
 исправление в текущем scope. Агент не переводит PR обратно в draft и не меняет
@@ -763,9 +763,9 @@ Staging smoke: https://github.com/<owner>/<repo>/actions/runs/<run-id>
 - дальше пользователь проверяет PR самостоятельно или с помощью Copilot / другого ревьюера
 - `CI` проверяет пользователь; если есть ошибки, он возвращает задачу агенту
 - финальный self-review выполняется агентом только по отдельной команде пользователя
-- `ready` и `merge` выполняет только пользователь; Copilot/reviewer review и технический вердикт агента идут после пользовательского `ready` и перед пользовательским `merge`
-- после merge агент проверяет результат и проходит канонический closure-route
-  `Issue Closure -> Spec Closure -> cleanup`
+- `ready` и `merge` выполняет только пользователь; review и технический вердикт
+  идут между ними
+- после merge/closed-without-merge пройти применимый route Этапа 18, затем cleanup
 
 Отсутствие `CI` не блокирует `docs-only` path.
 
@@ -819,7 +819,8 @@ Handoff-точка — это допустимая точка остановки
 
 Stream считается полностью закрытым только когда выполнены все follow-up для того уровня, до которого он был делегирован.
 
-Полное закрытие включает `Issue Closure` и применимый `Spec Closure`.
+Полное закрытие включает `Issue Closure` и применимый `Spec Closure` как для
+result-route, так и для no-result terminal-route.
 
 Нужно различать четыре типа хвоста:
 
@@ -835,19 +836,17 @@ Stream считается полностью закрытым только ко�
 
 1. `Связанные задачи: не требуется` даёт `Issue Closure: not_required`.
    Closing reference/keyword в PR или commit блокирует pre-merge verdict.
-2. Для `#NNN` агент сверяет каждую live Issue с основанием закрытия.
-3. Пользователь выполняет close/reopen и публикует на merged PR
-   `Issue Closure: completed` плюс по одной строке
+2. Для `#NNN` агент сверяет live state; пользователь выполняет close/reopen и
+   пишет на merged PR `Issue Closure: completed` и по строке
    `Issue #NNN: closed | left_open`.
-4. Record должен совпадать с live-состоянием; иначе checkpoint pending.
-   `left_open` создаёт `issue/admin tail`, но не блокирует следующий checkpoint.
+3. Несовпадение record/live state означает pending; `left_open` создаёт
+   неблокирующий после cleanup `issue/admin tail`.
 
 ### Spec Closure Checklist
 
-После `Issue Closure: completed | not_required` для неприменимого Spec агент по
-отдельной команде публикует на merged PR одну запись:
-`Spec Closure: not_required` и `Spec Closure reason: <причина>`. Без обеих строк
-состояние pending. Для применимого внешнего Spec перед закрытием stream нужно:
+На result-route для неприменимого Spec на merged PR нужны
+`Spec Closure: not_required` и `Spec Closure reason: <причина>`; иначе pending.
+Для применимого Spec:
 
 1. сверить фактический runtime / validated diff / acceptance с внешним `Spec doc`
 2. обновить статус в самом `Spec doc`, если документ всё ещё содержит собственный статусный блок
@@ -855,26 +854,46 @@ Stream считается полностью закрытым только ко�
 4. синхронизировать внешний `active-streams.md`: оставить там только реально открытые существенные stream-ы, а закрытую запись удалить или заменить актуальной
 5. если перенос документа в `archive/` не делается в том же шаге, явно оставить документ в состоянии `implemented` с отдельным follow-up `archive pending`
 
-Запись изменений во внешний Spec repo, commit и push являются отдельными
-уровнями разрешения по `ab-spec-workflow`; завершение одного уровня не разрешает
-следующий автоматически.
+Spec write, commit и push — отдельные разрешения по `ab-spec-workflow`.
+
+### No-result terminal-route
+
+Требует доказанного отсутствия merged/shared diff/эквивалента и пользовательского
+`cancelled | deferred | closed_without_merge`. Любая materialization переводит
+в result-route, rollback или forward-fix. До cleanup фиксируются:
+
+```text
+Terminal outcome: cancelled | deferred | closed_without_merge
+Terminal reason: <краткая причина>
+```
+
+- Каждый `#NNN`: пользователь фиксирует `Issue Closure: completed`,
+  `Issue Closure reason: terminal_without_materialized_result` и
+  `Issue #NNN: closed | left_open`; `не требуется`:
+  `Issue Closure: not_required` плюс непустая `Issue Closure reason`.
+- Применимый Spec -> фактический `planned | partial | archived`, после commit
+  `Spec Closure: completed` + revision; неприменимый -> `not_required` + reason.
+- Record: closed PR; без PR — применимый Spec audit или локальный handoff. Новый
+  Spec ради отмены не создаётся; Spec write/commit/push разрешаются отдельно.
+- Cleanup ждёт оба checkpoint; `completed` закрывает attempt, не acceptance.
+  `Deferred` branch/worktree — dormant tail с owner/checkpoint, не cleanup;
+  новый substantial stream требует exception.
+- Outcome, close/reopen и Issue-решения выполняет пользователь.
 
 Статус `planned` для уже материализованного acceptance считается process-error и не является допустимым состоянием закрытия stream-а.
 Незакрытый `spec/admin tail` нужно явно перечислять перед стартом нового substantial code stream-а, но он сам по себе не запрещает unrelated `docs-only` шаг или малый локальный maintenance step.
 
-Code/release после merge в `main` продолжает deploy -> smoke -> принятие
-результата/риска; docs/process начинает после проверки merged result. Далее оба
-идут `Issue Closure -> Spec Closure -> cleanup`. Cleanup разрешён только при
-`issue_closure` и `spec_closure` в `completed | not_required`.
+Result-route: production acceptance либо проверенный merged docs/process result
+-> `Issue Closure` -> `Spec Closure` -> cleanup. Без materialized result —
+terminal-route выше. Оба checkpoint должны быть `completed | not_required`.
 
 Результат:
 - у stream есть честная точка завершения без путаницы между локальной готовностью, `staging` и `main`.
 
 ## Этап 19. Cleanup
 
-После обоих closure-checkpoint агент предлагает cleanup; полное закрытие stream
-фиксируется после cleanup. Все ручные действия этапа требуют закрытых checkpoint.
-GitHub auto-delete ветки при merge не считается cleanup и не заменяет checkpoint.
+После обоих checkpoint агент предлагает cleanup; только он закрывает stream.
+Ручные действия требуют checkpoint, GitHub auto-delete их не заменяет.
 Если stream дошёл до `merge`, branch cleanup является обязательным closure-подшагом:
 агент должен показать конкретный dry-run список и выполнить удаление только после
 явного подтверждения пользователя, если удаление затрагивает remote branch,
@@ -890,9 +909,9 @@ GitHub auto-delete ветки при merge не считается cleanup и н
 Branch cleanup checklist:
 
 1. проверить, что по ветке нет открытого PR
-2. проверить, что PR ветки закрыт через merge
+2. проверить merge либо terminal record и оба checkpoint для closed-without-merge PR
 3. проверить, что branch не является `main`, `staging`, активным stream-ом или явно сохранённым backup
-4. удалить remote head branch после merge по явной команде пользователя или подтвердить, что GitHub auto-delete уже сделал это
+4. после merge удалить remote branch по команде/подтвердить auto-delete; после closed-without-merge пользователь удаляет branch либо сохраняет dormant tail
 5. удалить соответствующую локальную ветку после сохранения нужного upstream/history
 6. выполнить prune локальных remote-tracking ссылок
 7. повторно показать короткий статус: что удалено, что оставлено и почему
@@ -903,7 +922,7 @@ Branch cleanup checklist:
 `main`, `staging`, защищённой веткой, активным stream-ом или backup-веткой, и по
 branch нет другого открытого PR. Если любой из этих признаков нельзя подтвердить
 read-only проверкой, агент не удаляет remote branch и показывает blocker.
-PR, закрытый без merge, считается blocker-ом branch cleanup для агента: агент
+PR, закрытый без merge и без terminal-route, считается blocker-ом branch cleanup для агента: агент
 показывает blocker и ждёт действия пользователя, а remote branch удаляет только
 пользователь.
 

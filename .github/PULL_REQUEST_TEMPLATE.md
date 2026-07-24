@@ -22,11 +22,11 @@
 - Основание связи:
 <!--
 `Связанные задачи` — нейтральная lineage-связь: `не требуется`, `#NNN` или
-`#NNN, #MMM`. Не используйте closing keywords GitHub:
-`close/closes/closed`, `fix/fixes/fixed`, `resolve/resolves/resolved`.
-Основание closure: принятый production-результат/риск для code/release либо
-проверенный merged result для docs/process. Затем выполните `Issue Closure`,
-`Spec Closure` и cleanup по `docs/task-delivery-workflow.md`.
+`#NNN, #MMM`; closing keywords GitHub запрещены.
+Routes по `docs/task-delivery-workflow.md`: result — после production acceptance
+или проверки merged docs/process result; no-result — только без materialized
+result и после пользовательского `cancelled | deferred | closed_without_merge`.
+Оба route требуют exact Issue/Spec records до cleanup; `deferred` — dormant tail.
 -->
 - Блокеры:
 - Принятый риск:
