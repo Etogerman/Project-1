@@ -168,7 +168,7 @@ approval, branch protection, required checks и secrets. Агент не пре�
 Missing/mismatched evidence означает pending; после cleanup `left_open` —
 неблокирующий `issue/admin tail`.
 
-Исключение branch cleanup: после closure-checkpoint и явной команды пользователя
+Исключение branch cleanup: после обоих closure-checkpoint и явной команды пользователя
 агент может удалить remote head branch слитого PR, если проверил `MERGED`,
 соответствие branch этому PR, отсутствие другого открытого PR и статуса
 защищённой ветки, активного stream-а или backup-ветки. Если любой признак нельзя

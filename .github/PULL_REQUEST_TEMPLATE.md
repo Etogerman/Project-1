@@ -24,9 +24,9 @@
 `Связанные задачи` — нейтральная lineage-связь: `не требуется`, `#NNN` или
 `#NNN, #MMM`. Не используйте closing keywords GitHub:
 `close/closes/closed`, `fix/fixes/fixed`, `resolve/resolves/resolved`.
-После merge выполните `Issue Closure`, `Spec Closure` и cleanup по
-`docs/task-delivery-workflow.md`; там же заданы `not_required`, merged-PR records
-и `issue/admin tail`.
+Основание closure: принятый production-результат/риск для code/release либо
+проверенный merged result для docs/process. Затем выполните `Issue Closure`,
+`Spec Closure` и cleanup по `docs/task-delivery-workflow.md`.
 -->
 - Блокеры:
 - Принятый риск:
