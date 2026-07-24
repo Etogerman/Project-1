@@ -248,6 +248,10 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'platform' => Channel::PLATFORM_MAX,
             'connection_type' => Channel::CONNECTION_TYPE_BOT,
         ]);
+        $telegramAccount = Channel::factory()->account()->create([
+            'name' => 'Локальный Telegram Account',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
         $callbackOwner = $profile->callbackOwners()->firstOrFail();
 
         Bitrix24OpenLineRoute::query()->create([
@@ -274,6 +278,19 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'line_name' => '8 Локальный бот MAX - Герман-1',
             'callback_owner_id' => $callbackOwner->id,
             'source_id' => 'ABC_MAX',
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+        ]);
+        Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $telegramAccount->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($telegramAccount),
+            'connector_code' => 'abc_telegram_account',
+            'line_id' => '7',
+            'line_name' => '7 Локальный Telegram Account - Герман-1',
+            'callback_owner_id' => $callbackOwner->id,
+            'source_id' => 'ABC_TELEGRAM_ACCOUNT',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);
 
@@ -305,6 +322,8 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         $this->assertStringContainsString("'color' => '#7B4DFF'", $snippet);
         $this->assertStringContainsString("'label' => 'MX'", $snippet);
         $this->assertStringContainsString('8 =>', $snippet);
+        $this->assertStringNotContainsString("'abc_telegram_account'", $snippet);
+        $this->assertStringNotContainsString("'line_id' => '7'", $snippet);
         $this->assertStringContainsString("'owner_profile_key' => 'local-1'", $snippet);
         $this->assertStringContainsString("'owner_callback_base_url' => 'https://local-ngrok.example.test'", $snippet);
     }

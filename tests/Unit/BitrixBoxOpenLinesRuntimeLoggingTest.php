@@ -11,6 +11,7 @@ class BitrixBoxOpenLinesRuntimeLoggingTest extends TestCase
 {
     public static function setUpBeforeClass(): void
     {
+        require_once dirname(__DIR__, 2).'/bitrix-box/abrikosoff-openlines/local/php_interface/include/abrikosoff_openlines/src/RouteRegistry.php';
         require_once dirname(__DIR__, 2).'/bitrix-box/abrikosoff-openlines/local/php_interface/include/abrikosoff_openlines/src/Runtime.php';
     }
 
@@ -83,6 +84,9 @@ class BitrixBoxOpenLinesRuntimeLoggingTest extends TestCase
                 'owner_callback_base_url' => 'https://abc-ngrok.example.test',
             ],
         ]);
+        $config['route_registry'] = [
+            'enabled' => false,
+        ];
         $config['connectors'] = [
             'abrikosoff_telegram' => [
                 'name' => 'Legacy Telegram',
@@ -108,6 +112,10 @@ class BitrixBoxOpenLinesRuntimeLoggingTest extends TestCase
             'abc_telegram',
             Runtime::connectorCodeForComponentLine('abrikosoff:imconnector.telegram', '9'),
         );
+        $this->assertSame(
+            'abc_max',
+            Runtime::connectorCodeForComponentLine('abrikosoff:imconnector.max', '3'),
+        );
         $this->assertSame('abrikosoff_telegram', Runtime::onBuildTelegramConnector()['ID'] ?? null);
 
         $lineInfo = Runtime::onInfoLine('2');
@@ -115,6 +123,11 @@ class BitrixBoxOpenLinesRuntimeLoggingTest extends TestCase
         $this->assertIsArray($lineInfo);
         $this->assertSame('abrikosoff_telegram', $lineInfo['connector_id']);
         $this->assertSame('https://legacy-ngrok.example.test/callbacks/bitrix24/openlines', $lineInfo['url']);
+
+        $maxLineInfo = Runtime::onInfoLine('3');
+
+        $this->assertIsArray($maxLineInfo);
+        $this->assertSame('abc_max', $maxLineInfo['connector_id']);
     }
 
     public function test_runtime_refuses_ambiguous_connector_line_ownership(): void

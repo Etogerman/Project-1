@@ -28,6 +28,10 @@ class Bitrix24OpenLineRoute extends Model
 
     public const CHANNEL_TYPE_MAX = 'max';
 
+    public const OPEN_LINES_CONNECTOR_TYPE_TELEGRAM = 'telegram';
+
+    public const OPEN_LINES_CONNECTOR_TYPE_MAX = 'max';
+
     /**
      * @var list<string>
      */
@@ -82,6 +86,15 @@ class Bitrix24OpenLineRoute extends Model
             $channel->platform === Channel::PLATFORM_TELEGRAM && $channel->isAccountConnection() => self::CHANNEL_TYPE_TELEGRAM_ACCOUNT,
             $channel->platform === Channel::PLATFORM_MAX => self::CHANNEL_TYPE_MAX,
             default => (string) $channel->platform,
+        };
+    }
+
+    public static function openLinesConnectorTypeForChannelType(string $channelType): ?string
+    {
+        return match (trim($channelType)) {
+            self::CHANNEL_TYPE_TELEGRAM_BOT => self::OPEN_LINES_CONNECTOR_TYPE_TELEGRAM,
+            self::CHANNEL_TYPE_MAX => self::OPEN_LINES_CONNECTOR_TYPE_MAX,
+            default => null,
         };
     }
 

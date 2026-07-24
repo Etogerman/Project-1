@@ -19,6 +19,7 @@ use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Livewire\Livewire;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 class Bitrix24OpenLinesRouteRegistryTest extends TestCase
@@ -52,7 +53,7 @@ class Bitrix24OpenLinesRouteRegistryTest extends TestCase
         $channel = Channel::factory()->create([
             'name' => 'Telegram Local',
             'platform' => Channel::PLATFORM_TELEGRAM,
-            'connection_type' => Channel::CONNECTION_TYPE_ACCOUNT,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
         ]);
 
         Bitrix24OpenLineRoute::query()->create([
@@ -829,6 +830,61 @@ class Bitrix24OpenLinesRouteRegistryTest extends TestCase
         }
 
         Http::assertNothingSent();
+    }
+
+    #[DataProvider('usableOpenLinesRouteStatusProvider')]
+    public function test_publish_fails_before_http_for_telegram_account_route(string $status): void
+    {
+        $profile = $this->makeProfile([
+            'portal_domain' => 'stagecrm.fvds.ru',
+            'callback_base_url' => 'https://local.example.test/callback',
+            'openlines_route_registry_secret_encrypted' => 'registry-secret-for-telegram-account-test',
+        ]);
+        $owner = $profile->callbackOwners()->firstOrFail();
+        $channel = Channel::factory()->account()->create([
+            'name' => 'Telegram Account',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+
+        Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
+            'connector_code' => 'abrikosoff_telegram_account',
+            'line_id' => 'account-line',
+            'line_name' => 'Telegram account',
+            'callback_owner_id' => $owner->id,
+            'source_id' => 'ABRIKOSOFF_TELEGRAM_ACCOUNT',
+            'status' => $status,
+        ]);
+
+        Http::fake();
+
+        try {
+            app(PublishBitrix24OpenLinesRouteRegistryAction::class)->handle($profile->fresh());
+            $this->fail('Expected Telegram account route to block registry publish.');
+        } catch (Bitrix24OpenLinesRouteRegistryException $exception) {
+            $this->assertSame('route_registry_connector_type_invalid', $exception->errorCode);
+        }
+
+        Http::assertNothingSent();
+
+        $profile->refresh();
+        $this->assertSame(Bitrix24Profile::ROUTE_REGISTRY_STATUS_FAILED, $profile->openlines_route_registry_last_status);
+        $this->assertSame('route_registry_connector_type_invalid', $profile->openlines_route_registry_last_error);
+    }
+
+    /**
+     * @return array<string, array{string}>
+     */
+    public static function usableOpenLinesRouteStatusProvider(): array
+    {
+        return [
+            'active' => [Bitrix24OpenLineRoute::STATUS_ACTIVE],
+            'legacy' => [Bitrix24OpenLineRoute::STATUS_LEGACY],
+        ];
     }
 
     public function test_doctor_reports_missing_connector_catalog_from_remote_snapshot(): void

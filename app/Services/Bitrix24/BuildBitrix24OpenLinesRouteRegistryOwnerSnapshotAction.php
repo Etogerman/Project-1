@@ -8,10 +8,6 @@ use App\Models\Bitrix24Profile;
 
 class BuildBitrix24OpenLinesRouteRegistryOwnerSnapshotAction
 {
-    private const CONNECTOR_TYPE_TELEGRAM = 'telegram';
-
-    private const CONNECTOR_TYPE_MAX = 'max';
-
     /**
      * @return array<string, mixed>
      */
@@ -102,14 +98,15 @@ class BuildBitrix24OpenLinesRouteRegistryOwnerSnapshotAction
 
     private function connectorType(string $channelType): string
     {
-        return match (trim($channelType)) {
-            Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT,
-            Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_ACCOUNT => self::CONNECTOR_TYPE_TELEGRAM,
-            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => self::CONNECTOR_TYPE_MAX,
-            default => throw new Bitrix24OpenLinesRouteRegistryException(
+        $connectorType = Bitrix24OpenLineRoute::openLinesConnectorTypeForChannelType($channelType);
+
+        if ($connectorType === null) {
+            throw new Bitrix24OpenLinesRouteRegistryException(
                 'route_registry_connector_type_invalid',
                 'Тип канала не поддерживается OpenLines connector registry.',
-            ),
-        };
+            );
+        }
+
+        return $connectorType;
     }
 }

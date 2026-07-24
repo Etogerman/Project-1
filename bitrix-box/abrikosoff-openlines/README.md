@@ -97,12 +97,17 @@ Bitrix обслуживает несколько Laravel-контуров, ак�
 из включённого и валидного route registry. Для registry-defined коннекторов
 ручная запись в `connectors.*.lines` не требуется.
 
-`connectors.*.lines` используется только для явно разрешённого переходного
-fallback или совместимости с legacy snapshot без connector catalog. Для
-registry-defined линии `OnInfoLine` и operator message callbacks отправляются
-на:
+При `route_registry.enabled = false` именно `connectors.*.lines` остаётся штатным
+источником статических линий. Ограничение «только переходный fallback или
+совместимость с legacy snapshot без connector catalog» применяется после
+включения registry. Для registry-defined линии `OnInfoLine` и operator message
+callbacks отправляются на:
 
 - `{owner_callback_base_url}/callbacks/bitrix24/openlines`
+
+Registry connector catalog принимает только `telegram_bot -> telegram` и
+`max -> max`. Рабочий `telegram_account` route блокирует publish до HTTP-запроса
+как `route_registry_connector_type_invalid`.
 
 Текущий production handoff:
 
