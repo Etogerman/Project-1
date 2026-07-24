@@ -582,7 +582,7 @@ Staging smoke: https://github.com/Etogerman/Project-1/actions/runs/123
 19. Если docs/process PR смержен, но merged result не проверен, рекомендуемый вариант — `1. Агент проверяет merged result`.
 20. Если основание закрытия выполнено, а `Issue Closure` pending, рекомендуемый вариант — `1. Пройти Issue Closure Checklist`.
 21. Если `Issue Closure: completed | not_required`, а `Spec Closure` pending, рекомендуемый вариант — `1. Пройти Spec Closure Checklist`.
-22. Если оба closure-checkpoint закрыты, а cleanup pending, рекомендуемый вариант — `1. Cleanup`. До него допустим только docs-only/spec/admin follow-up без runtime/code diff.
+22. Если оба closure-checkpoint закрыты, а cleanup pending, рекомендуемый вариант — `1. Cleanup`; до него допустим только docs-only/spec/admin follow-up.
 
 Если вердикт агента по review — `нужны правки`, следующим шагом считается
 исправление в текущем scope. Агент не переводит PR обратно в draft и не меняет
@@ -825,7 +825,7 @@ Stream считается полностью закрытым только ко�
 
 1. runtime/release tail: открытый PR, незавершённый `CI`, незавершённый `staging`/`main` path, deploy и smoke; это жёсткие blockers
 2. branch hygiene tail: merged remote/local ветки, stale worktree и локальные ветки без upstream; это cleanup-gate перед новым code stream-ом
-3. issue/admin tail: связанная Issue, которую пользователь после принятия результата решил оставить открытой; решение по Issue принято, но сама Issue остаётся видимым follow-up
+3. issue/admin tail: Issue, оставленная открытой после основания закрытия; видимый, но неблокирующий после cleanup follow-up
 4. spec/admin tail: `Spec doc` status, `streams/README.md`, запись в `active-streams.md`, `archive pending`; это обязательные follow-up, но не отдельный rollout gate сами по себе
 
 ### Issue Closure Checklist
@@ -834,6 +834,7 @@ Stream считается полностью закрытым только ко�
 проверенный merged result для docs/process.
 
 1. `Связанные задачи: не требуется` даёт `Issue Closure: not_required`.
+   Непустой pre-merge closing reference блокирует verdict до удаления.
 2. Для `#NNN` агент сверяет каждую live Issue с основанием закрытия.
 3. Пользователь выполняет close/reopen и публикует на merged PR
    `Issue Closure: completed` плюс по одной строке

@@ -111,8 +111,8 @@ integration/runtime или release контуром, пока не доказа�
 - production deploy или smoke follow-up;
 - принятый результат без завершённого `Issue Closure` или применимого
   `Spec Closure`;
-- `issue/admin tail`: связанная Issue, которую пользователь решил оставить
-  открытой после принятия результата;
+- `issue/admin tail`: Issue, оставленная открытой после основания закрытия;
+  после cleanup не блокирует новый stream;
 - branch hygiene tail: слитая удалённая или локальная ветка, stale worktree или
   локальная ветка без upstream;
 - spec/admin tail во внешнем репозитории документации;
@@ -165,7 +165,8 @@ approval, branch protection, required checks и secrets. Агент не пре�
 
 После принятия production-результата/риска либо проверки merged docs/process PR
 используй closure-route и records из `docs/task-delivery-workflow.md`.
-Missing/mismatched evidence означает pending; `left_open` — `issue/admin tail`.
+Missing/mismatched evidence означает pending; после cleanup `left_open` —
+неблокирующий `issue/admin tail`.
 
 Исключение branch cleanup: после closure-checkpoint и явной команды пользователя
 агент может удалить remote head branch слитого PR, если проверил `MERGED`,

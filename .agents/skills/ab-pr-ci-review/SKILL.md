@@ -1,6 +1,6 @@
 ---
 name: ab-pr-ci-review
-description: Inspect AB Connector PR, CI, review, draft/ready state, Russian PR title/body language, PR body guard fields, Spec fields, review verdict, post-merge Issue/Spec Closure, and the allowed next checkpoint without editing PRs, merging, or bypassing delivery gates.
+description: Read-only inspect AB Connector PR/CI/review, Russian title/body and guards, Spec fields, post-merge Issue/Spec Closure, verdict, and next checkpoint without merging or bypassing gates.
 ---
 
 # Проверка PR, CI и review
@@ -100,8 +100,8 @@ checkpoint строится по delivery rules, CI/review status и полям 
 
 Перед `готово к merge` одним live snapshot собери CI, review bodies/comments, все
 `reviewThreads`, `closingIssuesReferences` и commits; зафиксируй
-`checkedAt/headRefOid/body.updatedAt/Issue numbers/commit SHAs`. Последующее
-изменение evidence аннулирует verdict.
+`checkedAt/headRefOid/body.updatedAt/Issue numbers/commit SHAs`. Непустые closing
+references и последующие изменения evidence блокируют verdict.
 
 ## Обязательные правила
 
@@ -138,7 +138,7 @@ PR в `staging` не включает merge в `staging`, staging smoke, PR в `
 
 По отдельной команде сверяй closure-route и merged-PR records с
 `docs/task-delivery-workflow.md`; missing/mismatched evidence означает pending,
-`left_open` — `issue/admin tail`.
+`left_open` — неблокирующий после cleanup `issue/admin tail`.
 
 ## PR title и body
 
