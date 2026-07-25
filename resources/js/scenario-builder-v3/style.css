@@ -1,4 +1,5 @@
-.ac-v3-builder {
+.ac-v3-builder,
+.ac-v3-builder__portal {
     --bg: #fafaf8;
     --surface: #ffffff;
     --surface-2: #f5f5f3;
@@ -31,6 +32,12 @@
     --shadow-card-hover: 0 4px 14px rgba(20, 20, 20, 0.08), 0 0 0 1px rgba(20, 20, 20, 0.08);
     --shadow-card-selected: 0 8px 28px rgba(20, 20, 20, 0.1), 0 0 0 1.5px var(--accent);
 
+    color: var(--text);
+    font: 500 13px/1.45 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+    font-feature-settings: "ss01", "cv11";
+}
+
+.ac-v3-builder {
     position: relative;
     display: grid;
     height: calc(100vh - 112px);
@@ -39,9 +46,6 @@
     border: 1px solid var(--border);
     border-radius: 10px;
     background: var(--bg);
-    color: var(--text);
-    font: 500 13px/1.45 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
-    font-feature-settings: "ss01", "cv11";
     grid-template-rows: 44px 32px auto;
     isolation: isolate;
 }
@@ -50,7 +54,8 @@
     grid-template-rows: max-content 32px minmax(0, 1fr);
 }
 
-:where(.dark, [data-theme="dark"]) .ac-v3-builder {
+:where(.dark, [data-theme="dark"]) .ac-v3-builder,
+:where(.dark, [data-theme="dark"]) .ac-v3-builder__portal {
     --bg: #111315;
     --surface: #171a1d;
     --surface-2: #202428;
@@ -99,14 +104,22 @@ body:has([data-scenario-builder-v3]) .ac-v3-builder {
 
 .ac-v3-builder *,
 .ac-v3-builder *::before,
-.ac-v3-builder *::after {
+.ac-v3-builder *::after,
+.ac-v3-builder__portal,
+.ac-v3-builder__portal *,
+.ac-v3-builder__portal *::before,
+.ac-v3-builder__portal *::after {
     box-sizing: border-box;
 }
 
 .ac-v3-builder button,
 .ac-v3-builder input,
 .ac-v3-builder textarea,
-.ac-v3-builder select {
+.ac-v3-builder select,
+.ac-v3-builder__portal button,
+.ac-v3-builder__portal input,
+.ac-v3-builder__portal textarea,
+.ac-v3-builder__portal select {
     font: inherit;
 }
 
