@@ -8186,7 +8186,7 @@ function StartExpressionVariablePopover({
 
     return createPortal(
         <div
-            className="ac-v3-builder__start-expression-popover"
+            className="ac-v3-builder__portal ac-v3-builder__start-expression-popover"
             style={{ top: position.top, left: position.left }}
             role="dialog"
             aria-label={ariaLabel}
@@ -10473,7 +10473,7 @@ function DialogFieldKeyInput({ value, onChange, placeholder, suggestions = [], p
     const suggestionsList = isSuggestionsOpen && visibleSuggestions.length > 0 && typeof document !== 'undefined' ? createPortal(
         <div
             ref={suggestionsRef}
-            className="ac-v3-builder__dialog-field-suggestions"
+            className="ac-v3-builder__portal ac-v3-builder__dialog-field-suggestions"
             data-role="scenario-edge-dialog-field-key-suggestions"
             data-field-key-purpose={purpose}
             style={suggestionsStyle ?? undefined}
