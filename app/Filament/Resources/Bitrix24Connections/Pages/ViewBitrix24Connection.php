@@ -572,6 +572,7 @@ class ViewBitrix24Connection extends ViewRecord
         }
 
         $connectors = [];
+        $connectorTypes = [];
 
         foreach ($routes as $route) {
             $connectorType = Bitrix24OpenLineRoute::openLinesConnectorTypeForChannelType((string) $route->channel_type);
@@ -581,6 +582,12 @@ class ViewBitrix24Connection extends ViewRecord
             if ($connectorType === null || $connectorCode === '' || $lineId === '') {
                 continue;
             }
+
+            if (isset($connectorTypes[$connectorCode]) && $connectorTypes[$connectorCode] !== $connectorType) {
+                return null;
+            }
+
+            $connectorTypes[$connectorCode] = $connectorType;
 
             if (! isset($connectors[$connectorCode])) {
                 $connectors[$connectorCode] = $this->bitrixBoxConnectorEntry($route, $lineId, $connectorType);
