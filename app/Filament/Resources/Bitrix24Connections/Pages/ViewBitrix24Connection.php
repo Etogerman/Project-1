@@ -572,17 +572,25 @@ class ViewBitrix24Connection extends ViewRecord
         }
 
         $connectors = [];
+        $connectorTypes = [];
 
         foreach ($routes as $route) {
+            $connectorType = Bitrix24OpenLineRoute::openLinesConnectorTypeForChannelType((string) $route->channel_type);
             $connectorCode = trim((string) $route->connector_code);
             $lineId = trim((string) $route->line_id);
 
-            if ($connectorCode === '' || $lineId === '') {
+            if ($connectorType === null || $connectorCode === '' || $lineId === '') {
                 continue;
             }
 
+            if (isset($connectorTypes[$connectorCode]) && $connectorTypes[$connectorCode] !== $connectorType) {
+                return null;
+            }
+
+            $connectorTypes[$connectorCode] = $connectorType;
+
             if (! isset($connectors[$connectorCode])) {
-                $connectors[$connectorCode] = $this->bitrixBoxConnectorEntry($route, $lineId);
+                $connectors[$connectorCode] = $this->bitrixBoxConnectorEntry($route, $lineId, $connectorType);
             }
 
             $connectors[$connectorCode]['lines'][$lineId] = [
@@ -1505,7 +1513,9 @@ class ViewBitrix24Connection extends ViewRecord
 
     protected function defaultStatusForChannel(Channel $channel): string
     {
-        return Bitrix24OpenLineRoute::channelTypeForChannel($channel) === Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_ACCOUNT
+        $channelType = Bitrix24OpenLineRoute::channelTypeForChannel($channel);
+
+        return Bitrix24OpenLineRoute::openLinesConnectorTypeForChannelType($channelType) === null
             ? Bitrix24OpenLineRoute::STATUS_UNSUPPORTED
             : Bitrix24OpenLineRoute::STATUS_INACTIVE;
     }
@@ -1640,12 +1650,17 @@ class ViewBitrix24Connection extends ViewRecord
         }
 
         $isUsableStatus = in_array($form['status'], Bitrix24OpenLineRoute::usableStatuses(), true);
+        $channelType = Bitrix24OpenLineRoute::channelTypeForChannel($channel);
 
         if (
             $isUsableStatus
-            && Bitrix24OpenLineRoute::channelTypeForChannel($channel) === Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_ACCOUNT
+            && Bitrix24OpenLineRoute::openLinesConnectorTypeForChannelType($channelType) === null
         ) {
-            $this->failOpenLineRouteSave('Telegram account пока нельзя сделать рабочим маршрутом открытых линий.');
+            $this->failOpenLineRouteSave(
+                $channelType === Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_ACCOUNT
+                    ? 'Telegram account пока нельзя сделать рабочим маршрутом открытых линий.'
+                    : 'Этот тип канала пока нельзя сделать рабочим маршрутом открытых линий.',
+            );
 
             return false;
         }
@@ -2161,24 +2176,25 @@ class ViewBitrix24Connection extends ViewRecord
     /**
      * @return array{name: string, component: string, line_id: string, line_name: string, lines: array<string, mixed>, color: string, label: string}
      */
-    protected function bitrixBoxConnectorEntry(Bitrix24OpenLineRoute $route, string $lineId): array
+    protected function bitrixBoxConnectorEntry(Bitrix24OpenLineRoute $route, string $lineId, string $connectorType): array
     {
         return [
-            'name' => $this->bitrixBoxConnectorName($route),
-            'component' => $this->bitrixBoxConnectorComponent($route),
+            'name' => $this->bitrixBoxConnectorName($connectorType),
+            'component' => $this->bitrixBoxConnectorComponent($connectorType),
             'line_id' => $lineId,
             'line_name' => $this->bitrixBoxLineName($route),
             'lines' => [],
-            'color' => $this->bitrixBoxConnectorColor($route),
-            'label' => $this->bitrixBoxConnectorLabel($route),
+            'color' => $this->bitrixBoxConnectorColor($connectorType),
+            'label' => $this->bitrixBoxConnectorLabel($connectorType),
         ];
     }
 
-    protected function bitrixBoxConnectorName(Bitrix24OpenLineRoute $route): string
+    protected function bitrixBoxConnectorName(string $connectorType): string
     {
-        $platformName = match ($route->channel_type) {
-            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => 'MAX',
-            default => 'Telegram',
+        $platformName = match ($connectorType) {
+            Bitrix24OpenLineRoute::OPEN_LINES_CONNECTOR_TYPE_TELEGRAM => 'Telegram',
+            Bitrix24OpenLineRoute::OPEN_LINES_CONNECTOR_TYPE_MAX => 'MAX',
+            default => throw new \LogicException('Unsupported Open Lines connector type.'),
         };
         $record = $this->getRecord();
         $connectionName = $record instanceof Bitrix24Connection ? trim((string) $record->application_name) : '';
@@ -2190,27 +2206,30 @@ class ViewBitrix24Connection extends ViewRecord
         return mb_substr($prefix.' '.$platformName, 0, 120);
     }
 
-    protected function bitrixBoxConnectorComponent(Bitrix24OpenLineRoute $route): string
+    protected function bitrixBoxConnectorComponent(string $connectorType): string
     {
-        return match ($route->channel_type) {
-            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => 'abrikosoff:imconnector.max',
-            default => 'abrikosoff:imconnector.telegram',
+        return match ($connectorType) {
+            Bitrix24OpenLineRoute::OPEN_LINES_CONNECTOR_TYPE_TELEGRAM => 'abrikosoff:imconnector.telegram',
+            Bitrix24OpenLineRoute::OPEN_LINES_CONNECTOR_TYPE_MAX => 'abrikosoff:imconnector.max',
+            default => throw new \LogicException('Unsupported Open Lines connector type.'),
         };
     }
 
-    protected function bitrixBoxConnectorColor(Bitrix24OpenLineRoute $route): string
+    protected function bitrixBoxConnectorColor(string $connectorType): string
     {
-        return match ($route->channel_type) {
-            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => '#7B4DFF',
-            default => '#27A7E7',
+        return match ($connectorType) {
+            Bitrix24OpenLineRoute::OPEN_LINES_CONNECTOR_TYPE_TELEGRAM => '#27A7E7',
+            Bitrix24OpenLineRoute::OPEN_LINES_CONNECTOR_TYPE_MAX => '#7B4DFF',
+            default => throw new \LogicException('Unsupported Open Lines connector type.'),
         };
     }
 
-    protected function bitrixBoxConnectorLabel(Bitrix24OpenLineRoute $route): string
+    protected function bitrixBoxConnectorLabel(string $connectorType): string
     {
-        return match ($route->channel_type) {
-            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => 'MX',
-            default => 'TG',
+        return match ($connectorType) {
+            Bitrix24OpenLineRoute::OPEN_LINES_CONNECTOR_TYPE_TELEGRAM => 'TG',
+            Bitrix24OpenLineRoute::OPEN_LINES_CONNECTOR_TYPE_MAX => 'MX',
+            default => throw new \LogicException('Unsupported Open Lines connector type.'),
         };
     }
 

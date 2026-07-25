@@ -2,8 +2,8 @@
 
 namespace Tests\Feature;
 
-use App\Models\Bitrix24Profile;
 use App\Models\Bitrix24OpenLineRoute;
+use App\Models\Bitrix24Profile;
 use App\Models\Channel;
 use App\Models\ContactIdentity;
 use App\Models\Dialog;
@@ -154,6 +154,28 @@ class Bitrix24OpenLineRouteSchemaTest extends TestCase
         $this->assertSame(Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT, Bitrix24OpenLineRoute::channelTypeForChannel($telegramBot));
         $this->assertSame(Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_ACCOUNT, Bitrix24OpenLineRoute::channelTypeForChannel($telegramAccount));
         $this->assertSame(Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX, Bitrix24OpenLineRoute::channelTypeForChannel($maxBot));
+    }
+
+    public function test_openlines_connector_type_policy_supports_telegram_bot_and_max_only(): void
+    {
+        $this->assertSame(
+            Bitrix24OpenLineRoute::OPEN_LINES_CONNECTOR_TYPE_TELEGRAM,
+            Bitrix24OpenLineRoute::openLinesConnectorTypeForChannelType(
+                Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT,
+            ),
+        );
+        $this->assertSame(
+            Bitrix24OpenLineRoute::OPEN_LINES_CONNECTOR_TYPE_MAX,
+            Bitrix24OpenLineRoute::openLinesConnectorTypeForChannelType(
+                Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX,
+            ),
+        );
+        $this->assertNull(
+            Bitrix24OpenLineRoute::openLinesConnectorTypeForChannelType(
+                Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_ACCOUNT,
+            ),
+        );
+        $this->assertNull(Bitrix24OpenLineRoute::openLinesConnectorTypeForChannelType('unsupported'));
     }
 
     private function makeProfile(): Bitrix24Profile

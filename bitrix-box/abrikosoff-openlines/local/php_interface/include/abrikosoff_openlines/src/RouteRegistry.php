@@ -20,6 +20,8 @@ final class RouteRegistry
 
     private const HMAC_WINDOW_SECONDS = 300;
 
+    private const MAX_CONNECTORS_PER_OWNER = 500;
+
     private const MAX_ROUTES_PER_OWNER = 500;
 
     private const MAX_OWNERS = 100;
@@ -27,6 +29,21 @@ final class RouteRegistry
     private const MAX_REGISTRY_BYTES = 1048576;
 
     private const MAX_LOG_BYTES = 5242880;
+
+    /**
+     * @var array<string, string>
+     */
+    private const BUNDLED_COMPONENT_TYPES = [
+        'abrikosoff:imconnector.telegram' => 'telegram',
+        'abrikosoff:imconnector.max' => 'max',
+    ];
+
+    /**
+     * Request-scoped validated snapshots keyed by registry file and expected portal.
+     *
+     * @var array<string, array<string, array{registry: array<string, mixed>|null, error_code: string}>>
+     */
+    private static array $validatedRegistrySnapshots = [];
 
     /**
      * @param  array<string, mixed>  $runtimeConfig
@@ -45,32 +62,65 @@ final class RouteRegistry
             return self::runtimeDecision(self::DECISION_BLOCKED, null, 'route_registry_invalid_key');
         }
 
-        $registry = self::readRegistry($runtimeConfig);
+        $registryError = '';
+        $registry = self::readRegistry($runtimeConfig, $registryError);
         $routeKey = self::routeKey($connectorCode, $lineId);
 
         if (! is_array($registry)) {
+            $runtimeError = $registryError !== '' ? $registryError : 'route_registry_invalid';
+
+            if (self::registryErrorRequiresFailClosed($registryError)) {
+                self::logEvent($runtimeConfig, 'route_registry_invalid', [
+                    'connector_code' => $connectorCode,
+                    'line_id' => $lineId,
+                    'error_code' => $runtimeError,
+                ]);
+
+                return self::runtimeDecision(self::DECISION_BLOCKED, null, $runtimeError);
+            }
+
             if (self::transitionFallbackAllowed($runtimeConfig, $routeKey)) {
                 self::logEvent($runtimeConfig, 'route_registry_fallback_used', [
                     'connector_code' => $connectorCode,
                     'line_id' => $lineId,
-                    'error_code' => 'route_registry_invalid',
+                    'error_code' => $runtimeError,
                 ]);
 
-                return self::runtimeDecision(self::DECISION_FALLBACK, null, 'route_registry_invalid');
+                return self::runtimeDecision(self::DECISION_FALLBACK, null, $runtimeError);
             }
 
             self::logEvent($runtimeConfig, 'route_registry_invalid', [
                 'connector_code' => $connectorCode,
                 'line_id' => $lineId,
-                'error_code' => 'route_registry_invalid',
+                'error_code' => $runtimeError,
             ]);
 
-            return self::runtimeDecision(self::DECISION_BLOCKED, null, 'route_registry_invalid');
+            return self::runtimeDecision(self::DECISION_BLOCKED, null, $runtimeError);
         }
 
         $route = self::findRoute($registry, $connectorCode, $lineId);
 
         if (is_array($route) && ($route['active'] ?? false) === true) {
+            $connectorTypeConflict = self::routeStaticConnectorTypeConflict(
+                $registry,
+                $route,
+                $runtimeConfig,
+            );
+
+            if ($connectorTypeConflict) {
+                self::logEvent($runtimeConfig, 'route_registry_invalid', [
+                    'connector_code' => $connectorCode,
+                    'line_id' => $lineId,
+                    'error_code' => 'route_registry_connector_type_conflict',
+                ]);
+
+                return self::runtimeDecision(
+                    self::DECISION_BLOCKED,
+                    null,
+                    'route_registry_connector_type_conflict',
+                );
+            }
+
             return self::runtimeDecision(self::DECISION_ACTIVE, $route);
         }
 
@@ -125,6 +175,176 @@ final class RouteRegistry
     }
 
     /**
+     * @param  list<string>  $staticConnectorCodes
+     * @param  list<string>  $staticLineConnectorCodes
+     * @param  array<string, mixed>  $runtimeConfig
+     * @return array{decision: string, route: array<string, mixed>|null, error_code: string}
+     */
+    public static function resolveRuntimeLine(
+        string $lineId,
+        array $staticConnectorCodes,
+        array $staticLineConnectorCodes,
+        array $runtimeConfig
+    ): array {
+        $lineId = trim($lineId);
+        $staticConnectorCodes = self::normalizeConnectorCodes($staticConnectorCodes);
+        $staticLineConnectorCodes = self::normalizeConnectorCodes($staticLineConnectorCodes);
+
+        if (! self::runtimeEnabled($runtimeConfig)) {
+            return self::runtimeDecision(self::DECISION_DISABLED);
+        }
+
+        if ($lineId === '') {
+            return self::runtimeDecision(self::DECISION_BLOCKED, null, 'route_registry_invalid_key');
+        }
+
+        $registryError = '';
+        $registry = self::readRegistry($runtimeConfig, $registryError);
+
+        if (! is_array($registry)) {
+            $runtimeError = $registryError !== '' ? $registryError : 'route_registry_invalid';
+
+            if (self::registryErrorRequiresFailClosed($registryError)) {
+                self::logEvent($runtimeConfig, 'route_registry_invalid', [
+                    'line_id' => $lineId,
+                    'error_code' => $runtimeError,
+                ]);
+
+                return self::runtimeDecision(self::DECISION_BLOCKED, null, $runtimeError);
+            }
+
+            return self::runtimeLineFallbackDecision(
+                $lineId,
+                $staticLineConnectorCodes,
+                $runtimeConfig,
+                $runtimeError,
+            );
+        }
+
+        $matches = [];
+
+        foreach (self::registryRoutes($registry) as $route) {
+            if (($route['active'] ?? false) !== true || trim((string) ($route['line_id'] ?? '')) !== $lineId) {
+                continue;
+            }
+
+            $matches[] = $route;
+        }
+
+        if (count($matches) > 1) {
+            self::logEvent($runtimeConfig, 'route_registry_invalid', [
+                'line_id' => $lineId,
+                'error_code' => 'route_registry_duplicate_line_id',
+            ]);
+
+            return self::runtimeDecision(self::DECISION_BLOCKED, null, 'route_registry_duplicate_line_id');
+        }
+
+        if (count($matches) === 1) {
+            $route = $matches[0];
+            $connectorCode = trim((string) ($route['connector_code'] ?? ''));
+
+            if (self::routeStaticConnectorTypeConflict($registry, $route, $runtimeConfig)) {
+                self::logEvent($runtimeConfig, 'route_registry_invalid', [
+                    'connector_code' => $connectorCode,
+                    'line_id' => $lineId,
+                    'error_code' => 'route_registry_connector_type_conflict',
+                ]);
+
+                return self::runtimeDecision(
+                    self::DECISION_BLOCKED,
+                    null,
+                    'route_registry_connector_type_conflict',
+                );
+            }
+
+            if (self::routeHasRegistryConnector($registry, $route)
+                || in_array($connectorCode, $staticConnectorCodes, true)
+            ) {
+                return self::runtimeDecision(self::DECISION_ACTIVE, $route);
+            }
+
+            self::logEvent($runtimeConfig, 'route_registry_invalid', [
+                'connector_code' => $connectorCode,
+                'line_id' => $lineId,
+                'error_code' => 'route_registry_connector_missing',
+            ]);
+
+            return self::runtimeDecision(self::DECISION_BLOCKED, null, 'route_registry_connector_missing');
+        }
+
+        return self::runtimeLineFallbackDecision(
+            $lineId,
+            $staticLineConnectorCodes,
+            $runtimeConfig,
+            'route_registry_miss',
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $runtimeConfig
+     * @return array<int|string, array{connector_code: string, connector_type: string}>
+     */
+    public static function activeConnectorDefinitions(array $runtimeConfig): array
+    {
+        if (! self::runtimeEnabled($runtimeConfig)) {
+            return [];
+        }
+
+        $registry = self::readRegistry($runtimeConfig);
+
+        if (! is_array($registry)) {
+            return [];
+        }
+
+        $definitions = [];
+
+        foreach (self::normalizeOwners($registry['owners'] ?? []) as $owner) {
+            $connectors = is_array($owner['connectors'] ?? null) ? $owner['connectors'] : [];
+            $routes = is_array($owner['routes'] ?? null) ? $owner['routes'] : [];
+            $activeConnectorCodes = [];
+
+            foreach ($routes as $route) {
+                if (! is_array($route) || ($route['active'] ?? false) !== true) {
+                    continue;
+                }
+
+                $connectorCode = trim((string) ($route['connector_code'] ?? ''));
+
+                if ($connectorCode !== '') {
+                    $activeConnectorCodes[$connectorCode] = true;
+                }
+            }
+
+            foreach ($connectors as $connectorKey => $connector) {
+                if (! is_array($connector)) {
+                    continue;
+                }
+
+                $connectorCode = trim((string) ($connector['connector_code'] ?? ''));
+                $connectorType = trim((string) ($connector['connector_type'] ?? ''));
+
+                if ($connectorCode === ''
+                    || (string) $connectorKey !== $connectorCode
+                    || ! isset($activeConnectorCodes[$connectorCode])
+                    || self::staticConnectorTypeConflicts($runtimeConfig, $connectorCode, $connectorType)
+                ) {
+                    continue;
+                }
+
+                $definitions[$connectorCode] = [
+                    'connector_code' => $connectorCode,
+                    'connector_type' => $connectorType,
+                ];
+            }
+        }
+
+        ksort($definitions);
+
+        return $definitions;
+    }
+
+    /**
      * @param  array<string, mixed>  $server
      * @param  array<string, string>  $headers
      * @param  array<string, mixed>|null  $endpointConfig
@@ -153,15 +373,18 @@ final class RouteRegistry
         $action = self::queryValue($query, 'action');
 
         if ($method === 'GET' && $action === 'snapshot') {
-            $registry = self::readRegistry($endpointConfig);
+            $registryError = '';
+            $registry = self::readRegistry($endpointConfig, $registryError);
 
             if ($registry === null) {
+                $registryError = $registryError !== '' ? $registryError : 'route_registry_invalid';
+
                 self::logEvent($endpointConfig, 'route_registry_invalid', [
                     'request_id' => $requestId,
-                    'error_code' => 'route_registry_invalid',
+                    'error_code' => $registryError,
                 ]);
 
-                return self::response(500, false, 'route_registry_invalid');
+                return self::response(500, false, $registryError);
             }
 
             return self::response(200, true, '', [
@@ -183,13 +406,29 @@ final class RouteRegistry
         $validationError = self::validatePublishPayload($payload, $endpointConfig);
 
         if ($validationError !== '') {
+            if (in_array($validationError, [
+                'route_registry_connector_missing',
+                'route_registry_connector_type_invalid',
+            ], true)) {
+                self::logEvent($endpointConfig, 'route_registry_invalid', [
+                    'owner_profile_key' => is_scalar($payload['owner_profile_key'] ?? null)
+                        ? trim((string) $payload['owner_profile_key'])
+                        : '',
+                    'request_id' => $requestId,
+                    'error_code' => $validationError,
+                ]);
+            }
+
             return self::response(422, false, $validationError);
         }
 
         $publishResult = self::publishOwnerSnapshot($payload, $endpointConfig, $requestId);
 
         if ($publishResult['error_code'] !== '') {
-            $status = $publishResult['error_code'] === 'route_registry_conflict' ? 409 : 422;
+            $status = in_array($publishResult['error_code'], [
+                'route_registry_conflict',
+                'route_registry_connector_type_conflict',
+            ], true) ? 409 : 422;
 
             return self::response($status, false, $publishResult['error_code'], [
                 'conflicts' => $publishResult['conflicts'],
@@ -209,7 +448,10 @@ final class RouteRegistry
         http_response_code($result['status']);
         header('Content-Type: application/json; charset=UTF-8');
 
-        echo json_encode($result['body'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{"ok":false}';
+        echo json_encode(
+            self::responseBodyForEncoding($result['body']),
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
+        ) ?: '{"ok":false}';
     }
 
     public static function requestSignature(
@@ -353,6 +595,7 @@ final class RouteRegistry
         }
 
         try {
+            self::forgetValidatedRegistrySnapshots($endpointConfig);
             $registry = self::readRegistry($endpointConfig);
 
             if (! is_array($registry)) {
@@ -369,7 +612,27 @@ final class RouteRegistry
             }
 
             $ownerKey = (string) $payload['owner_profile_key'];
+            $connectors = self::normalizePublishConnectors($payload['connectors'] ?? []);
             $routes = self::normalizePublishRoutes($payload['routes'] ?? []);
+            $connectorConflicts = self::detectConnectorTypeConflicts($registry, $ownerKey, $connectors);
+            $connectorConflicts = array_merge(
+                $connectorConflicts,
+                self::detectStaticConnectorTypeConflicts($connectors, $endpointConfig),
+            );
+
+            if ($connectorConflicts !== []) {
+                self::logEvent($endpointConfig, 'route_registry_conflict', [
+                    'owner_profile_key' => $ownerKey,
+                    'request_id' => $requestId,
+                    'error_code' => 'route_registry_connector_type_conflict',
+                ]);
+
+                return [
+                    'error_code' => 'route_registry_connector_type_conflict',
+                    'conflicts' => $connectorConflicts,
+                ];
+            }
+
             $conflicts = self::detectRouteConflicts($registry, $ownerKey, array_keys($routes));
             $lineConflicts = self::detectActiveLineConflicts($registry, $ownerKey, $routes);
             $conflicts = array_merge($conflicts, $lineConflicts);
@@ -400,11 +663,17 @@ final class RouteRegistry
             $registry['portal_domain'] = (string) $payload['portal_domain'];
             $registry['updated_at'] = date('c');
             $registry['owners'] = $owners;
-            $registry['owners'][$ownerKey] = [
+            $ownerSnapshot = [
                 'owner_profile_key' => $ownerKey,
                 'owner_callback_base_url' => self::normalizeCallbackBaseUrl((string) $payload['owner_callback_base_url']),
                 'routes' => $routes,
             ];
+
+            if (array_key_exists('connectors', $payload)) {
+                $ownerSnapshot['connectors'] = $connectors;
+            }
+
+            $registry['owners'][$ownerKey] = $ownerSnapshot;
 
             $writeError = self::writeRegistry($registry, $endpointConfig);
 
@@ -441,7 +710,10 @@ final class RouteRegistry
         $registryFile = $dir.'/route_registry.json';
         $previousFile = $dir.'/route_registry.previous.json';
         $tempFile = $dir.'/route_registry.'.getmypid().'.tmp';
-        $encoded = json_encode($registry, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
+        $encoded = json_encode(
+            self::registryForEncoding($registry),
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT,
+        );
 
         if ($encoded === false || strlen($encoded) > self::MAX_REGISTRY_BYTES) {
             return 'route_registry_payload_too_large';
@@ -474,8 +746,45 @@ final class RouteRegistry
         }
 
         @chmod($registryFile, 0600);
+        self::forgetValidatedRegistrySnapshots($endpointConfig);
 
         return '';
+    }
+
+    /**
+     * Preserve map semantics for numeric-only connector codes at JSON boundaries.
+     *
+     * @param  array<string, mixed>  $body
+     * @return array<string, mixed>
+     */
+    private static function responseBodyForEncoding(array $body): array
+    {
+        if (is_array($body['registry'] ?? null)) {
+            $body['registry'] = self::registryForEncoding($body['registry']);
+        }
+
+        return $body;
+    }
+
+    /**
+     * @param  array<string, mixed>  $registry
+     * @return array<string, mixed>
+     */
+    private static function registryForEncoding(array $registry): array
+    {
+        $owners = self::normalizeOwners($registry['owners'] ?? []);
+
+        foreach ($owners as $ownerKey => $owner) {
+            if (array_key_exists('connectors', $owner) && is_array($owner['connectors'])) {
+                $owner['connectors'] = (object) $owner['connectors'];
+            }
+
+            $owners[$ownerKey] = $owner;
+        }
+
+        $registry['owners'] = (object) $owners;
+
+        return $registry;
     }
 
     /**
@@ -538,6 +847,42 @@ final class RouteRegistry
             return 'route_registry_routes_invalid';
         }
 
+        $connectors = [];
+        $hasConnectorCatalog = array_key_exists('connectors', $payload);
+
+        if ($hasConnectorCatalog) {
+            if (! is_array($payload['connectors'])) {
+                return 'route_registry_connector_type_invalid';
+            }
+
+            if (count($payload['connectors']) > self::MAX_CONNECTORS_PER_OWNER) {
+                return 'route_registry_connector_type_invalid';
+            }
+
+            foreach ($payload['connectors'] as $connectorKey => $connector) {
+                if ((! is_string($connectorKey) && ! is_int($connectorKey))
+                    || ! is_array($connector)
+                    || array_diff(array_keys($connector), ['connector_code', 'connector_type']) !== []
+                    || ! is_scalar($connector['connector_code'] ?? null)
+                    || ! is_scalar($connector['connector_type'] ?? null)
+                ) {
+                    return 'route_registry_connector_type_invalid';
+                }
+
+                $normalizedConnectorCode = trim((string) $connector['connector_code']);
+                $connectorType = trim((string) $connector['connector_type']);
+
+                if (! self::validConnectorCode($normalizedConnectorCode)
+                    || (string) $connectorKey !== $normalizedConnectorCode
+                    || ! in_array($connectorType, ['telegram', 'max'], true)
+                ) {
+                    return 'route_registry_connector_type_invalid';
+                }
+
+                $connectors[$normalizedConnectorCode] = $connectorType;
+            }
+        }
+
         if (count($payload['routes']) > self::MAX_ROUTES_PER_OWNER) {
             return 'route_registry_too_many_routes';
         }
@@ -589,6 +934,10 @@ final class RouteRegistry
             $active = is_bool($route['active'] ?? null) ? $route['active'] : true;
 
             if ($active) {
+                if ($hasConnectorCatalog && ! array_key_exists($connectorCode, $connectors)) {
+                    return 'route_registry_connector_missing';
+                }
+
                 if (array_key_exists($lineId, $activeLineIds)) {
                     return 'route_registry_duplicate_line_id';
                 }
@@ -598,6 +947,43 @@ final class RouteRegistry
         }
 
         return '';
+    }
+
+    /**
+     * @param  mixed  $connectors
+     * @return array<int|string, array{connector_code: string, connector_type: string}>
+     */
+    private static function normalizePublishConnectors($connectors): array
+    {
+        if (! is_array($connectors)) {
+            return [];
+        }
+
+        $normalized = [];
+
+        foreach ($connectors as $connectorKey => $connector) {
+            if ((! is_string($connectorKey) && ! is_int($connectorKey)) || ! is_array($connector)) {
+                continue;
+            }
+
+            $connectorCode = trim((string) ($connector['connector_code'] ?? ''));
+
+            if ($connectorCode === ''
+                || (string) $connectorKey !== $connectorCode
+                || ! self::validConnectorCode($connectorCode)
+            ) {
+                continue;
+            }
+
+            $normalized[$connectorCode] = [
+                'connector_code' => $connectorCode,
+                'connector_type' => trim((string) ($connector['connector_type'] ?? '')),
+            ];
+        }
+
+        ksort($normalized);
+
+        return $normalized;
     }
 
     /**
@@ -756,6 +1142,86 @@ final class RouteRegistry
 
     /**
      * @param  array<string, mixed>  $registry
+     * @param  array<int|string, array{connector_code: string, connector_type: string}>  $connectors
+     * @return list<array<string, string>>
+     */
+    private static function detectConnectorTypeConflicts(array $registry, string $ownerKey, array $connectors): array
+    {
+        $conflicts = [];
+
+        foreach (self::normalizeOwners($registry['owners'] ?? []) as $existingOwnerKey => $owner) {
+            if ($existingOwnerKey === $ownerKey) {
+                continue;
+            }
+
+            $existingConnectors = is_array($owner['connectors'] ?? null) ? $owner['connectors'] : [];
+
+            foreach ($connectors as $connector) {
+                $connectorCode = trim((string) ($connector['connector_code'] ?? ''));
+                $existingConnector = $existingConnectors[$connectorCode] ?? null;
+
+                if ($connectorCode === '' || ! is_array($existingConnector)) {
+                    continue;
+                }
+
+                $connectorType = trim((string) ($connector['connector_type'] ?? ''));
+                $existingConnectorType = trim((string) ($existingConnector['connector_type'] ?? ''));
+
+                if ($connectorType === $existingConnectorType) {
+                    continue;
+                }
+
+                $conflicts[] = [
+                    'connector_code' => $connectorCode,
+                    'owner_profile_key' => $existingOwnerKey,
+                    'connector_type' => $connectorType,
+                    'conflict_connector_type' => $existingConnectorType,
+                ];
+            }
+        }
+
+        return $conflicts;
+    }
+
+    /**
+     * @param  array<int|string, array{connector_code: string, connector_type: string}>  $connectors
+     * @param  array<string, mixed>  $endpointConfig
+     * @return list<array<string, string>>
+     */
+    private static function detectStaticConnectorTypeConflicts(array $connectors, array $endpointConfig): array
+    {
+        $runtimeConfig = is_array($endpointConfig['runtime_config'] ?? null)
+            ? $endpointConfig['runtime_config']
+            : self::loadRuntimeConfig();
+        $staticConnectorTypes = self::staticConnectorTypes($runtimeConfig);
+        $conflicts = [];
+
+        foreach ($connectors as $connector) {
+            $connectorCode = trim((string) ($connector['connector_code'] ?? ''));
+            $connectorType = trim((string) ($connector['connector_type'] ?? ''));
+
+            if ($connectorCode === ''
+                || ! array_key_exists($connectorCode, $staticConnectorTypes)
+                || $staticConnectorTypes[$connectorCode] === $connectorType
+            ) {
+                continue;
+            }
+
+            $conflicts[] = [
+                'connector_code' => $connectorCode,
+                'owner_profile_key' => 'static_config',
+                'connector_type' => $connectorType,
+                'conflict_connector_type' => $staticConnectorTypes[$connectorCode] !== ''
+                    ? $staticConnectorTypes[$connectorCode]
+                    : 'unknown',
+            ];
+        }
+
+        return $conflicts;
+    }
+
+    /**
+     * @param  array<string, mixed>  $registry
      * @param  array<string, array<string, mixed>>  $routes
      * @return list<array<string, string>>
      */
@@ -816,91 +1282,208 @@ final class RouteRegistry
      * @param  array<string, mixed>  $runtimeConfig
      * @return array<string, mixed>|null
      */
-    private static function readRegistry(array $runtimeConfig): ?array
+    private static function readRegistry(array $runtimeConfig, ?string &$errorCode = null): ?array
     {
+        $errorCode = 'route_registry_invalid';
         $file = self::storageDir($runtimeConfig).'/route_registry.json';
         $expectedPortalDomain = self::expectedPortalDomain($runtimeConfig);
 
+        if (
+            isset(self::$validatedRegistrySnapshots[$file])
+            && array_key_exists($expectedPortalDomain, self::$validatedRegistrySnapshots[$file])
+        ) {
+            $snapshot = self::$validatedRegistrySnapshots[$file][$expectedPortalDomain];
+            $errorCode = $snapshot['error_code'];
+
+            return $snapshot['registry'];
+        }
+
         if ($expectedPortalDomain === '') {
-            return null;
+            return self::rememberValidatedRegistrySnapshot(
+                $file,
+                $expectedPortalDomain,
+                null,
+                'route_registry_invalid',
+                $errorCode,
+            );
         }
 
         if (! is_file($file)) {
-            return self::emptyRegistry($expectedPortalDomain);
+            return self::rememberValidatedRegistrySnapshot(
+                $file,
+                $expectedPortalDomain,
+                self::emptyRegistry($expectedPortalDomain),
+                '',
+                $errorCode,
+            );
         }
 
         $raw = @file_get_contents($file);
 
         if (! is_string($raw) || strlen($raw) > self::MAX_REGISTRY_BYTES) {
-            return null;
+            return self::rememberValidatedRegistrySnapshot(
+                $file,
+                $expectedPortalDomain,
+                null,
+                'route_registry_invalid',
+                $errorCode,
+            );
         }
 
         $decoded = json_decode($raw, true);
 
         if (! is_array($decoded) || (int) ($decoded['schema_version'] ?? 0) !== self::SCHEMA_VERSION) {
-            return null;
+            return self::rememberValidatedRegistrySnapshot(
+                $file,
+                $expectedPortalDomain,
+                null,
+                'route_registry_invalid',
+                $errorCode,
+            );
         }
 
         $registryPortalDomain = trim((string) ($decoded['portal_domain'] ?? ''));
 
         if ($registryPortalDomain !== $expectedPortalDomain) {
-            return null;
+            return self::rememberValidatedRegistrySnapshot(
+                $file,
+                $expectedPortalDomain,
+                null,
+                'route_registry_invalid',
+                $errorCode,
+            );
         }
 
-        if (! self::storedRegistryIsValid($decoded)) {
-            return null;
+        $storedRegistryError = self::storedRegistryValidationError($decoded);
+
+        if ($storedRegistryError !== '') {
+            return self::rememberValidatedRegistrySnapshot(
+                $file,
+                $expectedPortalDomain,
+                null,
+                $storedRegistryError,
+                $errorCode,
+            );
         }
 
-        return $decoded;
+        return self::rememberValidatedRegistrySnapshot(
+            $file,
+            $expectedPortalDomain,
+            $decoded,
+            '',
+            $errorCode,
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $registry
+     * @return array<string, mixed>|null
+     */
+    private static function rememberValidatedRegistrySnapshot(
+        string $file,
+        string $expectedPortalDomain,
+        ?array $registry,
+        string $snapshotErrorCode,
+        ?string &$errorCode
+    ): ?array {
+        self::$validatedRegistrySnapshots[$file][$expectedPortalDomain] = [
+            'registry' => $registry,
+            'error_code' => $snapshotErrorCode,
+        ];
+        $errorCode = $snapshotErrorCode;
+
+        return $registry;
+    }
+
+    /**
+     * @param  array<string, mixed>  $config
+     */
+    private static function forgetValidatedRegistrySnapshots(array $config): void
+    {
+        unset(self::$validatedRegistrySnapshots[self::storageDir($config).'/route_registry.json']);
     }
 
     /**
      * @param  array<string, mixed>  $registry
      */
-    private static function storedRegistryIsValid(array $registry): bool
+    private static function storedRegistryValidationError(array $registry): string
     {
         if (! isset($registry['owners']) || ! is_array($registry['owners']) || count($registry['owners']) > self::MAX_OWNERS) {
-            return false;
+            return 'route_registry_invalid';
         }
 
         $seenRouteKeys = [];
         $seenActiveLineIds = [];
+        $seenConnectorTypes = [];
 
         foreach ($registry['owners'] as $ownerKey => $owner) {
             if (! is_string($ownerKey) || ! preg_match('/^[a-zA-Z0-9._-]{1,128}$/', $ownerKey) || ! is_array($owner)) {
-                return false;
+                return 'route_registry_invalid';
             }
 
             if (! is_scalar($owner['owner_profile_key'] ?? null) || trim((string) $owner['owner_profile_key']) !== $ownerKey) {
-                return false;
+                return 'route_registry_invalid';
             }
 
             if (! is_scalar($owner['owner_callback_base_url'] ?? null)
                 || self::validateCallbackBaseUrl((string) $owner['owner_callback_base_url'], false) !== ''
             ) {
-                return false;
+                return 'route_registry_invalid';
             }
 
             if (! isset($owner['routes']) || ! is_array($owner['routes']) || count($owner['routes']) > self::MAX_ROUTES_PER_OWNER) {
-                return false;
+                return 'route_registry_invalid';
+            }
+
+            $connectors = [];
+            $hasConnectorCatalog = array_key_exists('connectors', $owner);
+
+            if ($hasConnectorCatalog) {
+                if (! is_array($owner['connectors']) || count($owner['connectors']) > self::MAX_CONNECTORS_PER_OWNER) {
+                    return 'route_registry_connector_type_invalid';
+                }
+
+                foreach ($owner['connectors'] as $connectorKey => $connector) {
+                    if (! self::storedConnectorIsValid($connectorKey, $connector)) {
+                        return 'route_registry_connector_type_invalid';
+                    }
+
+                    $connectorCode = trim((string) $connector['connector_code']);
+                    $connectorType = trim((string) $connector['connector_type']);
+
+                    if (isset($seenConnectorTypes[$connectorCode])
+                        && $seenConnectorTypes[$connectorCode] !== $connectorType
+                    ) {
+                        return 'route_registry_connector_type_conflict';
+                    }
+
+                    $connectors[$connectorCode] = true;
+                    $seenConnectorTypes[$connectorCode] = $connectorType;
+                }
             }
 
             foreach ($owner['routes'] as $routeKey => $route) {
                 if (! self::storedRouteIsValid($routeKey, $route)) {
-                    return false;
+                    return 'route_registry_invalid';
                 }
 
                 if (array_key_exists($routeKey, $seenRouteKeys)) {
-                    return false;
+                    return 'route_registry_conflict';
                 }
 
                 $seenRouteKeys[$routeKey] = true;
 
                 if (($route['active'] ?? false) === true) {
+                    $connectorCode = trim((string) ($route['connector_code'] ?? ''));
+
+                    if ($hasConnectorCatalog && ! isset($connectors[$connectorCode])) {
+                        return 'route_registry_connector_missing';
+                    }
+
                     $lineId = trim((string) ($route['line_id'] ?? ''));
 
                     if (array_key_exists($lineId, $seenActiveLineIds)) {
-                        return false;
+                        return 'route_registry_duplicate_line_id';
                     }
 
                     $seenActiveLineIds[$lineId] = true;
@@ -908,7 +1491,29 @@ final class RouteRegistry
             }
         }
 
-        return true;
+        return '';
+    }
+
+    /**
+     * @param  mixed  $connectorCode
+     * @param  mixed  $connector
+     */
+    private static function storedConnectorIsValid($connectorCode, $connector): bool
+    {
+        if ((! is_string($connectorCode) && ! is_int($connectorCode))
+            || ! is_array($connector)
+            || array_diff(array_keys($connector), ['connector_code', 'connector_type']) !== []
+            || ! is_scalar($connector['connector_code'] ?? null)
+            || ! is_scalar($connector['connector_type'] ?? null)
+        ) {
+            return false;
+        }
+
+        $normalizedConnectorCode = trim((string) $connector['connector_code']);
+
+        return self::validConnectorCode($normalizedConnectorCode)
+            && $normalizedConnectorCode === (string) $connectorCode
+            && in_array(trim((string) $connector['connector_type']), ['telegram', 'max'], true);
     }
 
     /**
@@ -968,6 +1573,102 @@ final class RouteRegistry
         }
 
         return $routes;
+    }
+
+    /**
+     * @param  array<string, mixed>  $registry
+     * @param  array<string, mixed>  $route
+     */
+    private static function routeHasRegistryConnector(array $registry, array $route): bool
+    {
+        $ownerKey = trim((string) ($route['owner_profile_key'] ?? ''));
+        $connectorCode = trim((string) ($route['connector_code'] ?? ''));
+        $owners = self::normalizeOwners($registry['owners'] ?? []);
+        $owner = $owners[$ownerKey] ?? null;
+
+        if (! is_array($owner) || ! is_array($owner['connectors'] ?? null)) {
+            return false;
+        }
+
+        return is_array($owner['connectors'][$connectorCode] ?? null);
+    }
+
+    /**
+     * @param  array<string, mixed>  $registry
+     * @param  array<string, mixed>  $route
+     */
+    private static function routeRegistryConnectorType(array $registry, array $route): string
+    {
+        $ownerKey = trim((string) ($route['owner_profile_key'] ?? ''));
+        $connectorCode = trim((string) ($route['connector_code'] ?? ''));
+        $owners = self::normalizeOwners($registry['owners'] ?? []);
+        $owner = $owners[$ownerKey] ?? null;
+        $connector = is_array($owner) && is_array($owner['connectors'] ?? null)
+            ? ($owner['connectors'][$connectorCode] ?? null)
+            : null;
+
+        return is_array($connector)
+            ? trim((string) ($connector['connector_type'] ?? ''))
+            : '';
+    }
+
+    /**
+     * @param  array<string, mixed>  $registry
+     * @param  array<string, mixed>  $route
+     * @param  array<string, mixed>  $runtimeConfig
+     */
+    private static function routeStaticConnectorTypeConflict(
+        array $registry,
+        array $route,
+        array $runtimeConfig
+    ): bool {
+        $connectorCode = trim((string) ($route['connector_code'] ?? ''));
+        $connectorType = self::routeRegistryConnectorType($registry, $route);
+
+        return $connectorType !== ''
+            && self::staticConnectorTypeConflicts($runtimeConfig, $connectorCode, $connectorType);
+    }
+
+    /**
+     * @param  array<string, mixed>  $runtimeConfig
+     */
+    private static function staticConnectorTypeConflicts(
+        array $runtimeConfig,
+        string $connectorCode,
+        string $connectorType
+    ): bool {
+        $staticConnectorTypes = self::staticConnectorTypes($runtimeConfig);
+
+        return array_key_exists($connectorCode, $staticConnectorTypes)
+            && $staticConnectorTypes[$connectorCode] !== $connectorType;
+    }
+
+    /**
+     * @param  array<string, mixed>  $runtimeConfig
+     * @return array<int|string, string>
+     */
+    private static function staticConnectorTypes(array $runtimeConfig): array
+    {
+        $connectors = self::arrayGet($runtimeConfig, 'connectors', []);
+
+        if (! is_array($connectors)) {
+            return [];
+        }
+
+        $types = [];
+
+        foreach ($connectors as $connectorKey => $connector) {
+            $connectorCode = trim((string) $connectorKey);
+
+            if ($connectorCode === '' || ! self::validConnectorCode($connectorCode) || ! is_array($connector)) {
+                continue;
+            }
+
+            $component = trim((string) ($connector['component'] ?? ''));
+            $types[$connectorCode] = self::BUNDLED_COMPONENT_TYPES[$component] ?? '';
+        }
+
+        return $types;
     }
 
     /**
@@ -1037,6 +1738,99 @@ final class RouteRegistry
         $routes = self::transitionFallbackRouteKeys($runtimeConfig);
 
         return in_array('*', $routes, true) || in_array($routeKey, $routes, true);
+    }
+
+    /**
+     * @param  list<string>  $staticConnectorCodes
+     * @param  array<string, mixed>  $runtimeConfig
+     * @return array{decision: string, route: array<string, mixed>|null, error_code: string}
+     */
+    private static function runtimeLineFallbackDecision(
+        string $lineId,
+        array $staticConnectorCodes,
+        array $runtimeConfig,
+        string $errorCode
+    ): array {
+        $fallbackConnectorCodes = [];
+
+        foreach ($staticConnectorCodes as $connectorCode) {
+            if (self::transitionFallbackAllowed($runtimeConfig, self::routeKey($connectorCode, $lineId))) {
+                $fallbackConnectorCodes[] = $connectorCode;
+            }
+        }
+
+        if (count($fallbackConnectorCodes) === 1) {
+            $connectorCode = $fallbackConnectorCodes[0];
+
+            self::logEvent($runtimeConfig, 'route_registry_fallback_used', [
+                'connector_code' => $connectorCode,
+                'line_id' => $lineId,
+                'error_code' => $errorCode,
+            ]);
+
+            return self::runtimeDecision(self::DECISION_FALLBACK, [
+                'connector_code' => $connectorCode,
+                'line_id' => $lineId,
+            ], $errorCode);
+        }
+
+        if (count($fallbackConnectorCodes) > 1) {
+            self::logEvent($runtimeConfig, 'route_registry_invalid', [
+                'line_id' => $lineId,
+                'error_code' => 'route_registry_duplicate_line_id',
+            ]);
+
+            return self::runtimeDecision(self::DECISION_BLOCKED, null, 'route_registry_duplicate_line_id');
+        }
+
+        $event = $errorCode === 'route_registry_invalid'
+            ? 'route_registry_invalid'
+            : 'route_registry_miss';
+        $payload = [
+            'line_id' => $lineId,
+            'error_code' => $errorCode,
+        ];
+
+        if (count($staticConnectorCodes) === 1) {
+            $payload['connector_code'] = $staticConnectorCodes[0];
+        }
+
+        self::logEvent($runtimeConfig, $event, $payload);
+
+        return self::runtimeDecision(self::DECISION_BLOCKED, null, $errorCode);
+    }
+
+    private static function registryErrorRequiresFailClosed(string $errorCode): bool
+    {
+        return in_array($errorCode, [
+            'route_registry_conflict',
+            'route_registry_connector_missing',
+            'route_registry_connector_type_conflict',
+            'route_registry_connector_type_invalid',
+            'route_registry_duplicate_line_id',
+        ], true);
+    }
+
+    /**
+     * @param  list<string>  $connectorCodes
+     * @return list<string>
+     */
+    private static function normalizeConnectorCodes(array $connectorCodes): array
+    {
+        $normalized = [];
+
+        foreach ($connectorCodes as $connectorCode) {
+            $connectorCode = trim((string) $connectorCode);
+
+            if (self::validConnectorCode($connectorCode)) {
+                $normalized[$connectorCode] = true;
+            }
+        }
+
+        $connectorCodes = array_keys($normalized);
+        sort($connectorCodes);
+
+        return $connectorCodes;
     }
 
     /**
@@ -1209,8 +2003,13 @@ final class RouteRegistry
 
         [$connectorCode, $lineId] = $parts;
 
-        return preg_match('/^[a-zA-Z0-9._-]{1,64}$/', $connectorCode) === 1
+        return self::validConnectorCode($connectorCode)
             && preg_match('/^[0-9]{1,64}$/', $lineId) === 1;
+    }
+
+    private static function validConnectorCode(string $connectorCode): bool
+    {
+        return preg_match('/^[a-zA-Z0-9._-]{1,64}$/', trim($connectorCode)) === 1;
     }
 
     private static function normalizeCallbackBaseUrl(string $callbackBaseUrl): string

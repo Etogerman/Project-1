@@ -248,6 +248,10 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'platform' => Channel::PLATFORM_MAX,
             'connection_type' => Channel::CONNECTION_TYPE_BOT,
         ]);
+        $telegramAccount = Channel::factory()->account()->create([
+            'name' => 'Локальный Telegram Account',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
         $callbackOwner = $profile->callbackOwners()->firstOrFail();
 
         Bitrix24OpenLineRoute::query()->create([
@@ -274,6 +278,19 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'line_name' => '8 Локальный бот MAX - Герман-1',
             'callback_owner_id' => $callbackOwner->id,
             'source_id' => 'ABC_MAX',
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+        ]);
+        Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $telegramAccount->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($telegramAccount),
+            'connector_code' => 'abc_telegram_account',
+            'line_id' => '7',
+            'line_name' => '7 Локальный Telegram Account - Герман-1',
+            'callback_owner_id' => $callbackOwner->id,
+            'source_id' => 'ABC_TELEGRAM_ACCOUNT',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);
 
@@ -305,8 +322,59 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         $this->assertStringContainsString("'color' => '#7B4DFF'", $snippet);
         $this->assertStringContainsString("'label' => 'MX'", $snippet);
         $this->assertStringContainsString('8 =>', $snippet);
+        $this->assertStringNotContainsString("'abc_telegram_account'", $snippet);
+        $this->assertStringNotContainsString("'line_id' => '7'", $snippet);
         $this->assertStringContainsString("'owner_profile_key' => 'local-1'", $snippet);
         $this->assertStringContainsString("'owner_callback_base_url' => 'https://local-ngrok.example.test'", $snippet);
+    }
+
+    public function test_bitrix_box_config_snippet_fails_closed_for_conflicting_connector_types(): void
+    {
+        $admin = $this->makeAdmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'stagecrm.fvds.ru',
+            'profile_key' => 'staging',
+            'callback_base_url' => 'https://local-ngrok.example.test',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+        ]);
+        $telegram = Channel::factory()->create([
+            'name' => 'Локальный Telegram',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+        $max = Channel::factory()->create([
+            'name' => 'Локальный MAX',
+            'platform' => Channel::PLATFORM_MAX,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+        $callbackOwner = $profile->callbackOwners()->firstOrFail();
+
+        foreach ([
+            [$telegram, '9', 'ABC_TELEGRAM'],
+            [$max, '8', 'ABC_MAX'],
+        ] as [$channel, $lineId, $sourceId]) {
+            Bitrix24OpenLineRoute::query()->create([
+                'bitrix24_profile_id' => $profile->id,
+                'channel_id' => $channel->id,
+                'portal_domain' => $profile->portal_domain,
+                'profile_key' => $profile->profile_key,
+                'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
+                'connector_code' => 'shared_connector',
+                'line_id' => $lineId,
+                'line_name' => $channel->name,
+                'callback_owner_id' => $callbackOwner->id,
+                'source_id' => $sourceId,
+                'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+            ]);
+        }
+
+        $component = Livewire::actingAs($admin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()]);
+
+        $this->assertNull($component->instance()->getBitrixBoxConfigSnippet());
     }
 
     public function test_callback_owner_cannot_reuse_another_profile_callback_url(): void
