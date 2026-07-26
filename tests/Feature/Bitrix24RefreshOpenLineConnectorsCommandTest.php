@@ -19,7 +19,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
     use InteractsWithBitrix24RuntimeProfile;
     use RefreshDatabase;
 
-    public function test_refresh_repairs_telegram_bot_connector_binding_without_recreating_open_line(): void
+    public function test_refresh_clears_error_without_activating_misconfigured_route_or_recreating_open_line(): void
     {
         config()->set('bitrix24.application.name', 'Герман-4');
 
@@ -112,9 +112,9 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
         ])->assertSuccessful();
 
         $this->assertSame('Имя из админки', $connection->refresh()->application_name);
-        $this->assertSame(Bitrix24OpenLineRoute::STATUS_ACTIVE, $route->refresh()->status);
-        $this->assertSame('5', $route->refresh()->line_id);
-        $this->assertSame('stagecrm.fvds.ru#5', $route->line_owner_key);
+        $this->assertSame(Bitrix24OpenLineRoute::STATUS_MISCONFIGURED, $route->refresh()->status);
+        $this->assertSame('5', $route->line_id);
+        $this->assertNull($route->line_owner_key);
         $this->assertNull($route->last_error_message);
         $this->assertNull($route->last_error_at);
     }
@@ -518,9 +518,13 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
             'Bitrix24 REST call failed after retry attempts.',
             $failedRoute->refresh()->last_error_message,
         );
+        $this->assertSame(Bitrix24OpenLineRoute::STATUS_MISCONFIGURED, $failedRoute->status);
+        $this->assertSame('5', $failedRoute->line_id);
+        $this->assertNull($failedRoute->line_owner_key);
         $this->assertNotNull($failedRoute->last_error_at);
         $this->assertNull($refreshedRoute->refresh()->last_error_message);
         $this->assertNull($refreshedRoute->last_error_at);
+        $this->assertSame(Bitrix24OpenLineRoute::STATUS_ACTIVE, $refreshedRoute->status);
     }
 
     public function test_refresh_validation_error_is_recorded_on_route_before_calling_bitrix24(): void
@@ -564,6 +568,9 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
         ])->assertFailed();
 
         $this->assertSame('В маршруте ОЛ не заполнен CRM source.', $route->refresh()->last_error_message);
+        $this->assertSame(Bitrix24OpenLineRoute::STATUS_MISCONFIGURED, $route->status);
+        $this->assertSame('5', $route->line_id);
+        $this->assertNull($route->line_owner_key);
         $this->assertNotNull($route->last_error_at);
     }
 
