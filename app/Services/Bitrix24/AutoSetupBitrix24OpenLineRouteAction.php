@@ -34,19 +34,21 @@ class AutoSetupBitrix24OpenLineRouteAction
         $connection->loadMissing('profile');
         $route->loadMissing(['bitrix24Profile', 'channel']);
 
+        $profile = $route->bitrix24Profile;
+        $channel = $route->channel;
+
+        if (! $profile instanceof Bitrix24Profile || ! $channel instanceof Channel) {
+            throw new Bitrix24OpenLineAutoSetupException('Маршрут ОЛ не связан с профилем Bitrix24 или каналом.');
+        }
+
+        if ((int) $connection->profile_id !== (int) $profile->id) {
+            throw new Bitrix24OpenLineAutoSetupException('Bitrix24-подключение относится к другому профилю.');
+        }
+
+        $this->assertRefreshContextSupported($connection, $profile, $channel, $route);
+
         try {
-            $profile = $route->bitrix24Profile;
-            $channel = $route->channel;
-
-            if (! $profile instanceof Bitrix24Profile || ! $channel instanceof Channel) {
-                throw new Bitrix24OpenLineAutoSetupException('Маршрут ОЛ не связан с профилем Bitrix24 или каналом.');
-            }
-
-            if ((int) $connection->profile_id !== (int) $profile->id) {
-                throw new Bitrix24OpenLineAutoSetupException('Bitrix24-подключение относится к другому профилю.');
-            }
-
-            $this->assertCanRefreshConnectorRegistration($connection, $profile, $channel, $route);
+            $this->assertRouteConfigurationValidForRefresh($profile, $channel, $route);
             $connection = $this->refreshApplicationNameForConnectorRegistration($connection);
             $this->registerConnector($connection, $profile, $channel, (string) $route->connector_code);
             $this->setConnectorData($connection, $profile, $channel, (string) $route->connector_code, (string) $route->line_id);
@@ -106,7 +108,7 @@ class AutoSetupBitrix24OpenLineRouteAction
         );
     }
 
-    private function assertCanRefreshConnectorRegistration(
+    private function assertRefreshContextSupported(
         Bitrix24Connection $connection,
         Bitrix24Profile $profile,
         Channel $channel,
@@ -132,6 +134,14 @@ class AutoSetupBitrix24OpenLineRouteAction
             throw new Bitrix24OpenLineAutoSetupException('Маршрут ОЛ не активен и не находится в состоянии ремонта.');
         }
 
+        $this->assertRequiredScopes($connection);
+    }
+
+    private function assertRouteConfigurationValidForRefresh(
+        Bitrix24Profile $profile,
+        Channel $channel,
+        Bitrix24OpenLineRoute $route,
+    ): void {
         foreach ([
             'connector_code' => 'В маршруте ОЛ не заполнен код соединителя.',
             'line_id' => 'В маршруте ОЛ не заполнена открытая линия.',
@@ -143,8 +153,6 @@ class AutoSetupBitrix24OpenLineRouteAction
         }
 
         $this->assertLineIsNotUsedByAnotherRoute($profile, $channel, (string) $route->line_id);
-
-        $this->assertRequiredScopes($connection);
     }
 
     private function syncOpenLineConfig(

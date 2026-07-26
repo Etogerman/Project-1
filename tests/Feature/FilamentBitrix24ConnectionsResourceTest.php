@@ -16,6 +16,7 @@ use App\Models\Channel;
 use App\Models\ContactIdentity;
 use App\Models\Dialog;
 use App\Models\User;
+use App\Services\Bitrix24\AutoSetupBitrix24OpenLineRouteAction;
 use App\Services\Bitrix24\Bitrix24ApiClient;
 use App\Services\Bitrix24\Bitrix24ApiException;
 use Filament\Facades\Filament;
@@ -638,7 +639,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         $this->assertSame('42', $dialog->bitrix24_open_line_resolved_chat_id_override);
     }
 
-    public function test_generic_save_cannot_promote_misconfigured_route_to_usable(): void
+    public function test_generic_save_cannot_change_misconfigured_route_status_or_bypass_gate_through_inactive(): void
     {
         $admin = $this->makeAdmin();
         $profile = $this->makeProfile([
@@ -671,23 +672,22 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'bitrix24_open_line_binding_verified_at' => now(),
         ]);
 
-        Livewire::actingAs($admin)
-            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
-            ->set("openLineRouteForms.{$channel->id}.status", Bitrix24OpenLineRoute::STATUS_ACTIVE)
-            ->call('saveOpenLineRoute', $channel->id)
-            ->assertSet(
-                'openLineRouteErrorMessage',
-                'Маршрут с ошибкой нельзя сделать рабочим обычным сохранением.',
-            );
+        foreach ([
+            Bitrix24OpenLineRoute::STATUS_INACTIVE,
+            Bitrix24OpenLineRoute::STATUS_ACTIVE,
+            Bitrix24OpenLineRoute::STATUS_LEGACY,
+        ] as $status) {
+            Livewire::actingAs($admin)
+                ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+                ->set("openLineRouteForms.{$channel->id}.status", $status)
+                ->call('saveOpenLineRoute', $channel->id)
+                ->assertSet(
+                    'openLineRouteErrorMessage',
+                    'Статус маршрута с ошибкой нельзя менять обычным сохранением.',
+                );
 
-        Livewire::actingAs($admin)
-            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
-            ->set("openLineRouteForms.{$channel->id}.status", Bitrix24OpenLineRoute::STATUS_LEGACY)
-            ->call('saveOpenLineRoute', $channel->id)
-            ->assertSet(
-                'openLineRouteErrorMessage',
-                'Маршрут с ошибкой нельзя сделать рабочим обычным сохранением.',
-            );
+            $this->assertSame(Bitrix24OpenLineRoute::STATUS_MISCONFIGURED, $route->fresh()->status);
+        }
 
         $route->refresh();
         $dialog->refresh();
@@ -1780,6 +1780,58 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         ]);
     }
 
+    public function test_save_application_name_keeps_active_route_when_refresh_context_is_unsupported(): void
+    {
+        $superadmin = $this->makeSuperadmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'other.example.test',
+            'telegram_connector_code' => 'abc_telegram',
+            'telegram_source_id' => 'ABC_TELEGRAM',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+            'application_name' => 'Старое имя',
+            'scope' => AutoSetupBitrix24OpenLineRouteAction::REQUIRED_SCOPES,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'telegram-token'],
+        ]);
+        $route = Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT,
+            'connector_code' => 'abc_telegram',
+            'line_id' => 'line-existing',
+            'source_id' => 'ABC_TELEGRAM',
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+            'last_error_message' => 'Предыдущее предупреждение',
+            'last_error_at' => now()->subMinute(),
+        ]);
+
+        $this->mock(Bitrix24ApiClient::class, function ($mock): void {
+            $mock->shouldNotReceive('call');
+        });
+
+        Livewire::actingAs($superadmin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->set('applicationNameForm.application_name', 'Новое имя')
+            ->call('saveApplicationName')
+            ->assertSet('applicationNameForm.application_name', 'Новое имя');
+
+        $route->refresh();
+
+        $this->assertSame('Новое имя', $connection->refresh()->application_name);
+        $this->assertSame(Bitrix24OpenLineRoute::STATUS_ACTIVE, $route->status);
+        $this->assertSame('other.example.test#line-existing', $route->line_owner_key);
+        $this->assertSame('Предыдущее предупреждение', $route->last_error_message);
+        $this->assertNotNull($route->last_error_at);
+    }
+
     public function test_superadmin_can_save_profile_crm_schema_settings(): void
     {
         $superadmin = $this->makeSuperadmin();
@@ -1862,7 +1914,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'connection_type' => Channel::CONNECTION_TYPE_BOT,
             'credentials' => ['token' => 'telegram-token'],
         ]);
-        Bitrix24OpenLineRoute::query()->create([
+        $route = Bitrix24OpenLineRoute::query()->create([
             'bitrix24_profile_id' => $profile->id,
             'channel_id' => $channel->id,
             'portal_domain' => $profile->portal_domain,
@@ -1872,6 +1924,8 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'line_id' => 'line-existing',
             'source_id' => 'ABC_TELEGRAM',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+            'last_error_message' => 'Предыдущее предупреждение',
+            'last_error_at' => now()->subMinute(),
         ]);
 
         $this->mock(Bitrix24ApiClient::class, function ($mock): void {
@@ -1882,6 +1936,13 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
             ->call('setupOpenLineRoute', $channel->id)
             ->assertSet('openLineRouteErrorMessage', 'Обновление регистрации ОЛ доступно только для stagecrm.fvds.ru.');
+
+        $route->refresh();
+
+        $this->assertSame(Bitrix24OpenLineRoute::STATUS_ACTIVE, $route->status);
+        $this->assertSame('other.example.test#line-existing', $route->line_owner_key);
+        $this->assertSame('Предыдущее предупреждение', $route->last_error_message);
+        $this->assertNotNull($route->last_error_at);
     }
 
     public function test_auto_setup_button_is_disabled_when_bitrix24_scopes_are_missing(): void

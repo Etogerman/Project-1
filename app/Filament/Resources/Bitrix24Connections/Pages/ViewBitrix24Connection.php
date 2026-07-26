@@ -1700,10 +1700,10 @@ class ViewBitrix24Connection extends ViewRecord
 
         if (
             $route->status === Bitrix24OpenLineRoute::STATUS_MISCONFIGURED
-            && in_array($form['status'], Bitrix24OpenLineRoute::usableStatuses(), true)
+            && $form['status'] !== Bitrix24OpenLineRoute::STATUS_MISCONFIGURED
         ) {
             $this->failOpenLineRouteSave(
-                'Маршрут с ошибкой нельзя сделать рабочим обычным сохранением.',
+                'Статус маршрута с ошибкой нельзя менять обычным сохранением.',
             );
 
             return false;

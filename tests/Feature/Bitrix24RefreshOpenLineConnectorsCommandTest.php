@@ -119,6 +119,57 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
         $this->assertNull($route->last_error_at);
     }
 
+    public function test_unsupported_refresh_context_does_not_mutate_active_route_before_calling_bitrix24(): void
+    {
+        $connection = $this->makeProfileLinkedActiveBitrix24Connection(
+            connectionOverrides: [
+                'portal_domain' => 'other.example.test',
+                'application_name' => 'Имя из админки',
+                'scope' => AutoSetupBitrix24OpenLineRouteAction::REQUIRED_SCOPES,
+            ],
+            profileOverrides: [
+                'portal_domain' => 'other.example.test',
+                'telegram_connector_code' => 'abc_telegram',
+                'telegram_source_id' => 'ABC_TELEGRAM_DEV',
+            ],
+        );
+        $profile = $connection->profile()->firstOrFail();
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'telegram-token'],
+        ]);
+        $route = Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT,
+            'connector_code' => 'abc_telegram',
+            'line_id' => '5',
+            'source_id' => 'ABC_TELEGRAM_DEV',
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+            'last_error_message' => 'Предыдущее предупреждение',
+            'last_error_at' => now()->subMinute(),
+        ]);
+
+        $this->mock(Bitrix24ApiClient::class, function ($mock): void {
+            $mock->shouldNotReceive('call');
+        });
+
+        $this->artisan('bitrix24:refresh-openline-connectors', [
+            '--connection' => $connection->id,
+            '--route' => $route->id,
+        ])->assertFailed();
+
+        $route->refresh();
+
+        $this->assertSame(Bitrix24OpenLineRoute::STATUS_ACTIVE, $route->status);
+        $this->assertSame('other.example.test#5', $route->line_owner_key);
+        $this->assertSame('Предыдущее предупреждение', $route->last_error_message);
+        $this->assertNotNull($route->last_error_at);
+    }
+
     public function test_refreshes_max_connector_registration_with_max_name_and_icon(): void
     {
         config()->set('bitrix24.application.name', 'Герман-4');
