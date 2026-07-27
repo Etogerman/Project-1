@@ -230,10 +230,18 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
                 ->andReturn($this->bitrixResponse(true));
 
             $mock->shouldNotReceive('call')
-                ->withArgs(fn (string $method): bool => in_array($method, [
-                    'imconnector.activate',
-                    'imopenlines.config.update',
-                ], true));
+                ->with('imconnector.activate', \Mockery::any(), \Mockery::any());
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params): bool => $method === 'imopenlines.config.update'
+                    && ($params['CONFIG_ID'] ?? null) === 'line-original'
+                    && ($params['PARAMS'] ?? null) === [
+                        'CRM' => 'Y',
+                        'CRM_CREATE' => 'deal',
+                        'CRM_SOURCE' => 'ABC_TELEGRAM',
+                    ])
+                ->andReturn($this->bitrixResponse(true));
         });
 
         app(AutoSetupBitrix24OpenLineRouteAction::class)
@@ -305,7 +313,7 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
         $this->assertNotNull($route->last_error_at);
     }
 
-    public function test_active_route_refresh_never_activates_connector_or_open_line_config(): void
+    public function test_active_route_refresh_syncs_crm_settings_without_activating_connector(): void
     {
         [, $connection, , $route] = $this->makeRouteFixture();
 
@@ -321,10 +329,18 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
                 ->andReturn($this->bitrixResponse(true));
 
             $mock->shouldNotReceive('call')
-                ->withArgs(fn (string $method): bool => in_array($method, [
-                    'imconnector.activate',
-                    'imopenlines.config.update',
-                ], true));
+                ->with('imconnector.activate', \Mockery::any(), \Mockery::any());
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params): bool => $method === 'imopenlines.config.update'
+                    && ($params['CONFIG_ID'] ?? null) === 'line-original'
+                    && ($params['PARAMS'] ?? null) === [
+                        'CRM' => 'Y',
+                        'CRM_CREATE' => 'deal',
+                        'CRM_SOURCE' => 'ABC_TELEGRAM',
+                    ])
+                ->andReturn($this->bitrixResponse(true));
         });
 
         app(AutoSetupBitrix24OpenLineRouteAction::class)
