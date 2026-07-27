@@ -89,8 +89,17 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
             $mock->shouldNotReceive('call')
                 ->with('imconnector.activate', \Mockery::any(), \Mockery::any());
 
-            $mock->shouldNotReceive('call')
-                ->with('imopenlines.config.update', \Mockery::any(), \Mockery::any());
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imopenlines.config.update'
+                    && $usedConnection->is($connection)
+                    && ($params['CONFIG_ID'] ?? null) === '5'
+                    && ($params['PARAMS'] ?? null) === [
+                        'CRM' => 'Y',
+                        'CRM_CREATE' => 'deal',
+                        'CRM_SOURCE' => 'ABC_TELEGRAM_DEV',
+                    ])
+                ->andReturn($this->bitrixResponse(true, true));
         });
 
         $this->artisan('bitrix24:refresh-openline-connectors', [
@@ -276,10 +285,18 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
                 ->andReturn($this->bitrixResponse(true, true));
 
             $mock->shouldNotReceive('call')
-                ->withArgs(fn (string $method): bool => in_array($method, [
-                    'imconnector.activate',
-                    'imopenlines.config.update',
-                ], true));
+                ->with('imconnector.activate', \Mockery::any(), \Mockery::any());
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params): bool => $method === 'imopenlines.config.update'
+                    && ($params['CONFIG_ID'] ?? null) === '7'
+                    && ($params['PARAMS'] ?? null) === [
+                        'CRM' => 'Y',
+                        'CRM_CREATE' => 'deal',
+                        'CRM_SOURCE' => 'ABRIKOSOFF_MAX',
+                    ])
+                ->andReturn($this->bitrixResponse(true, true));
         });
 
         $this->artisan('bitrix24:refresh-openline-connectors', [
@@ -403,10 +420,19 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
                 ->andReturn($this->bitrixResponse(true, true));
 
             $mock->shouldNotReceive('call')
-                ->withArgs(fn (string $method): bool => in_array($method, [
-                    'imconnector.activate',
-                    'imopenlines.config.update',
-                ], true));
+                ->with('imconnector.activate', \Mockery::any(), \Mockery::any());
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imopenlines.config.update'
+                    && $usedConnection->is($connection)
+                    && ($params['CONFIG_ID'] ?? null) === '2'
+                    && ($params['PARAMS'] ?? null) === [
+                        'CRM' => 'Y',
+                        'CRM_CREATE' => 'deal',
+                        'CRM_SOURCE' => 'ABRIKOSOFF_MAX',
+                    ])
+                ->andReturn($this->bitrixResponse(true, true));
         });
 
         $this->artisan('bitrix24:refresh-openline-connectors', [
@@ -561,10 +587,19 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
                 ->andReturn($this->bitrixResponse(true, true));
 
             $mock->shouldNotReceive('call')
-                ->withArgs(fn (string $method): bool => in_array($method, [
-                    'imconnector.activate',
-                    'imopenlines.config.update',
-                ], true));
+                ->with('imconnector.activate', \Mockery::any(), \Mockery::any());
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imopenlines.config.update'
+                    && $usedConnection->is($connection)
+                    && ($params['CONFIG_ID'] ?? null) === '7'
+                    && ($params['PARAMS'] ?? null) === [
+                        'CRM' => 'Y',
+                        'CRM_CREATE' => 'deal',
+                        'CRM_SOURCE' => 'ABC_MAX_DEV',
+                    ])
+                ->andReturn($this->bitrixResponse(true, true));
         });
 
         $this->artisan('bitrix24:refresh-openline-connectors', [

@@ -20,7 +20,7 @@ class Bitrix24OpenLineRouteOperationLockTest extends TestCase
 
         $profileId = 991;
         $channelId = 992;
-        $fullRefreshBudgetSeconds = 2 * ((5 * 45) + (2 * 2.5));
+        $fullRefreshBudgetSeconds = 3 * ((5 * 45) + (2 * 2.5));
         $nestedAttemptException = null;
 
         try {

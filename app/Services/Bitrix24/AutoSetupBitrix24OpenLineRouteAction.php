@@ -93,10 +93,18 @@ class AutoSetupBitrix24OpenLineRouteAction
             $connection = $this->refreshApplicationNameForConnectorRegistration($connection);
             $this->registerConnector($connection, $profile, $channel, (string) $route->connector_code);
             $this->setConnectorData($connection, $profile, $channel, (string) $route->connector_code, (string) $route->line_id);
-            $refreshedRoute = $this->completeRefreshStateTransition(
-                $route,
-                $initialStateVersion,
-            );
+
+            if ($this->routeStateVersionMatches((int) $route->getKey(), $initialStateVersion)) {
+                $this->syncOpenLineCrmSettings(
+                    $connection,
+                    (string) $route->line_id,
+                    (string) $route->source_id,
+                );
+                $refreshedRoute = $this->completeRefreshStateTransition(
+                    $route,
+                    $initialStateVersion,
+                );
+            }
         } catch (Bitrix24OpenLineAutoSetupException $exception) {
             $this->markRouteError($route, $exception->getMessage());
 
@@ -152,6 +160,15 @@ class AutoSetupBitrix24OpenLineRouteAction
 
                 return $lockedRoute->refresh();
             },
+        );
+    }
+
+    private function routeStateVersionMatches(int $routeId, string $expectedStateVersion): bool
+    {
+        return $this->routeOperationLock->runShortStateTransition(
+            $routeId,
+            fn (?Bitrix24OpenLineRoute $lockedRoute): bool => $lockedRoute instanceof Bitrix24OpenLineRoute
+                && (string) $lockedRoute->getAttribute('state_version') === $expectedStateVersion,
         );
     }
 
@@ -231,6 +248,23 @@ class AutoSetupBitrix24OpenLineRouteAction
         }
 
         $this->assertLineIsNotUsedByAnotherRoute($profile, $channel, (string) $route->line_id);
+    }
+
+    private function syncOpenLineCrmSettings(
+        Bitrix24Connection $connection,
+        string $lineId,
+        string $sourceId,
+    ): void {
+        $response = $this->apiClient->call('imopenlines.config.update', [
+            'CONFIG_ID' => $lineId,
+            'PARAMS' => [
+                'CRM' => 'Y',
+                'CRM_CREATE' => 'deal',
+                'CRM_SOURCE' => $sourceId,
+            ],
+        ], $connection);
+
+        $this->assertSuccessfulBooleanResult($response, 'Не удалось синхронизировать CRM-настройки открытой линии Bitrix24.');
     }
 
     private function registerConnector(
