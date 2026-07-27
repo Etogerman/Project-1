@@ -1425,20 +1425,11 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                     && ($params['LINE'] ?? null) === 'line-existing')
                 ->andReturn($this->bitrixResponse(true, true));
 
-            $mock->shouldReceive('call')
-                ->once()
-                ->withArgs(fn (string $method, array $params): bool => $method === 'imconnector.activate'
-                    && ($params['LINE'] ?? null) === 'line-existing')
-                ->andReturn($this->bitrixResponse(true, true));
+            $mock->shouldNotReceive('call')
+                ->with('imconnector.activate', \Mockery::any(), \Mockery::any());
 
-            $mock->shouldReceive('call')
-                ->once()
-                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imopenlines.config.update'
-                    && $usedConnection->is($connection)
-                    && ($params['CONFIG_ID'] ?? null) === 'line-existing'
-                    && data_get($params, 'PARAMS.CRM_SOURCE') === 'ABC_TELEGRAM_DEV_GERMAN_MAIN'
-                    && ! array_key_exists('LINE_NAME', $params['PARAMS'] ?? []))
-                ->andReturn($this->bitrixResponse(true, true));
+            $mock->shouldNotReceive('call')
+                ->with('imopenlines.config.update', \Mockery::any(), \Mockery::any());
         });
 
         Livewire::actingAs($superadmin)
@@ -1543,6 +1534,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                 ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imopenlines.config.update'
                     && $usedConnection->is($connection)
                     && ($params['CONFIG_ID'] ?? null) === 'line-existing'
+                    && data_get($params, 'PARAMS.ACTIVE') === 'Y'
                     && ! array_key_exists('LINE_NAME', $params['PARAMS'] ?? []))
                 ->andReturn($this->bitrixResponse(true, true));
         });

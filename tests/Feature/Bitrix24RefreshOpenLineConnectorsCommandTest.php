@@ -86,26 +86,11 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
                 })
                 ->andReturn($this->bitrixResponse(true, true));
 
-            $mock->shouldReceive('call')
-                ->once()
-                ->withArgs(function (string $method, array $params, Bitrix24Connection $usedConnection) use ($connection): bool {
-                    return $method === 'imconnector.activate'
-                        && $usedConnection->is($connection)
-                        && $params === [
-                            'CONNECTOR' => 'abc_telegram',
-                            'LINE' => '5',
-                            'ACTIVE' => '1',
-                        ];
-                })
-                ->andReturn($this->bitrixResponse(true, true));
+            $mock->shouldNotReceive('call')
+                ->with('imconnector.activate', \Mockery::any(), \Mockery::any());
 
-            $mock->shouldReceive('call')
-                ->once()
-                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imopenlines.config.update'
-                    && $usedConnection->is($connection)
-                    && ($params['CONFIG_ID'] ?? null) === '5'
-                    && data_get($params, 'PARAMS.CRM_SOURCE') === 'ABC_TELEGRAM_DEV')
-                ->andReturn($this->bitrixResponse(true, true));
+            $mock->shouldNotReceive('call')
+                ->with('imopenlines.config.update', \Mockery::any(), \Mockery::any());
         });
 
         $this->artisan('bitrix24:refresh-openline-connectors', [
@@ -616,6 +601,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
                 ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imopenlines.config.update'
                     && $usedConnection->is($connection)
                     && ($params['CONFIG_ID'] ?? null) === '7'
+                    && data_get($params, 'PARAMS.ACTIVE') === 'Y'
                     && data_get($params, 'PARAMS.CRM_SOURCE') === 'ABC_MAX_DEV')
                 ->andReturn($this->bitrixResponse(true, true));
         });

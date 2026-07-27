@@ -82,14 +82,18 @@ class AutoSetupBitrix24OpenLineRouteAction
         }
 
         $this->assertRefreshContextSupported($connection, $profile, $channel, $route);
+        $shouldActivateRoute = $route->status !== Bitrix24OpenLineRoute::STATUS_MISCONFIGURED;
 
         try {
             $this->assertRouteConfigurationValidForRefresh($profile, $channel, $route);
             $connection = $this->refreshApplicationNameForConnectorRegistration($connection);
             $this->registerConnector($connection, $profile, $channel, (string) $route->connector_code);
             $this->setConnectorData($connection, $profile, $channel, (string) $route->connector_code, (string) $route->line_id);
-            $this->activateConnector($connection, (string) $route->connector_code, (string) $route->line_id);
-            $this->syncOpenLineConfig($connection, $channel, (string) $route->line_id, (string) $route->source_id);
+
+            if ($shouldActivateRoute) {
+                $this->activateConnector($connection, (string) $route->connector_code, (string) $route->line_id);
+                $this->syncOpenLineConfig($connection, $channel, (string) $route->line_id, (string) $route->source_id);
+            }
         } catch (Bitrix24OpenLineAutoSetupException $exception) {
             $this->markRouteError($route, $exception->getMessage());
 
