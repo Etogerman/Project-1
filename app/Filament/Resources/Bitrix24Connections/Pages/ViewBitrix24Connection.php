@@ -15,12 +15,14 @@ use App\Models\User;
 use App\Services\Bitrix24\AutoSetupBitrix24OpenLineRouteAction;
 use App\Services\Bitrix24\Bitrix24OpenLineAutoSetupException;
 use App\Services\Bitrix24\Bitrix24OpenLineRepairException;
+use App\Services\Bitrix24\Bitrix24OpenLineRouteOperationLock;
 use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryException;
 use App\Services\Bitrix24\DoctorBitrix24OpenLinesRouteRegistryAction;
 use App\Services\Bitrix24\PublishBitrix24OpenLinesRouteRegistryAction;
 use App\Services\Bitrix24\RepairStaleBitrix24OpenLineAction;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Contracts\Support\Htmlable;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Carbon;
@@ -500,7 +502,7 @@ class ViewBitrix24Connection extends ViewRecord
                     $this->openLineRouteForms[$channel->id] ?? $this->defaultOpenLineRouteForm($profile, $channel, $route),
                 );
                 $status = (string) ($route?->status ?? '');
-                $autoSetup = $this->resolveOpenLineAutoSetupState($profile, $channel, $route, $form);
+                $autoSetup = $this->resolveOpenLineAutoSetupState($profile, $channel, $route);
                 $bindingDiagnostics = $this->resolveRouteBindingDiagnostics($route, $form);
                 $callbackDiagnostics = $this->resolveLatestOpenLinesCallbackDiagnostics($form);
                 $staleCallbackDiagnostics = $this->resolveLatestStaleOpenLinesCallbackDiagnostics($form);
@@ -628,41 +630,66 @@ class ViewBitrix24Connection extends ViewRecord
         }
 
         $form = $this->normalizeOpenLineRouteForm($this->openLineRouteForms[$channel->id] ?? []);
-        $route = Bitrix24OpenLineRoute::query()
-            ->where('bitrix24_profile_id', $profile->id)
-            ->where('channel_id', $channel->id)
-            ->first();
-
-        if (! $this->validateOpenLineRouteForm($profile, $channel, $route, $form)) {
-            return;
-        }
-
         $user = auth()->user();
 
         try {
-            $route ??= new Bitrix24OpenLineRoute([
-                'bitrix24_profile_id' => $profile->id,
-                'channel_id' => $channel->id,
-                'created_by_user_id' => $user instanceof User ? $user->id : null,
-            ]);
+            $saved = app(Bitrix24OpenLineRouteOperationLock::class)->run(
+                $profile->id,
+                $channel->id,
+                fn (): bool => DB::transaction(function () use ($profile, $channel, $form, $user): bool {
+                    $route = Bitrix24OpenLineRoute::query()
+                        ->where('bitrix24_profile_id', $profile->id)
+                        ->where('channel_id', $channel->id)
+                        ->lockForUpdate()
+                        ->first();
 
-            $route->fill([
-                'portal_domain' => $profile->portal_domain,
-                'profile_key' => $profile->profile_key,
-                'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
-                'connector_code' => $this->nullableFormValue($form['connector_code']),
-                'line_id' => $this->nullableFormValue($form['line_id']),
-                'line_name' => $this->nullableFormValue($form['line_name']),
-                'callback_owner_id' => $this->nullableIntegerFormValue($form['callback_owner_id']),
-                'source_id' => $this->nullableFormValue($form['source_id']),
-                'status' => $form['status'],
-                'updated_by_user_id' => $user instanceof User ? $user->id : null,
-            ]);
+                    if (! $this->validateStoredOpenLineRouteTransition($route, $form)) {
+                        return false;
+                    }
 
-            $route->save();
-        } catch (QueryException) {
+                    if (! $this->validateOpenLineRouteForm($profile, $channel, $route, $form)) {
+                        return false;
+                    }
+
+                    $route ??= new Bitrix24OpenLineRoute([
+                        'bitrix24_profile_id' => $profile->id,
+                        'channel_id' => $channel->id,
+                        'created_by_user_id' => $user instanceof User ? $user->id : null,
+                    ]);
+
+                    $route->fill([
+                        'portal_domain' => $profile->portal_domain,
+                        'profile_key' => $profile->profile_key,
+                        'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
+                        'connector_code' => $this->nullableFormValue($form['connector_code']),
+                        'line_id' => $this->nullableFormValue($form['line_id']),
+                        'line_name' => $this->nullableFormValue($form['line_name']),
+                        'callback_owner_id' => $this->nullableIntegerFormValue($form['callback_owner_id']),
+                        'source_id' => $this->nullableFormValue($form['source_id']),
+                        'status' => $form['status'],
+                        'updated_by_user_id' => $user instanceof User ? $user->id : null,
+                    ]);
+
+                    $route->save();
+
+                    return true;
+                }, attempts: 3),
+            );
+        } catch (LockTimeoutException) {
+            $this->failOpenLineRouteSave(Bitrix24OpenLineRouteOperationLock::BUSY_MESSAGE);
+
+            return;
+        } catch (QueryException $exception) {
+            if (! $this->isOpenLineRouteUniqueConstraintViolation($exception)) {
+                throw $exception;
+            }
+
             $this->failOpenLineRouteSave('Открытая линия уже занята другим рабочим маршрутом.');
 
+            return;
+        }
+
+        if (! $saved) {
             return;
         }
 
@@ -1085,28 +1112,15 @@ class ViewBitrix24Connection extends ViewRecord
             ->where('bitrix24_profile_id', $profile->id)
             ->where('channel_id', $channel->id)
             ->first();
-        $form = $this->normalizeOpenLineRouteForm($this->openLineRouteForms[$channel->id] ?? []);
 
-        if (! $this->validateOpenLineRouteForm($profile, $channel, $route, $form)) {
-            return;
-        }
-
-        try {
-            $route = $this->persistOpenLineRouteForm($profile, $channel, $route, $form);
-        } catch (QueryException) {
-            $this->failOpenLineRouteSave('Открытая линия уже занята другим рабочим маршрутом.');
+        if (! $route instanceof Bitrix24OpenLineRoute) {
+            $this->failOpenLineRouteSave('Сохранённый маршрут ОЛ не найден. Автоматическое создание новой линии отключено.');
 
             return;
         }
 
-        $refreshExistingRoute = $route instanceof Bitrix24OpenLineRoute && $route->isUsable();
-
         try {
-            if ($refreshExistingRoute) {
-                $route = app(AutoSetupBitrix24OpenLineRouteAction::class)->refreshConnectorRegistration($record, $route);
-            } else {
-                $route = app(AutoSetupBitrix24OpenLineRouteAction::class)->handle($record, $channel, auth()->user());
-            }
+            $route = app(AutoSetupBitrix24OpenLineRouteAction::class)->refreshConnectorRegistration($record, $route);
         } catch (Bitrix24OpenLineAutoSetupException $exception) {
             $this->failOpenLineRouteSave($exception->getMessage());
 
@@ -1114,12 +1128,12 @@ class ViewBitrix24Connection extends ViewRecord
         }
 
         $this->openLineRouteErrorMessage = null;
-        $this->openLineRouteSuccessMessage = $this->openLineRouteSetupSuccessMessage($channel, $route, $refreshExistingRoute);
+        $this->openLineRouteSuccessMessage = $this->openLineRouteRefreshSuccessMessage($channel, $route);
         $this->reloadOpenLineRouteForms();
 
         Notification::make()
             ->success()
-            ->title($refreshExistingRoute ? 'Карточка соединителя обновлена' : 'Открытая линия настроена')
+            ->title('Карточка соединителя обновлена')
             ->send();
     }
 
@@ -1686,6 +1700,41 @@ class ViewBitrix24Connection extends ViewRecord
         return true;
     }
 
+    /**
+     * @param  array{status:string,connector_code:string,line_id:string,line_name:string,callback_owner_id:string,source_id:string}  $form
+     */
+    protected function validateStoredOpenLineRouteTransition(
+        ?Bitrix24OpenLineRoute $route,
+        array $form,
+    ): bool {
+        if (! $route instanceof Bitrix24OpenLineRoute) {
+            return true;
+        }
+
+        foreach (['connector_code', 'line_id'] as $field) {
+            if (trim((string) $route->{$field}) !== $form[$field]) {
+                $this->failOpenLineRouteSave(
+                    'Обычное сохранение не меняет код соединителя и LINE_ID существующего маршрута.',
+                );
+
+                return false;
+            }
+        }
+
+        if (
+            $route->status === Bitrix24OpenLineRoute::STATUS_MISCONFIGURED
+            && $form['status'] !== Bitrix24OpenLineRoute::STATUS_MISCONFIGURED
+        ) {
+            $this->failOpenLineRouteSave(
+                'Статус маршрута с ошибкой нельзя менять обычным сохранением.',
+            );
+
+            return false;
+        }
+
+        return true;
+    }
+
     protected function hasOpenLineOwnerConflict(Bitrix24Profile $profile, ?Bitrix24OpenLineRoute $route, string $lineId): bool
     {
         if ($lineId === '') {
@@ -1700,39 +1749,14 @@ class ViewBitrix24Connection extends ViewRecord
             ->exists();
     }
 
-    /**
-     * @param  array{status:string,connector_code:string,line_id:string,line_name:string,callback_owner_id:string,source_id:string}  $form
-     */
-    protected function persistOpenLineRouteForm(
-        Bitrix24Profile $profile,
-        Channel $channel,
-        ?Bitrix24OpenLineRoute $route,
-        array $form,
-    ): Bitrix24OpenLineRoute {
-        $user = auth()->user();
+    protected function isOpenLineRouteUniqueConstraintViolation(QueryException $exception): bool
+    {
+        $sqlState = (string) ($exception->errorInfo[0] ?? $exception->getCode());
+        $message = mb_strtolower($exception->getMessage());
 
-        $route ??= new Bitrix24OpenLineRoute([
-            'bitrix24_profile_id' => $profile->id,
-            'channel_id' => $channel->id,
-            'created_by_user_id' => $user instanceof User ? $user->id : null,
-        ]);
-
-        $route->fill([
-            'portal_domain' => $profile->portal_domain,
-            'profile_key' => $profile->profile_key,
-            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
-            'connector_code' => $this->nullableFormValue($form['connector_code']),
-            'line_id' => $this->nullableFormValue($form['line_id']),
-            'line_name' => $this->nullableFormValue($form['line_name']),
-            'callback_owner_id' => $this->nullableIntegerFormValue($form['callback_owner_id']),
-            'source_id' => $this->nullableFormValue($form['source_id']),
-            'status' => $form['status'],
-            'updated_by_user_id' => $user instanceof User ? $user->id : null,
-        ]);
-
-        $route->save();
-
-        return $route;
+        return in_array($sqlState, ['23000', '23505'], true)
+            && str_contains($message, 'bitrix24_open_line_routes')
+            && ($sqlState === '23505' || str_contains($message, 'unique'));
     }
 
     /**
@@ -2106,16 +2130,14 @@ class ViewBitrix24Connection extends ViewRecord
             ->send();
     }
 
-    protected function openLineRouteSetupSuccessMessage(
+    protected function openLineRouteRefreshSuccessMessage(
         Channel $channel,
         Bitrix24OpenLineRoute $route,
-        bool $refreshExistingRoute,
     ): string {
-        $actionLabel = $refreshExistingRoute ? 'Карточка соединителя обновлена' : 'Открытая линия настроена';
         $channelTitle = sprintf('#%d %s', $channel->id, $channel->name);
         $lineSuffix = filled($route->line_id) ? sprintf(', LINE_ID %s', $route->line_id) : '';
 
-        return sprintf('%s: %s%s.', $actionLabel, $channelTitle, $lineSuffix);
+        return sprintf('Карточка соединителя обновлена: %s%s.', $channelTitle, $lineSuffix);
     }
 
     protected function failProfileSettingsSave(string $message): void
@@ -2240,14 +2262,11 @@ class ViewBitrix24Connection extends ViewRecord
         Bitrix24Profile $profile,
         Channel $channel,
         ?Bitrix24OpenLineRoute $route,
-        array $form,
     ): array {
         $default = [
             'visible' => true,
             'enabled' => false,
-            'label' => $route instanceof Bitrix24OpenLineRoute && $route->isUsable()
-                ? 'Обновить карточку'
-                : 'Настроить ОЛ',
+            'label' => 'Обновить карточку',
             'reason' => '',
         ];
 
@@ -2274,6 +2293,18 @@ class ViewBitrix24Connection extends ViewRecord
             return [...$default, 'visible' => false, 'reason' => ''];
         }
 
+        if (! $route instanceof Bitrix24OpenLineRoute) {
+            return [...$default, 'reason' => 'Маршрут ОЛ ещё не сохранён'];
+        }
+
+        if (! in_array($route->status, [
+            Bitrix24OpenLineRoute::STATUS_ACTIVE,
+            Bitrix24OpenLineRoute::STATUS_LEGACY,
+            Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
+        ], true)) {
+            return [...$default, 'reason' => 'Маршрут ОЛ не готов к обновлению'];
+        }
+
         if (! $channel->is_active) {
             return [...$default, 'reason' => 'Канал выключен'];
         }
@@ -2282,25 +2313,16 @@ class ViewBitrix24Connection extends ViewRecord
             return [...$default, 'reason' => 'Нет токена'];
         }
 
-        $connectorCode = match ($channelType) {
-            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => $profile->max_connector_code,
-            default => $profile->telegram_connector_code,
-        };
-        $sourceId = match ($channelType) {
-            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => $profile->max_source_id,
-            default => $profile->telegram_source_id,
-        };
-        $channelLabel = match ($channelType) {
-            Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX => 'MAX',
-            default => 'Telegram',
-        };
-
-        if (! filled($connectorCode)) {
-            return [...$default, 'reason' => "Не заполнен {$channelLabel} connector_code"];
+        if (! filled($route->connector_code)) {
+            return [...$default, 'reason' => 'В маршруте ОЛ не заполнен код соединителя'];
         }
 
-        if (! filled($sourceId)) {
-            return [...$default, 'reason' => "Не заполнен {$channelLabel} source_id"];
+        if (! filled($route->line_id)) {
+            return [...$default, 'reason' => 'В маршруте ОЛ не заполнена открытая линия'];
+        }
+
+        if (! filled($route->source_id)) {
+            return [...$default, 'reason' => 'В маршруте ОЛ не заполнен CRM source'];
         }
 
         $actualScopes = collect($record->scope ?? [])
