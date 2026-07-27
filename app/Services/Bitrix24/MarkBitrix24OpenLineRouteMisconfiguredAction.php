@@ -13,7 +13,7 @@ final class MarkBitrix24OpenLineRouteMisconfiguredAction
 
     public function handle(int $routeId, ?string $message): ?Bitrix24OpenLineRoute
     {
-        return $this->routeOperationLock->runStateTransition(
+        return $this->routeOperationLock->runShortStateTransition(
             $routeId,
             function (?Bitrix24OpenLineRoute $route) use ($message): ?Bitrix24OpenLineRoute {
                 if (! $route instanceof Bitrix24OpenLineRoute) {

@@ -138,35 +138,40 @@ class AutoSetupBitrix24OpenLineRouteAction
         string $initialStateVersion,
         bool $shouldActivateRoute,
     ): ?Bitrix24OpenLineRoute {
-        return $this->routeOperationLock->runStateTransition(
-            (int) $route->getKey(),
-            function (?Bitrix24OpenLineRoute $lockedRoute) use (
+        $routeId = (int) $route->getKey();
+
+        if ($shouldActivateRoute) {
+            if (! $this->routeStateVersionMatches($routeId, $initialStateVersion)) {
+                return null;
+            }
+
+            $this->activateConnector(
+                $connection,
+                (string) $route->connector_code,
+                (string) $route->line_id,
+            );
+
+            if (! $this->routeStateVersionMatches($routeId, $initialStateVersion)) {
+                return null;
+            }
+
+            $this->syncOpenLineConfig(
                 $connection,
                 $channel,
-                $route,
-                $initialStateVersion,
-                $shouldActivateRoute,
-            ): ?Bitrix24OpenLineRoute {
+                (string) $route->line_id,
+                (string) $route->source_id,
+            );
+        }
+
+        return $this->routeOperationLock->runShortStateTransition(
+            $routeId,
+            function (?Bitrix24OpenLineRoute $lockedRoute) use ($initialStateVersion): ?Bitrix24OpenLineRoute {
                 if (! $lockedRoute instanceof Bitrix24OpenLineRoute) {
                     throw new Bitrix24OpenLineAutoSetupException('Маршрут ОЛ больше не существует.');
                 }
 
                 if ((string) $lockedRoute->getAttribute('state_version') !== $initialStateVersion) {
                     return null;
-                }
-
-                if ($shouldActivateRoute) {
-                    $this->activateConnector(
-                        $connection,
-                        (string) $route->connector_code,
-                        (string) $route->line_id,
-                    );
-                    $this->syncOpenLineConfig(
-                        $connection,
-                        $channel,
-                        (string) $route->line_id,
-                        (string) $route->source_id,
-                    );
                 }
 
                 $lockedRoute->forceFill([
@@ -177,6 +182,15 @@ class AutoSetupBitrix24OpenLineRouteAction
 
                 return $lockedRoute->refresh();
             },
+        );
+    }
+
+    private function routeStateVersionMatches(int $routeId, string $expectedStateVersion): bool
+    {
+        return $this->routeOperationLock->runShortStateTransition(
+            $routeId,
+            fn (?Bitrix24OpenLineRoute $lockedRoute): bool => $lockedRoute instanceof Bitrix24OpenLineRoute
+                && (string) $lockedRoute->getAttribute('state_version') === $expectedStateVersion,
         );
     }
 

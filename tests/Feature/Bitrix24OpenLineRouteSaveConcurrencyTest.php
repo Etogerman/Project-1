@@ -27,6 +27,8 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
 {
     use DatabaseMigrations;
 
+    private const STATE_TRANSITION_CONNECTION = 'bitrix24_route_state_transition';
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -310,32 +312,22 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
         $this->assertNotNull($route->last_error_at);
     }
 
-    public function test_fail_closed_transition_waits_until_refresh_state_transition_finishes(): void
+    public function test_fail_closed_transition_commits_during_activation_and_cancels_refresh_completion(): void
     {
         if (DB::getDriverName() !== 'pgsql') {
             $this->markTestSkipped('The production row-locking contract is PostgreSQL-specific.');
         }
 
         [, $connection, , $route] = $this->makeRouteFixture();
-        $defaultConnection = config('database.default');
-        $concurrentConnection = 'bitrix24_route_refresh_concurrent_failure';
-        config([
-            'database.connections.'.$concurrentConnection => config(
-                'database.connections.'.$defaultConnection,
-            ),
-        ]);
-        DB::purge($concurrentConnection);
-
-        $concurrentWriteAttempted = false;
-        $concurrentWriteException = null;
+        $transitionCommitted = false;
         $defaultTransactionLevelDuringActivation = null;
+        $stateTransitionTransactionLevelDuringActivation = null;
 
         $this->mock(Bitrix24ApiClient::class, function ($mock) use (
-            $concurrentConnection,
             $route,
-            &$concurrentWriteAttempted,
-            &$concurrentWriteException,
+            &$transitionCommitted,
             &$defaultTransactionLevelDuringActivation,
+            &$stateTransitionTransactionLevelDuringActivation,
         ): void {
             $mock->shouldReceive('call')
                 ->once()
@@ -351,71 +343,130 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
                 ->once()
                 ->withArgs(fn (string $method): bool => $method === 'imconnector.activate')
                 ->andReturnUsing(function () use (
-                    $concurrentConnection,
                     $route,
-                    &$concurrentWriteAttempted,
-                    &$concurrentWriteException,
+                    &$transitionCommitted,
                     &$defaultTransactionLevelDuringActivation,
+                    &$stateTransitionTransactionLevelDuringActivation,
                 ): Bitrix24RestResponseData {
-                    $concurrentWriteAttempted = true;
                     $defaultTransactionLevelDuringActivation = DB::transactionLevel();
-                    $database = DB::connection($concurrentConnection);
-                    $database->statement("SET lock_timeout TO '100ms'");
-
-                    try {
-                        $database->table('bitrix24_open_line_routes')
-                            ->where('id', $route->id)
-                            ->update([
-                                'status' => Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
-                                'line_owner_key' => null,
-                                'last_error_message' => 'Конкурентная ошибка live export.',
-                                'last_error_at' => now(),
-                                'updated_at' => now(),
-                            ]);
-                    } catch (QueryException $exception) {
-                        $concurrentWriteException = $exception;
-                    } finally {
-                        $database->statement('SET lock_timeout TO DEFAULT');
-                    }
+                    $stateTransitionTransactionLevelDuringActivation = DB::connection(
+                        self::STATE_TRANSITION_CONNECTION,
+                    )->transactionLevel();
+                    DB::purge(self::STATE_TRANSITION_CONNECTION);
+                    app(MarkBitrix24OpenLineRouteMisconfiguredAction::class)->handle(
+                        (int) $route->getKey(),
+                        'Конкурентная ошибка live export.',
+                    );
+                    $transitionCommitted = true;
 
                     return $this->bitrixResponse(true);
                 });
 
             $mock->shouldReceive('call')
-                ->once()
-                ->withArgs(fn (string $method): bool => $method === 'imopenlines.config.update')
-                ->andReturn($this->bitrixResponse(true));
+                ->never()
+                ->withArgs(fn (string $method): bool => $method === 'imopenlines.config.update');
         });
 
         try {
             app(AutoSetupBitrix24OpenLineRouteAction::class)
                 ->refreshConnectorRegistration($connection, $route);
-
-            $this->assertTrue($concurrentWriteAttempted);
-            $this->assertSame(0, $defaultTransactionLevelDuringActivation);
-            $this->assertInstanceOf(QueryException::class, $concurrentWriteException);
+            $this->fail('Expected a concurrent route transition exception.');
+        } catch (Bitrix24OpenLineAutoSetupException $exception) {
             $this->assertSame(
-                '55P03',
-                (string) ($concurrentWriteException->errorInfo[0] ?? $concurrentWriteException->getCode()),
+                'Маршрут ОЛ изменился во время обновления. Активация отменена; проверьте актуальное состояние маршрута.',
+                $exception->getMessage(),
             );
-
-            $route->refresh();
-            $this->assertSame(Bitrix24OpenLineRoute::STATUS_ACTIVE, $route->status);
-            $this->assertNull($route->last_error_message);
-
-            app(MarkBitrix24OpenLineRouteMisconfiguredAction::class)->handle(
-                (int) $route->getKey(),
-                'Конкурентная ошибка live export.',
-            );
-        } finally {
-            DB::purge($concurrentConnection);
         }
 
         $route->refresh();
 
+        $this->assertTrue($transitionCommitted);
+        $this->assertSame(0, $defaultTransactionLevelDuringActivation);
+        $this->assertSame(0, $stateTransitionTransactionLevelDuringActivation);
         $this->assertSame(Bitrix24OpenLineRoute::STATUS_MISCONFIGURED, $route->status);
         $this->assertNull($route->line_owner_key);
         $this->assertSame('Конкурентная ошибка live export.', $route->last_error_message);
+        $this->assertNotNull($route->last_error_at);
+    }
+
+    public function test_fail_closed_transition_commits_during_config_sync_and_cancels_refresh_completion(): void
+    {
+        if (DB::getDriverName() !== 'pgsql') {
+            $this->markTestSkipped('The production row-locking contract is PostgreSQL-specific.');
+        }
+
+        [, $connection, , $route] = $this->makeRouteFixture();
+        $transitionCommitted = false;
+        $defaultTransactionLevelDuringConfigSync = null;
+        $stateTransitionTransactionLevelDuringConfigSync = null;
+
+        $this->mock(Bitrix24ApiClient::class, function ($mock) use (
+            $route,
+            &$transitionCommitted,
+            &$defaultTransactionLevelDuringConfigSync,
+            &$stateTransitionTransactionLevelDuringConfigSync,
+        ): void {
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method): bool => $method === 'imconnector.register')
+                ->andReturn($this->bitrixResponse(['result' => true]));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method): bool => $method === 'imconnector.connector.data.set')
+                ->andReturn($this->bitrixResponse(true));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method): bool => $method === 'imconnector.activate')
+                ->andReturn($this->bitrixResponse(true));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method): bool => $method === 'imopenlines.config.update')
+                ->andReturnUsing(function () use (
+                    $route,
+                    &$transitionCommitted,
+                    &$defaultTransactionLevelDuringConfigSync,
+                    &$stateTransitionTransactionLevelDuringConfigSync,
+                ): Bitrix24RestResponseData {
+                    $defaultTransactionLevelDuringConfigSync = DB::transactionLevel();
+                    $stateTransitionTransactionLevelDuringConfigSync = DB::connection(
+                        self::STATE_TRANSITION_CONNECTION,
+                    )->transactionLevel();
+                    DB::purge(self::STATE_TRANSITION_CONNECTION);
+                    app(MarkBitrix24OpenLineRouteMisconfiguredAction::class)->handle(
+                        (int) $route->getKey(),
+                        'Конкурентная ошибка live export во время config sync.',
+                    );
+                    $transitionCommitted = true;
+
+                    return $this->bitrixResponse(true);
+                });
+        });
+
+        try {
+            app(AutoSetupBitrix24OpenLineRouteAction::class)
+                ->refreshConnectorRegistration($connection, $route);
+            $this->fail('Expected a concurrent route transition exception.');
+        } catch (Bitrix24OpenLineAutoSetupException $exception) {
+            $this->assertSame(
+                'Маршрут ОЛ изменился во время обновления. Активация отменена; проверьте актуальное состояние маршрута.',
+                $exception->getMessage(),
+            );
+        }
+
+        $route->refresh();
+
+        $this->assertTrue($transitionCommitted);
+        $this->assertSame(0, $defaultTransactionLevelDuringConfigSync);
+        $this->assertSame(0, $stateTransitionTransactionLevelDuringConfigSync);
+        $this->assertSame(Bitrix24OpenLineRoute::STATUS_MISCONFIGURED, $route->status);
+        $this->assertNull($route->line_owner_key);
+        $this->assertSame(
+            'Конкурентная ошибка live export во время config sync.',
+            $route->last_error_message,
+        );
         $this->assertNotNull($route->last_error_at);
     }
 

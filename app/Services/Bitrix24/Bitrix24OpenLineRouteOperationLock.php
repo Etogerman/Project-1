@@ -47,7 +47,10 @@ final class Bitrix24OpenLineRouteOperationLock
         }
     }
 
-    public function runStateTransition(int $routeId, Closure $callback): mixed
+    /**
+     * Keep the callback database-only so the row lock is never held during external I/O.
+     */
+    public function runShortStateTransition(int $routeId, Closure $callback): mixed
     {
         $connectionName = $this->stateTransitionConnectionName();
         $connection = DB::connection($connectionName);
