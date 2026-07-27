@@ -313,6 +313,109 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
         $this->assertNotNull($route->last_error_at);
     }
 
+    public function test_fail_closed_transition_during_crm_sync_preserves_misconfigured_state_without_activation_calls(): void
+    {
+        [, $connection, , $route] = $this->makeRouteFixture();
+        $route->forceFill([
+            'status' => Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
+            'last_error_message' => 'Старая ошибка refresh.',
+            'last_error_at' => now()->subMinute(),
+        ])->save();
+        $transitionCommitted = false;
+        $transactionLevelDuringCrmSync = null;
+        $stateVersionBeforeTransition = null;
+        $stateVersionAfterTransition = null;
+
+        $this->mock(Bitrix24ApiClient::class, function ($mock) use (
+            $route,
+            &$transitionCommitted,
+            &$transactionLevelDuringCrmSync,
+            &$stateVersionBeforeTransition,
+            &$stateVersionAfterTransition,
+        ): void {
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method): bool => $method === 'imconnector.register')
+                ->andReturn($this->bitrixResponse(['result' => true]));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method): bool => $method === 'imconnector.connector.data.set')
+                ->andReturn($this->bitrixResponse(true));
+
+            $mock->shouldReceive('call')
+                ->never()
+                ->withArgs(fn (string $method): bool => in_array($method, [
+                    'imconnector.activate',
+                    'imopenlines.config.add',
+                ], true));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params): bool => $method === 'imopenlines.config.update'
+                    && ($params['CONFIG_ID'] ?? null) === 'line-original'
+                    && ($params['PARAMS'] ?? null) === [
+                        'CRM' => 'Y',
+                        'CRM_CREATE' => 'deal',
+                        'CRM_SOURCE' => 'ABC_TELEGRAM',
+                    ])
+                ->andReturnUsing(function () use (
+                    $route,
+                    &$transitionCommitted,
+                    &$transactionLevelDuringCrmSync,
+                    &$stateVersionBeforeTransition,
+                    &$stateVersionAfterTransition,
+                ): Bitrix24RestResponseData {
+                    $transactionLevelDuringCrmSync = DB::transactionLevel();
+                    $stateVersionBeforeTransition = (string) DB::table('bitrix24_open_line_routes')
+                        ->where('id', $route->getKey())
+                        ->value(DB::raw('xmin::text'));
+                    app(MarkBitrix24OpenLineRouteMisconfiguredAction::class)->handle(
+                        (int) $route->getKey(),
+                        'Конкурентная ошибка live export во время CRM sync.',
+                    );
+                    $stateVersionAfterTransition = (string) DB::table('bitrix24_open_line_routes')
+                        ->where('id', $route->getKey())
+                        ->value(DB::raw('xmin::text'));
+                    $transitionCommitted = true;
+
+                    return $this->bitrixResponse(true);
+                });
+        });
+
+        $caughtException = null;
+
+        try {
+            app(AutoSetupBitrix24OpenLineRouteAction::class)
+                ->refreshConnectorRegistration($connection, $route);
+        } catch (Bitrix24OpenLineAutoSetupException $exception) {
+            $caughtException = $exception;
+        }
+
+        $route->refresh();
+
+        $this->assertTrue(
+            $transitionCommitted,
+            $caughtException?->getMessage() ?? 'CRM sync transition callback was not executed.',
+        );
+        $this->assertSame(0, $transactionLevelDuringCrmSync);
+        $this->assertNotSame($stateVersionBeforeTransition, $stateVersionAfterTransition);
+        $this->assertInstanceOf(Bitrix24OpenLineAutoSetupException::class, $caughtException);
+        $this->assertSame(
+            'Маршрут ОЛ изменился во время обновления. Обновление карточки не завершено; проверьте актуальное состояние маршрута.',
+            $caughtException->getMessage(),
+        );
+        $this->assertSame(Bitrix24OpenLineRoute::STATUS_MISCONFIGURED, $route->status);
+        $this->assertNull($route->line_owner_key);
+        $this->assertSame(
+            'Конкурентная ошибка live export во время CRM sync.',
+            $route->last_error_message,
+        );
+        $this->assertNotNull($route->last_error_at);
+        $this->assertSame('abc_telegram', $route->connector_code);
+        $this->assertSame('line-original', $route->line_id);
+    }
+
     public function test_active_route_refresh_syncs_crm_settings_without_activating_connector(): void
     {
         [, $connection, , $route] = $this->makeRouteFixture();
