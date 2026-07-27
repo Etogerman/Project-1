@@ -7,6 +7,7 @@ use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Bitrix24Profile;
 use App\Models\Channel;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Str;
 
 class AutoSetupBitrix24OpenLineRouteAction
@@ -27,12 +28,47 @@ class AutoSetupBitrix24OpenLineRouteAction
 
     public function __construct(
         private readonly Bitrix24ApiClient $apiClient,
+        private readonly Bitrix24OpenLineRouteOperationLock $routeOperationLock,
     ) {}
 
     public function refreshConnectorRegistration(Bitrix24Connection $connection, Bitrix24OpenLineRoute $route): Bitrix24OpenLineRoute
     {
+        $profileId = (int) $route->bitrix24_profile_id;
+        $channelId = (int) $route->channel_id;
+
+        try {
+            return $this->routeOperationLock->run(
+                $profileId,
+                $channelId,
+                fn (): Bitrix24OpenLineRoute => $this->refreshConnectorRegistrationUnderLock(
+                    $connection,
+                    $profileId,
+                    $channelId,
+                ),
+            );
+        } catch (LockTimeoutException $exception) {
+            throw new Bitrix24OpenLineAutoSetupException(
+                Bitrix24OpenLineRouteOperationLock::BUSY_MESSAGE,
+                previous: $exception,
+            );
+        }
+    }
+
+    private function refreshConnectorRegistrationUnderLock(
+        Bitrix24Connection $connection,
+        int $profileId,
+        int $channelId,
+    ): Bitrix24OpenLineRoute {
         $connection->loadMissing('profile');
-        $route->loadMissing(['bitrix24Profile', 'channel']);
+        $route = Bitrix24OpenLineRoute::query()
+            ->with(['bitrix24Profile', 'channel'])
+            ->where('bitrix24_profile_id', $profileId)
+            ->where('channel_id', $channelId)
+            ->first();
+
+        if (! $route instanceof Bitrix24OpenLineRoute) {
+            throw new Bitrix24OpenLineAutoSetupException('Маршрут ОЛ больше не существует.');
+        }
 
         $profile = $route->bitrix24Profile;
         $channel = $route->channel;
