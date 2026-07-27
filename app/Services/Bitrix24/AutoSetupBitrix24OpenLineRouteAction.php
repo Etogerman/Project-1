@@ -94,6 +94,13 @@ class AutoSetupBitrix24OpenLineRouteAction
             $this->markRouteError($route, $exception->getMessage());
 
             throw $exception;
+        } catch (Bitrix24AuthRefreshException $exception) {
+            $detail = $this->sanitizeErrorMessage($exception->getMessage());
+            $message = $detail === null
+                ? 'Не удалось обновить авторизацию Bitrix24.'
+                : 'Не удалось обновить авторизацию Bitrix24: '.$detail;
+
+            throw new Bitrix24OpenLineAutoSetupException($message, previous: $exception);
         } catch (Bitrix24ApiException $exception) {
             $message = $exception->getMessage() !== ''
                 ? $exception->getMessage()

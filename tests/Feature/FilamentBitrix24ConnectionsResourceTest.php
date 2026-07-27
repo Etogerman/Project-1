@@ -19,6 +19,7 @@ use App\Models\User;
 use App\Services\Bitrix24\AutoSetupBitrix24OpenLineRouteAction;
 use App\Services\Bitrix24\Bitrix24ApiClient;
 use App\Services\Bitrix24\Bitrix24ApiException;
+use App\Services\Bitrix24\Bitrix24AuthRefreshException;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -1832,6 +1833,61 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         $this->assertNotNull($route->last_error_at);
     }
 
+    public function test_save_application_name_handles_auth_refresh_failure_without_invalidating_route(): void
+    {
+        $superadmin = $this->makeSuperadmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => AutoSetupBitrix24OpenLineRouteAction::SUPPORTED_PORTAL_DOMAIN,
+            'telegram_connector_code' => 'abc_telegram',
+            'telegram_source_id' => 'ABC_TELEGRAM',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+            'application_name' => 'Старое имя',
+            'scope' => AutoSetupBitrix24OpenLineRouteAction::REQUIRED_SCOPES,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'telegram-token'],
+        ]);
+        $route = Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT,
+            'connector_code' => 'abc_telegram',
+            'line_id' => 'line-existing',
+            'source_id' => 'ABC_TELEGRAM',
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+            'last_error_message' => 'Предыдущее предупреждение',
+            'last_error_at' => now()->subMinute(),
+        ]);
+
+        $this->mock(Bitrix24ApiClient::class, function ($mock): void {
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method): bool => $method === 'imconnector.register')
+                ->andThrow(new Bitrix24AuthRefreshException('Bitrix24 token refresh request failed.'));
+        });
+
+        Livewire::actingAs($superadmin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->set('applicationNameForm.application_name', 'Новое имя')
+            ->call('saveApplicationName')
+            ->assertSet('applicationNameForm.application_name', 'Новое имя');
+
+        $route->refresh();
+
+        $this->assertSame('Новое имя', $connection->refresh()->application_name);
+        $this->assertSame(Bitrix24OpenLineRoute::STATUS_ACTIVE, $route->status);
+        $this->assertSame('stagecrm.fvds.ru#line-existing', $route->line_owner_key);
+        $this->assertSame('Предыдущее предупреждение', $route->last_error_message);
+        $this->assertNotNull($route->last_error_at);
+    }
+
     public function test_superadmin_can_save_profile_crm_schema_settings(): void
     {
         $superadmin = $this->makeSuperadmin();
@@ -1941,6 +1997,61 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
 
         $this->assertSame(Bitrix24OpenLineRoute::STATUS_ACTIVE, $route->status);
         $this->assertSame('other.example.test#line-existing', $route->line_owner_key);
+        $this->assertSame('Предыдущее предупреждение', $route->last_error_message);
+        $this->assertNotNull($route->last_error_at);
+    }
+
+    public function test_auto_setup_reports_auth_refresh_failure_without_invalidating_route(): void
+    {
+        $superadmin = $this->makeSuperadmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => AutoSetupBitrix24OpenLineRouteAction::SUPPORTED_PORTAL_DOMAIN,
+            'telegram_connector_code' => 'abc_telegram',
+            'telegram_source_id' => 'ABC_TELEGRAM',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+            'scope' => AutoSetupBitrix24OpenLineRouteAction::REQUIRED_SCOPES,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'telegram-token'],
+        ]);
+        $route = Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT,
+            'connector_code' => 'abc_telegram',
+            'line_id' => 'line-existing',
+            'source_id' => 'ABC_TELEGRAM',
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+            'last_error_message' => 'Предыдущее предупреждение',
+            'last_error_at' => now()->subMinute(),
+        ]);
+
+        $this->mock(Bitrix24ApiClient::class, function ($mock): void {
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method): bool => $method === 'imconnector.register')
+                ->andThrow(new Bitrix24AuthRefreshException('Bitrix24 token refresh request failed.'));
+        });
+
+        Livewire::actingAs($superadmin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->call('setupOpenLineRoute', $channel->id)
+            ->assertSet(
+                'openLineRouteErrorMessage',
+                'Не удалось обновить авторизацию Bitrix24: Bitrix24 token refresh request failed.',
+            );
+
+        $route->refresh();
+
+        $this->assertSame(Bitrix24OpenLineRoute::STATUS_ACTIVE, $route->status);
+        $this->assertSame('stagecrm.fvds.ru#line-existing', $route->line_owner_key);
         $this->assertSame('Предыдущее предупреждение', $route->last_error_message);
         $this->assertNotNull($route->last_error_at);
     }
