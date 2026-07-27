@@ -29,6 +29,7 @@ class AutoSetupBitrix24OpenLineRouteAction
     public function __construct(
         private readonly Bitrix24ApiClient $apiClient,
         private readonly Bitrix24OpenLineRouteOperationLock $routeOperationLock,
+        private readonly MarkBitrix24OpenLineRouteMisconfiguredAction $markRouteMisconfiguredAction,
     ) {}
 
     public function refreshConnectorRegistration(Bitrix24Connection $connection, Bitrix24OpenLineRoute $route): Bitrix24OpenLineRoute
@@ -61,6 +62,8 @@ class AutoSetupBitrix24OpenLineRouteAction
     ): Bitrix24OpenLineRoute {
         $connection->loadMissing('profile');
         $route = Bitrix24OpenLineRoute::query()
+            ->select('bitrix24_open_line_routes.*')
+            ->selectRaw('bitrix24_open_line_routes.xmin::text as state_version')
             ->with(['bitrix24Profile', 'channel'])
             ->where('bitrix24_profile_id', $profileId)
             ->where('channel_id', $channelId)
@@ -83,17 +86,21 @@ class AutoSetupBitrix24OpenLineRouteAction
 
         $this->assertRefreshContextSupported($connection, $profile, $channel, $route);
         $shouldActivateRoute = $route->status !== Bitrix24OpenLineRoute::STATUS_MISCONFIGURED;
+        $initialStateVersion = (string) $route->getAttribute('state_version');
+        $refreshedRoute = null;
 
         try {
             $this->assertRouteConfigurationValidForRefresh($profile, $channel, $route);
             $connection = $this->refreshApplicationNameForConnectorRegistration($connection);
             $this->registerConnector($connection, $profile, $channel, (string) $route->connector_code);
             $this->setConnectorData($connection, $profile, $channel, (string) $route->connector_code, (string) $route->line_id);
-
-            if ($shouldActivateRoute) {
-                $this->activateConnector($connection, (string) $route->connector_code, (string) $route->line_id);
-                $this->syncOpenLineConfig($connection, $channel, (string) $route->line_id, (string) $route->source_id);
-            }
+            $refreshedRoute = $this->completeRefreshStateTransition(
+                $connection,
+                $channel,
+                $route,
+                $initialStateVersion,
+                $shouldActivateRoute,
+            );
         } catch (Bitrix24OpenLineAutoSetupException $exception) {
             $this->markRouteError($route, $exception->getMessage());
 
@@ -115,13 +122,62 @@ class AutoSetupBitrix24OpenLineRouteAction
             throw new Bitrix24OpenLineAutoSetupException($message, previous: $exception);
         }
 
-        $route->forceFill([
-            'last_error_message' => null,
-            'last_error_at' => null,
-            'updated_at' => now(),
-        ])->save();
+        if (! $refreshedRoute instanceof Bitrix24OpenLineRoute) {
+            throw new Bitrix24OpenLineAutoSetupException(
+                'Маршрут ОЛ изменился во время обновления. Активация отменена; проверьте актуальное состояние маршрута.',
+            );
+        }
 
-        return $route->refresh();
+        return $refreshedRoute;
+    }
+
+    private function completeRefreshStateTransition(
+        Bitrix24Connection $connection,
+        Channel $channel,
+        Bitrix24OpenLineRoute $route,
+        string $initialStateVersion,
+        bool $shouldActivateRoute,
+    ): ?Bitrix24OpenLineRoute {
+        return $this->routeOperationLock->runStateTransition(
+            (int) $route->getKey(),
+            function (?Bitrix24OpenLineRoute $lockedRoute) use (
+                $connection,
+                $channel,
+                $route,
+                $initialStateVersion,
+                $shouldActivateRoute,
+            ): ?Bitrix24OpenLineRoute {
+                if (! $lockedRoute instanceof Bitrix24OpenLineRoute) {
+                    throw new Bitrix24OpenLineAutoSetupException('Маршрут ОЛ больше не существует.');
+                }
+
+                if ((string) $lockedRoute->getAttribute('state_version') !== $initialStateVersion) {
+                    return null;
+                }
+
+                if ($shouldActivateRoute) {
+                    $this->activateConnector(
+                        $connection,
+                        (string) $route->connector_code,
+                        (string) $route->line_id,
+                    );
+                    $this->syncOpenLineConfig(
+                        $connection,
+                        $channel,
+                        (string) $route->line_id,
+                        (string) $route->source_id,
+                    );
+                }
+
+                $lockedRoute->forceFill([
+                    'last_error_message' => null,
+                    'last_error_at' => null,
+                    'updated_at' => now(),
+                ])->save();
+
+                return $lockedRoute->refresh();
+            },
+        );
     }
 
     private function isAutoSetupSupportedChannel(Channel $channel): bool
@@ -417,11 +473,10 @@ class AutoSetupBitrix24OpenLineRouteAction
 
     private function markRouteError(Bitrix24OpenLineRoute $route, string $message): void
     {
-        $route->forceFill([
-            'status' => Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
-            'last_error_message' => $this->sanitizeErrorMessage($message),
-            'last_error_at' => now(),
-        ])->save();
+        $this->markRouteMisconfiguredAction->handle(
+            (int) $route->getKey(),
+            $this->sanitizeErrorMessage($message),
+        );
     }
 
     private function configuredApplicationDisplayName(): ?string

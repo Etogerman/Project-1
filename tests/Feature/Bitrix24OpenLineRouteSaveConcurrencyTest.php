@@ -14,6 +14,7 @@ use App\Services\Bitrix24\AutoSetupBitrix24OpenLineRouteAction;
 use App\Services\Bitrix24\Bitrix24ApiClient;
 use App\Services\Bitrix24\Bitrix24OpenLineAutoSetupException;
 use App\Services\Bitrix24\Bitrix24OpenLineRouteOperationLock;
+use App\Services\Bitrix24\MarkBitrix24OpenLineRouteMisconfiguredAction;
 use Filament\Facades\Filament;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\QueryException;
@@ -249,6 +250,173 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
         $this->assertSame(Bitrix24OpenLineRoute::STATUS_ACTIVE, $route->status);
         $this->assertSame('ABC_TELEGRAM', $route->source_id);
         $this->assertNull($route->last_error_message);
+    }
+
+    public function test_fail_closed_transition_committed_before_activation_cancels_refresh(): void
+    {
+        [, $connection, , $route] = $this->makeRouteFixture();
+        $transitionCommitted = false;
+
+        $this->mock(Bitrix24ApiClient::class, function ($mock) use (
+            $route,
+            &$transitionCommitted,
+        ): void {
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method): bool => $method === 'imconnector.register')
+                ->andReturn($this->bitrixResponse(['result' => true]));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method): bool => $method === 'imconnector.connector.data.set')
+                ->andReturnUsing(function () use (
+                    $route,
+                    &$transitionCommitted,
+                ): Bitrix24RestResponseData {
+                    app(MarkBitrix24OpenLineRouteMisconfiguredAction::class)->handle(
+                        (int) $route->getKey(),
+                        'Live export обнаружил неактивную линию.',
+                    );
+                    $transitionCommitted = true;
+
+                    return $this->bitrixResponse(true);
+                });
+
+            $mock->shouldReceive('call')
+                ->never()
+                ->withArgs(fn (string $method): bool => in_array($method, [
+                    'imconnector.activate',
+                    'imopenlines.config.update',
+                ], true));
+        });
+
+        try {
+            app(AutoSetupBitrix24OpenLineRouteAction::class)
+                ->refreshConnectorRegistration($connection, $route);
+            $this->fail('Expected a concurrent route transition exception.');
+        } catch (Bitrix24OpenLineAutoSetupException $exception) {
+            $this->assertSame(
+                'Маршрут ОЛ изменился во время обновления. Активация отменена; проверьте актуальное состояние маршрута.',
+                $exception->getMessage(),
+            );
+        }
+
+        $route->refresh();
+
+        $this->assertTrue($transitionCommitted);
+        $this->assertSame(Bitrix24OpenLineRoute::STATUS_MISCONFIGURED, $route->status);
+        $this->assertNull($route->line_owner_key);
+        $this->assertSame('Live export обнаружил неактивную линию.', $route->last_error_message);
+        $this->assertNotNull($route->last_error_at);
+    }
+
+    public function test_fail_closed_transition_waits_until_refresh_state_transition_finishes(): void
+    {
+        if (DB::getDriverName() !== 'pgsql') {
+            $this->markTestSkipped('The production row-locking contract is PostgreSQL-specific.');
+        }
+
+        [, $connection, , $route] = $this->makeRouteFixture();
+        $defaultConnection = config('database.default');
+        $concurrentConnection = 'bitrix24_route_refresh_concurrent_failure';
+        config([
+            'database.connections.'.$concurrentConnection => config(
+                'database.connections.'.$defaultConnection,
+            ),
+        ]);
+        DB::purge($concurrentConnection);
+
+        $concurrentWriteAttempted = false;
+        $concurrentWriteException = null;
+        $defaultTransactionLevelDuringActivation = null;
+
+        $this->mock(Bitrix24ApiClient::class, function ($mock) use (
+            $concurrentConnection,
+            $route,
+            &$concurrentWriteAttempted,
+            &$concurrentWriteException,
+            &$defaultTransactionLevelDuringActivation,
+        ): void {
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method): bool => $method === 'imconnector.register')
+                ->andReturn($this->bitrixResponse(['result' => true]));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method): bool => $method === 'imconnector.connector.data.set')
+                ->andReturn($this->bitrixResponse(true));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method): bool => $method === 'imconnector.activate')
+                ->andReturnUsing(function () use (
+                    $concurrentConnection,
+                    $route,
+                    &$concurrentWriteAttempted,
+                    &$concurrentWriteException,
+                    &$defaultTransactionLevelDuringActivation,
+                ): Bitrix24RestResponseData {
+                    $concurrentWriteAttempted = true;
+                    $defaultTransactionLevelDuringActivation = DB::transactionLevel();
+                    $database = DB::connection($concurrentConnection);
+                    $database->statement("SET lock_timeout TO '100ms'");
+
+                    try {
+                        $database->table('bitrix24_open_line_routes')
+                            ->where('id', $route->id)
+                            ->update([
+                                'status' => Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
+                                'line_owner_key' => null,
+                                'last_error_message' => 'Конкурентная ошибка live export.',
+                                'last_error_at' => now(),
+                                'updated_at' => now(),
+                            ]);
+                    } catch (QueryException $exception) {
+                        $concurrentWriteException = $exception;
+                    } finally {
+                        $database->statement('SET lock_timeout TO DEFAULT');
+                    }
+
+                    return $this->bitrixResponse(true);
+                });
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method): bool => $method === 'imopenlines.config.update')
+                ->andReturn($this->bitrixResponse(true));
+        });
+
+        try {
+            app(AutoSetupBitrix24OpenLineRouteAction::class)
+                ->refreshConnectorRegistration($connection, $route);
+
+            $this->assertTrue($concurrentWriteAttempted);
+            $this->assertSame(0, $defaultTransactionLevelDuringActivation);
+            $this->assertInstanceOf(QueryException::class, $concurrentWriteException);
+            $this->assertSame(
+                '55P03',
+                (string) ($concurrentWriteException->errorInfo[0] ?? $concurrentWriteException->getCode()),
+            );
+
+            $route->refresh();
+            $this->assertSame(Bitrix24OpenLineRoute::STATUS_ACTIVE, $route->status);
+            $this->assertNull($route->last_error_message);
+
+            app(MarkBitrix24OpenLineRouteMisconfiguredAction::class)->handle(
+                (int) $route->getKey(),
+                'Конкурентная ошибка live export.',
+            );
+        } finally {
+            DB::purge($concurrentConnection);
+        }
+
+        $route->refresh();
+
+        $this->assertSame(Bitrix24OpenLineRoute::STATUS_MISCONFIGURED, $route->status);
+        $this->assertNull($route->line_owner_key);
+        $this->assertSame('Конкурентная ошибка live export.', $route->last_error_message);
+        $this->assertNotNull($route->last_error_at);
     }
 
     public function test_generic_save_lock_prevents_refresh_from_reading_stale_state(): void

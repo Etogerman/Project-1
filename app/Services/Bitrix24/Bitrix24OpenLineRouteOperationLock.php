@@ -2,13 +2,18 @@
 
 namespace App\Services\Bitrix24;
 
+use App\Models\Bitrix24OpenLineRoute;
 use Closure;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
+use LogicException;
 
 final class Bitrix24OpenLineRouteOperationLock
 {
     public const BUSY_MESSAGE = 'Маршрут ОЛ уже изменяется или обновляется. Повторите попытку после завершения текущей операции.';
+
+    private const STATE_TRANSITION_CONNECTION = 'bitrix24_route_state_transition';
 
     private const MINIMUM_LOCK_SECONDS = 180;
 
@@ -40,6 +45,50 @@ final class Bitrix24OpenLineRouteOperationLock
         } finally {
             $lock->release();
         }
+    }
+
+    public function runStateTransition(int $routeId, Closure $callback): mixed
+    {
+        $connectionName = $this->stateTransitionConnectionName();
+        $connection = DB::connection($connectionName);
+
+        return $connection->transaction(function () use ($connectionName, $routeId, $callback): mixed {
+            $route = (new Bitrix24OpenLineRoute)
+                ->setConnection($connectionName)
+                ->newQuery()
+                ->select('bitrix24_open_line_routes.*')
+                ->selectRaw('bitrix24_open_line_routes.xmin::text as state_version')
+                ->whereKey($routeId)
+                ->lockForUpdate()
+                ->first();
+
+            return $callback($route);
+        });
+    }
+
+    private function stateTransitionConnectionName(): string
+    {
+        $defaultConnection = (string) config('database.default');
+
+        if (DB::connection($defaultConnection)->transactionLevel() > 0) {
+            return $defaultConnection;
+        }
+
+        if (is_array(config('database.connections.'.self::STATE_TRANSITION_CONNECTION))) {
+            return self::STATE_TRANSITION_CONNECTION;
+        }
+
+        $defaultConfiguration = config('database.connections.'.$defaultConnection);
+
+        if (! is_array($defaultConfiguration)) {
+            throw new LogicException('Default database connection is not configured.');
+        }
+
+        config([
+            'database.connections.'.self::STATE_TRANSITION_CONNECTION => $defaultConfiguration,
+        ]);
+
+        return self::STATE_TRANSITION_CONNECTION;
     }
 
     private function lockSeconds(): int

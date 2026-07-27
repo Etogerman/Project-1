@@ -7,7 +7,6 @@ use App\Data\Bitrix24\Bitrix24OpenLinesIdentityDecisionData;
 use App\Data\Bitrix24\Bitrix24OpenLinesRouteData;
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24MessageExport;
-use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Channel;
 use App\Models\Contact;
@@ -45,6 +44,7 @@ class ExportMessageToBitrix24OpenLinesAction
         private readonly GuardBitrix24OpenLineMutationAction $guardOpenLineMutationAction,
         private readonly RepairStaleBitrix24ContactForLiveExportAction $repairStaleBitrix24ContactForLiveExportAction,
         private readonly QueueBitrix24LiveMessageExportAction $queueBitrix24LiveMessageExportAction,
+        private readonly MarkBitrix24OpenLineRouteMisconfiguredAction $markRouteMisconfiguredAction,
     ) {}
 
     public function handle(
@@ -487,17 +487,7 @@ class ExportMessageToBitrix24OpenLinesAction
             return;
         }
 
-        $routeModel = Bitrix24OpenLineRoute::query()->find($routeId);
-
-        if (! $routeModel instanceof Bitrix24OpenLineRoute) {
-            return;
-        }
-
-        $routeModel->forceFill([
-            'status' => Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
-            'last_error_message' => Str::limit($exception->getMessage(), 1000, ''),
-            'last_error_at' => now(),
-        ])->save();
+        $this->markRouteMisconfiguredAction->handle($routeId, $exception->getMessage());
     }
 
     private function isInactiveOpenLineFailure(Bitrix24LiveExportTransportException $exception): bool
