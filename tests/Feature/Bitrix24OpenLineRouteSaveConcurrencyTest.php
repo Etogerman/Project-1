@@ -27,8 +27,6 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
 {
     use DatabaseMigrations;
 
-    private const STATE_TRANSITION_CONNECTION = 'bitrix24_route_state_transition';
-
     protected function setUp(): void
     {
         parent::setUp();
@@ -231,16 +229,11 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
                 ->withArgs(fn (string $method): bool => $method === 'imconnector.connector.data.set')
                 ->andReturn($this->bitrixResponse(true));
 
-            $mock->shouldReceive('call')
-                ->once()
-                ->withArgs(fn (string $method): bool => $method === 'imconnector.activate')
-                ->andReturn($this->bitrixResponse(true));
-
-            $mock->shouldReceive('call')
-                ->once()
-                ->withArgs(fn (string $method, array $params): bool => $method === 'imopenlines.config.update'
-                    && data_get($params, 'PARAMS.CRM_SOURCE') === 'ABC_TELEGRAM')
-                ->andReturn($this->bitrixResponse(true));
+            $mock->shouldNotReceive('call')
+                ->withArgs(fn (string $method): bool => in_array($method, [
+                    'imconnector.activate',
+                    'imopenlines.config.update',
+                ], true));
         });
 
         app(AutoSetupBitrix24OpenLineRouteAction::class)
@@ -254,7 +247,7 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
         $this->assertNull($route->last_error_message);
     }
 
-    public function test_fail_closed_transition_committed_before_activation_cancels_refresh(): void
+    public function test_fail_closed_transition_during_connector_metadata_refresh_cancels_completion_without_activation_calls(): void
     {
         [, $connection, , $route] = $this->makeRouteFixture();
         $transitionCommitted = false;
@@ -298,7 +291,7 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
             $this->fail('Expected a concurrent route transition exception.');
         } catch (Bitrix24OpenLineAutoSetupException $exception) {
             $this->assertSame(
-                'Маршрут ОЛ изменился во время обновления. Активация отменена; проверьте актуальное состояние маршрута.',
+                'Маршрут ОЛ изменился во время обновления. Обновление карточки не завершено; проверьте актуальное состояние маршрута.',
                 $exception->getMessage(),
             );
         }
@@ -312,23 +305,11 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
         $this->assertNotNull($route->last_error_at);
     }
 
-    public function test_fail_closed_transition_commits_during_activation_and_cancels_refresh_completion(): void
+    public function test_active_route_refresh_never_activates_connector_or_open_line_config(): void
     {
-        if (DB::getDriverName() !== 'pgsql') {
-            $this->markTestSkipped('The production row-locking contract is PostgreSQL-specific.');
-        }
-
         [, $connection, , $route] = $this->makeRouteFixture();
-        $transitionCommitted = false;
-        $defaultTransactionLevelDuringActivation = null;
-        $stateTransitionTransactionLevelDuringActivation = null;
 
-        $this->mock(Bitrix24ApiClient::class, function ($mock) use (
-            $route,
-            &$transitionCommitted,
-            &$defaultTransactionLevelDuringActivation,
-            &$stateTransitionTransactionLevelDuringActivation,
-        ): void {
+        $this->mock(Bitrix24ApiClient::class, function ($mock): void {
             $mock->shouldReceive('call')
                 ->once()
                 ->withArgs(fn (string $method): bool => $method === 'imconnector.register')
@@ -339,135 +320,22 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
                 ->withArgs(fn (string $method): bool => $method === 'imconnector.connector.data.set')
                 ->andReturn($this->bitrixResponse(true));
 
-            $mock->shouldReceive('call')
-                ->once()
-                ->withArgs(fn (string $method): bool => $method === 'imconnector.activate')
-                ->andReturnUsing(function () use (
-                    $route,
-                    &$transitionCommitted,
-                    &$defaultTransactionLevelDuringActivation,
-                    &$stateTransitionTransactionLevelDuringActivation,
-                ): Bitrix24RestResponseData {
-                    $defaultTransactionLevelDuringActivation = DB::transactionLevel();
-                    $stateTransitionTransactionLevelDuringActivation = DB::connection(
-                        self::STATE_TRANSITION_CONNECTION,
-                    )->transactionLevel();
-                    DB::purge(self::STATE_TRANSITION_CONNECTION);
-                    app(MarkBitrix24OpenLineRouteMisconfiguredAction::class)->handle(
-                        (int) $route->getKey(),
-                        'Конкурентная ошибка live export.',
-                    );
-                    $transitionCommitted = true;
-
-                    return $this->bitrixResponse(true);
-                });
-
-            $mock->shouldReceive('call')
-                ->never()
-                ->withArgs(fn (string $method): bool => $method === 'imopenlines.config.update');
+            $mock->shouldNotReceive('call')
+                ->withArgs(fn (string $method): bool => in_array($method, [
+                    'imconnector.activate',
+                    'imopenlines.config.update',
+                ], true));
         });
 
-        try {
-            app(AutoSetupBitrix24OpenLineRouteAction::class)
-                ->refreshConnectorRegistration($connection, $route);
-            $this->fail('Expected a concurrent route transition exception.');
-        } catch (Bitrix24OpenLineAutoSetupException $exception) {
-            $this->assertSame(
-                'Маршрут ОЛ изменился во время обновления. Активация отменена; проверьте актуальное состояние маршрута.',
-                $exception->getMessage(),
-            );
-        }
+        app(AutoSetupBitrix24OpenLineRouteAction::class)
+            ->refreshConnectorRegistration($connection, $route);
 
         $route->refresh();
 
-        $this->assertTrue($transitionCommitted);
-        $this->assertSame(0, $defaultTransactionLevelDuringActivation);
-        $this->assertSame(0, $stateTransitionTransactionLevelDuringActivation);
-        $this->assertSame(Bitrix24OpenLineRoute::STATUS_MISCONFIGURED, $route->status);
-        $this->assertNull($route->line_owner_key);
-        $this->assertSame('Конкурентная ошибка live export.', $route->last_error_message);
-        $this->assertNotNull($route->last_error_at);
-    }
-
-    public function test_fail_closed_transition_commits_during_config_sync_and_cancels_refresh_completion(): void
-    {
-        if (DB::getDriverName() !== 'pgsql') {
-            $this->markTestSkipped('The production row-locking contract is PostgreSQL-specific.');
-        }
-
-        [, $connection, , $route] = $this->makeRouteFixture();
-        $transitionCommitted = false;
-        $defaultTransactionLevelDuringConfigSync = null;
-        $stateTransitionTransactionLevelDuringConfigSync = null;
-
-        $this->mock(Bitrix24ApiClient::class, function ($mock) use (
-            $route,
-            &$transitionCommitted,
-            &$defaultTransactionLevelDuringConfigSync,
-            &$stateTransitionTransactionLevelDuringConfigSync,
-        ): void {
-            $mock->shouldReceive('call')
-                ->once()
-                ->withArgs(fn (string $method): bool => $method === 'imconnector.register')
-                ->andReturn($this->bitrixResponse(['result' => true]));
-
-            $mock->shouldReceive('call')
-                ->once()
-                ->withArgs(fn (string $method): bool => $method === 'imconnector.connector.data.set')
-                ->andReturn($this->bitrixResponse(true));
-
-            $mock->shouldReceive('call')
-                ->once()
-                ->withArgs(fn (string $method): bool => $method === 'imconnector.activate')
-                ->andReturn($this->bitrixResponse(true));
-
-            $mock->shouldReceive('call')
-                ->once()
-                ->withArgs(fn (string $method): bool => $method === 'imopenlines.config.update')
-                ->andReturnUsing(function () use (
-                    $route,
-                    &$transitionCommitted,
-                    &$defaultTransactionLevelDuringConfigSync,
-                    &$stateTransitionTransactionLevelDuringConfigSync,
-                ): Bitrix24RestResponseData {
-                    $defaultTransactionLevelDuringConfigSync = DB::transactionLevel();
-                    $stateTransitionTransactionLevelDuringConfigSync = DB::connection(
-                        self::STATE_TRANSITION_CONNECTION,
-                    )->transactionLevel();
-                    DB::purge(self::STATE_TRANSITION_CONNECTION);
-                    app(MarkBitrix24OpenLineRouteMisconfiguredAction::class)->handle(
-                        (int) $route->getKey(),
-                        'Конкурентная ошибка live export во время config sync.',
-                    );
-                    $transitionCommitted = true;
-
-                    return $this->bitrixResponse(true);
-                });
-        });
-
-        try {
-            app(AutoSetupBitrix24OpenLineRouteAction::class)
-                ->refreshConnectorRegistration($connection, $route);
-            $this->fail('Expected a concurrent route transition exception.');
-        } catch (Bitrix24OpenLineAutoSetupException $exception) {
-            $this->assertSame(
-                'Маршрут ОЛ изменился во время обновления. Активация отменена; проверьте актуальное состояние маршрута.',
-                $exception->getMessage(),
-            );
-        }
-
-        $route->refresh();
-
-        $this->assertTrue($transitionCommitted);
-        $this->assertSame(0, $defaultTransactionLevelDuringConfigSync);
-        $this->assertSame(0, $stateTransitionTransactionLevelDuringConfigSync);
-        $this->assertSame(Bitrix24OpenLineRoute::STATUS_MISCONFIGURED, $route->status);
-        $this->assertNull($route->line_owner_key);
-        $this->assertSame(
-            'Конкурентная ошибка live export во время config sync.',
-            $route->last_error_message,
-        );
-        $this->assertNotNull($route->last_error_at);
+        $this->assertSame(Bitrix24OpenLineRoute::STATUS_ACTIVE, $route->status);
+        $this->assertSame('stagecrm.fvds.ru#line-original', $route->line_owner_key);
+        $this->assertNull($route->last_error_message);
+        $this->assertNull($route->last_error_at);
     }
 
     public function test_generic_save_lock_prevents_refresh_from_reading_stale_state(): void
