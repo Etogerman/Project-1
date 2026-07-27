@@ -628,45 +628,58 @@ class ViewBitrix24Connection extends ViewRecord
         }
 
         $form = $this->normalizeOpenLineRouteForm($this->openLineRouteForms[$channel->id] ?? []);
-        $route = Bitrix24OpenLineRoute::query()
-            ->where('bitrix24_profile_id', $profile->id)
-            ->where('channel_id', $channel->id)
-            ->first();
-
-        if (! $this->validateStoredOpenLineRouteTransition($route, $form)) {
-            return;
-        }
-
-        if (! $this->validateOpenLineRouteForm($profile, $channel, $route, $form)) {
-            return;
-        }
-
         $user = auth()->user();
 
         try {
-            $route ??= new Bitrix24OpenLineRoute([
-                'bitrix24_profile_id' => $profile->id,
-                'channel_id' => $channel->id,
-                'created_by_user_id' => $user instanceof User ? $user->id : null,
-            ]);
+            $saved = DB::transaction(function () use ($profile, $channel, $form, $user): bool {
+                $route = Bitrix24OpenLineRoute::query()
+                    ->where('bitrix24_profile_id', $profile->id)
+                    ->where('channel_id', $channel->id)
+                    ->lockForUpdate()
+                    ->first();
 
-            $route->fill([
-                'portal_domain' => $profile->portal_domain,
-                'profile_key' => $profile->profile_key,
-                'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
-                'connector_code' => $this->nullableFormValue($form['connector_code']),
-                'line_id' => $this->nullableFormValue($form['line_id']),
-                'line_name' => $this->nullableFormValue($form['line_name']),
-                'callback_owner_id' => $this->nullableIntegerFormValue($form['callback_owner_id']),
-                'source_id' => $this->nullableFormValue($form['source_id']),
-                'status' => $form['status'],
-                'updated_by_user_id' => $user instanceof User ? $user->id : null,
-            ]);
+                if (! $this->validateStoredOpenLineRouteTransition($route, $form)) {
+                    return false;
+                }
 
-            $route->save();
-        } catch (QueryException) {
+                if (! $this->validateOpenLineRouteForm($profile, $channel, $route, $form)) {
+                    return false;
+                }
+
+                $route ??= new Bitrix24OpenLineRoute([
+                    'bitrix24_profile_id' => $profile->id,
+                    'channel_id' => $channel->id,
+                    'created_by_user_id' => $user instanceof User ? $user->id : null,
+                ]);
+
+                $route->fill([
+                    'portal_domain' => $profile->portal_domain,
+                    'profile_key' => $profile->profile_key,
+                    'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
+                    'connector_code' => $this->nullableFormValue($form['connector_code']),
+                    'line_id' => $this->nullableFormValue($form['line_id']),
+                    'line_name' => $this->nullableFormValue($form['line_name']),
+                    'callback_owner_id' => $this->nullableIntegerFormValue($form['callback_owner_id']),
+                    'source_id' => $this->nullableFormValue($form['source_id']),
+                    'status' => $form['status'],
+                    'updated_by_user_id' => $user instanceof User ? $user->id : null,
+                ]);
+
+                $route->save();
+
+                return true;
+            }, attempts: 3);
+        } catch (QueryException $exception) {
+            if (! $this->isOpenLineRouteUniqueConstraintViolation($exception)) {
+                throw $exception;
+            }
+
             $this->failOpenLineRouteSave('Открытая линия уже занята другим рабочим маршрутом.');
 
+            return;
+        }
+
+        if (! $saved) {
             return;
         }
 
@@ -1724,6 +1737,16 @@ class ViewBitrix24Connection extends ViewRecord
             ->where('line_owner_key', $lineOwnerKey)
             ->when($route instanceof Bitrix24OpenLineRoute, fn ($query) => $query->whereKeyNot($route->id))
             ->exists();
+    }
+
+    protected function isOpenLineRouteUniqueConstraintViolation(QueryException $exception): bool
+    {
+        $sqlState = (string) ($exception->errorInfo[0] ?? $exception->getCode());
+        $message = mb_strtolower($exception->getMessage());
+
+        return in_array($sqlState, ['23000', '23505'], true)
+            && str_contains($message, 'bitrix24_open_line_routes')
+            && ($sqlState === '23505' || str_contains($message, 'unique'));
     }
 
     /**
