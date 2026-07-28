@@ -85,7 +85,6 @@ class AutoSetupBitrix24OpenLineRouteAction
         }
 
         $this->assertRefreshContextSupported($connection, $profile, $channel, $route);
-        $shouldActivateRoute = $route->status !== Bitrix24OpenLineRoute::STATUS_MISCONFIGURED;
         $initialStateVersion = (string) $route->getAttribute('state_version');
         $refreshedRoute = null;
 
@@ -94,13 +93,18 @@ class AutoSetupBitrix24OpenLineRouteAction
             $connection = $this->refreshApplicationNameForConnectorRegistration($connection);
             $this->registerConnector($connection, $profile, $channel, (string) $route->connector_code);
             $this->setConnectorData($connection, $profile, $channel, (string) $route->connector_code, (string) $route->line_id);
-            $refreshedRoute = $this->completeRefreshStateTransition(
-                $connection,
-                $channel,
-                $route,
-                $initialStateVersion,
-                $shouldActivateRoute,
-            );
+
+            if ($this->routeStateVersionMatches((int) $route->getKey(), $initialStateVersion)) {
+                $this->syncOpenLineCrmSettings(
+                    $connection,
+                    (string) $route->line_id,
+                    (string) $route->source_id,
+                );
+                $refreshedRoute = $this->completeRefreshStateTransition(
+                    $route,
+                    $initialStateVersion,
+                );
+            }
         } catch (Bitrix24OpenLineAutoSetupException $exception) {
             $this->markRouteError($route, $exception->getMessage());
 
@@ -124,7 +128,7 @@ class AutoSetupBitrix24OpenLineRouteAction
 
         if (! $refreshedRoute instanceof Bitrix24OpenLineRoute) {
             throw new Bitrix24OpenLineAutoSetupException(
-                'Маршрут ОЛ изменился во время обновления. Активация отменена; проверьте актуальное состояние маршрута.',
+                'Маршрут ОЛ изменился во время обновления. Обновление карточки не завершено; проверьте актуальное состояние маршрута.',
             );
         }
 
@@ -132,36 +136,10 @@ class AutoSetupBitrix24OpenLineRouteAction
     }
 
     private function completeRefreshStateTransition(
-        Bitrix24Connection $connection,
-        Channel $channel,
         Bitrix24OpenLineRoute $route,
         string $initialStateVersion,
-        bool $shouldActivateRoute,
     ): ?Bitrix24OpenLineRoute {
         $routeId = (int) $route->getKey();
-
-        if ($shouldActivateRoute) {
-            if (! $this->routeStateVersionMatches($routeId, $initialStateVersion)) {
-                return null;
-            }
-
-            $this->activateConnector(
-                $connection,
-                (string) $route->connector_code,
-                (string) $route->line_id,
-            );
-
-            if (! $this->routeStateVersionMatches($routeId, $initialStateVersion)) {
-                return null;
-            }
-
-            $this->syncOpenLineConfig(
-                $connection,
-                $channel,
-                (string) $route->line_id,
-                (string) $route->source_id,
-            );
-        }
 
         return $this->routeOperationLock->runShortStateTransition(
             $routeId,
@@ -272,41 +250,21 @@ class AutoSetupBitrix24OpenLineRouteAction
         $this->assertLineIsNotUsedByAnotherRoute($profile, $channel, (string) $route->line_id);
     }
 
-    private function syncOpenLineConfig(
+    private function syncOpenLineCrmSettings(
         Bitrix24Connection $connection,
-        Channel $channel,
         string $lineId,
         string $sourceId,
-        ?string $lineName = null,
     ): void {
         $response = $this->apiClient->call('imopenlines.config.update', [
             'CONFIG_ID' => $lineId,
-            'PARAMS' => $this->openLineConfigParams($channel, $sourceId, $lineName),
+            'PARAMS' => [
+                'CRM' => 'Y',
+                'CRM_CREATE' => 'deal',
+                'CRM_SOURCE' => $sourceId,
+            ],
         ], $connection);
 
-        $this->assertSuccessfulBooleanResult($response, 'Не удалось синхронизировать настройки открытой линии Bitrix24.');
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    private function openLineConfigParams(
-        Channel $channel,
-        string $sourceId,
-        ?string $lineName,
-    ): array {
-        $params = [
-            'ACTIVE' => 'Y',
-            'CRM' => 'Y',
-            'CRM_CREATE' => 'deal',
-            'CRM_SOURCE' => $sourceId,
-        ];
-
-        if ($lineName !== null && trim($lineName) !== '') {
-            $params['LINE_NAME'] = Str::limit(trim($lineName), 120, '');
-        }
-
-        return $params;
+        $this->assertSuccessfulBooleanResult($response, 'Не удалось синхронизировать CRM-настройки открытой линии Bitrix24.');
     }
 
     private function registerConnector(
@@ -358,17 +316,6 @@ class AutoSetupBitrix24OpenLineRouteAction
         ], $connection);
 
         $this->assertSuccessfulBooleanResult($response, 'Не удалось сохранить настройки соединителя Bitrix24.');
-    }
-
-    private function activateConnector(Bitrix24Connection $connection, string $connectorCode, string $lineId): void
-    {
-        $response = $this->apiClient->call('imconnector.activate', [
-            'CONNECTOR' => $connectorCode,
-            'LINE' => $lineId,
-            'ACTIVE' => '1',
-        ], $connection);
-
-        $this->assertSuccessfulBooleanResult($response, 'Не удалось активировать соединитель Bitrix24.');
     }
 
     private function assertLineIsNotUsedByAnotherRoute(Bitrix24Profile $profile, Channel $channel, string $lineId): void

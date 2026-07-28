@@ -17,7 +17,7 @@ final class Bitrix24OpenLineRouteOperationLock
 
     private const MINIMUM_LOCK_SECONDS = 180;
 
-    private const REMOTE_OPERATION_COUNT = 4;
+    private const REMOTE_OPERATION_COUNT = 3;
 
     private const REST_ROUNDS_PER_OPERATION = 2;
 
