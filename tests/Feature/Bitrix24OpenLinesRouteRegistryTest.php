@@ -284,6 +284,37 @@ class Bitrix24OpenLinesRouteRegistryTest extends TestCase
         );
     }
 
+    public function test_acquire_line_lease_rejects_non_numeric_line_id_before_http_request(): void
+    {
+        $profile = $this->makeProfile([
+            'portal_domain' => 'stagecrm.fvds.ru',
+            'callback_base_url' => 'https://local.example.test/callback',
+            'openlines_route_registry_secret_encrypted' => 'registry-secret-for-invalid-line-test',
+        ]);
+        $owner = $profile->callbackOwners()->firstOrFail();
+        Http::preventStrayRequests();
+
+        try {
+            app(Bitrix24OpenLinesRouteRegistryClient::class)->acquireLineLease(
+                $profile,
+                $owner,
+                'abc_max',
+                'max',
+                'line-editable',
+                360,
+            );
+            $this->fail('Non-numeric LINE_ID must fail before the registry request.');
+        } catch (Bitrix24OpenLinesRouteRegistryException $exception) {
+            $this->assertSame('route_registry_line_id_invalid', $exception->errorCode);
+            $this->assertSame(
+                'LINE_ID открытой линии должен состоять из 1–64 цифр.',
+                $exception->getMessage(),
+            );
+        }
+
+        $this->assertCount(0, Http::recorded());
+    }
+
     public function test_doctor_compares_signed_snapshot_with_local_owner_scope(): void
     {
         $secret = 'registry-secret-for-doctor-test-123456';

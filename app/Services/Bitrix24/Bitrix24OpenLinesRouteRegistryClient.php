@@ -39,13 +39,14 @@ class Bitrix24OpenLinesRouteRegistryClient
         string $lineId,
         int $leaseSeconds,
     ): array {
+        $lineId = $this->validatedLineId($lineId);
         $response = $this->request($profile, 'POST', 'action=acquire-line-lease', [
             'portal_domain' => trim((string) $profile->portal_domain),
             'owner_profile_key' => trim((string) $owner->owner_key),
             'owner_callback_base_url' => trim((string) $owner->callback_base_url),
             'connector_code' => trim($connectorCode),
             'connector_type' => trim($connectorType),
-            'line_id' => trim($lineId),
+            'line_id' => $lineId,
             'lease_seconds' => $leaseSeconds,
         ]);
         $leaseToken = is_scalar($response['lease_token'] ?? null)
@@ -74,12 +75,27 @@ class Bitrix24OpenLinesRouteRegistryClient
         string $lineId,
         string $leaseToken,
     ): void {
+        $lineId = $this->validatedLineId($lineId);
         $this->request($profile, 'POST', 'action=release-line-lease', [
             'portal_domain' => trim((string) $profile->portal_domain),
             'owner_profile_key' => trim((string) $owner->owner_key),
-            'line_id' => trim($lineId),
+            'line_id' => $lineId,
             'lease_token' => trim($leaseToken),
         ]);
+    }
+
+    private function validatedLineId(string $lineId): string
+    {
+        $lineId = trim($lineId);
+
+        if (preg_match('/^[0-9]{1,64}$/', $lineId) !== 1) {
+            throw new Bitrix24OpenLinesRouteRegistryException(
+                'route_registry_line_id_invalid',
+                'LINE_ID открытой линии должен состоять из 1–64 цифр.',
+            );
+        }
+
+        return $lineId;
     }
 
     /**

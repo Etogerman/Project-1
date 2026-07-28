@@ -602,6 +602,18 @@ class BitrixBoxOpenLinesRegistryFirstConnectorDiscoveryTest extends TestCase
         );
     }
 
+    public function test_signed_line_lease_rejects_non_numeric_line_id(): void
+    {
+        $result = $this->lineLeaseRequest(
+            action: 'acquire-line-lease',
+            payload: $this->lineLeasePayload('local-1', 'dynamic_max', 'line-editable'),
+            requestId: 'lease-invalid-line-id',
+        );
+
+        $this->assertSame(422, $result['status']);
+        $this->assertSame('route_registry_route_invalid', $result['body']['error_code']);
+    }
+
     public function test_publish_cannot_change_line_ownership_while_shared_lease_is_active(): void
     {
         $payload = $this->publishPayload(

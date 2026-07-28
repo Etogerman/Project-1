@@ -26,6 +26,7 @@ use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use Livewire\Livewire;
 use Tests\TestCase;
@@ -561,13 +562,56 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
             ->set("openLineRouteForms.{$channel->id}.status", Bitrix24OpenLineRoute::STATUS_ACTIVE)
             ->set("openLineRouteForms.{$channel->id}.connector_code", 'abc_telegram')
-            ->set("openLineRouteForms.{$channel->id}.line_id", 'line-editable')
+            ->set("openLineRouteForms.{$channel->id}.line_id", '15')
             ->set("openLineRouteForms.{$channel->id}.line_name", '9 Локальный бот телеграм - Герман-1')
             ->set("openLineRouteForms.{$channel->id}.source_id", 'source-editable')
             ->call('saveOpenLineRoute', $channel->id)
             ->assertSet(
                 'openLineRouteErrorMessage',
                 'Для этой открытой линии ещё не опубликован владелец в общем OpenLines registry. Сначала выполните разрешённую публикацию ownership.',
+            );
+
+        $this->assertDatabaseMissing('bitrix24_open_line_routes', [
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+        ]);
+    }
+
+    public function test_employee_cannot_send_non_numeric_line_id_to_registry_lease(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+        $profile = $this->makeProfile([
+            'portal_domain' => 'crm.edit.test',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Editable Telegram',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'bitrix24.view', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'bitrix24.edit', true);
+        Http::preventStrayRequests();
+
+        Livewire::actingAs($employee)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->set("openLineRouteForms.{$channel->id}.status", Bitrix24OpenLineRoute::STATUS_ACTIVE)
+            ->set("openLineRouteForms.{$channel->id}.connector_code", 'abc_telegram')
+            ->set("openLineRouteForms.{$channel->id}.line_id", 'line-editable')
+            ->set("openLineRouteForms.{$channel->id}.line_name", '9 Локальный бот телеграм - Герман-1')
+            ->set("openLineRouteForms.{$channel->id}.source_id", 'source-editable')
+            ->call('saveOpenLineRoute', $channel->id)
+            ->assertSet(
+                'openLineRouteErrorMessage',
+                'LINE_ID открытой линии должен состоять из 1–64 цифр.',
             );
 
         $this->assertDatabaseMissing('bitrix24_open_line_routes', [
@@ -610,7 +654,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                 && $usedOwner->is($owner)
                 && $connectorCode === 'abc_telegram'
                 && $connectorType === 'telegram'
-                && $lineId === 'line-editable'
+                && $lineId === '16'
                 && $leaseSeconds >= 180)
             ->andReturn([
                 'lease_token' => str_repeat('a', 64),
@@ -625,7 +669,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                 string $leaseToken,
             ): bool => $usedProfile->is($profile)
                 && $usedOwner->is($owner)
-                && $lineId === 'line-editable'
+                && $lineId === '16'
                 && $leaseToken === str_repeat('a', 64));
 
         $this->setRolePermission(User::ROLE_EMPLOYEE, 'bitrix24.view', true);
@@ -635,7 +679,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
             ->set("openLineRouteForms.{$channel->id}.status", Bitrix24OpenLineRoute::STATUS_ACTIVE)
             ->set("openLineRouteForms.{$channel->id}.connector_code", 'abc_telegram')
-            ->set("openLineRouteForms.{$channel->id}.line_id", 'line-editable')
+            ->set("openLineRouteForms.{$channel->id}.line_id", '16')
             ->set("openLineRouteForms.{$channel->id}.line_name", '9 Локальный бот телеграм - Герман-1')
             ->set("openLineRouteForms.{$channel->id}.source_id", 'source-editable')
             ->call('saveOpenLineRoute', $channel->id)
@@ -648,10 +692,10 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'profile_key' => 'staging',
             'channel_type' => Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT,
             'connector_code' => 'abc_telegram',
-            'line_id' => 'line-editable',
+            'line_id' => '16',
             'line_name' => '9 Локальный бот телеграм - Герман-1',
             'callback_owner_id' => $profile->callbackOwners()->firstOrFail()->id,
-            'line_owner_key' => 'crm.edit.test#line-editable',
+            'line_owner_key' => 'crm.edit.test#16',
             'source_id' => 'source-editable',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
             'created_by_user_id' => $employee->id,

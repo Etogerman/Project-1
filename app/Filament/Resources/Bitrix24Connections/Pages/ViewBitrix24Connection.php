@@ -1822,6 +1822,7 @@ class ViewBitrix24Connection extends ViewRecord
             'route_registry_line_owner_missing' => 'Для этой открытой линии ещё не опубликован владелец в общем OpenLines registry. Сначала выполните разрешённую публикацию ownership.',
             'route_registry_line_owner_conflict' => 'Открытая линия закреплена в общем OpenLines registry за другим контуром.',
             'route_registry_line_lease_expiring' => 'Срок общей аренды открытой линии недостаточен для безопасного завершения операции. Повторите попытку.',
+            'route_registry_line_id_invalid' => 'LINE_ID открытой линии должен состоять из 1–64 цифр.',
             default => 'Не удалось подтвердить единое владение открытой линией в общем OpenLines registry.',
         };
     }
