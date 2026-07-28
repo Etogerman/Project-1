@@ -15,6 +15,7 @@ use App\Models\User;
 use App\Services\Bitrix24\AutoSetupBitrix24OpenLineRouteAction;
 use App\Services\Bitrix24\Bitrix24OpenLineAutoSetupException;
 use App\Services\Bitrix24\Bitrix24OpenLineRepairException;
+use App\Services\Bitrix24\Bitrix24OpenLineRouteLeaseDeadline;
 use App\Services\Bitrix24\Bitrix24OpenLineRouteOperationLock;
 use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryException;
 use App\Services\Bitrix24\DoctorBitrix24OpenLinesRouteRegistryAction;
@@ -632,44 +633,71 @@ class ViewBitrix24Connection extends ViewRecord
         $form = $this->normalizeOpenLineRouteForm($this->openLineRouteForms[$channel->id] ?? []);
         $user = auth()->user();
         $routeOperationLock = app(Bitrix24OpenLineRouteOperationLock::class);
-        $saveRoute = fn (): bool => DB::transaction(function () use ($profile, $channel, $form, $user): bool {
-            $route = Bitrix24OpenLineRoute::query()
-                ->where('bitrix24_profile_id', $profile->id)
-                ->where('channel_id', $channel->id)
-                ->lockForUpdate()
-                ->first();
+        $saveRoute = function (?Bitrix24OpenLineRouteLeaseDeadline $leaseDeadline = null) use (
+            $profile,
+            $channel,
+            $form,
+            $user,
+            $routeOperationLock,
+        ): bool {
+            $save = function () use (
+                $profile,
+                $channel,
+                $form,
+                $user,
+                $routeOperationLock,
+                $leaseDeadline,
+            ): bool {
+                if ($leaseDeadline instanceof Bitrix24OpenLineRouteLeaseDeadline) {
+                    $routeOperationLock->assertLeaseAllowsDatabaseTransition($leaseDeadline);
+                }
 
-            if (! $this->validateStoredOpenLineRouteTransition($route, $form)) {
-                return false;
-            }
+                $route = Bitrix24OpenLineRoute::query()
+                    ->where('bitrix24_profile_id', $profile->id)
+                    ->where('channel_id', $channel->id)
+                    ->lockForUpdate()
+                    ->first();
 
-            if (! $this->validateOpenLineRouteForm($profile, $channel, $route, $form)) {
-                return false;
-            }
+                if (! $this->validateStoredOpenLineRouteTransition($route, $form)) {
+                    return false;
+                }
 
-            $route ??= new Bitrix24OpenLineRoute([
-                'bitrix24_profile_id' => $profile->id,
-                'channel_id' => $channel->id,
-                'created_by_user_id' => $user instanceof User ? $user->id : null,
-            ]);
+                if (! $this->validateOpenLineRouteForm($profile, $channel, $route, $form)) {
+                    return false;
+                }
 
-            $route->fill([
-                'portal_domain' => $profile->portal_domain,
-                'profile_key' => $profile->profile_key,
-                'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
-                'connector_code' => $this->nullableFormValue($form['connector_code']),
-                'line_id' => $this->nullableFormValue($form['line_id']),
-                'line_name' => $this->nullableFormValue($form['line_name']),
-                'callback_owner_id' => $this->nullableIntegerFormValue($form['callback_owner_id']),
-                'source_id' => $this->nullableFormValue($form['source_id']),
-                'status' => $form['status'],
-                'updated_by_user_id' => $user instanceof User ? $user->id : null,
-            ]);
+                $route ??= new Bitrix24OpenLineRoute([
+                    'bitrix24_profile_id' => $profile->id,
+                    'channel_id' => $channel->id,
+                    'created_by_user_id' => $user instanceof User ? $user->id : null,
+                ]);
 
-            $route->save();
+                $route->fill([
+                    'portal_domain' => $profile->portal_domain,
+                    'profile_key' => $profile->profile_key,
+                    'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
+                    'connector_code' => $this->nullableFormValue($form['connector_code']),
+                    'line_id' => $this->nullableFormValue($form['line_id']),
+                    'line_name' => $this->nullableFormValue($form['line_name']),
+                    'callback_owner_id' => $this->nullableIntegerFormValue($form['callback_owner_id']),
+                    'source_id' => $this->nullableFormValue($form['source_id']),
+                    'status' => $form['status'],
+                    'updated_by_user_id' => $user instanceof User ? $user->id : null,
+                ]);
 
-            return true;
-        }, attempts: 3);
+                if ($leaseDeadline instanceof Bitrix24OpenLineRouteLeaseDeadline) {
+                    $routeOperationLock->assertLeaseAllowsDatabaseTransition($leaseDeadline);
+                }
+
+                $route->save();
+
+                return true;
+            };
+
+            return $leaseDeadline instanceof Bitrix24OpenLineRouteLeaseDeadline
+                ? $routeOperationLock->runDatabaseTransaction($save)
+                : DB::transaction($save, attempts: 3);
+        };
         $owner = $this->resolveActiveCallbackOwner($profile, $form['callback_owner_id']);
         $connectorType = Bitrix24OpenLineRoute::openLinesConnectorTypeForChannelType(
             Bitrix24OpenLineRoute::channelTypeForChannel($channel),
@@ -1791,8 +1819,9 @@ class ViewBitrix24Connection extends ViewRecord
     {
         return match ($exception->errorCode) {
             'route_registry_line_busy' => 'Открытая линия сейчас изменяется в другом контуре. Повторите попытку после завершения операции.',
-            'route_registry_line_owner_missing' => 'Для этой открытой линии нет опубликованного владельца в общем OpenLines registry.',
+            'route_registry_line_owner_missing' => 'Для этой открытой линии ещё не опубликован владелец в общем OpenLines registry. Сначала выполните разрешённую публикацию ownership.',
             'route_registry_line_owner_conflict' => 'Открытая линия закреплена в общем OpenLines registry за другим контуром.',
+            'route_registry_line_lease_expiring' => 'Срок общей аренды открытой линии недостаточен для безопасного завершения операции. Повторите попытку.',
             default => 'Не удалось подтвердить единое владение открытой линией в общем OpenLines registry.',
         };
     }

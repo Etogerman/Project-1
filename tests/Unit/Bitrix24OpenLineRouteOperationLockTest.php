@@ -4,7 +4,10 @@ namespace Tests\Unit;
 
 use App\Services\Bitrix24\Bitrix24OpenLineRouteOperationLock;
 use Illuminate\Contracts\Cache\LockTimeoutException;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
+use PDOException;
 use Tests\TestCase;
 
 class Bitrix24OpenLineRouteOperationLockTest extends TestCase
@@ -138,6 +141,78 @@ class Bitrix24OpenLineRouteOperationLockTest extends TestCase
         } finally {
             $this->travelBack();
             Cache::flush();
+        }
+    }
+
+    public function test_lease_bound_database_transaction_applies_and_restores_timeouts(): void
+    {
+        if (DB::getDriverName() !== 'pgsql') {
+            $this->markTestSkipped('The production database timeout contract is PostgreSQL-specific.');
+        }
+
+        $connection = DB::connection();
+        $previousLockTimeout = (string) $connection->scalar(
+            "select current_setting('lock_timeout')",
+        );
+        $previousStatementTimeout = (string) $connection->scalar(
+            "select current_setting('statement_timeout')",
+        );
+
+        $result = app(Bitrix24OpenLineRouteOperationLock::class)
+            ->runDatabaseTransaction(function () use ($connection): string {
+                $this->assertSame(
+                    '5s',
+                    (string) $connection->scalar("select current_setting('lock_timeout')"),
+                );
+                $this->assertSame(
+                    '15s',
+                    (string) $connection->scalar("select current_setting('statement_timeout')"),
+                );
+
+                return 'completed';
+            });
+
+        $this->assertSame('completed', $result);
+        $this->assertSame(
+            $previousLockTimeout,
+            (string) $connection->scalar("select current_setting('lock_timeout')"),
+        );
+        $this->assertSame(
+            $previousStatementTimeout,
+            (string) $connection->scalar("select current_setting('statement_timeout')"),
+        );
+    }
+
+    public function test_postgresql_lock_and_statement_timeouts_fail_as_busy_route(): void
+    {
+        if (DB::getDriverName() !== 'pgsql') {
+            $this->markTestSkipped('The production database timeout contract is PostgreSQL-specific.');
+        }
+
+        foreach (['55P03', '57014'] as $sqlState) {
+            $previous = new PDOException('PostgreSQL operation exceeded its bounded wait.');
+            $previous->errorInfo = [$sqlState];
+
+            try {
+                app(Bitrix24OpenLineRouteOperationLock::class)
+                    ->runDatabaseTransaction(
+                        fn (): never => throw new QueryException(
+                            'pgsql',
+                            'select route for update',
+                            [],
+                            $previous,
+                        ),
+                        attempts: 1,
+                    );
+
+                $this->fail("SQLSTATE {$sqlState} was not translated to a busy route.");
+            } catch (LockTimeoutException $exception) {
+                $this->assertSame(
+                    Bitrix24OpenLineRouteOperationLock::BUSY_MESSAGE,
+                    $exception->getMessage(),
+                );
+                $this->assertInstanceOf(QueryException::class, $exception->getPrevious());
+            }
         }
     }
 }

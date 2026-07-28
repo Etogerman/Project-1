@@ -12,7 +12,7 @@ use App\Services\Bitrix24\AutoSetupBitrix24OpenLineRouteAction;
 use App\Services\Bitrix24\Bitrix24ApiClient;
 use App\Services\Bitrix24\Bitrix24ApiException;
 use App\Services\Bitrix24\Bitrix24AuthRefreshException;
-use App\Services\Bitrix24\Bitrix24OpenLineRouteOwnershipLease;
+use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryClient;
 use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
@@ -28,10 +28,15 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
     {
         parent::setUp();
 
-        $this->mock(Bitrix24OpenLineRouteOwnershipLease::class, function ($mock): void {
-            $mock->shouldReceive('run')
+        $this->mock(Bitrix24OpenLinesRouteRegistryClient::class, function ($mock): void {
+            $mock->shouldReceive('acquireLineLease')
                 ->byDefault()
-                ->andReturnUsing(fn (...$arguments): mixed => $arguments[6]());
+                ->andReturn([
+                    'lease_token' => str_repeat('d', 64),
+                    'expires_at' => now()->addHour()->toIso8601String(),
+                ]);
+            $mock->shouldReceive('releaseLineLease')
+                ->byDefault();
         });
     }
 
@@ -555,12 +560,13 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);
 
-        $this->mock(Bitrix24OpenLineRouteOwnershipLease::class, function ($mock): void {
-            $mock->shouldReceive('run')
+        $this->mock(Bitrix24OpenLinesRouteRegistryClient::class, function ($mock): void {
+            $mock->shouldReceive('acquireLineLease')
                 ->once()
                 ->andThrow(new Bitrix24OpenLinesRouteRegistryException(
                     'route_registry_line_owner_conflict',
                 ));
+            $mock->shouldNotReceive('releaseLineLease');
         });
         $this->mock(Bitrix24ApiClient::class, function ($mock): void {
             $mock->shouldNotReceive('call');

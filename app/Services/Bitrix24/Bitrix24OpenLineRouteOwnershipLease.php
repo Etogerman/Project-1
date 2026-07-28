@@ -31,9 +31,19 @@ class Bitrix24OpenLineRouteOwnershipLease
             $lineId,
             $leaseSeconds,
         );
-
         try {
-            return $callback();
+            $deadline = Bitrix24OpenLineRouteLeaseDeadline::fromRegistryLease(
+                $lease['expires_at'],
+                $leaseSeconds,
+                max(
+                    1,
+                    (int) config('bitrix24.http.timeout_seconds', 15),
+                    (int) config('bitrix24.http.connect_timeout_seconds', 5),
+                ),
+            );
+            $deadline->assertAvailableFor(0);
+
+            return $callback($deadline);
         } finally {
             try {
                 $this->registryClient->releaseLineLease(

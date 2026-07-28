@@ -20,7 +20,7 @@ use App\Services\Bitrix24\AutoSetupBitrix24OpenLineRouteAction;
 use App\Services\Bitrix24\Bitrix24ApiClient;
 use App\Services\Bitrix24\Bitrix24ApiException;
 use App\Services\Bitrix24\Bitrix24AuthRefreshException;
-use App\Services\Bitrix24\Bitrix24OpenLineRouteOwnershipLease;
+use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryClient;
 use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryException;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -40,11 +40,6 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
 
         Filament::setCurrentPanel(Filament::getPanel('admin'));
         Filament::bootCurrentPanel();
-        $this->mock(Bitrix24OpenLineRouteOwnershipLease::class, function ($mock): void {
-            $mock->shouldReceive('run')
-                ->byDefault()
-                ->andReturnUsing(fn (...$arguments): mixed => $arguments[6]());
-        });
     }
 
     public function test_active_admin_can_open_bitrix24_connections_index_page(): void
@@ -531,7 +526,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             ->assertDontSee('Сохранить маршрут');
     }
 
-    public function test_employee_with_edit_permission_can_create_open_line_route(): void
+    public function test_employee_cannot_create_usable_route_without_published_registry_owner(): void
     {
         $employee = User::factory()->create([
             'is_active' => true,
@@ -550,6 +545,88 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'platform' => Channel::PLATFORM_TELEGRAM,
             'connection_type' => Channel::CONNECTION_TYPE_BOT,
         ]);
+
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'bitrix24.view', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'bitrix24.edit', true);
+        $this->mock(Bitrix24OpenLinesRouteRegistryClient::class, function ($mock): void {
+            $mock->shouldReceive('acquireLineLease')
+                ->once()
+                ->andThrow(new Bitrix24OpenLinesRouteRegistryException(
+                    'route_registry_line_owner_missing',
+                ));
+            $mock->shouldNotReceive('releaseLineLease');
+        });
+
+        Livewire::actingAs($employee)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->set("openLineRouteForms.{$channel->id}.status", Bitrix24OpenLineRoute::STATUS_ACTIVE)
+            ->set("openLineRouteForms.{$channel->id}.connector_code", 'abc_telegram')
+            ->set("openLineRouteForms.{$channel->id}.line_id", 'line-editable')
+            ->set("openLineRouteForms.{$channel->id}.line_name", '9 Локальный бот телеграм - Герман-1')
+            ->set("openLineRouteForms.{$channel->id}.source_id", 'source-editable')
+            ->call('saveOpenLineRoute', $channel->id)
+            ->assertSet(
+                'openLineRouteErrorMessage',
+                'Для этой открытой линии ещё не опубликован владелец в общем OpenLines registry. Сначала выполните разрешённую публикацию ownership.',
+            );
+
+        $this->assertDatabaseMissing('bitrix24_open_line_routes', [
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+        ]);
+    }
+
+    public function test_employee_with_edit_permission_can_save_exact_prepublished_registry_owner(): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+        $profile = $this->makeProfile([
+            'portal_domain' => 'crm.edit.test',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Editable Telegram',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+        $owner = $profile->callbackOwners()->firstOrFail();
+        $client = $this->mock(Bitrix24OpenLinesRouteRegistryClient::class);
+        $client->shouldReceive('acquireLineLease')
+            ->once()
+            ->withArgs(fn (
+                Bitrix24Profile $usedProfile,
+                Bitrix24CallbackOwner $usedOwner,
+                string $connectorCode,
+                string $connectorType,
+                string $lineId,
+                int $leaseSeconds,
+            ): bool => $usedProfile->is($profile)
+                && $usedOwner->is($owner)
+                && $connectorCode === 'abc_telegram'
+                && $connectorType === 'telegram'
+                && $lineId === 'line-editable'
+                && $leaseSeconds >= 180)
+            ->andReturn([
+                'lease_token' => str_repeat('a', 64),
+                'expires_at' => now()->addHour()->toIso8601String(),
+            ]);
+        $client->shouldReceive('releaseLineLease')
+            ->once()
+            ->withArgs(fn (
+                Bitrix24Profile $usedProfile,
+                Bitrix24CallbackOwner $usedOwner,
+                string $lineId,
+                string $leaseToken,
+            ): bool => $usedProfile->is($profile)
+                && $usedOwner->is($owner)
+                && $lineId === 'line-editable'
+                && $leaseToken === str_repeat('a', 64));
 
         $this->setRolePermission(User::ROLE_EMPLOYEE, 'bitrix24.view', true);
         $this->setRolePermission(User::ROLE_EMPLOYEE, 'bitrix24.edit', true);
@@ -597,12 +674,13 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'platform' => Channel::PLATFORM_MAX,
             'connection_type' => Channel::CONNECTION_TYPE_BOT,
         ]);
-        $this->mock(Bitrix24OpenLineRouteOwnershipLease::class, function ($mock): void {
-            $mock->shouldReceive('run')
+        $this->mock(Bitrix24OpenLinesRouteRegistryClient::class, function ($mock): void {
+            $mock->shouldReceive('acquireLineLease')
                 ->once()
                 ->andThrow(new Bitrix24OpenLinesRouteRegistryException(
                     'route_registry_line_owner_conflict',
                 ));
+            $mock->shouldNotReceive('releaseLineLease');
         });
 
         Livewire::actingAs($admin)
@@ -655,6 +733,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'bitrix24_open_line_resolved_chat_id_override' => '42',
             'bitrix24_open_line_binding_verified_at' => now(),
         ]);
+        $this->allowPublishedOpenLineOwnership(2);
 
         Livewire::actingAs($admin)
             ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
@@ -720,6 +799,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'bitrix24_open_line_resolved_chat_id_override' => '77',
             'bitrix24_open_line_binding_verified_at' => now(),
         ]);
+        $this->allowPublishedOpenLineOwnership(2);
 
         foreach ([
             Bitrix24OpenLineRoute::STATUS_INACTIVE,
@@ -781,6 +861,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'line_id' => 'shared-line',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);
+        $this->allowPublishedOpenLineOwnership();
 
         Livewire::actingAs($admin)
             ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
@@ -1380,6 +1461,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'bitrix24_open_line_resolved_chat_id_override' => '56',
             'bitrix24_open_line_binding_verified_at' => now(),
         ]);
+        $this->allowPublishedOpenLineOwnership();
 
         $this->mock(Bitrix24ApiClient::class, function ($mock): void {
             $mock->shouldNotReceive('call')->with('imopenlines.config.add', \Mockery::any(), \Mockery::any());
@@ -1454,6 +1536,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'bitrix24_open_line_resolved_chat_id_override' => '56',
             'bitrix24_open_line_binding_verified_at' => now(),
         ]);
+        $this->allowPublishedOpenLineOwnership();
 
         $this->mock(Bitrix24ApiClient::class, function ($mock) use ($connection): void {
             $mock->shouldNotReceive('call')->with('app.info', \Mockery::any(), \Mockery::any());
@@ -1558,6 +1641,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'bitrix24_open_line_resolved_chat_id_override' => '56',
             'bitrix24_open_line_binding_verified_at' => now(),
         ]);
+        $this->allowPublishedOpenLineOwnership(2);
 
         $this->mock(Bitrix24ApiClient::class, function ($mock) use ($channel, $connection): void {
             $mock->shouldNotReceive('call')->with('app.info', \Mockery::any(), \Mockery::any());
@@ -1661,6 +1745,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'source_id' => 'ABC_TELEGRAM_DEV_GERMAN_MAIN',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);
+        $this->allowPublishedOpenLineOwnership();
 
         $this->mock(Bitrix24ApiClient::class, function ($mock) use ($channel, $connection): void {
             $mock->shouldNotReceive('call')->with('app.info', \Mockery::any(), \Mockery::any());
@@ -1767,6 +1852,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                 'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
             ]);
         }
+        $this->allowPublishedOpenLineOwnership(2);
 
         $this->mock(Bitrix24ApiClient::class, function ($mock) use ($connection): void {
             $mock->shouldNotReceive('call')->with('app.info', \Mockery::any(), \Mockery::any());
@@ -1928,6 +2014,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'last_error_message' => 'Предыдущее предупреждение',
             'last_error_at' => now()->subMinute(),
         ]);
+        $this->allowPublishedOpenLineOwnership();
 
         $this->mock(Bitrix24ApiClient::class, function ($mock): void {
             $mock->shouldReceive('call')
@@ -2047,7 +2134,6 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'last_error_message' => 'Предыдущее предупреждение',
             'last_error_at' => now()->subMinute(),
         ]);
-
         $this->mock(Bitrix24ApiClient::class, function ($mock): void {
             $mock->shouldReceive('call')->never();
         });
@@ -2097,6 +2183,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'last_error_message' => 'Предыдущее предупреждение',
             'last_error_at' => now()->subMinute(),
         ]);
+        $this->allowPublishedOpenLineOwnership();
 
         $this->mock(Bitrix24ApiClient::class, function ($mock): void {
             $mock->shouldReceive('call')
@@ -2277,6 +2364,19 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'is_admin' => true,
             'role' => User::ROLE_ADMIN,
         ]);
+    }
+
+    private function allowPublishedOpenLineOwnership(int $times = 1): void
+    {
+        $client = $this->mock(Bitrix24OpenLinesRouteRegistryClient::class);
+        $client->shouldReceive('acquireLineLease')
+            ->times($times)
+            ->andReturn([
+                'lease_token' => str_repeat('b', 64),
+                'expires_at' => now()->addHour()->toIso8601String(),
+            ]);
+        $client->shouldReceive('releaseLineLease')
+            ->times($times);
     }
 
     private function makeSuperadmin(): User

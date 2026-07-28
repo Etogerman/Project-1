@@ -117,8 +117,8 @@ class Bitrix24OpenLinesRouteRegistryClient
         $url = $query === '' ? $endpoint : $endpoint.'?'.$query;
 
         $pending = Http::acceptJson()
-            ->timeout(15)
-            ->connectTimeout(5)
+            ->timeout((int) config('bitrix24.http.timeout_seconds', 15))
+            ->connectTimeout((int) config('bitrix24.http.connect_timeout_seconds', 5))
             ->withHeaders([
                 'X-ABR-Timestamp' => $timestamp,
                 'X-ABR-Request-Id' => $requestId,
