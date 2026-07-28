@@ -1114,6 +1114,76 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_misconfigured_line_claim_rejects_unsupported_channel_type(): void
+    {
+        $admin = $this->makeAdmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'crm.misconfigured-account.test',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+        ]);
+        $channel = Channel::factory()->account()->create([
+            'name' => 'Telegram Account',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+        ]);
+        $owner = $profile->callbackOwners()->firstOrFail();
+        Http::preventStrayRequests();
+
+        Livewire::actingAs($admin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->set("openLineRouteForms.{$channel->id}.status", Bitrix24OpenLineRoute::STATUS_MISCONFIGURED)
+            ->set("openLineRouteForms.{$channel->id}.connector_code", 'abc_telegram_account')
+            ->set("openLineRouteForms.{$channel->id}.line_id", '43')
+            ->set("openLineRouteForms.{$channel->id}.callback_owner_id", (string) $owner->id)
+            ->call('saveOpenLineRoute', $channel->id)
+            ->assertSet(
+                'openLineRouteErrorMessage',
+                'Telegram account пока нельзя использовать как маршрут, удерживающий LINE_ID.',
+            );
+
+        $this->assertDatabaseMissing('bitrix24_open_line_routes', [
+            'channel_id' => $channel->id,
+        ]);
+        Http::assertNothingSent();
+    }
+
+    public function test_misconfigured_line_claim_rejects_invalid_connector_code(): void
+    {
+        $admin = $this->makeAdmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'crm.misconfigured-code.test',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+        $owner = $profile->callbackOwners()->firstOrFail();
+        Http::preventStrayRequests();
+
+        Livewire::actingAs($admin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->set("openLineRouteForms.{$channel->id}.status", Bitrix24OpenLineRoute::STATUS_MISCONFIGURED)
+            ->set("openLineRouteForms.{$channel->id}.connector_code", 'abc max')
+            ->set("openLineRouteForms.{$channel->id}.line_id", '45')
+            ->set("openLineRouteForms.{$channel->id}.callback_owner_id", (string) $owner->id)
+            ->call('saveOpenLineRoute', $channel->id)
+            ->assertSet(
+                'openLineRouteErrorMessage',
+                'Код соединителя должен состоять из 1–64 латинских букв, цифр или символов ".", "_" и "-".',
+            );
+
+        $this->assertDatabaseMissing('bitrix24_open_line_routes', [
+            'channel_id' => $channel->id,
+        ]);
+        Http::assertNothingSent();
+    }
+
     public function test_misconfigured_line_claim_requires_an_active_callback_owner(): void
     {
         $admin = $this->makeAdmin();

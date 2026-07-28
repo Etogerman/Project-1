@@ -45,6 +45,13 @@ class BuildBitrix24OpenLinesRouteRegistryOwnerSnapshotAction
                         return;
                     }
 
+                    if (! Bitrix24OpenLineRoute::isValidConnectorCode($connectorCode)) {
+                        throw new Bitrix24OpenLinesRouteRegistryException(
+                            'route_registry_connector_code_invalid',
+                            'Код соединителя должен состоять из 1–64 латинских букв, цифр или символов ".", "_" и "-".',
+                        );
+                    }
+
                     if (! Bitrix24OpenLineRoute::isValidLineId($lineId)) {
                         throw new Bitrix24OpenLinesRouteRegistryException(
                             'route_registry_line_id_invalid',

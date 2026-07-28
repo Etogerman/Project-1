@@ -3,6 +3,7 @@
 namespace App\Services\Bitrix24;
 
 use App\Models\Bitrix24CallbackOwner;
+use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Bitrix24Profile;
 use Closure;
 use Throwable;
@@ -77,7 +78,7 @@ class Bitrix24OpenLineRouteOwnershipLease
         }
 
         if (trim((string) $profile->portal_domain) === ''
-            || trim($connectorCode) === ''
+            || ! Bitrix24OpenLineRoute::isValidConnectorCode($connectorCode)
             || ! in_array(trim($connectorType), ['telegram', 'max'], true)
             || trim($lineId) === ''
         ) {

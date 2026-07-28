@@ -1015,6 +1015,49 @@ class Bitrix24OpenLinesRouteRegistryTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_publish_fails_before_http_for_invalid_connector_code(): void
+    {
+        $profile = $this->makeProfile([
+            'portal_domain' => 'stagecrm.fvds.ru',
+            'callback_base_url' => 'https://local.example.test/callback',
+            'openlines_route_registry_secret_encrypted' => 'registry-secret-for-invalid-connector-code-test',
+        ]);
+        $owner = $profile->callbackOwners()->firstOrFail();
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+
+        Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
+            'connector_code' => 'invalid connector code',
+            'line_id' => '44',
+            'line_name' => 'Invalid connector code',
+            'callback_owner_id' => $owner->id,
+            'source_id' => 'ABRIKOSOFF_TEST',
+            'status' => Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
+        ]);
+
+        Http::fake();
+
+        try {
+            app(PublishBitrix24OpenLinesRouteRegistryAction::class)->handle($profile->fresh());
+            $this->fail('Expected invalid connector code to block registry publish.');
+        } catch (Bitrix24OpenLinesRouteRegistryException $exception) {
+            $this->assertSame('route_registry_connector_code_invalid', $exception->errorCode);
+        }
+
+        Http::assertNothingSent();
+
+        $profile->refresh();
+        $this->assertSame(Bitrix24Profile::ROUTE_REGISTRY_STATUS_FAILED, $profile->openlines_route_registry_last_status);
+        $this->assertSame('route_registry_connector_code_invalid', $profile->openlines_route_registry_last_error);
+    }
+
     #[DataProvider('usableOpenLinesRouteStatusProvider')]
     public function test_publish_fails_before_http_for_telegram_account_route(string $status): void
     {

@@ -1817,10 +1817,14 @@ class ViewBitrix24Connection extends ViewRecord
 
         $isUsableStatus = in_array($form['status'], Bitrix24OpenLineRoute::usableStatuses(), true);
         $channelType = Bitrix24OpenLineRoute::channelTypeForChannel($channel);
+        $connectorType = Bitrix24OpenLineRoute::openLinesConnectorTypeForChannelType($channelType);
+        $claimsExternalLine = in_array($form['status'], Bitrix24OpenLineRoute::claimingStatuses(), true)
+            && $form['connector_code'] !== ''
+            && $form['line_id'] !== '';
 
         if (
             $isUsableStatus
-            && Bitrix24OpenLineRoute::openLinesConnectorTypeForChannelType($channelType) === null
+            && $connectorType === null
         ) {
             $this->failOpenLineRouteSave(
                 $channelType === Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_ACCOUNT
@@ -1837,9 +1841,26 @@ class ViewBitrix24Connection extends ViewRecord
             return false;
         }
 
-        $claimsExternalLine = in_array($form['status'], Bitrix24OpenLineRoute::claimingStatuses(), true)
-            && $form['connector_code'] !== ''
-            && $form['line_id'] !== '';
+        if ($claimsExternalLine && $connectorType === null) {
+            $this->failOpenLineRouteSave(
+                $channelType === Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_ACCOUNT
+                    ? 'Telegram account пока нельзя использовать как маршрут, удерживающий LINE_ID.'
+                    : 'Этот тип канала пока нельзя использовать как маршрут, удерживающий LINE_ID.',
+            );
+
+            return false;
+        }
+
+        if (
+            $claimsExternalLine
+            && ! Bitrix24OpenLineRoute::isValidConnectorCode($form['connector_code'])
+        ) {
+            $this->failOpenLineRouteSave(
+                'Код соединителя должен состоять из 1–64 латинских букв, цифр или символов ".", "_" и "-".',
+            );
+
+            return false;
+        }
 
         if ($claimsExternalLine && ! ($this->resolveActiveCallbackOwner($profile, $form['callback_owner_id']) instanceof Bitrix24CallbackOwner)) {
             $this->failOpenLineRouteSave('Для маршрута, удерживающего LINE_ID, нужен активный callback-владелец.');

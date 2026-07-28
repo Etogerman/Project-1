@@ -116,6 +116,11 @@ class Bitrix24OpenLineRoute extends Model
         return self::canonicalLineId($lineId) === $lineId;
     }
 
+    public static function isValidConnectorCode(string $connectorCode): bool
+    {
+        return preg_match('/^[a-zA-Z0-9._-]{1,64}$/', trim($connectorCode)) === 1;
+    }
+
     public static function channelTypeForChannel(Channel $channel): string
     {
         return match (true) {

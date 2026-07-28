@@ -17,6 +17,7 @@ use App\Services\Bitrix24\Bitrix24OpenLineRouteOperationLock;
 use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryClient;
 use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryException;
 use App\Services\Bitrix24\MarkBitrix24OpenLineRouteMisconfiguredAction;
+use App\Services\Bitrix24\SaveBitrix24CallbackOwnerAction;
 use Filament\Facades\Filament;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\QueryException;
@@ -45,6 +46,97 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
             $mock->shouldReceive('releaseLineLease')
                 ->byDefault();
         });
+    }
+
+    public function test_callback_owner_creation_survives_a_concurrent_insert_after_the_locked_read(): void
+    {
+        if (DB::getDriverName() !== 'pgsql') {
+            $this->markTestSkipped('The production callback-owner locking contract is PostgreSQL-specific.');
+        }
+
+        $profile = Bitrix24Profile::query()->create([
+            'portal_domain' => 'crm.callback-owner-race.test',
+            'profile_key' => 'callback-owner-race',
+            'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
+            'display_name' => 'Callback owner race',
+            'callback_base_url' => 'https://profile-callback-owner-race.example.test',
+        ]);
+        $ownerKey = 'local-race';
+        $callbackBaseUrl = 'https://callback-owner-race.example.test';
+        $defaultConnection = config('database.default');
+        $concurrentConnection = 'bitrix24_callback_owner_create_concurrent';
+        config([
+            'database.connections.'.$concurrentConnection => config(
+                'database.connections.'.$defaultConnection,
+            ),
+        ]);
+        DB::purge($concurrentConnection);
+
+        $concurrentInsertAttempted = false;
+        $lockedReadObserved = false;
+
+        DB::listen(function (QueryExecuted $query) use (
+            &$concurrentInsertAttempted,
+            &$lockedReadObserved,
+            $callbackBaseUrl,
+            $concurrentConnection,
+            $defaultConnection,
+            $ownerKey,
+            $profile,
+        ): void {
+            if ($query->connectionName !== $defaultConnection || $concurrentInsertAttempted) {
+                return;
+            }
+
+            $sql = mb_strtolower(trim($query->sql));
+
+            if (
+                ! str_starts_with($sql, 'select')
+                || ! str_contains($sql, 'bitrix24_callback_owners')
+                || ! str_contains($sql, 'owner_key')
+            ) {
+                return;
+            }
+
+            $concurrentInsertAttempted = true;
+            $lockedReadObserved = str_contains($sql, 'for update');
+
+            DB::connection($concurrentConnection)
+                ->table('bitrix24_callback_owners')
+                ->insert([
+                    'bitrix24_profile_id' => $profile->id,
+                    'owner_key' => $ownerKey,
+                    'display_name' => 'Конкурентная запись',
+                    'callback_base_url' => $callbackBaseUrl,
+                    'status' => Bitrix24CallbackOwner::STATUS_ACTIVE,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+        });
+
+        try {
+            $owner = app(SaveBitrix24CallbackOwnerAction::class)->updateOrCreate(
+                $profile,
+                $ownerKey,
+                [
+                    'display_name' => 'Согласованный владелец',
+                    'callback_base_url' => $callbackBaseUrl,
+                    'status' => Bitrix24CallbackOwner::STATUS_ACTIVE,
+                ],
+            );
+        } finally {
+            DB::purge($concurrentConnection);
+        }
+
+        $this->assertTrue($concurrentInsertAttempted);
+        $this->assertTrue($lockedReadObserved);
+        $this->assertSame($ownerKey, $owner->owner_key);
+        $this->assertSame('Согласованный владелец', $owner->display_name);
+        $this->assertSame($callbackBaseUrl, $owner->callback_base_url);
+        $this->assertSame(1, Bitrix24CallbackOwner::query()
+            ->where('bitrix24_profile_id', $profile->id)
+            ->where('owner_key', $ownerKey)
+            ->count());
     }
 
     public function test_owner_identity_change_between_lease_and_commit_blocks_route_save(): void

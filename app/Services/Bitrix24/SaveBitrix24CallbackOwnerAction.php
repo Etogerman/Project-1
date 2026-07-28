@@ -49,10 +49,19 @@ class SaveBitrix24CallbackOwnerAction
             $attributes = ['owner_key' => $ownerKey] + $values;
 
             if (! $owner instanceof Bitrix24CallbackOwner) {
-                return Bitrix24CallbackOwner::query()->create([
-                    'bitrix24_profile_id' => $profile->id,
-                    ...$attributes,
-                ]);
+                Bitrix24CallbackOwner::query()->createOrFirst(
+                    [
+                        'bitrix24_profile_id' => $profile->id,
+                        'owner_key' => $ownerKey,
+                    ],
+                    $values,
+                );
+
+                $owner = Bitrix24CallbackOwner::query()
+                    ->where('bitrix24_profile_id', $profile->id)
+                    ->where('owner_key', $ownerKey)
+                    ->lockForUpdate()
+                    ->firstOrFail();
             }
 
             return $this->saveLocked($owner, $attributes);
