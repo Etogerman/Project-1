@@ -9,6 +9,78 @@ use Tests\TestCase;
 
 class Bitrix24OpenLineRouteOperationLockTest extends TestCase
 {
+    public function test_same_line_lock_serializes_different_route_locks(): void
+    {
+        Cache::flush();
+
+        $profileId = 993;
+        $firstChannelId = 994;
+        $secondChannelId = 995;
+        $nestedAttemptException = null;
+        $routeOperationLock = app(Bitrix24OpenLineRouteOperationLock::class);
+
+        try {
+            $result = $routeOperationLock->run(
+                $profileId,
+                $firstChannelId,
+                function () use (
+                    $routeOperationLock,
+                    $profileId,
+                    $secondChannelId,
+                    &$nestedAttemptException,
+                ): string {
+                    return $routeOperationLock->runForLine(
+                        ' StageCRM.FVDS.RU ',
+                        ' 14 ',
+                        function () use (
+                            $routeOperationLock,
+                            $profileId,
+                            $secondChannelId,
+                            &$nestedAttemptException,
+                        ): string {
+                            try {
+                                $routeOperationLock->run(
+                                    $profileId,
+                                    $secondChannelId,
+                                    fn (): string => $routeOperationLock->runForLine(
+                                        'stagecrm.fvds.ru',
+                                        '14',
+                                        fn (): string => 'overlap',
+                                    ),
+                                );
+                            } catch (LockTimeoutException $exception) {
+                                $nestedAttemptException = $exception;
+                            }
+
+                            return 'completed';
+                        },
+                    );
+                },
+            );
+
+            $this->assertSame('completed', $result);
+            $this->assertInstanceOf(LockTimeoutException::class, $nestedAttemptException);
+            $this->assertSame(
+                Bitrix24OpenLineRouteOperationLock::BUSY_MESSAGE,
+                $nestedAttemptException->getMessage(),
+            );
+            $this->assertSame(
+                'reacquired',
+                $routeOperationLock->run(
+                    $profileId,
+                    $secondChannelId,
+                    fn (): string => $routeOperationLock->runForLine(
+                        'stagecrm.fvds.ru',
+                        '14',
+                        fn (): string => 'reacquired',
+                    ),
+                ),
+            );
+        } finally {
+            Cache::flush();
+        }
+    }
+
     public function test_lock_stays_owned_for_full_configured_refresh_budget(): void
     {
         config()->set([
