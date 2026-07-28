@@ -3,13 +3,17 @@
 namespace Tests\Feature;
 
 use App\Data\Bitrix24\Bitrix24RestResponseData;
+use App\Models\Bitrix24CallbackOwner;
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24OpenLineRoute;
+use App\Models\Bitrix24Profile;
 use App\Models\Channel;
 use App\Services\Bitrix24\AutoSetupBitrix24OpenLineRouteAction;
 use App\Services\Bitrix24\Bitrix24ApiClient;
 use App\Services\Bitrix24\Bitrix24ApiException;
 use App\Services\Bitrix24\Bitrix24AuthRefreshException;
+use App\Services\Bitrix24\Bitrix24OpenLineRouteOwnershipLease;
+use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Tests\Feature\Concerns\InteractsWithBitrix24RuntimeProfile;
@@ -19,6 +23,17 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
 {
     use InteractsWithBitrix24RuntimeProfile;
     use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->mock(Bitrix24OpenLineRouteOwnershipLease::class, function ($mock): void {
+            $mock->shouldReceive('run')
+                ->byDefault()
+                ->andReturnUsing(fn (...$arguments): mixed => $arguments[6]());
+        });
+    }
 
     public function test_refresh_clears_error_without_activating_misconfigured_route_or_recreating_open_line(): void
     {
@@ -43,7 +58,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
             'connection_type' => Channel::CONNECTION_TYPE_BOT,
             'credentials' => ['token' => 'telegram-token'],
         ]);
-        $route = Bitrix24OpenLineRoute::query()->create([
+        $route = $this->makeOpenLineRoute($profile, [
             'bitrix24_profile_id' => $profile->id,
             'channel_id' => $channel->id,
             'portal_domain' => $profile->portal_domain,
@@ -134,7 +149,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
             'connection_type' => Channel::CONNECTION_TYPE_BOT,
             'credentials' => ['token' => 'telegram-token'],
         ]);
-        $route = Bitrix24OpenLineRoute::query()->create([
+        $route = $this->makeOpenLineRoute($profile, [
             'bitrix24_profile_id' => $profile->id,
             'channel_id' => $channel->id,
             'portal_domain' => $profile->portal_domain,
@@ -185,7 +200,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
             'connection_type' => Channel::CONNECTION_TYPE_BOT,
             'credentials' => ['token' => 'telegram-token'],
         ]);
-        $route = Bitrix24OpenLineRoute::query()->create([
+        $route = $this->makeOpenLineRoute($profile, [
             'bitrix24_profile_id' => $profile->id,
             'channel_id' => $channel->id,
             'portal_domain' => $profile->portal_domain,
@@ -247,7 +262,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
             'credentials' => ['token' => 'max-token'],
         ]);
 
-        Bitrix24OpenLineRoute::query()->create([
+        $this->makeOpenLineRoute($profile, [
             'bitrix24_profile_id' => $profile->id,
             'channel_id' => $channel->id,
             'portal_domain' => $profile->portal_domain,
@@ -326,7 +341,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
             'credentials' => ['token' => 'telegram-token'],
         ]);
 
-        Bitrix24OpenLineRoute::query()->create([
+        $this->makeOpenLineRoute($profile, [
             'bitrix24_profile_id' => $profile->id,
             'channel_id' => $channel->id,
             'portal_domain' => $profile->portal_domain,
@@ -374,7 +389,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
             'credentials' => ['token' => 'new-max-token'],
         ]);
 
-        $oldRoute = Bitrix24OpenLineRoute::query()->create([
+        $oldRoute = $this->makeOpenLineRoute($profile, [
             'bitrix24_profile_id' => $profile->id,
             'channel_id' => $oldMaxChannel->id,
             'portal_domain' => $profile->portal_domain,
@@ -385,7 +400,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
             'source_id' => 'ABRIKOSOFF_MAX',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);
-        $newRoute = Bitrix24OpenLineRoute::query()->create([
+        $newRoute = $this->makeOpenLineRoute($profile, [
             'bitrix24_profile_id' => $profile->id,
             'channel_id' => $newMaxChannel->id,
             'portal_domain' => $profile->portal_domain,
@@ -471,7 +486,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
             'credentials' => ['token' => 'new-max-token'],
         ]);
 
-        $oldRoute = Bitrix24OpenLineRoute::query()->create([
+        $oldRoute = $this->makeOpenLineRoute($profile, [
             'bitrix24_profile_id' => $profile->id,
             'channel_id' => $oldMaxChannel->id,
             'portal_domain' => $profile->portal_domain,
@@ -482,7 +497,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
             'source_id' => 'ABRIKOSOFF_MAX',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);
-        $newRoute = Bitrix24OpenLineRoute::query()->create([
+        $newRoute = $this->makeOpenLineRoute($profile, [
             'bitrix24_profile_id' => $profile->id,
             'channel_id' => $newMaxChannel->id,
             'portal_domain' => $profile->portal_domain,
@@ -506,6 +521,70 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
         $this->assertSame('Открытая линия уже занята другим маршрутом.', $newRoute->refresh()->last_error_message);
         $this->assertNotNull($newRoute->last_error_at);
         $this->assertNull($oldRoute->refresh()->last_error_message);
+    }
+
+    public function test_registry_owner_conflict_blocks_refresh_command_before_calling_bitrix24(): void
+    {
+        $connection = $this->makeProfileLinkedActiveBitrix24Connection(
+            connectionOverrides: [
+                'portal_domain' => AutoSetupBitrix24OpenLineRouteAction::SUPPORTED_PORTAL_DOMAIN,
+                'application_name' => 'Имя из админки',
+                'scope' => AutoSetupBitrix24OpenLineRouteAction::REQUIRED_SCOPES,
+            ],
+            profileOverrides: [
+                'portal_domain' => AutoSetupBitrix24OpenLineRouteAction::SUPPORTED_PORTAL_DOMAIN,
+                'max_connector_code' => 'abrikosoff_max',
+                'max_source_id' => 'ABRIKOSOFF_MAX',
+            ],
+        );
+        $profile = $connection->profile()->firstOrFail();
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'max-token'],
+        ]);
+        $route = $this->makeOpenLineRoute($profile, [
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX,
+            'connector_code' => 'abrikosoff_max',
+            'line_id' => '31',
+            'source_id' => 'ABRIKOSOFF_MAX',
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+        ]);
+
+        $this->mock(Bitrix24OpenLineRouteOwnershipLease::class, function ($mock): void {
+            $mock->shouldReceive('run')
+                ->once()
+                ->andThrow(new Bitrix24OpenLinesRouteRegistryException(
+                    'route_registry_line_owner_conflict',
+                ));
+        });
+        $this->mock(Bitrix24ApiClient::class, function ($mock): void {
+            $mock->shouldNotReceive('call');
+        });
+
+        $this->artisan('bitrix24:refresh-openline-connectors', [
+            '--connection' => $connection->id,
+            '--route' => $route->id,
+        ])
+            ->expectsOutputToContain(
+                'Открытая линия закреплена в общем OpenLines registry за другим контуром.',
+            )
+            ->assertFailed();
+
+        $route->refresh();
+
+        $this->assertSame(Bitrix24OpenLineRoute::STATUS_MISCONFIGURED, $route->status);
+        $this->assertSame('31', $route->line_id);
+        $this->assertNull($route->line_owner_key);
+        $this->assertSame(
+            'Открытая линия закреплена в общем OpenLines registry за другим контуром.',
+            $route->last_error_message,
+        );
+        $this->assertNotNull($route->last_error_at);
     }
 
     public function test_transport_failure_is_recorded_and_remaining_routes_continue_refreshing(): void
@@ -535,7 +614,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
             'connection_type' => Channel::CONNECTION_TYPE_BOT,
             'credentials' => ['token' => 'max-token'],
         ]);
-        $failedRoute = Bitrix24OpenLineRoute::query()->create([
+        $failedRoute = $this->makeOpenLineRoute($profile, [
             'bitrix24_profile_id' => $profile->id,
             'channel_id' => $telegramChannel->id,
             'portal_domain' => $profile->portal_domain,
@@ -548,7 +627,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
             'last_error_message' => 'Старое предупреждение',
             'last_error_at' => now()->subMinute(),
         ]);
-        $refreshedRoute = Bitrix24OpenLineRoute::query()->create([
+        $refreshedRoute = $this->makeOpenLineRoute($profile, [
             'bitrix24_profile_id' => $profile->id,
             'channel_id' => $maxChannel->id,
             'portal_domain' => $profile->portal_domain,
@@ -639,7 +718,7 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
             'connection_type' => Channel::CONNECTION_TYPE_BOT,
             'credentials' => ['token' => 'telegram-token'],
         ]);
-        $route = Bitrix24OpenLineRoute::query()->create([
+        $route = $this->makeOpenLineRoute($profile, [
             'bitrix24_profile_id' => $profile->id,
             'channel_id' => $channel->id,
             'portal_domain' => $profile->portal_domain,
@@ -673,6 +752,29 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
         }
 
         return rawurldecode(Str::after($value, 'data:image/svg+xml,'));
+    }
+
+    /**
+     * @param  array<string, mixed>  $attributes
+     */
+    private function makeOpenLineRoute(Bitrix24Profile $profile, array $attributes): Bitrix24OpenLineRoute
+    {
+        $callbackOwner = Bitrix24CallbackOwner::query()->firstOrCreate(
+            [
+                'bitrix24_profile_id' => $profile->id,
+                'owner_key' => Bitrix24CallbackOwner::DEFAULT_LOCAL_OWNER_KEY,
+            ],
+            [
+                'display_name' => 'Локалка 1',
+                'callback_base_url' => $profile->callback_base_url,
+                'status' => Bitrix24CallbackOwner::STATUS_ACTIVE,
+            ],
+        );
+
+        return Bitrix24OpenLineRoute::query()->create([
+            'callback_owner_id' => $callbackOwner->id,
+            ...$attributes,
+        ]);
     }
 
     private function bitrixResponse(
