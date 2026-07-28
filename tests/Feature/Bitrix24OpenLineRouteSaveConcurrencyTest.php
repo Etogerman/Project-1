@@ -22,6 +22,7 @@ use Filament\Facades\Filament;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseMigrations;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Livewire\Livewire;
 use Tests\TestCase;
@@ -616,6 +617,83 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
         $this->assertSame(
             'Открытая линия закреплена в общем OpenLines registry за другим контуром.',
             $route->last_error_message,
+        );
+    }
+
+    public function test_registry_failure_marks_route_misconfigured_before_releasing_refresh_lock(): void
+    {
+        [, $connection, $channel, $route] = $this->makeRouteFixture();
+        $profileId = (int) $route->bitrix24_profile_id;
+        $routeLockWasAvailableDuringTransition = null;
+
+        DB::listen(function (QueryExecuted $query) use (
+            $channel,
+            $profileId,
+            &$routeLockWasAvailableDuringTransition,
+        ): void {
+            if ($routeLockWasAvailableDuringTransition !== null) {
+                return;
+            }
+
+            $sql = mb_strtolower(trim($query->sql));
+
+            if (
+                ! str_starts_with($sql, 'select')
+                || ! str_contains($sql, 'bitrix24_open_line_routes')
+                || ! str_contains($sql, 'for update')
+            ) {
+                return;
+            }
+
+            $probeLock = Cache::lock(
+                sprintf(
+                    'bitrix24-open-line-route-operation:%d:%d',
+                    $profileId,
+                    (int) $channel->getKey(),
+                ),
+                60,
+            );
+            $routeLockWasAvailableDuringTransition = $probeLock->get();
+
+            if ($routeLockWasAvailableDuringTransition) {
+                $probeLock->release();
+            }
+        });
+
+        $this->mock(Bitrix24OpenLinesRouteRegistryClient::class, function ($mock): void {
+            $mock->shouldReceive('acquireLineLease')
+                ->once()
+                ->andThrow(new Bitrix24OpenLinesRouteRegistryException(
+                    'route_registry_line_owner_conflict',
+                ));
+            $mock->shouldNotReceive('releaseLineLease');
+        });
+        $this->mock(Bitrix24ApiClient::class, function ($mock): void {
+            $mock->shouldNotReceive('call');
+        });
+
+        try {
+            app(AutoSetupBitrix24OpenLineRouteAction::class)
+                ->refreshConnectorRegistration($connection, $route);
+            $this->fail('Чужой владелец LINE_ID должен блокировать refresh.');
+        } catch (Bitrix24OpenLineAutoSetupException $exception) {
+            $this->assertSame(
+                'Открытая линия закреплена в общем OpenLines registry за другим контуром.',
+                $exception->getMessage(),
+            );
+        }
+
+        $this->assertNotNull(
+            $routeLockWasAvailableDuringTransition,
+            'Fail-closed переход маршрута не был выполнен.',
+        );
+        $this->assertFalse(
+            $routeLockWasAvailableDuringTransition,
+            'Route-lock нельзя освобождать до завершения fail-closed перехода.',
+        );
+        $this->assertSame(
+            Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
+            $route->fresh()->status,
         );
     }
 

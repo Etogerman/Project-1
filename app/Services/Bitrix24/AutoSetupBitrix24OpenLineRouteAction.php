@@ -42,22 +42,37 @@ class AutoSetupBitrix24OpenLineRouteAction
             return $this->routeOperationLock->run(
                 $profileId,
                 $channelId,
-                fn (): Bitrix24OpenLineRoute => $this->refreshConnectorRegistrationUnderLock(
+                function () use (
+                    $channelId,
                     $connection,
                     $profileId,
-                    $channelId,
-                ),
+                    $route,
+                ): Bitrix24OpenLineRoute {
+                    try {
+                        return $this->refreshConnectorRegistrationUnderLock(
+                            $connection,
+                            $profileId,
+                            $channelId,
+                        );
+                    } catch (Bitrix24OpenLinesRouteRegistryException $exception) {
+                        $message = $this->ownershipErrorMessage($exception);
+                        $this->markRouteMisconfiguredAction->handle(
+                            (int) $route->getKey(),
+                            $message,
+                        );
+
+                        throw new Bitrix24OpenLineAutoSetupException(
+                            $message,
+                            previous: $exception,
+                        );
+                    }
+                },
             );
         } catch (LockTimeoutException $exception) {
             throw new Bitrix24OpenLineAutoSetupException(
                 Bitrix24OpenLineRouteOperationLock::BUSY_MESSAGE,
                 previous: $exception,
             );
-        } catch (Bitrix24OpenLinesRouteRegistryException $exception) {
-            $message = $this->ownershipErrorMessage($exception);
-            $this->markRouteMisconfiguredAction->handle((int) $route->getKey(), $message);
-
-            throw new Bitrix24OpenLineAutoSetupException($message, previous: $exception);
         }
     }
 
