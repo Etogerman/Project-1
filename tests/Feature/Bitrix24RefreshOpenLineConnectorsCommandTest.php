@@ -15,6 +15,7 @@ use App\Services\Bitrix24\Bitrix24AuthRefreshException;
 use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryClient;
 use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Tests\Feature\Concerns\InteractsWithBitrix24RuntimeProfile;
 use Tests\TestCase;
@@ -132,6 +133,110 @@ class Bitrix24RefreshOpenLineConnectorsCommandTest extends TestCase
         $this->assertNull($route->line_owner_key);
         $this->assertNull($route->last_error_message);
         $this->assertNull($route->last_error_at);
+    }
+
+    public function test_refresh_uses_one_canonical_identity_for_lease_and_bitrix_mutations(): void
+    {
+        $connection = $this->makeProfileLinkedActiveBitrix24Connection(
+            connectionOverrides: [
+                'portal_domain' => AutoSetupBitrix24OpenLineRouteAction::SUPPORTED_PORTAL_DOMAIN,
+                'application_name' => 'Имя из админки',
+                'scope' => AutoSetupBitrix24OpenLineRouteAction::REQUIRED_SCOPES,
+            ],
+            profileOverrides: [
+                'portal_domain' => AutoSetupBitrix24OpenLineRouteAction::SUPPORTED_PORTAL_DOMAIN,
+                'telegram_connector_code' => 'abc_telegram',
+                'telegram_source_id' => 'ABC_TELEGRAM_DEV',
+            ],
+        );
+        $profile = $connection->profile()->firstOrFail();
+        $channel = Channel::factory()->create([
+            'name' => 'Локальный бот',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'telegram-token'],
+        ]);
+        $route = $this->makeOpenLineRoute($profile, [
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT,
+            'connector_code' => 'abc_telegram',
+            'line_id' => '5',
+            'source_id' => 'ABC_TELEGRAM_DEV',
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+        ]);
+        $owner = $route->callbackOwner()->firstOrFail();
+
+        DB::table('bitrix24_open_line_routes')
+            ->where('id', $route->id)
+            ->update([
+                'connector_code' => ' abc_telegram ',
+                'line_id' => ' 005 ',
+            ]);
+
+        $this->mock(Bitrix24OpenLinesRouteRegistryClient::class, function ($mock) use ($profile, $owner): void {
+            $mock->shouldReceive('acquireLineLease')
+                ->once()
+                ->withArgs(fn (
+                    Bitrix24Profile $usedProfile,
+                    Bitrix24CallbackOwner $usedOwner,
+                    string $connectorCode,
+                    string $connectorType,
+                    string $lineId,
+                ): bool => $usedProfile->is($profile)
+                    && $usedOwner->is($owner)
+                    && $connectorCode === 'abc_telegram'
+                    && $connectorType === 'telegram'
+                    && $lineId === '5')
+                ->andReturn([
+                    'lease_token' => str_repeat('e', 64),
+                    'expires_at' => now()->addHour()->toIso8601String(),
+                ]);
+            $mock->shouldReceive('releaseLineLease')
+                ->once()
+                ->withArgs(fn (
+                    Bitrix24Profile $usedProfile,
+                    Bitrix24CallbackOwner $usedOwner,
+                    string $lineId,
+                    string $leaseToken,
+                ): bool => $usedProfile->is($profile)
+                    && $usedOwner->is($owner)
+                    && $lineId === '5'
+                    && $leaseToken === str_repeat('e', 64));
+        });
+        $this->mock(Bitrix24ApiClient::class, function ($mock) use ($channel, $connection): void {
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.register'
+                    && $usedConnection->is($connection)
+                    && ($params['ID'] ?? null) === 'abc_telegram')
+                ->andReturn($this->bitrixResponse(true, ['result' => true]));
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.connector.data.set'
+                    && $usedConnection->is($connection)
+                    && ($params['CONNECTOR'] ?? null) === 'abc_telegram'
+                    && ($params['LINE'] ?? null) === '5'
+                    && ($params['DATA']['ID'] ?? null) === 'channel:'.$channel->id.':connector:abc_telegram:line:5')
+                ->andReturn($this->bitrixResponse(true, true));
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imopenlines.config.update'
+                    && $usedConnection->is($connection)
+                    && ($params['CONFIG_ID'] ?? null) === '5')
+                ->andReturn($this->bitrixResponse(true, true));
+        });
+
+        $this->artisan('bitrix24:refresh-openline-connectors', [
+            '--connection' => $connection->id,
+            '--route' => $route->id,
+        ])->assertSuccessful();
+
+        $route->refresh();
+        $this->assertSame('abc_telegram', $route->connector_code);
+        $this->assertSame('5', $route->line_id);
     }
 
     public function test_unsupported_refresh_context_does_not_mutate_active_route_before_calling_bitrix24(): void

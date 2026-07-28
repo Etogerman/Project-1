@@ -1898,6 +1898,22 @@ class ViewBitrix24Connection extends ViewRecord
             }
         }
 
+        $storedCallbackOwnerId = $route->callback_owner_id !== null
+            ? (int) $route->callback_owner_id
+            : null;
+        $requestedCallbackOwnerId = $this->nullableIntegerFormValue($form['callback_owner_id']);
+
+        if (
+            $route->claimsExternalLine()
+            && $storedCallbackOwnerId !== $requestedCallbackOwnerId
+        ) {
+            $this->failOpenLineRouteSave(
+                'Обычное сохранение не меняет callback-владельца маршрута, удерживающего LINE_ID.',
+            );
+
+            return false;
+        }
+
         if (
             $route->status === Bitrix24OpenLineRoute::STATUS_MISCONFIGURED
             && $form['status'] !== Bitrix24OpenLineRoute::STATUS_MISCONFIGURED
@@ -1978,7 +1994,7 @@ class ViewBitrix24Connection extends ViewRecord
             return 'Занята другим маршрутом в текущей базе';
         }
 
-        if ($route instanceof Bitrix24OpenLineRoute && $route->isUsable()) {
+        if ($route instanceof Bitrix24OpenLineRoute && $route->claimsExternalLine()) {
             return sprintf('Текущий маршрут канала #%d', $channel->id);
         }
 

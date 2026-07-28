@@ -97,20 +97,21 @@ class AutoSetupBitrix24OpenLineRouteAction
         }
 
         $this->assertRefreshContextSupported($connection, $profile, $channel, $route);
+        $routeIdentity = $this->canonicalRefreshRouteIdentity($channel, $route);
 
         return $this->routeOperationLock->runForOwnedLine(
             $profile,
             $owner,
-            (string) $route->connector_code,
-            (string) Bitrix24OpenLineRoute::openLinesConnectorTypeForChannelType(
-                (string) $route->channel_type,
-            ),
-            (string) $route->line_id,
+            $routeIdentity['connector_code'],
+            $routeIdentity['connector_type'],
+            $routeIdentity['line_id'],
             fn (Bitrix24OpenLineRouteLeaseDeadline $leaseDeadline): Bitrix24OpenLineRoute => $this->refreshConnectorRegistrationForLine(
                 $connection,
                 $profile,
                 $channel,
                 $route,
+                $routeIdentity['connector_code'],
+                $routeIdentity['line_id'],
                 $leaseDeadline,
             ),
         );
@@ -121,6 +122,8 @@ class AutoSetupBitrix24OpenLineRouteAction
         Bitrix24Profile $profile,
         Channel $channel,
         Bitrix24OpenLineRoute $route,
+        string $connectorCode,
+        string $lineId,
         Bitrix24OpenLineRouteLeaseDeadline $leaseDeadline,
     ): Bitrix24OpenLineRoute {
         $initialStateVersion = (string) $route->getAttribute('state_version');
@@ -137,7 +140,7 @@ class AutoSetupBitrix24OpenLineRouteAction
                 $connection,
                 $profile,
                 $channel,
-                (string) $route->connector_code,
+                $connectorCode,
                 $leaseDeadline,
             );
             $this->routeOperationLock->assertLeaseAllowsRemoteOperation($leaseDeadline);
@@ -145,8 +148,8 @@ class AutoSetupBitrix24OpenLineRouteAction
                 $connection,
                 $profile,
                 $channel,
-                (string) $route->connector_code,
-                (string) $route->line_id,
+                $connectorCode,
+                $lineId,
                 $leaseDeadline,
             );
 
@@ -158,7 +161,7 @@ class AutoSetupBitrix24OpenLineRouteAction
                 $this->routeOperationLock->assertLeaseAllowsRemoteOperation($leaseDeadline);
                 $this->syncOpenLineCrmSettings(
                     $connection,
-                    (string) $route->line_id,
+                    $lineId,
                     (string) $route->source_id,
                     $leaseDeadline,
                 );
@@ -304,6 +307,39 @@ class AutoSetupBitrix24OpenLineRouteAction
         }
 
         $this->assertRequiredScopes($connection);
+    }
+
+    /**
+     * @return array{connector_code:string,connector_type:string,line_id:string}
+     */
+    private function canonicalRefreshRouteIdentity(
+        Channel $channel,
+        Bitrix24OpenLineRoute $route,
+    ): array {
+        $connectorCode = trim((string) $route->connector_code);
+        $storedLineId = trim((string) $route->line_id);
+        $lineId = Bitrix24OpenLineRoute::canonicalLineId($storedLineId) ?? $storedLineId;
+        $connectorType = Bitrix24OpenLineRoute::openLinesConnectorTypeForChannelType(
+            Bitrix24OpenLineRoute::channelTypeForChannel($channel),
+        );
+
+        if (! Bitrix24OpenLineRoute::isValidConnectorCode($connectorCode)) {
+            throw new Bitrix24OpenLineAutoSetupException(
+                'Код соединителя должен состоять из 1–64 латинских букв, цифр или символов ".", "_" и "-".',
+            );
+        }
+
+        if (! is_string($connectorType)) {
+            throw new Bitrix24OpenLineAutoSetupException(
+                'Обновление регистрации ОЛ сейчас доступно только для Telegram bot и MAX bot каналов.',
+            );
+        }
+
+        return [
+            'connector_code' => $connectorCode,
+            'connector_type' => $connectorType,
+            'line_id' => $lineId,
+        ];
     }
 
     private function assertRouteConfigurationValidForRefresh(

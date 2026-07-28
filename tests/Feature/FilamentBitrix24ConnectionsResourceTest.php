@@ -1024,6 +1024,95 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         $this->assertSame('77', $dialog->bitrix24_open_line_resolved_chat_id_override);
     }
 
+    public function test_generic_save_cannot_change_callback_owner_of_misconfigured_line_claim(): void
+    {
+        $admin = $this->makeAdmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'crm.misconfigured-owner-transition.test',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+        $storedOwner = $profile->callbackOwners()->firstOrFail();
+        $requestedOwner = Bitrix24CallbackOwner::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'owner_key' => 'local-2',
+            'display_name' => 'Локалка 2',
+            'callback_base_url' => 'https://local-2.example.test',
+            'status' => Bitrix24CallbackOwner::STATUS_ACTIVE,
+        ]);
+        $route = Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
+            'connector_code' => 'abc_telegram',
+            'line_id' => '19',
+            'callback_owner_id' => $storedOwner->id,
+            'source_id' => 'ABC_TELEGRAM',
+            'status' => Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
+        ]);
+        Http::preventStrayRequests();
+
+        Livewire::actingAs($admin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->set("openLineRouteForms.{$channel->id}.callback_owner_id", (string) $requestedOwner->id)
+            ->call('saveOpenLineRoute', $channel->id)
+            ->assertSet(
+                'openLineRouteErrorMessage',
+                'Обычное сохранение не меняет callback-владельца маршрута, удерживающего LINE_ID.',
+            );
+
+        $this->assertSame($storedOwner->id, $route->fresh()->callback_owner_id);
+        Http::assertNothingSent();
+    }
+
+    public function test_misconfigured_line_claim_is_labeled_as_current_route_owner(): void
+    {
+        $admin = $this->makeAdmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'crm.misconfigured-owner-label.test',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+
+        Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
+            'connector_code' => 'abc_telegram',
+            'line_id' => '20',
+            'callback_owner_id' => $profile->callbackOwners()->firstOrFail()->id,
+            'source_id' => 'ABC_TELEGRAM',
+            'status' => Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
+        ]);
+
+        $component = Livewire::actingAs($admin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()]);
+        $card = collect($component->instance()->getOpenLineRouteCards())
+            ->firstWhere('channel_id', $channel->id);
+
+        $this->assertIsArray($card);
+        $this->assertSame(
+            "Текущий маршрут канала #{$channel->id}",
+            $card['line_owner_label'],
+        );
+    }
+
     public function test_open_line_route_save_blocks_active_line_conflict(): void
     {
         $admin = $this->makeAdmin();

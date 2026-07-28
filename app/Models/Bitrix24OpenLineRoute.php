@@ -64,6 +64,10 @@ class Bitrix24OpenLineRoute extends Model
     protected static function booted(): void
     {
         static::saving(function (Bitrix24OpenLineRoute $route): void {
+            if ($route->connector_code !== null) {
+                $route->connector_code = trim((string) $route->connector_code);
+            }
+
             $canonicalLineId = self::canonicalLineId((string) $route->line_id);
 
             if ($canonicalLineId !== null) {
