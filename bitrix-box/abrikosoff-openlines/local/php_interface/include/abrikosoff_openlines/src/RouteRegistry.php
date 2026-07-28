@@ -1064,6 +1064,22 @@ final class RouteRegistry
                 return ['error_code' => 'route_registry_line_busy'] + $emptyResult;
             }
 
+            $connectorCode = trim((string) $payload['connector_code']);
+            $leasedConnectorLineId = self::leasedLineIdForConnector($leases, $connectorCode);
+
+            if ($leasedConnectorLineId !== null) {
+                self::logEvent($endpointConfig, 'route_registry_connector_busy', [
+                    'owner_profile_key' => trim((string) $payload['owner_profile_key']),
+                    'connector_code' => $connectorCode,
+                    'line_id' => $lineId,
+                    'leased_line_id' => $leasedConnectorLineId,
+                    'request_id' => $requestId,
+                    'error_code' => 'route_registry_connector_busy',
+                ]);
+
+                return ['error_code' => 'route_registry_connector_busy'] + $emptyResult;
+            }
+
             if (count($leases) >= self::MAX_LINE_LEASES) {
                 return ['error_code' => 'route_registry_too_many_line_leases'] + $emptyResult;
             }
@@ -1298,6 +1314,20 @@ final class RouteRegistry
 
     /**
      * @param  array<string, array<string, mixed>>  $leases
+     */
+    private static function leasedLineIdForConnector(array $leases, string $connectorCode): ?string
+    {
+        foreach ($leases as $lineId => $lease) {
+            if (trim((string) ($lease['connector_code'] ?? '')) === $connectorCode) {
+                return (string) $lineId;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, array<string, mixed>>  $leases
      * @param  array<string, mixed>  $endpointConfig
      */
     private static function writeLineLeases(array $leases, array $endpointConfig): string
@@ -1335,6 +1365,7 @@ final class RouteRegistry
             'route_registry_line_owner_missing',
             'route_registry_line_owner_conflict',
             'route_registry_line_busy',
+            'route_registry_connector_busy',
             'route_registry_line_lease_token_invalid',
         ], true)) {
             return 409;

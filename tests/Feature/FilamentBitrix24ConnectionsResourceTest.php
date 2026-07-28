@@ -925,7 +925,10 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'bitrix24_open_line_resolved_chat_id_override' => '42',
             'bitrix24_open_line_binding_verified_at' => now(),
         ]);
-        $this->allowPublishedOpenLineOwnership(2);
+        $this->mock(Bitrix24OpenLinesRouteRegistryClient::class, function ($mock): void {
+            $mock->shouldNotReceive('acquireLineLease');
+            $mock->shouldNotReceive('releaseLineLease');
+        });
 
         Livewire::actingAs($admin)
             ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
@@ -991,7 +994,10 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'bitrix24_open_line_resolved_chat_id_override' => '77',
             'bitrix24_open_line_binding_verified_at' => now(),
         ]);
-        $this->allowPublishedOpenLineOwnership(2);
+        $this->mock(Bitrix24OpenLinesRouteRegistryClient::class, function ($mock): void {
+            $mock->shouldNotReceive('acquireLineLease');
+            $mock->shouldNotReceive('releaseLineLease');
+        });
 
         foreach ([
             Bitrix24OpenLineRoute::STATUS_INACTIVE,

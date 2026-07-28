@@ -642,12 +642,21 @@ class ViewBitrix24Connection extends ViewRecord
         $claimsExternalLine = in_array($form['status'], Bitrix24OpenLineRoute::claimingStatuses(), true)
             && $form['connector_code'] !== ''
             && $form['line_id'] !== '';
+        $hasValidClaimIdentity = $claimsExternalLine
+            && is_string($connectorType)
+            && Bitrix24OpenLineRoute::isValidConnectorCode($form['connector_code'])
+            && Bitrix24OpenLineRoute::isValidLineId($form['line_id']);
+
+        if ($hasValidClaimIdentity && ! $owner instanceof Bitrix24CallbackOwner) {
+            $this->failOpenLineRouteSave('Для маршрута, удерживающего LINE_ID, нужен активный callback-владелец.');
+
+            return;
+        }
+
         $guardsOwnerIdentity = $claimsExternalLine
             && $owner instanceof Bitrix24CallbackOwner;
         $requiresOwnershipLease = in_array($form['status'], Bitrix24OpenLineRoute::usableStatuses(), true)
-            && $form['connector_code'] !== ''
-            && is_string($connectorType)
-            && $form['line_id'] !== ''
+            && $hasValidClaimIdentity
             && $owner instanceof Bitrix24CallbackOwner;
         $expectedOwnerIdentity = $guardsOwnerIdentity
             ? $this->callbackOwnerIdentity($owner)
@@ -1966,6 +1975,7 @@ class ViewBitrix24Connection extends ViewRecord
     {
         return match ($exception->errorCode) {
             'route_registry_line_busy' => 'Открытая линия сейчас изменяется в другом контуре. Повторите попытку после завершения операции.',
+            'route_registry_connector_busy' => 'Соединитель сейчас изменяется в другом контуре. Повторите попытку после завершения операции.',
             'route_registry_line_owner_missing' => 'Для этой открытой линии ещё не опубликован владелец в общем OpenLines registry. Сначала выполните разрешённую публикацию ownership.',
             'route_registry_line_owner_conflict' => 'Открытая линия закреплена в общем OpenLines registry за другим контуром.',
             'route_registry_line_lease_expiring' => 'Срок общей аренды открытой линии недостаточен для безопасного завершения операции. Повторите попытку.',

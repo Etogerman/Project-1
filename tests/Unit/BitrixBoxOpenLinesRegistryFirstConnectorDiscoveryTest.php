@@ -602,6 +602,75 @@ class BitrixBoxOpenLinesRegistryFirstConnectorDiscoveryTest extends TestCase
         );
     }
 
+    public function test_signed_line_lease_serializes_shared_connector_across_different_lines(): void
+    {
+        $firstPublish = $this->publishRequest(
+            $this->publishPayload(
+                ownerKey: 'local-1',
+                connectors: [
+                    'dynamic_max' => $this->connector('dynamic_max', 'max'),
+                ],
+                routes: [
+                    'dynamic_max:14' => $this->route('dynamic_max', '14', 'Primary MAX'),
+                ],
+            ),
+            'shared-connector-first-owner-publish',
+        );
+        $secondPublish = $this->publishRequest(
+            $this->publishPayload(
+                ownerKey: 'local-2',
+                connectors: [
+                    'dynamic_max' => $this->connector('dynamic_max', 'max'),
+                ],
+                routes: [
+                    'dynamic_max:15' => $this->route('dynamic_max', '15', 'Secondary MAX'),
+                ],
+            ),
+            'shared-connector-second-owner-publish',
+        );
+
+        $this->assertSame(200, $firstPublish['status']);
+        $this->assertSame(200, $secondPublish['status']);
+
+        $firstLease = $this->lineLeaseRequest(
+            action: 'acquire-line-lease',
+            payload: $this->lineLeasePayload('local-1', 'dynamic_max', '14'),
+            requestId: 'shared-connector-first-line',
+        );
+
+        $this->assertSame(200, $firstLease['status']);
+
+        $secondLine = $this->lineLeaseRequest(
+            action: 'acquire-line-lease',
+            payload: $this->lineLeasePayload('local-2', 'dynamic_max', '15'),
+            requestId: 'shared-connector-second-line',
+        );
+
+        $this->assertSame(409, $secondLine['status']);
+        $this->assertSame('route_registry_connector_busy', $secondLine['body']['error_code']);
+
+        $release = $this->lineLeaseRequest(
+            action: 'release-line-lease',
+            payload: [
+                'portal_domain' => 'stagecrm.fvds.ru',
+                'owner_profile_key' => 'local-1',
+                'line_id' => '14',
+                'lease_token' => $firstLease['body']['lease_token'],
+            ],
+            requestId: 'shared-connector-first-line-release',
+        );
+
+        $this->assertSame(200, $release['status']);
+        $this->assertSame(
+            200,
+            $this->lineLeaseRequest(
+                action: 'acquire-line-lease',
+                payload: $this->lineLeasePayload('local-2', 'dynamic_max', '15'),
+                requestId: 'shared-connector-second-line-after-release',
+            )['status'],
+        );
+    }
+
     public function test_signed_line_lease_rejects_non_numeric_line_id(): void
     {
         $result = $this->lineLeaseRequest(

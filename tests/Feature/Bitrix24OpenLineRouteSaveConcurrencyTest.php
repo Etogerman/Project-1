@@ -186,6 +186,86 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
         );
     }
 
+    public function test_owner_activation_after_initial_read_cannot_bypass_required_lease(): void
+    {
+        if (DB::getDriverName() !== 'pgsql') {
+            $this->markTestSkipped('The production callback-owner concurrency contract is PostgreSQL-specific.');
+        }
+
+        [$admin, $connection, $channel, $route] = $this->makeRouteFixture();
+        $component = Livewire::actingAs($admin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()]);
+        $owner = $route->callbackOwner()->firstOrFail();
+        $owner->forceFill([
+            'status' => Bitrix24CallbackOwner::STATUS_INACTIVE,
+        ])->save();
+        $this->mock(Bitrix24OpenLinesRouteRegistryClient::class, function ($mock): void {
+            $mock->shouldNotReceive('acquireLineLease');
+            $mock->shouldNotReceive('releaseLineLease');
+        });
+
+        $defaultConnection = (string) config('database.default');
+        $concurrentConnection = 'bitrix24_callback_owner_activation_concurrent';
+        config([
+            'database.connections.'.$concurrentConnection => config(
+                'database.connections.'.$defaultConnection,
+            ),
+        ]);
+        DB::purge($concurrentConnection);
+
+        $concurrentActivationAttempted = false;
+        $activeOwnerLookupObserved = false;
+
+        DB::listen(function (QueryExecuted $query) use (
+            &$concurrentActivationAttempted,
+            &$activeOwnerLookupObserved,
+            $concurrentConnection,
+            $defaultConnection,
+            $owner,
+        ): void {
+            if ($query->connectionName !== $defaultConnection || $concurrentActivationAttempted) {
+                return;
+            }
+
+            $sql = mb_strtolower(trim($query->sql));
+
+            if (
+                ! str_starts_with($sql, 'select')
+                || ! str_contains($sql, 'bitrix24_callback_owners')
+                || ! str_contains($sql, 'status')
+            ) {
+                return;
+            }
+
+            $concurrentActivationAttempted = true;
+            $activeOwnerLookupObserved = true;
+
+            DB::connection($concurrentConnection)
+                ->table('bitrix24_callback_owners')
+                ->where('id', $owner->id)
+                ->update([
+                    'status' => Bitrix24CallbackOwner::STATUS_ACTIVE,
+                    'updated_at' => now(),
+                ]);
+        });
+
+        try {
+            $component
+                ->call('saveOpenLineRoute', $channel->id)
+                ->assertSet(
+                    'openLineRouteErrorMessage',
+                    'Для маршрута, удерживающего LINE_ID, нужен активный callback-владелец.',
+                );
+        } finally {
+            DB::purge($concurrentConnection);
+        }
+
+        $this->assertTrue($concurrentActivationAttempted);
+        $this->assertTrue($activeOwnerLookupObserved);
+        $this->assertSame(Bitrix24CallbackOwner::STATUS_ACTIVE, $owner->fresh()->status);
+        $this->assertNull($route->fresh()->updated_by_user_id);
+    }
+
     public function test_generic_save_serializes_a_concurrent_misconfigured_transition(): void
     {
         if (DB::getDriverName() !== 'pgsql') {
