@@ -20,6 +20,8 @@ use App\Services\Bitrix24\AutoSetupBitrix24OpenLineRouteAction;
 use App\Services\Bitrix24\Bitrix24ApiClient;
 use App\Services\Bitrix24\Bitrix24ApiException;
 use App\Services\Bitrix24\Bitrix24AuthRefreshException;
+use App\Services\Bitrix24\Bitrix24OpenLineRouteOwnershipLease;
+use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryException;
 use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -38,6 +40,11 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
 
         Filament::setCurrentPanel(Filament::getPanel('admin'));
         Filament::bootCurrentPanel();
+        $this->mock(Bitrix24OpenLineRouteOwnershipLease::class, function ($mock): void {
+            $mock->shouldReceive('run')
+                ->byDefault()
+                ->andReturnUsing(fn (...$arguments): mixed => $arguments[6]());
+        });
     }
 
     public function test_active_admin_can_open_bitrix24_connections_index_page(): void
@@ -572,6 +579,47 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
             'created_by_user_id' => $employee->id,
             'updated_by_user_id' => $employee->id,
+        ]);
+    }
+
+    public function test_shared_registry_owner_conflict_blocks_usable_route_before_database_insert(): void
+    {
+        $admin = $this->makeAdmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'stagecrm.fvds.ru',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Blocked MAX',
+            'platform' => Channel::PLATFORM_MAX,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+        $this->mock(Bitrix24OpenLineRouteOwnershipLease::class, function ($mock): void {
+            $mock->shouldReceive('run')
+                ->once()
+                ->andThrow(new Bitrix24OpenLinesRouteRegistryException(
+                    'route_registry_line_owner_conflict',
+                ));
+        });
+
+        Livewire::actingAs($admin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->set("openLineRouteForms.{$channel->id}.status", Bitrix24OpenLineRoute::STATUS_ACTIVE)
+            ->set("openLineRouteForms.{$channel->id}.connector_code", 'abc_max')
+            ->set("openLineRouteForms.{$channel->id}.line_id", '14')
+            ->set("openLineRouteForms.{$channel->id}.source_id", 'ABC_MAX')
+            ->call('saveOpenLineRoute', $channel->id)
+            ->assertSet(
+                'openLineRouteErrorMessage',
+                'Открытая линия закреплена в общем OpenLines registry за другим контуром.',
+            );
+
+        $this->assertDatabaseMissing('bitrix24_open_line_routes', [
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
         ]);
     }
 
@@ -1394,6 +1442,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
             'connector_code' => 'abc_telegram_dev_german_main',
             'line_id' => 'line-existing',
+            'callback_owner_id' => $profile->callbackOwners()->firstOrFail()->id,
             'source_id' => 'ABC_TELEGRAM_DEV_GERMAN_MAIN',
             'status' => Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
             'last_error_message' => 'Старая ошибка',
@@ -1499,6 +1548,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
             'connector_code' => 'abc_telegram_dev_german_main',
             'line_id' => 'line-existing',
+            'callback_owner_id' => $profile->callbackOwners()->firstOrFail()->id,
             'source_id' => 'ABC_TELEGRAM_DEV_GERMAN_MAIN',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);
@@ -1607,6 +1657,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
             'connector_code' => 'abc_telegram_dev_german_main',
             'line_id' => 'line-existing',
+            'callback_owner_id' => $profile->callbackOwners()->firstOrFail()->id,
             'source_id' => 'ABC_TELEGRAM_DEV_GERMAN_MAIN',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);
@@ -1711,6 +1762,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                 'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
                 'connector_code' => $connectorCode,
                 'line_id' => $lineId,
+                'callback_owner_id' => $profile->callbackOwners()->firstOrFail()->id,
                 'source_id' => $sourceId,
                 'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
             ]);
@@ -1817,6 +1869,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'channel_type' => Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT,
             'connector_code' => 'abc_telegram',
             'line_id' => 'line-existing',
+            'callback_owner_id' => $profile->callbackOwners()->firstOrFail()->id,
             'source_id' => 'ABC_TELEGRAM',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
             'last_error_message' => 'Предыдущее предупреждение',
@@ -1869,6 +1922,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'channel_type' => Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT,
             'connector_code' => 'abc_telegram',
             'line_id' => 'line-existing',
+            'callback_owner_id' => $profile->callbackOwners()->firstOrFail()->id,
             'source_id' => 'ABC_TELEGRAM',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
             'last_error_message' => 'Предыдущее предупреждение',
@@ -1987,6 +2041,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
             'connector_code' => 'abc_telegram',
             'line_id' => 'line-existing',
+            'callback_owner_id' => $profile->callbackOwners()->firstOrFail()->id,
             'source_id' => 'ABC_TELEGRAM',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
             'last_error_message' => 'Предыдущее предупреждение',
@@ -2036,6 +2091,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'channel_type' => Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT,
             'connector_code' => 'abc_telegram',
             'line_id' => 'line-existing',
+            'callback_owner_id' => $profile->callbackOwners()->firstOrFail()->id,
             'source_id' => 'ABC_TELEGRAM',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
             'last_error_message' => 'Предыдущее предупреждение',

@@ -2,6 +2,7 @@
 
 namespace App\Services\Bitrix24;
 
+use App\Models\Bitrix24CallbackOwner;
 use App\Models\Bitrix24Profile;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Response;
@@ -25,6 +26,60 @@ class Bitrix24OpenLinesRouteRegistryClient
     public function publish(Bitrix24Profile $profile, array $payload): array
     {
         return $this->request($profile, 'POST', '', $payload);
+    }
+
+    /**
+     * @return array{lease_token:string,expires_at:string}
+     */
+    public function acquireLineLease(
+        Bitrix24Profile $profile,
+        Bitrix24CallbackOwner $owner,
+        string $connectorCode,
+        string $connectorType,
+        string $lineId,
+        int $leaseSeconds,
+    ): array {
+        $response = $this->request($profile, 'POST', 'action=acquire-line-lease', [
+            'portal_domain' => trim((string) $profile->portal_domain),
+            'owner_profile_key' => trim((string) $owner->owner_key),
+            'owner_callback_base_url' => trim((string) $owner->callback_base_url),
+            'connector_code' => trim($connectorCode),
+            'connector_type' => trim($connectorType),
+            'line_id' => trim($lineId),
+            'lease_seconds' => $leaseSeconds,
+        ]);
+        $leaseToken = is_scalar($response['lease_token'] ?? null)
+            ? trim((string) $response['lease_token'])
+            : '';
+        $expiresAt = is_scalar($response['expires_at'] ?? null)
+            ? trim((string) $response['expires_at'])
+            : '';
+
+        if (preg_match('/^[a-f0-9]{64}$/', $leaseToken) !== 1 || $expiresAt === '') {
+            throw new Bitrix24OpenLinesRouteRegistryException(
+                'route_registry_line_lease_response_invalid',
+                'OpenLines registry вернул некорректную operation lease.',
+            );
+        }
+
+        return [
+            'lease_token' => $leaseToken,
+            'expires_at' => $expiresAt,
+        ];
+    }
+
+    public function releaseLineLease(
+        Bitrix24Profile $profile,
+        Bitrix24CallbackOwner $owner,
+        string $lineId,
+        string $leaseToken,
+    ): void {
+        $this->request($profile, 'POST', 'action=release-line-lease', [
+            'portal_domain' => trim((string) $profile->portal_domain),
+            'owner_profile_key' => trim((string) $owner->owner_key),
+            'line_id' => trim($lineId),
+            'lease_token' => trim($leaseToken),
+        ]);
     }
 
     /**

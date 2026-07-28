@@ -9,6 +9,7 @@ use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Bitrix24Profile;
 use App\Models\Channel;
 use App\Models\User;
+use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryClient;
 use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryException;
 use App\Services\Bitrix24\DoctorBitrix24OpenLinesRouteRegistryAction;
 use App\Services\Bitrix24\PublishBitrix24OpenLinesRouteRegistryAction;
@@ -178,6 +179,109 @@ class Bitrix24OpenLinesRouteRegistryTest extends TestCase
         $this->assertSame('0', $payload->connectors->{'0'}->connector_code);
         $this->assertSame('max', $payload->connectors->{'0'}->connector_type);
         $this->assertSame('0', $payload->routes->{'0:45'}->connector_code);
+    }
+
+    public function test_publish_keeps_misconfigured_line_as_inactive_ownership_claim(): void
+    {
+        $profile = $this->makeProfile([
+            'portal_domain' => 'stagecrm.fvds.ru',
+            'callback_base_url' => 'https://local.example.test/callback',
+            'openlines_route_registry_secret_encrypted' => 'registry-secret-for-misconfigured-claim',
+        ]);
+        $owner = $profile->callbackOwners()->firstOrFail();
+        $channel = Channel::factory()->create([
+            'name' => 'Repairing MAX',
+            'platform' => Channel::PLATFORM_MAX,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+
+        Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX,
+            'connector_code' => 'abc_max',
+            'line_id' => '14',
+            'line_name' => 'Repairing MAX',
+            'callback_owner_id' => $owner->id,
+            'source_id' => 'ABC_MAX',
+            'status' => Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
+        ]);
+
+        Http::fake(fn (Request $request) => Http::response([
+            'ok' => true,
+            'owner_profile_key' => $owner->owner_key,
+            'published_routes' => count(json_decode($request->body(), true)['routes'] ?? []),
+        ]));
+
+        $result = app(PublishBitrix24OpenLinesRouteRegistryAction::class)->handle($profile->fresh());
+        $requests = Http::recorded();
+        $payload = json_decode($requests[0][0]->body(), true);
+
+        $this->assertSame(1, $result['published_routes']);
+        $this->assertSame([
+            'abc_max:14' => [
+                'connector_code' => 'abc_max',
+                'line_id' => '14',
+                'line_name' => 'Repairing MAX',
+                'active' => false,
+            ],
+        ], $payload['routes']);
+    }
+
+    public function test_acquire_line_lease_sends_complete_signed_ownership_identity(): void
+    {
+        $secret = 'registry-secret-for-line-lease-client';
+        $profile = $this->makeProfile([
+            'portal_domain' => 'stagecrm.fvds.ru',
+            'callback_base_url' => 'https://local.example.test/callback',
+            'openlines_route_registry_secret_encrypted' => $secret,
+        ]);
+        $owner = $profile->callbackOwners()->firstOrFail();
+
+        Http::fake(fn () => Http::response([
+            'ok' => true,
+            'lease_token' => str_repeat('a', 64),
+            'expires_at' => now()->addMinutes(6)->toIso8601String(),
+        ]));
+
+        $lease = app(Bitrix24OpenLinesRouteRegistryClient::class)->acquireLineLease(
+            $profile,
+            $owner,
+            'abc_max',
+            'max',
+            '14',
+            360,
+        );
+        $requests = Http::recorded();
+
+        $this->assertSame(str_repeat('a', 64), $lease['lease_token']);
+        $this->assertCount(1, $requests);
+
+        /** @var Request $request */
+        $request = $requests[0][0];
+        $payload = json_decode($request->body(), true);
+
+        $this->assertSame(
+            'https://stagecrm.fvds.ru/local/tools/abrikosoff_openlines/route-registry.php?action=acquire-line-lease',
+            $request->url(),
+        );
+        $this->assertSame([
+            'portal_domain' => 'stagecrm.fvds.ru',
+            'owner_profile_key' => $owner->owner_key,
+            'owner_callback_base_url' => $owner->callback_base_url,
+            'connector_code' => 'abc_max',
+            'connector_type' => 'max',
+            'line_id' => '14',
+            'lease_seconds' => 360,
+        ], $payload);
+        $this->assertRegistryRequestSigned(
+            $request,
+            $secret,
+            'POST',
+            'action=acquire-line-lease',
+        );
     }
 
     public function test_doctor_compares_signed_snapshot_with_local_owner_scope(): void

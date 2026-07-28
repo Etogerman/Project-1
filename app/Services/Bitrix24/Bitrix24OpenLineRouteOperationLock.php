@@ -2,7 +2,9 @@
 
 namespace App\Services\Bitrix24;
 
+use App\Models\Bitrix24CallbackOwner;
 use App\Models\Bitrix24OpenLineRoute;
+use App\Models\Bitrix24Profile;
 use Closure;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\Cache;
@@ -28,6 +30,10 @@ final class Bitrix24OpenLineRouteOperationLock
     private const RETRY_SLEEPS_PER_REST_ROUND = 1;
 
     private const SAFETY_MARGIN_MULTIPLIER = 1.25;
+
+    public function __construct(
+        private readonly Bitrix24OpenLineRouteOwnershipLease $ownershipLease,
+    ) {}
 
     public function run(int $profileId, int $channelId, Closure $callback): mixed
     {
@@ -56,6 +62,33 @@ final class Bitrix24OpenLineRouteOperationLock
                 $normalizedPortalDomain."\0".$normalizedLineId,
             ),
             $callback,
+        );
+    }
+
+    /**
+     * The local line lock preserves in-process lock ordering. The signed
+     * registry lease is the authority shared by independent DB/cache contours.
+     */
+    public function runForOwnedLine(
+        Bitrix24Profile $profile,
+        Bitrix24CallbackOwner $owner,
+        string $connectorCode,
+        string $connectorType,
+        string $lineId,
+        Closure $callback,
+    ): mixed {
+        return $this->runForLine(
+            (string) $profile->portal_domain,
+            $lineId,
+            fn (): mixed => $this->ownershipLease->run(
+                $profile,
+                $owner,
+                $connectorCode,
+                $connectorType,
+                $lineId,
+                $this->lockSeconds(),
+                $callback,
+            ),
         );
     }
 

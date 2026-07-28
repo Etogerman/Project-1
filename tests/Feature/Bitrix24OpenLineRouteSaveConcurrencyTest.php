@@ -14,6 +14,8 @@ use App\Services\Bitrix24\AutoSetupBitrix24OpenLineRouteAction;
 use App\Services\Bitrix24\Bitrix24ApiClient;
 use App\Services\Bitrix24\Bitrix24OpenLineAutoSetupException;
 use App\Services\Bitrix24\Bitrix24OpenLineRouteOperationLock;
+use App\Services\Bitrix24\Bitrix24OpenLineRouteOwnershipLease;
+use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryException;
 use App\Services\Bitrix24\MarkBitrix24OpenLineRouteMisconfiguredAction;
 use Filament\Facades\Filament;
 use Illuminate\Database\Events\QueryExecuted;
@@ -33,6 +35,11 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
 
         Filament::setCurrentPanel(Filament::getPanel('admin'));
         Filament::bootCurrentPanel();
+        $this->mock(Bitrix24OpenLineRouteOwnershipLease::class, function ($mock): void {
+            $mock->shouldReceive('run')
+                ->byDefault()
+                ->andReturnUsing(fn (...$arguments): mixed => $arguments[6]());
+        });
     }
 
     public function test_generic_save_serializes_a_concurrent_misconfigured_transition(): void
@@ -351,6 +358,40 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
         $this->assertNull($secondRoute->line_owner_key);
         $this->assertSame('abc_second', $secondRoute->connector_code);
         $this->assertSame('line-original', $secondRoute->line_id);
+    }
+
+    public function test_registry_owner_conflict_blocks_refresh_before_any_bitrix_mutation(): void
+    {
+        [, $connection, , $route] = $this->makeRouteFixture();
+        $this->mock(Bitrix24OpenLineRouteOwnershipLease::class, function ($mock): void {
+            $mock->shouldReceive('run')
+                ->once()
+                ->andThrow(new Bitrix24OpenLinesRouteRegistryException(
+                    'route_registry_line_owner_conflict',
+                ));
+        });
+        $this->mock(Bitrix24ApiClient::class, function ($mock): void {
+            $mock->shouldNotReceive('call');
+        });
+
+        try {
+            app(AutoSetupBitrix24OpenLineRouteAction::class)
+                ->refreshConnectorRegistration($connection, $route);
+            $this->fail('Чужой владелец LINE_ID должен блокировать refresh.');
+        } catch (Bitrix24OpenLineAutoSetupException $exception) {
+            $this->assertSame(
+                'Открытая линия закреплена в общем OpenLines registry за другим контуром.',
+                $exception->getMessage(),
+            );
+        }
+
+        $route->refresh();
+
+        $this->assertSame(Bitrix24OpenLineRoute::STATUS_MISCONFIGURED, $route->status);
+        $this->assertSame(
+            'Открытая линия закреплена в общем OpenLines registry за другим контуром.',
+            $route->last_error_message,
+        );
     }
 
     public function test_fail_closed_transition_during_connector_metadata_refresh_cancels_completion_without_activation_calls(): void

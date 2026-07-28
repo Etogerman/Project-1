@@ -31,7 +31,10 @@ class BuildBitrix24OpenLinesRouteRegistryOwnerSnapshotAction
             Bitrix24OpenLineRoute::query()
                 ->where('bitrix24_profile_id', $profile->id)
                 ->where('callback_owner_id', $owner->id)
-                ->whereIn('status', Bitrix24OpenLineRoute::usableStatuses())
+                ->whereIn('status', [
+                    ...Bitrix24OpenLineRoute::usableStatuses(),
+                    Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
+                ])
                 ->whereNotNull('connector_code')
                 ->whereNotNull('line_id')
                 ->orderBy('connector_code')
@@ -81,7 +84,7 @@ class BuildBitrix24OpenLinesRouteRegistryOwnerSnapshotAction
                         'connector_code' => $connectorCode,
                         'line_id' => $lineId,
                         'line_name' => trim((string) ($route->line_name ?? '')),
-                        'active' => true,
+                        'active' => in_array($route->status, Bitrix24OpenLineRoute::usableStatuses(), true),
                     ];
                 });
         }

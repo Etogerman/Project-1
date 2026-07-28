@@ -20,6 +20,14 @@ final class RouteRegistry
 
     private const HMAC_WINDOW_SECONDS = 300;
 
+    private const DEFAULT_LINE_LEASE_SECONDS = 360;
+
+    private const MIN_LINE_LEASE_SECONDS = 30;
+
+    private const MAX_LINE_LEASE_SECONDS = 86400;
+
+    private const MAX_LINE_LEASES = 1000;
+
     private const MAX_CONNECTORS_PER_OWNER = 500;
 
     private const MAX_ROUTES_PER_OWNER = 500;
@@ -393,7 +401,7 @@ final class RouteRegistry
             ]);
         }
 
-        if ($method !== 'POST' || $action !== '') {
+        if ($method !== 'POST') {
             return self::response(404, false, 'route_registry_unknown_action');
         }
 
@@ -401,6 +409,55 @@ final class RouteRegistry
 
         if (! is_array($payload)) {
             return self::response(422, false, 'route_registry_invalid_json');
+        }
+
+        if ($action === 'acquire-line-lease') {
+            $validationError = self::validateLineLeasePayload($payload, $endpointConfig, false);
+
+            if ($validationError !== '') {
+                return self::response(422, false, $validationError);
+            }
+
+            $leaseResult = self::acquireLineLease($payload, $endpointConfig, $requestId);
+
+            if ($leaseResult['error_code'] !== '') {
+                return self::response(
+                    self::lineLeaseErrorStatus($leaseResult['error_code']),
+                    false,
+                    $leaseResult['error_code'],
+                );
+            }
+
+            return self::response(200, true, '', [
+                'lease_token' => $leaseResult['lease_token'],
+                'expires_at' => $leaseResult['expires_at'],
+            ]);
+        }
+
+        if ($action === 'release-line-lease') {
+            $validationError = self::validateLineLeasePayload($payload, $endpointConfig, true);
+
+            if ($validationError !== '') {
+                return self::response(422, false, $validationError);
+            }
+
+            $releaseResult = self::releaseLineLease($payload, $endpointConfig, $requestId);
+
+            if ($releaseResult['error_code'] !== '') {
+                return self::response(
+                    self::lineLeaseErrorStatus($releaseResult['error_code']),
+                    false,
+                    $releaseResult['error_code'],
+                );
+            }
+
+            return self::response(200, true, '', [
+                'released' => $releaseResult['released'],
+            ]);
+        }
+
+        if ($action !== '') {
+            return self::response(404, false, 'route_registry_unknown_action');
         }
 
         $validationError = self::validatePublishPayload($payload, $endpointConfig);
@@ -425,10 +482,20 @@ final class RouteRegistry
         $publishResult = self::publishOwnerSnapshot($payload, $endpointConfig, $requestId);
 
         if ($publishResult['error_code'] !== '') {
-            $status = in_array($publishResult['error_code'], [
-                'route_registry_conflict',
-                'route_registry_connector_type_conflict',
-            ], true) ? 409 : 422;
+            $status = match (true) {
+                in_array($publishResult['error_code'], [
+                    'route_registry_conflict',
+                    'route_registry_connector_type_conflict',
+                    'route_registry_line_busy',
+                ], true) => 409,
+                in_array($publishResult['error_code'], [
+                    'route_registry_storage_unavailable',
+                    'route_registry_invalid',
+                    'route_registry_line_leases_invalid',
+                    'route_registry_line_leases_write_failed',
+                ], true) => 500,
+                default => 422,
+            };
 
             return self::response($status, false, $publishResult['error_code'], [
                 'conflicts' => $publishResult['conflicts'],
@@ -611,6 +678,7 @@ final class RouteRegistry
                 ];
             }
 
+            $registryBeforeUpdate = $registry;
             $ownerKey = (string) $payload['owner_profile_key'];
             $connectors = self::normalizePublishConnectors($payload['connectors'] ?? []);
             $routes = self::normalizePublishRoutes($payload['routes'] ?? []);
@@ -674,6 +742,46 @@ final class RouteRegistry
             }
 
             $registry['owners'][$ownerKey] = $ownerSnapshot;
+            $leaseError = '';
+            $leases = self::readLineLeases($endpointConfig, $leaseError);
+
+            if ($leases === null) {
+                return [
+                    'error_code' => $leaseError !== '' ? $leaseError : 'route_registry_line_leases_invalid',
+                    'conflicts' => [],
+                ];
+            }
+
+            $activeLeases = self::pruneExpiredLineLeases($leases);
+
+            foreach ($activeLeases as $lineId => $lease) {
+                $lineId = (string) $lineId;
+
+                if (self::lineOwnership($registryBeforeUpdate, $lineId) !== self::lineOwnership($registry, $lineId)) {
+                    self::logEvent($endpointConfig, 'route_registry_line_busy', [
+                        'owner_profile_key' => $ownerKey,
+                        'line_id' => $lineId,
+                        'request_id' => $requestId,
+                        'error_code' => 'route_registry_line_busy',
+                    ]);
+
+                    return [
+                        'error_code' => 'route_registry_line_busy',
+                        'conflicts' => [],
+                    ];
+                }
+            }
+
+            if ($activeLeases !== $leases) {
+                $leaseWriteError = self::writeLineLeases($activeLeases, $endpointConfig);
+
+                if ($leaseWriteError !== '') {
+                    return [
+                        'error_code' => $leaseWriteError,
+                        'conflicts' => [],
+                    ];
+                }
+            }
 
             $writeError = self::writeRegistry($registry, $endpointConfig);
 
@@ -791,6 +899,450 @@ final class RouteRegistry
      * @param  array<string, mixed>  $payload
      * @param  array<string, mixed>  $endpointConfig
      */
+    private static function validateLineLeasePayload(
+        array $payload,
+        array $endpointConfig,
+        bool $release,
+    ): string {
+        if (! is_scalar($payload['portal_domain'] ?? null)) {
+            return 'route_registry_portal_domain_mismatch';
+        }
+
+        $portalDomain = trim((string) $payload['portal_domain']);
+        $expectedPortalDomain = self::expectedPortalDomain($endpointConfig);
+
+        if ($expectedPortalDomain === '') {
+            return 'route_registry_portal_domain_config_missing';
+        }
+
+        if ($portalDomain === '' || $portalDomain !== $expectedPortalDomain) {
+            return 'route_registry_portal_domain_mismatch';
+        }
+
+        if (! is_scalar($payload['owner_profile_key'] ?? null)) {
+            return 'route_registry_owner_invalid';
+        }
+
+        $ownerKey = trim((string) $payload['owner_profile_key']);
+
+        if (! preg_match('/^[a-zA-Z0-9._-]{1,128}$/', $ownerKey)) {
+            return 'route_registry_owner_invalid';
+        }
+
+        $allowedOwnerKeys = self::allowedOwnerKeys($endpointConfig);
+
+        if ($allowedOwnerKeys === []) {
+            return 'route_registry_owner_allowlist_missing';
+        }
+
+        if (! in_array($ownerKey, $allowedOwnerKeys, true)) {
+            return 'route_registry_owner_not_allowed';
+        }
+
+        if (! is_scalar($payload['line_id'] ?? null)
+            || preg_match('/^[0-9]{1,64}$/', trim((string) $payload['line_id'])) !== 1
+        ) {
+            return 'route_registry_route_invalid';
+        }
+
+        if ($release) {
+            if (! is_scalar($payload['lease_token'] ?? null)
+                || preg_match('/^[a-f0-9]{64}$/', trim((string) $payload['lease_token'])) !== 1
+            ) {
+                return 'route_registry_line_lease_token_invalid';
+            }
+
+            return '';
+        }
+
+        if (! is_scalar($payload['owner_callback_base_url'] ?? null)) {
+            return 'route_registry_callback_url_invalid';
+        }
+
+        $callbackError = self::validateCallbackBaseUrl(
+            trim((string) $payload['owner_callback_base_url']),
+            (bool) ($endpointConfig['validate_dns'] ?? true),
+        );
+
+        if ($callbackError !== '') {
+            return $callbackError;
+        }
+
+        if (! is_scalar($payload['connector_code'] ?? null)
+            || ! self::validConnectorCode(trim((string) $payload['connector_code']))
+        ) {
+            return 'route_registry_route_invalid';
+        }
+
+        if (! is_scalar($payload['connector_type'] ?? null)
+            || ! in_array(trim((string) $payload['connector_type']), ['telegram', 'max'], true)
+        ) {
+            return 'route_registry_connector_type_invalid';
+        }
+
+        if (array_key_exists('lease_seconds', $payload)
+            && (! is_int($payload['lease_seconds'])
+                || $payload['lease_seconds'] < self::MIN_LINE_LEASE_SECONDS
+                || $payload['lease_seconds'] > self::MAX_LINE_LEASE_SECONDS)
+        ) {
+            return 'route_registry_line_lease_ttl_invalid';
+        }
+
+        return '';
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @param  array<string, mixed>  $endpointConfig
+     * @return array{error_code:string,lease_token:string,expires_at:string}
+     */
+    private static function acquireLineLease(array $payload, array $endpointConfig, string $requestId): array
+    {
+        $dir = self::storageDir($endpointConfig);
+        $emptyResult = [
+            'error_code' => 'route_registry_storage_unavailable',
+            'lease_token' => '',
+            'expires_at' => '',
+        ];
+
+        if (! self::ensurePrivateDirectory($dir)) {
+            return $emptyResult;
+        }
+
+        $lock = @fopen($dir.'/route_registry.lock', 'c+');
+
+        if (! is_resource($lock) || ! flock($lock, LOCK_EX)) {
+            return $emptyResult;
+        }
+
+        try {
+            self::forgetValidatedRegistrySnapshots($endpointConfig);
+            $registry = self::readRegistry($endpointConfig);
+
+            if (! is_array($registry)) {
+                return ['error_code' => 'route_registry_invalid'] + $emptyResult;
+            }
+
+            $lineId = trim((string) $payload['line_id']);
+            $ownership = self::lineOwnership($registry, $lineId);
+
+            if ($ownership === null) {
+                return ['error_code' => 'route_registry_line_owner_missing'] + $emptyResult;
+            }
+
+            if ($ownership !== self::lineOwnershipFromPayload($payload)) {
+                self::logEvent($endpointConfig, 'route_registry_line_owner_conflict', [
+                    'owner_profile_key' => trim((string) $payload['owner_profile_key']),
+                    'connector_code' => trim((string) $payload['connector_code']),
+                    'line_id' => $lineId,
+                    'request_id' => $requestId,
+                    'error_code' => 'route_registry_line_owner_conflict',
+                ]);
+
+                return ['error_code' => 'route_registry_line_owner_conflict'] + $emptyResult;
+            }
+
+            $leaseError = '';
+            $leases = self::readLineLeases($endpointConfig, $leaseError);
+
+            if ($leases === null) {
+                return [
+                    'error_code' => $leaseError !== '' ? $leaseError : 'route_registry_line_leases_invalid',
+                ] + $emptyResult;
+            }
+
+            $leases = self::pruneExpiredLineLeases($leases);
+
+            if (isset($leases[$lineId])) {
+                return ['error_code' => 'route_registry_line_busy'] + $emptyResult;
+            }
+
+            if (count($leases) >= self::MAX_LINE_LEASES) {
+                return ['error_code' => 'route_registry_too_many_line_leases'] + $emptyResult;
+            }
+
+            try {
+                $leaseToken = bin2hex(random_bytes(32));
+            } catch (\Throwable) {
+                return $emptyResult;
+            }
+
+            $leaseSeconds = is_int($payload['lease_seconds'] ?? null)
+                ? $payload['lease_seconds']
+                : self::DEFAULT_LINE_LEASE_SECONDS;
+            $expiresAt = time() + $leaseSeconds;
+            $leases[$lineId] = [
+                'line_id' => $lineId,
+                'owner_profile_key' => trim((string) $payload['owner_profile_key']),
+                'owner_callback_base_url' => self::normalizeCallbackBaseUrl(
+                    (string) $payload['owner_callback_base_url'],
+                ),
+                'connector_code' => trim((string) $payload['connector_code']),
+                'connector_type' => trim((string) $payload['connector_type']),
+                'token_hash' => hash('sha256', $leaseToken),
+                'expires_at' => $expiresAt,
+            ];
+            $writeError = self::writeLineLeases($leases, $endpointConfig);
+
+            if ($writeError !== '') {
+                return ['error_code' => $writeError] + $emptyResult;
+            }
+
+            self::logEvent($endpointConfig, 'route_registry_line_lease_acquired', [
+                'owner_profile_key' => trim((string) $payload['owner_profile_key']),
+                'connector_code' => trim((string) $payload['connector_code']),
+                'line_id' => $lineId,
+                'request_id' => $requestId,
+            ]);
+
+            return [
+                'error_code' => '',
+                'lease_token' => $leaseToken,
+                'expires_at' => date('c', $expiresAt),
+            ];
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @param  array<string, mixed>  $endpointConfig
+     * @return array{error_code:string,released:bool}
+     */
+    private static function releaseLineLease(array $payload, array $endpointConfig, string $requestId): array
+    {
+        $dir = self::storageDir($endpointConfig);
+
+        if (! self::ensurePrivateDirectory($dir)) {
+            return ['error_code' => 'route_registry_storage_unavailable', 'released' => false];
+        }
+
+        $lock = @fopen($dir.'/route_registry.lock', 'c+');
+
+        if (! is_resource($lock) || ! flock($lock, LOCK_EX)) {
+            return ['error_code' => 'route_registry_storage_unavailable', 'released' => false];
+        }
+
+        try {
+            $leaseError = '';
+            $leases = self::readLineLeases($endpointConfig, $leaseError);
+
+            if ($leases === null) {
+                return [
+                    'error_code' => $leaseError !== '' ? $leaseError : 'route_registry_line_leases_invalid',
+                    'released' => false,
+                ];
+            }
+
+            $lineId = trim((string) $payload['line_id']);
+            $leases = self::pruneExpiredLineLeases($leases);
+            $lease = $leases[$lineId] ?? null;
+
+            if (! is_array($lease)) {
+                $writeError = self::writeLineLeases($leases, $endpointConfig);
+
+                return ['error_code' => $writeError, 'released' => false];
+            }
+
+            if (trim((string) ($lease['owner_profile_key'] ?? '')) !== trim((string) $payload['owner_profile_key'])
+                || ! hash_equals(
+                    (string) ($lease['token_hash'] ?? ''),
+                    hash('sha256', trim((string) $payload['lease_token'])),
+                )
+            ) {
+                return ['error_code' => 'route_registry_line_lease_token_invalid', 'released' => false];
+            }
+
+            unset($leases[$lineId]);
+            $writeError = self::writeLineLeases($leases, $endpointConfig);
+
+            if ($writeError !== '') {
+                return ['error_code' => $writeError, 'released' => false];
+            }
+
+            self::logEvent($endpointConfig, 'route_registry_line_lease_released', [
+                'owner_profile_key' => trim((string) $payload['owner_profile_key']),
+                'line_id' => $lineId,
+                'request_id' => $requestId,
+            ]);
+
+            return ['error_code' => '', 'released' => true];
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $registry
+     * @return array{owner_profile_key:string,owner_callback_base_url:string,connector_code:string,connector_type:string,line_id:string}|null
+     */
+    private static function lineOwnership(array $registry, string $lineId): ?array
+    {
+        $matches = [];
+
+        foreach (self::registryRoutes($registry) as $route) {
+            if (trim((string) ($route['line_id'] ?? '')) !== $lineId) {
+                continue;
+            }
+
+            $matches[] = [
+                'owner_profile_key' => trim((string) ($route['owner_profile_key'] ?? '')),
+                'owner_callback_base_url' => self::normalizeCallbackBaseUrl(
+                    (string) ($route['owner_callback_base_url'] ?? ''),
+                ),
+                'connector_code' => trim((string) ($route['connector_code'] ?? '')),
+                'connector_type' => self::routeRegistryConnectorType($registry, $route),
+                'line_id' => $lineId,
+            ];
+        }
+
+        return count($matches) === 1 ? $matches[0] : null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array{owner_profile_key:string,owner_callback_base_url:string,connector_code:string,connector_type:string,line_id:string}
+     */
+    private static function lineOwnershipFromPayload(array $payload): array
+    {
+        return [
+            'owner_profile_key' => trim((string) $payload['owner_profile_key']),
+            'owner_callback_base_url' => self::normalizeCallbackBaseUrl(
+                (string) $payload['owner_callback_base_url'],
+            ),
+            'connector_code' => trim((string) $payload['connector_code']),
+            'connector_type' => trim((string) $payload['connector_type']),
+            'line_id' => trim((string) $payload['line_id']),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $endpointConfig
+     * @return array<string, array<string, mixed>>|null
+     */
+    private static function readLineLeases(array $endpointConfig, ?string &$errorCode = null): ?array
+    {
+        $errorCode = '';
+        $file = self::storageDir($endpointConfig).'/route_registry_line_leases.json';
+
+        if (! is_file($file)) {
+            return [];
+        }
+
+        $raw = @file_get_contents($file);
+
+        if (! is_string($raw) || strlen($raw) > self::MAX_REGISTRY_BYTES) {
+            $errorCode = 'route_registry_line_leases_invalid';
+
+            return null;
+        }
+
+        $decoded = json_decode($raw, true);
+
+        if (! is_array($decoded) || count($decoded) > self::MAX_LINE_LEASES) {
+            $errorCode = 'route_registry_line_leases_invalid';
+
+            return null;
+        }
+
+        foreach ($decoded as $lineId => $lease) {
+            if ((! is_string($lineId) && ! is_int($lineId))
+                || preg_match('/^[0-9]{1,64}$/', (string) $lineId) !== 1
+                || ! is_array($lease)
+                || trim((string) ($lease['line_id'] ?? '')) !== (string) $lineId
+                || ! preg_match('/^[a-zA-Z0-9._-]{1,128}$/', trim((string) ($lease['owner_profile_key'] ?? '')))
+                || ! self::validConnectorCode(trim((string) ($lease['connector_code'] ?? '')))
+                || ! in_array(trim((string) ($lease['connector_type'] ?? '')), ['telegram', 'max'], true)
+                || self::normalizeCallbackBaseUrl((string) ($lease['owner_callback_base_url'] ?? '')) === ''
+                || preg_match('/^[a-f0-9]{64}$/', trim((string) ($lease['token_hash'] ?? ''))) !== 1
+                || ! is_int($lease['expires_at'] ?? null)
+            ) {
+                $errorCode = 'route_registry_line_leases_invalid';
+
+                return null;
+            }
+        }
+
+        return $decoded;
+    }
+
+    /**
+     * @param  array<string, array<string, mixed>>  $leases
+     * @return array<string, array<string, mixed>>
+     */
+    private static function pruneExpiredLineLeases(array $leases): array
+    {
+        $now = time();
+
+        return array_filter(
+            $leases,
+            static fn (array $lease): bool => (int) ($lease['expires_at'] ?? 0) > $now,
+        );
+    }
+
+    /**
+     * @param  array<string, array<string, mixed>>  $leases
+     * @param  array<string, mixed>  $endpointConfig
+     */
+    private static function writeLineLeases(array $leases, array $endpointConfig): string
+    {
+        $dir = self::storageDir($endpointConfig);
+        $file = $dir.'/route_registry_line_leases.json';
+        $tempFile = $dir.'/route_registry_line_leases.'.getmypid().'.tmp';
+        ksort($leases);
+        $encoded = json_encode($leases, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
+
+        if ($encoded === false || strlen($encoded) > self::MAX_REGISTRY_BYTES) {
+            return 'route_registry_line_leases_write_failed';
+        }
+
+        if (@file_put_contents($tempFile, $encoded, LOCK_EX) === false) {
+            return 'route_registry_line_leases_write_failed';
+        }
+
+        @chmod($tempFile, 0600);
+
+        if (! @rename($tempFile, $file)) {
+            @unlink($tempFile);
+
+            return 'route_registry_line_leases_write_failed';
+        }
+
+        @chmod($file, 0600);
+
+        return '';
+    }
+
+    private static function lineLeaseErrorStatus(string $errorCode): int
+    {
+        if (in_array($errorCode, [
+            'route_registry_line_owner_missing',
+            'route_registry_line_owner_conflict',
+            'route_registry_line_busy',
+            'route_registry_line_lease_token_invalid',
+        ], true)) {
+            return 409;
+        }
+
+        if (in_array($errorCode, [
+            'route_registry_storage_unavailable',
+            'route_registry_invalid',
+            'route_registry_line_leases_invalid',
+            'route_registry_line_leases_write_failed',
+        ], true)) {
+            return 500;
+        }
+
+        return 422;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @param  array<string, mixed>  $endpointConfig
+     */
     private static function validatePublishPayload(array $payload, array $endpointConfig): string
     {
         if ((int) ($payload['schema_version'] ?? 0) !== self::SCHEMA_VERSION) {
@@ -887,7 +1439,7 @@ final class RouteRegistry
             return 'route_registry_too_many_routes';
         }
 
-        $activeLineIds = [];
+        $claimedLineIds = [];
 
         foreach ($payload['routes'] as $routeKey => $route) {
             if (! is_string($routeKey)) {
@@ -931,19 +1483,15 @@ final class RouteRegistry
                 return 'route_registry_route_invalid';
             }
 
-            $active = is_bool($route['active'] ?? null) ? $route['active'] : true;
-
-            if ($active) {
-                if ($hasConnectorCatalog && ! array_key_exists($connectorCode, $connectors)) {
-                    return 'route_registry_connector_missing';
-                }
-
-                if (array_key_exists($lineId, $activeLineIds)) {
-                    return 'route_registry_duplicate_line_id';
-                }
-
-                $activeLineIds[$lineId] = true;
+            if ($hasConnectorCatalog && ! array_key_exists($connectorCode, $connectors)) {
+                return 'route_registry_connector_missing';
             }
+
+            if (array_key_exists($lineId, $claimedLineIds)) {
+                return 'route_registry_duplicate_line_id';
+            }
+
+            $claimedLineIds[$lineId] = true;
         }
 
         return '';
@@ -1231,10 +1779,6 @@ final class RouteRegistry
         $incomingLineIds = [];
 
         foreach ($routes as $routeKey => $route) {
-            if (($route['active'] ?? false) !== true) {
-                continue;
-            }
-
             $lineId = trim((string) ($route['line_id'] ?? ''));
 
             if ($lineId === '') {
@@ -1256,7 +1800,7 @@ final class RouteRegistry
             $existingRoutes = is_array($owner['routes'] ?? null) ? $owner['routes'] : [];
 
             foreach ($existingRoutes as $existingRouteKey => $existingRoute) {
-                if (! is_string($existingRouteKey) || ! is_array($existingRoute) || ($existingRoute['active'] ?? false) !== true) {
+                if (! is_string($existingRouteKey) || ! is_array($existingRoute)) {
                     continue;
                 }
 
@@ -1413,7 +1957,7 @@ final class RouteRegistry
         }
 
         $seenRouteKeys = [];
-        $seenActiveLineIds = [];
+        $seenClaimedLineIds = [];
         $seenConnectorTypes = [];
 
         foreach ($registry['owners'] as $ownerKey => $owner) {
@@ -1473,21 +2017,19 @@ final class RouteRegistry
 
                 $seenRouteKeys[$routeKey] = true;
 
-                if (($route['active'] ?? false) === true) {
-                    $connectorCode = trim((string) ($route['connector_code'] ?? ''));
+                $connectorCode = trim((string) ($route['connector_code'] ?? ''));
 
-                    if ($hasConnectorCatalog && ! isset($connectors[$connectorCode])) {
-                        return 'route_registry_connector_missing';
-                    }
-
-                    $lineId = trim((string) ($route['line_id'] ?? ''));
-
-                    if (array_key_exists($lineId, $seenActiveLineIds)) {
-                        return 'route_registry_duplicate_line_id';
-                    }
-
-                    $seenActiveLineIds[$lineId] = true;
+                if ($hasConnectorCatalog && ! isset($connectors[$connectorCode])) {
+                    return 'route_registry_connector_missing';
                 }
+
+                $lineId = trim((string) ($route['line_id'] ?? ''));
+
+                if (array_key_exists($lineId, $seenClaimedLineIds)) {
+                    return 'route_registry_duplicate_line_id';
+                }
+
+                $seenClaimedLineIds[$lineId] = true;
             }
         }
 

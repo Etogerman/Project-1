@@ -3,6 +3,7 @@
 namespace App\Services\Bitrix24;
 
 use App\Data\Bitrix24\Bitrix24RestResponseData;
+use App\Models\Bitrix24CallbackOwner;
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Bitrix24Profile;
@@ -52,6 +53,11 @@ class AutoSetupBitrix24OpenLineRouteAction
                 Bitrix24OpenLineRouteOperationLock::BUSY_MESSAGE,
                 previous: $exception,
             );
+        } catch (Bitrix24OpenLinesRouteRegistryException $exception) {
+            $message = $this->ownershipErrorMessage($exception);
+            $this->markRouteMisconfiguredAction->handle((int) $route->getKey(), $message);
+
+            throw new Bitrix24OpenLineAutoSetupException($message, previous: $exception);
         }
     }
 
@@ -64,7 +70,7 @@ class AutoSetupBitrix24OpenLineRouteAction
         $route = Bitrix24OpenLineRoute::query()
             ->select('bitrix24_open_line_routes.*')
             ->selectRaw('bitrix24_open_line_routes.xmin::text as state_version')
-            ->with(['bitrix24Profile', 'channel'])
+            ->with(['bitrix24Profile', 'callbackOwner', 'channel'])
             ->where('bitrix24_profile_id', $profileId)
             ->where('channel_id', $channelId)
             ->first();
@@ -74,10 +80,16 @@ class AutoSetupBitrix24OpenLineRouteAction
         }
 
         $profile = $route->bitrix24Profile;
+        $owner = $route->callbackOwner;
         $channel = $route->channel;
 
-        if (! $profile instanceof Bitrix24Profile || ! $channel instanceof Channel) {
-            throw new Bitrix24OpenLineAutoSetupException('Маршрут ОЛ не связан с профилем Bitrix24 или каналом.');
+        if (! $profile instanceof Bitrix24Profile
+            || ! $owner instanceof Bitrix24CallbackOwner
+            || ! $channel instanceof Channel
+        ) {
+            throw new Bitrix24OpenLineAutoSetupException(
+                'Маршрут ОЛ не связан с профилем Bitrix24, callback-владельцем или каналом.',
+            );
         }
 
         if ((int) $connection->profile_id !== (int) $profile->id) {
@@ -86,8 +98,13 @@ class AutoSetupBitrix24OpenLineRouteAction
 
         $this->assertRefreshContextSupported($connection, $profile, $channel, $route);
 
-        return $this->routeOperationLock->runForLine(
-            (string) $profile->portal_domain,
+        return $this->routeOperationLock->runForOwnedLine(
+            $profile,
+            $owner,
+            (string) $route->connector_code,
+            (string) Bitrix24OpenLineRoute::openLinesConnectorTypeForChannelType(
+                (string) $route->channel_type,
+            ),
             (string) $route->line_id,
             fn (): Bitrix24OpenLineRoute => $this->refreshConnectorRegistrationForLine(
                 $connection,
@@ -457,6 +474,16 @@ class AutoSetupBitrix24OpenLineRouteAction
             (int) $route->getKey(),
             $this->sanitizeErrorMessage($message),
         );
+    }
+
+    private function ownershipErrorMessage(Bitrix24OpenLinesRouteRegistryException $exception): string
+    {
+        return match ($exception->errorCode) {
+            'route_registry_line_busy' => 'Открытая линия сейчас изменяется в другом контуре. Повторите попытку после завершения операции.',
+            'route_registry_line_owner_missing' => 'Для этой открытой линии нет опубликованного владельца в общем OpenLines registry.',
+            'route_registry_line_owner_conflict' => 'Открытая линия закреплена в общем OpenLines registry за другим контуром.',
+            default => 'Не удалось подтвердить единое владение открытой линией в общем OpenLines registry.',
+        };
     }
 
     private function configuredApplicationDisplayName(): ?string
