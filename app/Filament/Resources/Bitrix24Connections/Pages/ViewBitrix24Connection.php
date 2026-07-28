@@ -1719,6 +1719,12 @@ class ViewBitrix24Connection extends ViewRecord
             return false;
         }
 
+        if ($form['line_id'] !== '' && ! Bitrix24OpenLineRoute::isValidLineId($form['line_id'])) {
+            $this->failOpenLineRouteSave('LINE_ID открытой линии должен состоять из 1–64 цифр.');
+
+            return false;
+        }
+
         $isUsableStatus = in_array($form['status'], Bitrix24OpenLineRoute::usableStatuses(), true);
         $channelType = Bitrix24OpenLineRoute::channelTypeForChannel($channel);
 

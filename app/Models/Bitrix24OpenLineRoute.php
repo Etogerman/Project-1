@@ -79,6 +79,11 @@ class Bitrix24OpenLineRoute extends Model
         ];
     }
 
+    public static function isValidLineId(string $lineId): bool
+    {
+        return preg_match('/^[0-9]{1,64}$/', trim($lineId)) === 1;
+    }
+
     public static function channelTypeForChannel(Channel $channel): string
     {
         return match (true) {

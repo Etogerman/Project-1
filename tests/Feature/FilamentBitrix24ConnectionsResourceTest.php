@@ -29,6 +29,7 @@ use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use Livewire\Livewire;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 class FilamentBitrix24ConnectionsResourceTest extends TestCase
@@ -618,6 +619,63 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'bitrix24_profile_id' => $profile->id,
             'channel_id' => $channel->id,
         ]);
+        Http::assertNothingSent();
+    }
+
+    #[DataProvider('nonUsableOpenLineRouteStatusProvider')]
+    public function test_employee_cannot_save_non_numeric_line_id_for_non_usable_route(string $status): void
+    {
+        $employee = User::factory()->create([
+            'is_active' => true,
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+        ]);
+        $profile = $this->makeProfile([
+            'portal_domain' => 'crm.edit.test',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+        ]);
+        $channel = Channel::factory()->create([
+            'name' => 'Editable Telegram',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'bitrix24.view', true);
+        $this->setRolePermission(User::ROLE_EMPLOYEE, 'bitrix24.edit', true);
+        Http::preventStrayRequests();
+
+        Livewire::actingAs($employee)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->set("openLineRouteForms.{$channel->id}.status", $status)
+            ->set("openLineRouteForms.{$channel->id}.connector_code", 'abc_telegram')
+            ->set("openLineRouteForms.{$channel->id}.line_id", 'line-editable')
+            ->set("openLineRouteForms.{$channel->id}.line_name", '9 Локальный бот телеграм - Герман-1')
+            ->set("openLineRouteForms.{$channel->id}.source_id", 'source-editable')
+            ->call('saveOpenLineRoute', $channel->id)
+            ->assertSet(
+                'openLineRouteErrorMessage',
+                'LINE_ID открытой линии должен состоять из 1–64 цифр.',
+            );
+
+        $this->assertDatabaseMissing('bitrix24_open_line_routes', [
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+        ]);
+        Http::assertNothingSent();
+    }
+
+    /**
+     * @return array<string, array{string}>
+     */
+    public static function nonUsableOpenLineRouteStatusProvider(): array
+    {
+        return [
+            'inactive' => [Bitrix24OpenLineRoute::STATUS_INACTIVE],
+            'misconfigured' => [Bitrix24OpenLineRoute::STATUS_MISCONFIGURED],
+        ];
     }
 
     public function test_employee_with_edit_permission_can_save_exact_prepublished_registry_owner(): void
@@ -902,7 +960,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'profile_key' => $profile->profile_key,
             'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($firstChannel),
             'connector_code' => 'abc_telegram',
-            'line_id' => 'shared-line',
+            'line_id' => '41',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);
         $this->allowPublishedOpenLineOwnership();
@@ -911,13 +969,13 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
             ->set("openLineRouteForms.{$secondChannel->id}.status", Bitrix24OpenLineRoute::STATUS_ACTIVE)
             ->set("openLineRouteForms.{$secondChannel->id}.connector_code", 'abc_max')
-            ->set("openLineRouteForms.{$secondChannel->id}.line_id", 'shared-line')
+            ->set("openLineRouteForms.{$secondChannel->id}.line_id", '41')
             ->call('saveOpenLineRoute', $secondChannel->id)
             ->assertSet('openLineRouteErrorMessage', 'Открытая линия уже занята другим рабочим маршрутом.');
 
         $this->assertDatabaseMissing('bitrix24_open_line_routes', [
             'channel_id' => $secondChannel->id,
-            'line_owner_key' => 'crm.conflict.test#shared-line',
+            'line_owner_key' => 'crm.conflict.test#41',
         ]);
     }
 
@@ -1409,13 +1467,13 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
             ->set("openLineRouteForms.{$channel->id}.status", Bitrix24OpenLineRoute::STATUS_ACTIVE)
             ->set("openLineRouteForms.{$channel->id}.connector_code", 'abc_telegram_account')
-            ->set("openLineRouteForms.{$channel->id}.line_id", 'account-line')
+            ->set("openLineRouteForms.{$channel->id}.line_id", '42')
             ->call('saveOpenLineRoute', $channel->id)
             ->assertSet('openLineRouteErrorMessage', 'Telegram account пока нельзя сделать рабочим маршрутом открытых линий.');
 
         $this->assertDatabaseMissing('bitrix24_open_line_routes', [
             'channel_id' => $channel->id,
-            'line_id' => 'account-line',
+            'line_id' => '42',
         ]);
     }
 
@@ -1674,14 +1732,14 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'profile_key' => $profile->profile_key,
             'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
             'connector_code' => 'abc_telegram_dev_german_main',
-            'line_id' => 'line-existing',
+            'line_id' => '46',
             'callback_owner_id' => $profile->callbackOwners()->firstOrFail()->id,
             'source_id' => 'ABC_TELEGRAM_DEV_GERMAN_MAIN',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);
         $dialog = Dialog::factory()->create([
             'bitrix24_open_line_route_id' => $route->id,
-            'bitrix24_open_line_user_code_override' => 'abc_telegram_dev_german_main|line-existing|abrikosoff-dialog:535|26',
+            'bitrix24_open_line_user_code_override' => 'abc_telegram_dev_german_main|46|abrikosoff-dialog:535|26',
             'bitrix24_open_line_resolved_chat_id_override' => '56',
             'bitrix24_open_line_binding_verified_at' => now(),
         ]);
@@ -1705,8 +1763,8 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                 ->once()
                 ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imconnector.connector.data.set'
                     && $usedConnection->is($connection)
-                    && ($params['LINE'] ?? null) === 'line-existing'
-                    && data_get($params, 'DATA.ID') === 'channel:'.$channel->id.':connector:abc_telegram_dev_german_main:line:line-existing')
+                    && ($params['LINE'] ?? null) === '46'
+                    && data_get($params, 'DATA.ID') === 'channel:'.$channel->id.':connector:abc_telegram_dev_german_main:line:46')
                 ->andReturn($this->bitrixResponse(true, true));
 
             $mock->shouldNotReceive('call')
@@ -1716,7 +1774,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
                 ->once()
                 ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection): bool => $method === 'imopenlines.config.update'
                     && $usedConnection->is($connection)
-                    && ($params['CONFIG_ID'] ?? null) === 'line-existing'
+                    && ($params['CONFIG_ID'] ?? null) === '46'
                     && ($params['PARAMS'] ?? null) === [
                         'CRM' => 'Y',
                         'CRM_CREATE' => 'deal',
@@ -1741,13 +1799,13 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         $this->assertSame('Герман-4', $connection->refresh()->application_name);
         $this->assertSame(1, Bitrix24OpenLineRoute::query()->count());
         $this->assertSame('abc_telegram_dev_german_main', $route->connector_code);
-        $this->assertSame('line-existing', $route->line_id);
+        $this->assertSame('46', $route->line_id);
         $this->assertSame('ABC_TELEGRAM_UPDATED', $route->source_id);
-        $this->assertSame('stagecrm.fvds.ru#line-existing', $route->line_owner_key);
+        $this->assertSame('stagecrm.fvds.ru#46', $route->line_owner_key);
         $this->assertSame(Bitrix24OpenLineRoute::STATUS_ACTIVE, $route->status);
         $this->assertSame($route->id, $dialog->bitrix24_open_line_route_id);
         $this->assertSame(
-            'abc_telegram_dev_german_main|line-existing|abrikosoff-dialog:535|26',
+            'abc_telegram_dev_german_main|46|abrikosoff-dialog:535|26',
             $dialog->bitrix24_open_line_user_code_override,
         );
         $this->assertSame('56', $dialog->bitrix24_open_line_resolved_chat_id_override);

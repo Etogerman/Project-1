@@ -3,6 +3,7 @@
 namespace App\Services\Bitrix24;
 
 use App\Models\Bitrix24CallbackOwner;
+use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Bitrix24Profile;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Response;
@@ -88,7 +89,7 @@ class Bitrix24OpenLinesRouteRegistryClient
     {
         $lineId = trim($lineId);
 
-        if (preg_match('/^[0-9]{1,64}$/', $lineId) !== 1) {
+        if (! Bitrix24OpenLineRoute::isValidLineId($lineId)) {
             throw new Bitrix24OpenLinesRouteRegistryException(
                 'route_registry_line_id_invalid',
                 'LINE_ID открытой линии должен состоять из 1–64 цифр.',

@@ -156,7 +156,7 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
         $this->assertNull($route->line_owner_key);
         $this->assertSame('Конкурентная ошибка refresh.', $route->last_error_message);
         $this->assertSame('abc_telegram', $route->connector_code);
-        $this->assertSame('line-original', $route->line_id);
+        $this->assertSame('51', $route->line_id);
     }
 
     public function test_stale_form_cannot_override_a_misconfigured_transition_committed_first(): void
@@ -192,7 +192,7 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
         $this->assertNull($route->line_owner_key);
         $this->assertSame('Refresh завершился раньше сохранения.', $route->last_error_message);
         $this->assertSame('abc_telegram', $route->connector_code);
-        $this->assertSame('line-original', $route->line_id);
+        $this->assertSame('51', $route->line_id);
     }
 
     public function test_refresh_lock_prevents_a_generic_save_from_committing_stale_state(): void
@@ -247,7 +247,7 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
             $mock->shouldReceive('call')
                 ->once()
                 ->withArgs(fn (string $method, array $params): bool => $method === 'imopenlines.config.update'
-                    && ($params['CONFIG_ID'] ?? null) === 'line-original'
+                    && ($params['CONFIG_ID'] ?? null) === '51'
                     && ($params['PARAMS'] ?? null) === [
                         'CRM' => 'Y',
                         'CRM_CREATE' => 'deal',
@@ -289,7 +289,7 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
             'profile_key' => $profile->profile_key,
             'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($secondChannel),
             'connector_code' => 'abc_second',
-            'line_id' => 'line-original',
+            'line_id' => '51',
             'callback_owner_id' => $route->callback_owner_id,
             'source_id' => 'ABC_SECOND',
             'status' => Bitrix24OpenLineRoute::STATUS_INACTIVE,
@@ -318,7 +318,7 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
             $mock->shouldReceive('call')
                 ->once()
                 ->withArgs(fn (string $method, array $params): bool => $method === 'imopenlines.config.update'
-                    && ($params['CONFIG_ID'] ?? null) === 'line-original'
+                    && ($params['CONFIG_ID'] ?? null) === '51'
                     && ($params['PARAMS'] ?? null) === [
                         'CRM' => 'Y',
                         'CRM_CREATE' => 'deal',
@@ -362,7 +362,7 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
         $this->assertSame(Bitrix24OpenLineRoute::STATUS_INACTIVE, $secondRoute->status);
         $this->assertNull($secondRoute->line_owner_key);
         $this->assertSame('abc_second', $secondRoute->connector_code);
-        $this->assertSame('line-original', $secondRoute->line_id);
+        $this->assertSame('51', $secondRoute->line_id);
     }
 
     public function test_registry_owner_conflict_blocks_refresh_before_any_bitrix_mutation(): void
@@ -538,7 +538,7 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
             $mock->shouldReceive('call')
                 ->once()
                 ->withArgs(fn (string $method, array $params): bool => $method === 'imopenlines.config.update'
-                    && ($params['CONFIG_ID'] ?? null) === 'line-original'
+                    && ($params['CONFIG_ID'] ?? null) === '51'
                     && ($params['PARAMS'] ?? null) === [
                         'CRM' => 'Y',
                         'CRM_CREATE' => 'deal',
@@ -598,7 +598,7 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
         );
         $this->assertNotNull($route->last_error_at);
         $this->assertSame('abc_telegram', $route->connector_code);
-        $this->assertSame('line-original', $route->line_id);
+        $this->assertSame('51', $route->line_id);
     }
 
     public function test_active_route_refresh_syncs_crm_settings_without_activating_connector(): void
@@ -622,7 +622,7 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
             $mock->shouldReceive('call')
                 ->once()
                 ->withArgs(fn (string $method, array $params): bool => $method === 'imopenlines.config.update'
-                    && ($params['CONFIG_ID'] ?? null) === 'line-original'
+                    && ($params['CONFIG_ID'] ?? null) === '51'
                     && ($params['PARAMS'] ?? null) === [
                         'CRM' => 'Y',
                         'CRM_CREATE' => 'deal',
@@ -637,7 +637,7 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
         $route->refresh();
 
         $this->assertSame(Bitrix24OpenLineRoute::STATUS_ACTIVE, $route->status);
-        $this->assertSame('stagecrm.fvds.ru#line-original', $route->line_owner_key);
+        $this->assertSame('stagecrm.fvds.ru#51', $route->line_owner_key);
         $this->assertNull($route->last_error_message);
         $this->assertNull($route->last_error_at);
     }
@@ -759,7 +759,7 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
             'profile_key' => $profile->profile_key,
             'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
             'connector_code' => 'abc_telegram',
-            'line_id' => 'line-original',
+            'line_id' => '51',
             'callback_owner_id' => $callbackOwner->id,
             'source_id' => 'ABC_TELEGRAM',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,

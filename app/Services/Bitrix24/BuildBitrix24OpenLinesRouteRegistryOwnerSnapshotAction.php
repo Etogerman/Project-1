@@ -48,6 +48,13 @@ class BuildBitrix24OpenLinesRouteRegistryOwnerSnapshotAction
                         return;
                     }
 
+                    if (! Bitrix24OpenLineRoute::isValidLineId($lineId)) {
+                        throw new Bitrix24OpenLinesRouteRegistryException(
+                            'route_registry_line_id_invalid',
+                            'LINE_ID открытой линии должен состоять из 1–64 цифр.',
+                        );
+                    }
+
                     $routeKey = $connectorCode.':'.$lineId;
 
                     if (array_key_exists($routeKey, $routes)) {

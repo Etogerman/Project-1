@@ -694,6 +694,54 @@ class Bitrix24OpenLinesRouteRegistryTest extends TestCase
         $this->assertSame('route_registry_transport_failed', $profile->openlines_route_registry_last_error);
     }
 
+    public function test_publish_fails_before_http_when_misconfigured_route_has_non_numeric_line_id(): void
+    {
+        $profile = $this->makeProfile([
+            'portal_domain' => 'stagecrm.fvds.ru',
+            'callback_base_url' => 'https://local.example.test/callback',
+            'openlines_route_registry_secret_encrypted' => 'registry-secret-for-invalid-snapshot-line-test',
+        ]);
+        $owner = $profile->callbackOwners()->firstOrFail();
+        $channel = Channel::factory()->create([
+            'name' => 'Misconfigured MAX',
+            'platform' => Channel::PLATFORM_MAX,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+
+        Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX,
+            'connector_code' => 'abc_max',
+            'line_id' => 'line-editable',
+            'line_name' => 'Misconfigured MAX',
+            'callback_owner_id' => $owner->id,
+            'source_id' => 'ABC_MAX',
+            'status' => Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
+        ]);
+
+        Http::fake();
+
+        try {
+            app(PublishBitrix24OpenLinesRouteRegistryAction::class)->handle($profile->fresh());
+            $this->fail('Expected non-numeric LINE_ID to block registry publish.');
+        } catch (Bitrix24OpenLinesRouteRegistryException $exception) {
+            $this->assertSame('route_registry_line_id_invalid', $exception->errorCode);
+            $this->assertSame(
+                'LINE_ID открытой линии должен состоять из 1–64 цифр.',
+                $exception->getMessage(),
+            );
+        }
+
+        Http::assertNothingSent();
+
+        $profile->refresh();
+        $this->assertSame(Bitrix24Profile::ROUTE_REGISTRY_STATUS_FAILED, $profile->openlines_route_registry_last_status);
+        $this->assertSame('route_registry_line_id_invalid', $profile->openlines_route_registry_last_error);
+    }
+
     public function test_doctor_marks_profile_failed_on_registry_transport_error(): void
     {
         $profile = $this->makeProfile([
@@ -988,7 +1036,7 @@ class Bitrix24OpenLinesRouteRegistryTest extends TestCase
             'profile_key' => $profile->profile_key,
             'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
             'connector_code' => 'abrikosoff_telegram_account',
-            'line_id' => 'account-line',
+            'line_id' => '43',
             'line_name' => 'Telegram account',
             'callback_owner_id' => $owner->id,
             'source_id' => 'ABRIKOSOFF_TELEGRAM_ACCOUNT',
