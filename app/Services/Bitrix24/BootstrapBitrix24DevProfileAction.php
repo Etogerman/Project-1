@@ -18,6 +18,7 @@ class BootstrapBitrix24DevProfileAction
     public function __construct(
         private readonly NormalizeBitrix24CallbackBaseUrlAction $normalizeCallbackBaseUrl,
         private readonly Bitrix24ApiClient $bitrix24ApiClient,
+        private readonly SaveBitrix24CallbackOwnerAction $saveCallbackOwner,
     ) {}
 
     public function handle(
@@ -190,11 +191,9 @@ class BootstrapBitrix24DevProfileAction
 
     private function upsertLocalCallbackOwner(Bitrix24Profile $profile, string $callbackBaseUrl): void
     {
-        Bitrix24CallbackOwner::query()->updateOrCreate(
-            [
-                'bitrix24_profile_id' => $profile->id,
-                'owner_key' => Bitrix24CallbackOwner::DEFAULT_LOCAL_OWNER_KEY,
-            ],
+        $this->saveCallbackOwner->updateOrCreate(
+            $profile,
+            Bitrix24CallbackOwner::DEFAULT_LOCAL_OWNER_KEY,
             [
                 'display_name' => 'Локалка 1',
                 'callback_base_url' => $callbackBaseUrl,

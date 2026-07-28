@@ -47,6 +47,53 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
         });
     }
 
+    public function test_owner_identity_change_between_lease_and_commit_blocks_route_save(): void
+    {
+        [$admin, $connection, $channel, $route] = $this->makeRouteFixture();
+        $owner = $route->callbackOwner()->firstOrFail();
+        $routeUpdatedAt = DB::table('bitrix24_open_line_routes')
+            ->where('id', $route->id)
+            ->value('updated_at');
+        $client = $this->mock(Bitrix24OpenLinesRouteRegistryClient::class);
+        $client->shouldReceive('acquireLineLease')
+            ->once()
+            ->andReturnUsing(function () use ($owner): array {
+                DB::table('bitrix24_callback_owners')
+                    ->where('id', $owner->id)
+                    ->update([
+                        'owner_key' => 'local-concurrent',
+                        'updated_at' => now(),
+                    ]);
+
+                return [
+                    'lease_token' => str_repeat('e', 64),
+                    'expires_at' => now()->addHour()->toIso8601String(),
+                ];
+            });
+        $client->shouldReceive('releaseLineLease')
+            ->once();
+
+        Livewire::actingAs($admin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->call('saveOpenLineRoute', $channel->id)
+            ->assertSet(
+                'openLineRouteErrorMessage',
+                'Данные владения callback-владельца изменились после начала операции. Обновите страницу и повторите сохранение.',
+            );
+
+        $route->refresh();
+        $owner->refresh();
+
+        $this->assertSame('local-concurrent', $owner->owner_key);
+        $this->assertSame(Bitrix24OpenLineRoute::STATUS_ACTIVE, $route->status);
+        $this->assertEquals(
+            $routeUpdatedAt,
+            DB::table('bitrix24_open_line_routes')
+                ->where('id', $route->id)
+                ->value('updated_at'),
+        );
+    }
+
     public function test_generic_save_serializes_a_concurrent_misconfigured_transition(): void
     {
         if (DB::getDriverName() !== 'pgsql') {
@@ -422,6 +469,63 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
             app(AutoSetupBitrix24OpenLineRouteAction::class)
                 ->refreshConnectorRegistration($connection, $route);
             $this->fail('Недостаточный остаток lease должен остановить следующую Bitrix24-мутацию.');
+        } catch (Bitrix24OpenLineAutoSetupException $exception) {
+            $this->assertSame(
+                'Срок общей аренды открытой линии недостаточен для безопасного завершения операции. Повторите попытку.',
+                $exception->getMessage(),
+            );
+        } finally {
+            $this->travelBack();
+        }
+
+        $route->refresh();
+
+        $this->assertSame(Bitrix24OpenLineRoute::STATUS_MISCONFIGURED, $route->status);
+        $this->assertSame(
+            'Срок общей аренды открытой линии недостаточен для безопасного завершения операции. Повторите попытку.',
+            $route->last_error_message,
+        );
+    }
+
+    public function test_token_refresh_that_outlives_lease_stops_current_bitrix_mutation(): void
+    {
+        [, $connection, , $route] = $this->makeRouteFixture();
+        $this->mock(Bitrix24ApiClient::class, function ($mock): void {
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(
+                    fn (
+                        string $method,
+                        array $params,
+                        Bitrix24Connection $usedConnection,
+                        bool $transportRetry,
+                        mixed $beforeRestAttempt,
+                    ): bool => $method === 'imconnector.register'
+                        && $transportRetry
+                        && $beforeRestAttempt instanceof \Closure,
+                )
+                ->andReturnUsing(function (
+                    string $method,
+                    array $params,
+                    Bitrix24Connection $usedConnection,
+                    bool $transportRetry,
+                    \Closure $beforeRestAttempt,
+                ): Bitrix24RestResponseData {
+                    $this->travel(400)->seconds();
+                    $beforeRestAttempt();
+
+                    return $this->bitrixResponse(['result' => true]);
+                });
+            $mock->shouldNotReceive('call')
+                ->with('imconnector.connector.data.set', \Mockery::any(), \Mockery::any());
+            $mock->shouldNotReceive('call')
+                ->with('imopenlines.config.update', \Mockery::any(), \Mockery::any());
+        });
+
+        try {
+            app(AutoSetupBitrix24OpenLineRouteAction::class)
+                ->refreshConnectorRegistration($connection, $route);
+            $this->fail('Истёкшая во время token refresh lease должна остановить текущую Bitrix24-мутацию.');
         } catch (Bitrix24OpenLineAutoSetupException $exception) {
             $this->assertSame(
                 'Срок общей аренды открытой линии недостаточен для безопасного завершения операции. Повторите попытку.',

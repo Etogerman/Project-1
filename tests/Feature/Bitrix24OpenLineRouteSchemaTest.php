@@ -104,6 +104,38 @@ class Bitrix24OpenLineRouteSchemaTest extends TestCase
         ]);
     }
 
+    public function test_line_id_is_persisted_as_one_canonical_decimal_string(): void
+    {
+        $profile = $this->makeProfile();
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+
+        $route = Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
+            'connector_code' => 'abrikosoff_telegram',
+            'line_id' => '0001',
+            'status' => Bitrix24OpenLineRoute::STATUS_INACTIVE,
+        ]);
+
+        $this->assertSame('1', $route->line_id);
+        $this->assertSame('1', Bitrix24OpenLineRoute::canonicalLineId('1'));
+        $this->assertSame('1', Bitrix24OpenLineRoute::canonicalLineId('01'));
+        $this->assertSame('1', Bitrix24OpenLineRoute::canonicalLineId('001'));
+        $this->assertSame(
+            str_repeat('9', 64),
+            Bitrix24OpenLineRoute::canonicalLineId(str_repeat('9', 64)),
+        );
+        $this->assertTrue(Bitrix24OpenLineRoute::isValidLineId('1'));
+        $this->assertFalse(Bitrix24OpenLineRoute::isValidLineId('01'));
+        $this->assertFalse(Bitrix24OpenLineRoute::isValidLineId('001'));
+    }
+
     public function test_dialog_can_be_pinned_to_open_line_route(): void
     {
         $profile = $this->makeProfile();

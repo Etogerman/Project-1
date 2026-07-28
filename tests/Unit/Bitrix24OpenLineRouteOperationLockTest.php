@@ -84,6 +84,40 @@ class Bitrix24OpenLineRouteOperationLockTest extends TestCase
         }
     }
 
+    public function test_line_aliases_share_one_canonical_lock(): void
+    {
+        Cache::flush();
+
+        $routeOperationLock = app(Bitrix24OpenLineRouteOperationLock::class);
+        $nestedAttemptException = null;
+
+        try {
+            $routeOperationLock->runForLine(
+                'stagecrm.fvds.ru',
+                '0014',
+                function () use ($routeOperationLock, &$nestedAttemptException): void {
+                    try {
+                        $routeOperationLock->runForLine(
+                            'stagecrm.fvds.ru',
+                            '14',
+                            static fn (): string => 'overlap',
+                        );
+                    } catch (LockTimeoutException $exception) {
+                        $nestedAttemptException = $exception;
+                    }
+                },
+            );
+
+            $this->assertInstanceOf(LockTimeoutException::class, $nestedAttemptException);
+            $this->assertSame(
+                Bitrix24OpenLineRouteOperationLock::BUSY_MESSAGE,
+                $nestedAttemptException->getMessage(),
+            );
+        } finally {
+            Cache::flush();
+        }
+    }
+
     public function test_lock_stays_owned_for_full_configured_refresh_budget(): void
     {
         config()->set([

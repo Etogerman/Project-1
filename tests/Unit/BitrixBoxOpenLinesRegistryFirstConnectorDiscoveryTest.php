@@ -614,6 +614,39 @@ class BitrixBoxOpenLinesRegistryFirstConnectorDiscoveryTest extends TestCase
         $this->assertSame('route_registry_route_invalid', $result['body']['error_code']);
     }
 
+    public function test_signed_line_lease_rejects_non_canonical_line_alias(): void
+    {
+        $result = $this->lineLeaseRequest(
+            action: 'acquire-line-lease',
+            payload: $this->lineLeasePayload('local-1', 'dynamic_max', '014'),
+            requestId: 'lease-non-canonical-line-id',
+        );
+
+        $this->assertSame(422, $result['status']);
+        $this->assertSame('route_registry_route_invalid', $result['body']['error_code']);
+        $this->assertFileDoesNotExist($this->storageDir.'/route_registry_line_leases.json');
+    }
+
+    public function test_publish_rejects_non_canonical_line_alias(): void
+    {
+        $result = $this->publishRequest(
+            $this->publishPayload(
+                ownerKey: 'local-1',
+                connectors: [
+                    'dynamic_max' => $this->connector('dynamic_max', 'max'),
+                ],
+                routes: [
+                    'dynamic_max:014' => $this->route('dynamic_max', '014', 'Aliased MAX'),
+                ],
+            ),
+            'publish-non-canonical-line-id',
+        );
+
+        $this->assertSame(422, $result['status']);
+        $this->assertSame('route_registry_route_key_invalid', $result['body']['error_code']);
+        $this->assertFileDoesNotExist($this->storageDir.'/route_registry.json');
+    }
+
     public function test_publish_cannot_change_line_ownership_while_shared_lease_is_active(): void
     {
         $payload = $this->publishPayload(

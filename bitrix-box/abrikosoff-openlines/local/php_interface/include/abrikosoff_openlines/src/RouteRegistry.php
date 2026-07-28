@@ -60,13 +60,13 @@ final class RouteRegistry
     public static function resolveRuntimeRoute(string $connectorCode, string $lineId, array $runtimeConfig): array
     {
         $connectorCode = trim($connectorCode);
-        $lineId = trim($lineId);
+        $lineId = self::canonicalLineId($lineId);
 
         if (! self::runtimeEnabled($runtimeConfig)) {
             return self::runtimeDecision(self::DECISION_DISABLED);
         }
 
-        if ($connectorCode === '' || $lineId === '') {
+        if ($connectorCode === '' || $lineId === null) {
             return self::runtimeDecision(self::DECISION_BLOCKED, null, 'route_registry_invalid_key');
         }
 
@@ -157,9 +157,9 @@ final class RouteRegistry
      */
     public static function activeRoutesForLine(string $lineId, array $runtimeConfig): array
     {
-        $lineId = trim($lineId);
+        $lineId = self::canonicalLineId($lineId);
 
-        if ($lineId === '' || ! self::runtimeEnabled($runtimeConfig)) {
+        if ($lineId === null || ! self::runtimeEnabled($runtimeConfig)) {
             return [];
         }
 
@@ -194,7 +194,7 @@ final class RouteRegistry
         array $staticLineConnectorCodes,
         array $runtimeConfig
     ): array {
-        $lineId = trim($lineId);
+        $lineId = self::canonicalLineId($lineId);
         $staticConnectorCodes = self::normalizeConnectorCodes($staticConnectorCodes);
         $staticLineConnectorCodes = self::normalizeConnectorCodes($staticLineConnectorCodes);
 
@@ -202,7 +202,7 @@ final class RouteRegistry
             return self::runtimeDecision(self::DECISION_DISABLED);
         }
 
-        if ($lineId === '') {
+        if ($lineId === null) {
             return self::runtimeDecision(self::DECISION_BLOCKED, null, 'route_registry_invalid_key');
         }
 
@@ -939,9 +939,11 @@ final class RouteRegistry
             return 'route_registry_owner_not_allowed';
         }
 
-        if (! is_scalar($payload['line_id'] ?? null)
-            || preg_match('/^[0-9]{1,64}$/', trim((string) $payload['line_id'])) !== 1
-        ) {
+        $lineId = is_scalar($payload['line_id'] ?? null)
+            ? trim((string) $payload['line_id'])
+            : '';
+
+        if ($lineId === '' || self::canonicalLineId($lineId) !== $lineId) {
             return 'route_registry_route_invalid';
         }
 
@@ -1023,7 +1025,12 @@ final class RouteRegistry
                 return ['error_code' => 'route_registry_invalid'] + $emptyResult;
             }
 
-            $lineId = trim((string) $payload['line_id']);
+            $lineId = self::canonicalLineId((string) $payload['line_id']);
+
+            if ($lineId === null) {
+                return ['error_code' => 'route_registry_route_invalid'] + $emptyResult;
+            }
+
             $ownership = self::lineOwnership($registry, $lineId);
 
             if ($ownership === null) {
@@ -1136,7 +1143,12 @@ final class RouteRegistry
                 ];
             }
 
-            $lineId = trim((string) $payload['line_id']);
+            $lineId = self::canonicalLineId((string) $payload['line_id']);
+
+            if ($lineId === null) {
+                return ['error_code' => 'route_registry_route_invalid', 'released' => false];
+            }
+
             $leases = self::pruneExpiredLineLeases($leases);
             $lease = $leases[$lineId] ?? null;
 
@@ -1249,10 +1261,11 @@ final class RouteRegistry
         }
 
         foreach ($decoded as $lineId => $lease) {
-            if ((! is_string($lineId) && ! is_int($lineId))
-                || preg_match('/^[0-9]{1,64}$/', (string) $lineId) !== 1
+            $lineId = (string) $lineId;
+
+            if (self::canonicalLineId($lineId) !== $lineId
                 || ! is_array($lease)
-                || trim((string) ($lease['line_id'] ?? '')) !== (string) $lineId
+                || trim((string) ($lease['line_id'] ?? '')) !== $lineId
                 || ! preg_match('/^[a-zA-Z0-9._-]{1,128}$/', trim((string) ($lease['owner_profile_key'] ?? '')))
                 || ! self::validConnectorCode(trim((string) ($lease['connector_code'] ?? '')))
                 || ! in_array(trim((string) ($lease['connector_type'] ?? '')), ['telegram', 'max'], true)
@@ -1463,7 +1476,11 @@ final class RouteRegistry
             $connectorCode = trim((string) $route['connector_code']);
             $lineId = trim((string) $route['line_id']);
 
-            if ($connectorCode === '' || $lineId === '' || ! self::validRouteKey(self::routeKey($connectorCode, $lineId))) {
+            if ($connectorCode === ''
+                || $lineId === ''
+                || self::canonicalLineId($lineId) !== $lineId
+                || ! self::validRouteKey(self::routeKey($connectorCode, $lineId))
+            ) {
                 return 'route_registry_route_invalid';
             }
 
@@ -1556,10 +1573,10 @@ final class RouteRegistry
             }
 
             $connectorCode = trim((string) $route['connector_code']);
-            $lineId = trim((string) $route['line_id']);
+            $lineId = self::canonicalLineId((string) $route['line_id']);
             $key = trim($routeKey);
 
-            if ($key === '') {
+            if ($key === '' || $lineId === null) {
                 continue;
             }
 
@@ -2075,7 +2092,11 @@ final class RouteRegistry
         $connectorCode = trim((string) $route['connector_code']);
         $lineId = trim((string) $route['line_id']);
 
-        if ($connectorCode === '' || $lineId === '' || $routeKey !== self::routeKey($connectorCode, $lineId)) {
+        if ($connectorCode === ''
+            || $lineId === ''
+            || self::canonicalLineId($lineId) !== $lineId
+            || $routeKey !== self::routeKey($connectorCode, $lineId)
+        ) {
             return false;
         }
 
@@ -2530,9 +2551,9 @@ final class RouteRegistry
     private static function routeKey(string $connectorCode, string $lineId): string
     {
         $connectorCode = trim($connectorCode);
-        $lineId = trim($lineId);
+        $lineId = self::canonicalLineId($lineId);
 
-        return $connectorCode === '' || $lineId === '' ? '' : $connectorCode.':'.$lineId;
+        return $connectorCode === '' || $lineId === null ? '' : $connectorCode.':'.$lineId;
     }
 
     private static function validRouteKey(string $routeKey): bool
@@ -2546,7 +2567,20 @@ final class RouteRegistry
         [$connectorCode, $lineId] = $parts;
 
         return self::validConnectorCode($connectorCode)
-            && preg_match('/^[0-9]{1,64}$/', $lineId) === 1;
+            && self::canonicalLineId($lineId) === $lineId;
+    }
+
+    private static function canonicalLineId(string $lineId): ?string
+    {
+        $lineId = trim($lineId);
+
+        if (preg_match('/^[0-9]{1,64}$/', $lineId) !== 1) {
+            return null;
+        }
+
+        $canonical = ltrim($lineId, '0');
+
+        return $canonical === '' ? '0' : $canonical;
     }
 
     private static function validConnectorCode(string $connectorCode): bool

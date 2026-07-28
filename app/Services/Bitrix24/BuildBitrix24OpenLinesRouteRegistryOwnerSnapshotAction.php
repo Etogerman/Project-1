@@ -31,10 +31,7 @@ class BuildBitrix24OpenLinesRouteRegistryOwnerSnapshotAction
             Bitrix24OpenLineRoute::query()
                 ->where('bitrix24_profile_id', $profile->id)
                 ->where('callback_owner_id', $owner->id)
-                ->whereIn('status', [
-                    ...Bitrix24OpenLineRoute::usableStatuses(),
-                    Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
-                ])
+                ->whereIn('status', Bitrix24OpenLineRoute::claimingStatuses())
                 ->whereNotNull('connector_code')
                 ->whereNotNull('line_id')
                 ->orderBy('connector_code')

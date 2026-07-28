@@ -87,9 +87,9 @@ class Bitrix24OpenLinesRouteRegistryClient
 
     private function validatedLineId(string $lineId): string
     {
-        $lineId = trim($lineId);
+        $lineId = Bitrix24OpenLineRoute::canonicalLineId($lineId);
 
-        if (! Bitrix24OpenLineRoute::isValidLineId($lineId)) {
+        if ($lineId === null) {
             throw new Bitrix24OpenLinesRouteRegistryException(
                 'route_registry_line_id_invalid',
                 'LINE_ID открытой линии должен состоять из 1–64 цифр.',

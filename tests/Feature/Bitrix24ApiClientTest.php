@@ -9,6 +9,7 @@ use App\Models\Bitrix24SyncLog;
 use App\Services\Bitrix24\Bitrix24ApiClient;
 use App\Services\Bitrix24\Bitrix24AuthRefreshException;
 use App\Services\Bitrix24\Bitrix24ConnectionStateException;
+use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryException;
 use App\Services\Bitrix24\NoActiveBitrix24ConnectionException;
 use App\Services\Bitrix24\RefreshBitrix24AccessTokenAction;
 use App\Services\Bitrix24\ResolveCurrentBitrix24ConnectionAction;
@@ -152,6 +153,57 @@ class Bitrix24ApiClientTest extends TestCase
             'operation' => 'rest_call_after_refresh',
             'status' => Bitrix24SyncLog::STATUS_SUCCESS,
         ]);
+    }
+
+    public function test_rest_preflight_runs_after_token_refresh_and_can_block_the_mutation(): void
+    {
+        config()->set('bitrix24.oauth.server_url', 'https://oauth.example');
+        $connection = $this->makeActiveConnection([
+            'client_endpoint' => 'https://client-endpoint.example/rest/',
+            'access_token_encrypted' => 'expired-access-token',
+            'refresh_token_encrypted' => 'refresh-token',
+            'access_token_expires_at' => now()->subMinute(),
+        ]);
+        $preflightCalls = 0;
+
+        Http::fake([
+            'https://oauth.example/oauth/token/' => Http::response([
+                'access_token' => 'fresh-access-token',
+                'refresh_token' => 'fresh-refresh-token',
+                'expires_in' => 3600,
+            ]),
+            'https://client-endpoint.example/rest/profile.json' => Http::response([
+                'result' => ['ID' => 7],
+            ]),
+        ]);
+
+        try {
+            app(Bitrix24ApiClient::class)->call(
+                'profile',
+                connection: $connection,
+                beforeRestAttempt: function () use ($connection, &$preflightCalls): void {
+                    $preflightCalls++;
+                    $this->assertSame(
+                        'fresh-access-token',
+                        $connection->fresh()->access_token_encrypted,
+                    );
+
+                    throw new Bitrix24OpenLinesRouteRegistryException(
+                        'route_registry_line_lease_expiring',
+                        'Lease expired during token refresh.',
+                    );
+                },
+            );
+            $this->fail('REST preflight должен остановить мутацию после долгого token refresh.');
+        } catch (Bitrix24OpenLinesRouteRegistryException $exception) {
+            $this->assertSame('route_registry_line_lease_expiring', $exception->errorCode);
+        }
+
+        $this->assertSame(1, $preflightCalls);
+        Http::assertSentCount(1);
+        Http::assertNotSent(
+            fn ($request): bool => $request->url() === 'https://client-endpoint.example/rest/profile.json',
+        );
     }
 
     public function test_auth_failure_response_triggers_refresh_and_retries_rest_call_once(): void
@@ -445,9 +497,18 @@ class Bitrix24ApiClientTest extends TestCase
                 ->push(['result' => ['ID' => 101]], 200),
         ]);
 
-        $response = app(Bitrix24ApiClient::class)->call('profile', [], $connection);
+        $preflightCalls = 0;
+        $response = app(Bitrix24ApiClient::class)->call(
+            'profile',
+            [],
+            $connection,
+            beforeRestAttempt: function () use (&$preflightCalls): void {
+                $preflightCalls++;
+            },
+        );
 
         $this->assertTrue($response->successful);
+        $this->assertSame(2, $preflightCalls);
         Http::assertSentCount(2);
     }
 
@@ -525,7 +586,7 @@ class Bitrix24ApiClientTest extends TestCase
             },
         ]);
 
-        $job = new RefreshBitrix24TokenJob();
+        $job = new RefreshBitrix24TokenJob;
         $job->handle(
             app(ResolveCurrentBitrix24ConnectionAction::class),
             app(RefreshBitrix24AccessTokenAction::class),

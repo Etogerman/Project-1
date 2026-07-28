@@ -62,7 +62,7 @@ final class Bitrix24OpenLineRouteOperationLock
     public function runForLine(string $portalDomain, string $lineId, Closure $callback): mixed
     {
         $normalizedPortalDomain = mb_strtolower(trim($portalDomain));
-        $normalizedLineId = trim($lineId);
+        $normalizedLineId = Bitrix24OpenLineRoute::canonicalLineId($lineId) ?? trim($lineId);
 
         if ($normalizedPortalDomain === '' || $normalizedLineId === '') {
             return $callback();

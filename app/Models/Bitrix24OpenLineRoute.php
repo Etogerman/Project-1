@@ -64,6 +64,12 @@ class Bitrix24OpenLineRoute extends Model
     protected static function booted(): void
     {
         static::saving(function (Bitrix24OpenLineRoute $route): void {
+            $canonicalLineId = self::canonicalLineId((string) $route->line_id);
+
+            if ($canonicalLineId !== null) {
+                $route->line_id = $canonicalLineId;
+            }
+
             $route->line_owner_key = $route->buildLineOwnerKey();
         });
     }
@@ -79,9 +85,35 @@ class Bitrix24OpenLineRoute extends Model
         ];
     }
 
+    /**
+     * @return list<string>
+     */
+    public static function claimingStatuses(): array
+    {
+        return [
+            ...self::usableStatuses(),
+            self::STATUS_MISCONFIGURED,
+        ];
+    }
+
+    public static function canonicalLineId(string $lineId): ?string
+    {
+        $lineId = trim($lineId);
+
+        if (preg_match('/^[0-9]{1,64}$/', $lineId) !== 1) {
+            return null;
+        }
+
+        $canonical = ltrim($lineId, '0');
+
+        return $canonical === '' ? '0' : $canonical;
+    }
+
     public static function isValidLineId(string $lineId): bool
     {
-        return preg_match('/^[0-9]{1,64}$/', trim($lineId)) === 1;
+        $lineId = trim($lineId);
+
+        return self::canonicalLineId($lineId) === $lineId;
     }
 
     public static function channelTypeForChannel(Channel $channel): string
@@ -106,6 +138,13 @@ class Bitrix24OpenLineRoute extends Model
     public function isUsable(): bool
     {
         return in_array($this->status, self::usableStatuses(), true)
+            && filled($this->connector_code)
+            && filled($this->line_id);
+    }
+
+    public function claimsExternalLine(): bool
+    {
+        return in_array($this->status, self::claimingStatuses(), true)
             && filled($this->connector_code)
             && filled($this->line_id);
     }

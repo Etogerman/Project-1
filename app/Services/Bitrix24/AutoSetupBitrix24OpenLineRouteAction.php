@@ -133,9 +133,22 @@ class AutoSetupBitrix24OpenLineRouteAction
                 $leaseDeadline,
             );
             $this->routeOperationLock->assertLeaseAllowsRemoteOperation($leaseDeadline);
-            $this->registerConnector($connection, $profile, $channel, (string) $route->connector_code);
+            $this->registerConnector(
+                $connection,
+                $profile,
+                $channel,
+                (string) $route->connector_code,
+                $leaseDeadline,
+            );
             $this->routeOperationLock->assertLeaseAllowsRemoteOperation($leaseDeadline);
-            $this->setConnectorData($connection, $profile, $channel, (string) $route->connector_code, (string) $route->line_id);
+            $this->setConnectorData(
+                $connection,
+                $profile,
+                $channel,
+                (string) $route->connector_code,
+                (string) $route->line_id,
+                $leaseDeadline,
+            );
 
             if ($this->routeStateVersionMatches(
                 (int) $route->getKey(),
@@ -147,6 +160,7 @@ class AutoSetupBitrix24OpenLineRouteAction
                     $connection,
                     (string) $route->line_id,
                     (string) $route->source_id,
+                    $leaseDeadline,
                 );
                 $refreshedRoute = $this->completeRefreshStateTransition(
                     $route,
@@ -314,6 +328,7 @@ class AutoSetupBitrix24OpenLineRouteAction
         Bitrix24Connection $connection,
         string $lineId,
         string $sourceId,
+        Bitrix24OpenLineRouteLeaseDeadline $leaseDeadline,
     ): void {
         $response = $this->apiClient->call('imopenlines.config.update', [
             'CONFIG_ID' => $lineId,
@@ -322,7 +337,7 @@ class AutoSetupBitrix24OpenLineRouteAction
                 'CRM_CREATE' => 'deal',
                 'CRM_SOURCE' => $sourceId,
             ],
-        ], $connection);
+        ], $connection, beforeRestAttempt: $this->leasePreflight($leaseDeadline));
 
         $this->assertSuccessfulBooleanResult($response, 'Не удалось синхронизировать CRM-настройки открытой линии Bitrix24.');
     }
@@ -332,6 +347,7 @@ class AutoSetupBitrix24OpenLineRouteAction
         Bitrix24Profile $profile,
         Channel $channel,
         string $connectorCode,
+        Bitrix24OpenLineRouteLeaseDeadline $leaseDeadline,
     ): void {
         $connectorName = $this->buildConnectorName($connection, $channel);
 
@@ -349,7 +365,7 @@ class AutoSetupBitrix24OpenLineRouteAction
             'NEED_SIGNATURE' => true,
             'CHAT_GROUP' => false,
             'COMMENT' => 'Настройки канала '.$connectorName,
-        ], $connection);
+        ], $connection, beforeRestAttempt: $this->leasePreflight($leaseDeadline));
 
         $this->assertSuccessfulNestedResult($response, 'Не удалось зарегистрировать соединитель Bitrix24.');
     }
@@ -360,6 +376,7 @@ class AutoSetupBitrix24OpenLineRouteAction
         Channel $channel,
         string $connectorCode,
         string $lineId,
+        Bitrix24OpenLineRouteLeaseDeadline $leaseDeadline,
     ): void {
         $channelUrl = $this->settingsUrl($profile, $connection);
         $connectorName = $this->buildConnectorName($connection, $channel);
@@ -373,7 +390,7 @@ class AutoSetupBitrix24OpenLineRouteAction
                 'URL_IM' => $channelUrl,
                 'NAME' => $connectorName,
             ],
-        ], $connection);
+        ], $connection, beforeRestAttempt: $this->leasePreflight($leaseDeadline));
 
         $this->assertSuccessfulBooleanResult($response, 'Не удалось сохранить настройки соединителя Bitrix24.');
     }
@@ -394,6 +411,11 @@ class AutoSetupBitrix24OpenLineRouteAction
         if ($hasConflict) {
             throw new Bitrix24OpenLineAutoSetupException('Открытая линия уже занята другим маршрутом.');
         }
+    }
+
+    private function leasePreflight(Bitrix24OpenLineRouteLeaseDeadline $leaseDeadline): \Closure
+    {
+        return fn () => $this->routeOperationLock->assertLeaseAllowsRemoteOperation($leaseDeadline);
     }
 
     private function assertSuccessfulResponse(Bitrix24RestResponseData $response, string $message): void

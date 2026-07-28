@@ -419,6 +419,96 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         ]);
     }
 
+    public function test_callback_owner_identity_cannot_change_while_it_has_line_claims(): void
+    {
+        $superadmin = $this->makeSuperadmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'crm.owner-claim.test',
+            'callback_base_url' => 'https://owner-claim.example.test',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+        $owner = $profile->callbackOwners()->firstOrFail();
+
+        Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
+            'connector_code' => 'abc_telegram',
+            'line_id' => '31',
+            'callback_owner_id' => $owner->id,
+            'status' => Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
+        ]);
+
+        Livewire::actingAs($superadmin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->set("callbackOwnerForms.{$owner->id}.owner_key", 'local-2')
+            ->set("callbackOwnerForms.{$owner->id}.callback_base_url", 'https://owner-claim-new.example.test')
+            ->set("callbackOwnerForms.{$owner->id}.status", Bitrix24CallbackOwner::STATUS_INACTIVE)
+            ->call('saveCallbackOwner', $owner->id)
+            ->assertSet(
+                'callbackOwnersErrorMessage',
+                'Данные владения callback-владельца с маршрутами нельзя менять обычным сохранением. Сначала выполните отдельный переход владения.',
+            );
+
+        $owner->refresh();
+
+        $this->assertSame(Bitrix24CallbackOwner::DEFAULT_LOCAL_OWNER_KEY, $owner->owner_key);
+        $this->assertSame('https://owner-claim.example.test', $owner->callback_base_url);
+        $this->assertSame(Bitrix24CallbackOwner::STATUS_ACTIVE, $owner->status);
+    }
+
+    public function test_callback_owner_display_name_can_change_while_identity_has_line_claims(): void
+    {
+        $superadmin = $this->makeSuperadmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'crm.owner-label.test',
+            'callback_base_url' => 'https://owner-label.example.test',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+        $owner = $profile->callbackOwners()->firstOrFail();
+
+        Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
+            'connector_code' => 'abc_max',
+            'line_id' => '32',
+            'callback_owner_id' => $owner->id,
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+        ]);
+
+        Livewire::actingAs($superadmin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->set("callbackOwnerForms.{$owner->id}.display_name", 'Новая подпись локалки')
+            ->call('saveCallbackOwner', $owner->id)
+            ->assertSet('callbackOwnersErrorMessage', null);
+
+        $owner->refresh();
+
+        $this->assertSame('Новая подпись локалки', $owner->display_name);
+        $this->assertSame(Bitrix24CallbackOwner::DEFAULT_LOCAL_OWNER_KEY, $owner->owner_key);
+        $this->assertSame('https://owner-label.example.test', $owner->callback_base_url);
+        $this->assertSame(Bitrix24CallbackOwner::STATUS_ACTIVE, $owner->status);
+    }
+
     public function test_view_page_filters_webhook_events_and_sync_logs(): void
     {
         $admin = $this->makeAdmin();
@@ -737,7 +827,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
             ->set("openLineRouteForms.{$channel->id}.status", Bitrix24OpenLineRoute::STATUS_ACTIVE)
             ->set("openLineRouteForms.{$channel->id}.connector_code", 'abc_telegram')
-            ->set("openLineRouteForms.{$channel->id}.line_id", '16')
+            ->set("openLineRouteForms.{$channel->id}.line_id", '0016')
             ->set("openLineRouteForms.{$channel->id}.line_name", '9 Локальный бот телеграм - Герман-1')
             ->set("openLineRouteForms.{$channel->id}.source_id", 'source-editable')
             ->call('saveOpenLineRoute', $channel->id)
@@ -971,12 +1061,143 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             ->set("openLineRouteForms.{$secondChannel->id}.connector_code", 'abc_max')
             ->set("openLineRouteForms.{$secondChannel->id}.line_id", '41')
             ->call('saveOpenLineRoute', $secondChannel->id)
-            ->assertSet('openLineRouteErrorMessage', 'Открытая линия уже занята другим рабочим маршрутом.');
+            ->assertSet('openLineRouteErrorMessage', 'Открытая линия уже занята другим маршрутом.');
 
         $this->assertDatabaseMissing('bitrix24_open_line_routes', [
             'channel_id' => $secondChannel->id,
             'line_owner_key' => 'crm.conflict.test#41',
         ]);
+    }
+
+    public function test_misconfigured_route_cannot_duplicate_an_existing_line_claim(): void
+    {
+        $admin = $this->makeAdmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'crm.misconfigured-conflict.test',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+        ]);
+        $firstChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+        $secondChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+
+        Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $firstChannel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($firstChannel),
+            'connector_code' => 'abc_telegram',
+            'line_id' => '42',
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+        ]);
+        Http::preventStrayRequests();
+
+        Livewire::actingAs($admin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->set("openLineRouteForms.{$secondChannel->id}.status", Bitrix24OpenLineRoute::STATUS_MISCONFIGURED)
+            ->set("openLineRouteForms.{$secondChannel->id}.connector_code", 'abc_max')
+            ->set("openLineRouteForms.{$secondChannel->id}.line_id", '0042')
+            ->call('saveOpenLineRoute', $secondChannel->id)
+            ->assertSet('openLineRouteErrorMessage', 'Открытая линия уже занята другим маршрутом.');
+
+        $this->assertDatabaseMissing('bitrix24_open_line_routes', [
+            'channel_id' => $secondChannel->id,
+        ]);
+        Http::assertNothingSent();
+    }
+
+    public function test_misconfigured_line_claim_requires_an_active_callback_owner(): void
+    {
+        $admin = $this->makeAdmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'crm.misconfigured-owner.test',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+        $owner = $profile->callbackOwners()->firstOrFail();
+        $owner->forceFill([
+            'status' => Bitrix24CallbackOwner::STATUS_INACTIVE,
+        ])->save();
+        Http::preventStrayRequests();
+
+        Livewire::actingAs($admin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->set("openLineRouteForms.{$channel->id}.status", Bitrix24OpenLineRoute::STATUS_MISCONFIGURED)
+            ->set("openLineRouteForms.{$channel->id}.connector_code", 'abc_max')
+            ->set("openLineRouteForms.{$channel->id}.line_id", '44')
+            ->set("openLineRouteForms.{$channel->id}.callback_owner_id", (string) $owner->id)
+            ->call('saveOpenLineRoute', $channel->id)
+            ->assertSet(
+                'openLineRouteErrorMessage',
+                'Для маршрута, удерживающего LINE_ID, нужен активный callback-владелец.',
+            );
+
+        $this->assertDatabaseMissing('bitrix24_open_line_routes', [
+            'channel_id' => $channel->id,
+        ]);
+        Http::assertNothingSent();
+    }
+
+    public function test_inactive_route_can_reuse_line_without_claiming_it(): void
+    {
+        $admin = $this->makeAdmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'crm.inactive-alias.test',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+        ]);
+        $firstChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+        $secondChannel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_MAX,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+
+        Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $firstChannel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($firstChannel),
+            'connector_code' => 'abc_telegram',
+            'line_id' => '43',
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+        ]);
+        Http::preventStrayRequests();
+
+        Livewire::actingAs($admin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->set("openLineRouteForms.{$secondChannel->id}.status", Bitrix24OpenLineRoute::STATUS_INACTIVE)
+            ->set("openLineRouteForms.{$secondChannel->id}.connector_code", 'abc_max')
+            ->set("openLineRouteForms.{$secondChannel->id}.line_id", '0043')
+            ->call('saveOpenLineRoute', $secondChannel->id)
+            ->assertSet('openLineRouteErrorMessage', null);
+
+        $this->assertDatabaseHas('bitrix24_open_line_routes', [
+            'channel_id' => $secondChannel->id,
+            'line_id' => '43',
+            'line_owner_key' => null,
+            'status' => Bitrix24OpenLineRoute::STATUS_INACTIVE,
+        ]);
+        Http::assertNothingSent();
     }
 
     public function test_admin_can_see_and_reset_stale_open_line_dialog_bindings(): void
