@@ -31,20 +31,32 @@ final class Bitrix24OpenLineRouteOperationLock
 
     public function run(int $profileId, int $channelId, Closure $callback): mixed
     {
-        $lock = Cache::lock(
+        return $this->runLock(
             sprintf('bitrix24-open-line-route-operation:%d:%d', $profileId, $channelId),
-            $this->lockSeconds(),
+            $callback,
         );
+    }
 
-        if (! $lock->get()) {
-            throw new LockTimeoutException(self::BUSY_MESSAGE);
-        }
+    /**
+     * Call while the corresponding route lock is held so route and line
+     * operations always acquire locks in the same order.
+     */
+    public function runForLine(string $portalDomain, string $lineId, Closure $callback): mixed
+    {
+        $normalizedPortalDomain = mb_strtolower(trim($portalDomain));
+        $normalizedLineId = trim($lineId);
 
-        try {
+        if ($normalizedPortalDomain === '' || $normalizedLineId === '') {
             return $callback();
-        } finally {
-            $lock->release();
         }
+
+        return $this->runLock(
+            'bitrix24-open-line-resource-operation:'.hash(
+                'sha256',
+                $normalizedPortalDomain."\0".$normalizedLineId,
+            ),
+            $callback,
+        );
     }
 
     /**
@@ -92,6 +104,21 @@ final class Bitrix24OpenLineRouteOperationLock
         ]);
 
         return self::STATE_TRANSITION_CONNECTION;
+    }
+
+    private function runLock(string $key, Closure $callback): mixed
+    {
+        $lock = Cache::lock($key, $this->lockSeconds());
+
+        if (! $lock->get()) {
+            throw new LockTimeoutException(self::BUSY_MESSAGE);
+        }
+
+        try {
+            return $callback();
+        } finally {
+            $lock->release();
+        }
     }
 
     private function lockSeconds(): int

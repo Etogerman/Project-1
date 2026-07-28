@@ -631,49 +631,54 @@ class ViewBitrix24Connection extends ViewRecord
 
         $form = $this->normalizeOpenLineRouteForm($this->openLineRouteForms[$channel->id] ?? []);
         $user = auth()->user();
+        $routeOperationLock = app(Bitrix24OpenLineRouteOperationLock::class);
 
         try {
-            $saved = app(Bitrix24OpenLineRouteOperationLock::class)->run(
+            $saved = $routeOperationLock->run(
                 $profile->id,
                 $channel->id,
-                fn (): bool => DB::transaction(function () use ($profile, $channel, $form, $user): bool {
-                    $route = Bitrix24OpenLineRoute::query()
-                        ->where('bitrix24_profile_id', $profile->id)
-                        ->where('channel_id', $channel->id)
-                        ->lockForUpdate()
-                        ->first();
+                fn (): bool => $routeOperationLock->runForLine(
+                    (string) $profile->portal_domain,
+                    (string) $form['line_id'],
+                    fn (): bool => DB::transaction(function () use ($profile, $channel, $form, $user): bool {
+                        $route = Bitrix24OpenLineRoute::query()
+                            ->where('bitrix24_profile_id', $profile->id)
+                            ->where('channel_id', $channel->id)
+                            ->lockForUpdate()
+                            ->first();
 
-                    if (! $this->validateStoredOpenLineRouteTransition($route, $form)) {
-                        return false;
-                    }
+                        if (! $this->validateStoredOpenLineRouteTransition($route, $form)) {
+                            return false;
+                        }
 
-                    if (! $this->validateOpenLineRouteForm($profile, $channel, $route, $form)) {
-                        return false;
-                    }
+                        if (! $this->validateOpenLineRouteForm($profile, $channel, $route, $form)) {
+                            return false;
+                        }
 
-                    $route ??= new Bitrix24OpenLineRoute([
-                        'bitrix24_profile_id' => $profile->id,
-                        'channel_id' => $channel->id,
-                        'created_by_user_id' => $user instanceof User ? $user->id : null,
-                    ]);
+                        $route ??= new Bitrix24OpenLineRoute([
+                            'bitrix24_profile_id' => $profile->id,
+                            'channel_id' => $channel->id,
+                            'created_by_user_id' => $user instanceof User ? $user->id : null,
+                        ]);
 
-                    $route->fill([
-                        'portal_domain' => $profile->portal_domain,
-                        'profile_key' => $profile->profile_key,
-                        'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
-                        'connector_code' => $this->nullableFormValue($form['connector_code']),
-                        'line_id' => $this->nullableFormValue($form['line_id']),
-                        'line_name' => $this->nullableFormValue($form['line_name']),
-                        'callback_owner_id' => $this->nullableIntegerFormValue($form['callback_owner_id']),
-                        'source_id' => $this->nullableFormValue($form['source_id']),
-                        'status' => $form['status'],
-                        'updated_by_user_id' => $user instanceof User ? $user->id : null,
-                    ]);
+                        $route->fill([
+                            'portal_domain' => $profile->portal_domain,
+                            'profile_key' => $profile->profile_key,
+                            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
+                            'connector_code' => $this->nullableFormValue($form['connector_code']),
+                            'line_id' => $this->nullableFormValue($form['line_id']),
+                            'line_name' => $this->nullableFormValue($form['line_name']),
+                            'callback_owner_id' => $this->nullableIntegerFormValue($form['callback_owner_id']),
+                            'source_id' => $this->nullableFormValue($form['source_id']),
+                            'status' => $form['status'],
+                            'updated_by_user_id' => $user instanceof User ? $user->id : null,
+                        ]);
 
-                    $route->save();
+                        $route->save();
 
-                    return true;
-                }, attempts: 3),
+                        return true;
+                    }, attempts: 3),
+                ),
             );
         } catch (LockTimeoutException) {
             $this->failOpenLineRouteSave(Bitrix24OpenLineRouteOperationLock::BUSY_MESSAGE);

@@ -255,6 +255,104 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
         $this->assertNull($route->last_error_message);
     }
 
+    public function test_refresh_line_lock_prevents_another_channel_from_claiming_the_same_line(): void
+    {
+        [$admin, $connection, , $route] = $this->makeRouteFixture();
+        $profile = $connection->profile()->firstOrFail();
+        $route->forceFill([
+            'status' => Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
+            'last_error_message' => 'Маршрут ожидает безопасного refresh.',
+            'last_error_at' => now()->subMinute(),
+        ])->save();
+        $secondChannel = Channel::factory()->create([
+            'name' => 'Второй Telegram',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+            'credentials' => ['token' => 'second-telegram-token'],
+        ]);
+        $secondRoute = Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $secondChannel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($secondChannel),
+            'connector_code' => 'abc_second',
+            'line_id' => 'line-original',
+            'callback_owner_id' => $route->callback_owner_id,
+            'source_id' => 'ABC_SECOND',
+            'status' => Bitrix24OpenLineRoute::STATUS_INACTIVE,
+        ]);
+        $saveAttempted = false;
+
+        $this->mock(Bitrix24ApiClient::class, function ($mock) use (
+            $admin,
+            $connection,
+            $secondChannel,
+            &$saveAttempted,
+        ): void {
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method): bool => $method === 'imconnector.register')
+                ->andReturn($this->bitrixResponse(['result' => true]));
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method): bool => $method === 'imconnector.connector.data.set')
+                ->andReturn($this->bitrixResponse(true));
+
+            $mock->shouldNotReceive('call')
+                ->with('imconnector.activate', \Mockery::any(), \Mockery::any());
+
+            $mock->shouldReceive('call')
+                ->once()
+                ->withArgs(fn (string $method, array $params): bool => $method === 'imopenlines.config.update'
+                    && ($params['CONFIG_ID'] ?? null) === 'line-original'
+                    && ($params['PARAMS'] ?? null) === [
+                        'CRM' => 'Y',
+                        'CRM_CREATE' => 'deal',
+                        'CRM_SOURCE' => 'ABC_TELEGRAM',
+                    ])
+                ->andReturnUsing(function () use (
+                    $admin,
+                    $connection,
+                    $secondChannel,
+                    &$saveAttempted,
+                ): Bitrix24RestResponseData {
+                    $saveAttempted = true;
+
+                    Livewire::actingAs($admin)
+                        ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+                        ->set(
+                            "openLineRouteForms.{$secondChannel->id}.status",
+                            Bitrix24OpenLineRoute::STATUS_ACTIVE,
+                        )
+                        ->call('saveOpenLineRoute', $secondChannel->id)
+                        ->assertSet(
+                            'openLineRouteErrorMessage',
+                            Bitrix24OpenLineRouteOperationLock::BUSY_MESSAGE,
+                        );
+
+                    return $this->bitrixResponse(true);
+                });
+        });
+
+        app(AutoSetupBitrix24OpenLineRouteAction::class)
+            ->refreshConnectorRegistration($connection, $route);
+
+        $route->refresh();
+        $secondRoute->refresh();
+
+        $this->assertTrue($saveAttempted);
+        $this->assertSame(Bitrix24OpenLineRoute::STATUS_MISCONFIGURED, $route->status);
+        $this->assertNull($route->line_owner_key);
+        $this->assertNull($route->last_error_message);
+        $this->assertNull($route->last_error_at);
+        $this->assertSame(Bitrix24OpenLineRoute::STATUS_INACTIVE, $secondRoute->status);
+        $this->assertNull($secondRoute->line_owner_key);
+        $this->assertSame('abc_second', $secondRoute->connector_code);
+        $this->assertSame('line-original', $secondRoute->line_id);
+    }
+
     public function test_fail_closed_transition_during_connector_metadata_refresh_cancels_completion_without_activation_calls(): void
     {
         [, $connection, , $route] = $this->makeRouteFixture();

@@ -85,6 +85,25 @@ class AutoSetupBitrix24OpenLineRouteAction
         }
 
         $this->assertRefreshContextSupported($connection, $profile, $channel, $route);
+
+        return $this->routeOperationLock->runForLine(
+            (string) $profile->portal_domain,
+            (string) $route->line_id,
+            fn (): Bitrix24OpenLineRoute => $this->refreshConnectorRegistrationForLine(
+                $connection,
+                $profile,
+                $channel,
+                $route,
+            ),
+        );
+    }
+
+    private function refreshConnectorRegistrationForLine(
+        Bitrix24Connection $connection,
+        Bitrix24Profile $profile,
+        Channel $channel,
+        Bitrix24OpenLineRoute $route,
+    ): Bitrix24OpenLineRoute {
         $initialStateVersion = (string) $route->getAttribute('state_version');
         $refreshedRoute = null;
 
