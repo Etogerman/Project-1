@@ -111,8 +111,8 @@ integration/runtime или release контуром, пока не доказа�
 - production deploy или smoke follow-up;
 - незавершённые result/no-result closure records и `deferred` dormant tail;
 - `left_open` issue/admin tail; после cleanup он не блокирует новый stream;
-- branch hygiene tail: слитая удалённая или локальная ветка, stale worktree или
-  локальная ветка без upstream;
+- хвост очистки веток: слитая удалённая или локальная ветка, устаревший рабочий
+  каталог (`worktree`) или локальная ветка без отслеживаемой удалённой ветки;
 - spec/admin tail во внешнем репозитории документации;
 - загрязнение ветки или worktree другим stream-ом.
 
