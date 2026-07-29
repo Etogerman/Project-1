@@ -12,6 +12,7 @@ use App\Services\Bitrix24\Bitrix24ConnectionStateException;
 use App\Services\Bitrix24\Bitrix24OpenLineMutationAuthority;
 use App\Services\Bitrix24\Bitrix24OpenLineMutationAuthorityContext;
 use App\Services\Bitrix24\Bitrix24OpenLineMutationAuthorityException;
+use App\Services\Bitrix24\Bitrix24OpenLineMutationTarget;
 use App\Services\Bitrix24\Bitrix24OpenLineRestMethodPolicy;
 use App\Services\Bitrix24\Bitrix24OpenLineRouteLeaseDeadline;
 use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryException;
@@ -653,6 +654,106 @@ class Bitrix24ApiClientTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_chat_target_mutations_require_verified_route_target_before_http(): void
+    {
+        $connection = $this->makeActiveConnection();
+        Http::fake();
+
+        foreach ([
+            'imopenlines.crm.chat.user.add',
+            'imopenlines.crm.message.add',
+            'imopenlines.operator.another.finish',
+        ] as $method) {
+            try {
+                app(Bitrix24OpenLineMutationAuthorityContext::class)->run(
+                    $this->mutationAuthority(),
+                    fn () => app(Bitrix24ApiClient::class)->call(
+                        $method,
+                        ['CHAT_ID' => '23'],
+                        $connection,
+                    ),
+                );
+                $this->fail($method.' must require a verified mutation target.');
+            } catch (Bitrix24OpenLineMutationAuthorityException $exception) {
+                $this->assertSame('openlines_mutation_target_missing', $exception->errorCode);
+            }
+        }
+
+        Http::assertNothingSent();
+    }
+
+    public function test_chat_target_mutation_rejects_chat_or_route_identity_mismatch_before_http(): void
+    {
+        $connection = $this->makeActiveConnection();
+        Http::fake();
+
+        foreach ([
+            [
+                'target' => new Bitrix24OpenLineMutationTarget(
+                    portalDomain: 'crm.alexlesley.biz',
+                    connectorCode: 'abrikosoff_telegram',
+                    lineId: '13',
+                    chatId: '24',
+                ),
+                'error_code' => 'openlines_mutation_identity_mismatch',
+            ],
+            [
+                'target' => new Bitrix24OpenLineMutationTarget(
+                    portalDomain: 'crm.alexlesley.biz',
+                    connectorCode: 'other_connector',
+                    lineId: '13',
+                    chatId: '23',
+                ),
+                'error_code' => 'openlines_mutation_route_mismatch',
+            ],
+        ] as $case) {
+            try {
+                app(Bitrix24OpenLineMutationAuthorityContext::class)->run(
+                    $this->mutationAuthority(),
+                    fn () => app(Bitrix24ApiClient::class)->call(
+                        'imopenlines.crm.message.add',
+                        ['CHAT_ID' => '23'],
+                        $connection,
+                        mutationTarget: $case['target'],
+                    ),
+                );
+                $this->fail('A mismatched mutation target must be rejected.');
+            } catch (Bitrix24OpenLineMutationAuthorityException $exception) {
+                $this->assertSame($case['error_code'], $exception->errorCode);
+            }
+        }
+
+        Http::assertNothingSent();
+    }
+
+    public function test_chat_target_mutation_allows_exact_authorized_route_and_chat(): void
+    {
+        $connection = $this->makeActiveConnection();
+        Http::fake([
+            'https://client-endpoint.example/rest/imopenlines.crm.message.add.json' => Http::response([
+                'result' => 123,
+            ]),
+        ]);
+
+        $response = app(Bitrix24OpenLineMutationAuthorityContext::class)->run(
+            $this->mutationAuthority(),
+            fn () => app(Bitrix24ApiClient::class)->call(
+                'imopenlines.crm.message.add',
+                ['CHAT_ID' => '23'],
+                $connection,
+                mutationTarget: new Bitrix24OpenLineMutationTarget(
+                    portalDomain: 'crm.alexlesley.biz',
+                    connectorCode: 'abrikosoff_telegram',
+                    lineId: '13',
+                    chatId: '23',
+                ),
+            ),
+        );
+
+        $this->assertTrue($response->successful);
+        Http::assertSentCount(1);
+    }
+
     public function test_open_lines_method_classification_and_identity_catalogs_are_complete_together(): void
     {
         $mutatingMethods = array_keys(Bitrix24OpenLineRestMethodPolicy::MUTATING_METHOD_SCOPES);
@@ -663,6 +764,17 @@ class Bitrix24ApiClientTest extends TestCase
 
         $this->assertSame($mutatingMethods, $identityMethods);
         $this->assertNotEmpty(Bitrix24OpenLineRestMethodPolicy::READ_ONLY_METHODS);
+        $this->assertSame(
+            [
+                'imopenlines.crm.chat.user.add',
+                'imopenlines.crm.message.add',
+                'imopenlines.operator.another.finish',
+            ],
+            array_keys(array_filter(
+                Bitrix24OpenLineRestMethodPolicy::MUTATING_METHOD_IDENTITIES,
+                fn (array $identity): bool => $identity['chat_target'],
+            )),
+        );
     }
 
     public function test_every_literal_open_lines_rest_call_used_by_application_is_classified(): void

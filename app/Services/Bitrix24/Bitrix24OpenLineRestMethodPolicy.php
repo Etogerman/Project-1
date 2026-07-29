@@ -56,19 +56,19 @@ final class Bitrix24OpenLineRestMethodPolicy
     /**
      * Identity fields that the REST payload itself can and must expose.
      *
-     * @var array<string, array{line:bool,connector:bool,user_code:bool}>
+     * @var array<string, array{line:bool,connector:bool,user_code:bool,chat_target:bool}>
      */
     public const MUTATING_METHOD_IDENTITIES = [
-        'imconnector.connector.data.set' => ['line' => true, 'connector' => true, 'user_code' => false],
-        'imconnector.register' => ['line' => false, 'connector' => true, 'user_code' => false],
-        'imconnector.send.messages' => ['line' => true, 'connector' => true, 'user_code' => false],
-        'imconnector.send.status.delivery' => ['line' => true, 'connector' => true, 'user_code' => false],
-        'imopenlines.config.add' => ['line' => false, 'connector' => false, 'user_code' => false],
-        'imopenlines.config.update' => ['line' => true, 'connector' => false, 'user_code' => false],
-        'imopenlines.crm.chat.user.add' => ['line' => false, 'connector' => false, 'user_code' => false],
-        'imopenlines.crm.message.add' => ['line' => false, 'connector' => false, 'user_code' => false],
-        'imopenlines.operator.another.finish' => ['line' => false, 'connector' => false, 'user_code' => false],
-        'imopenlines.session.open' => ['line' => false, 'connector' => false, 'user_code' => true],
+        'imconnector.connector.data.set' => ['line' => true, 'connector' => true, 'user_code' => false, 'chat_target' => false],
+        'imconnector.register' => ['line' => false, 'connector' => true, 'user_code' => false, 'chat_target' => false],
+        'imconnector.send.messages' => ['line' => true, 'connector' => true, 'user_code' => false, 'chat_target' => false],
+        'imconnector.send.status.delivery' => ['line' => true, 'connector' => true, 'user_code' => false, 'chat_target' => false],
+        'imopenlines.config.add' => ['line' => false, 'connector' => false, 'user_code' => false, 'chat_target' => false],
+        'imopenlines.config.update' => ['line' => true, 'connector' => false, 'user_code' => false, 'chat_target' => false],
+        'imopenlines.crm.chat.user.add' => ['line' => false, 'connector' => false, 'user_code' => false, 'chat_target' => true],
+        'imopenlines.crm.message.add' => ['line' => false, 'connector' => false, 'user_code' => false, 'chat_target' => true],
+        'imopenlines.operator.another.finish' => ['line' => false, 'connector' => false, 'user_code' => false, 'chat_target' => true],
+        'imopenlines.session.open' => ['line' => false, 'connector' => false, 'user_code' => true, 'chat_target' => false],
     ];
 
     public static function requiresAuthority(string $method): bool
@@ -98,12 +98,12 @@ final class Bitrix24OpenLineRestMethodPolicy
     }
 
     /**
-     * @return array{line:bool,connector:bool,user_code:bool}
+     * @return array{line:bool,connector:bool,user_code:bool,chat_target:bool}
      */
     public static function requiredPayloadIdentity(string $method): array
     {
         return self::MUTATING_METHOD_IDENTITIES[self::normalize($method)]
-            ?? ['line' => false, 'connector' => false, 'user_code' => false];
+            ?? ['line' => false, 'connector' => false, 'user_code' => false, 'chat_target' => false];
     }
 
     public static function assertClassified(string $method): void

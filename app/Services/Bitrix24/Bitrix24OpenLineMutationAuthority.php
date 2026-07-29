@@ -48,6 +48,7 @@ final readonly class Bitrix24OpenLineMutationAuthority
         Bitrix24Connection $connection,
         string $method,
         array $params,
+        ?Bitrix24OpenLineMutationTarget $target = null,
     ): void {
         $method = mb_strtolower(trim($method));
         $allowedScopes = Bitrix24OpenLineRestMethodPolicy::allowedScopes($method);
@@ -85,6 +86,11 @@ final readonly class Bitrix24OpenLineMutationAuthority
         }
 
         $identity = Bitrix24OpenLineRestMethodPolicy::requiredPayloadIdentity($method);
+        $this->assertMutationTargetMatches(
+            $params,
+            $target,
+            $identity['chat_target'],
+        );
         $this->assertScalarMatches(
             $params,
             ['LINE', 'CONFIG_ID'],
@@ -100,6 +106,50 @@ final readonly class Bitrix24OpenLineMutationAuthority
             $identity['connector'],
         );
         $this->assertUserCodeMatches($params, $identity['user_code']);
+    }
+
+    /**
+     * @param  array<string, mixed>  $params
+     */
+    private function assertMutationTargetMatches(
+        array $params,
+        ?Bitrix24OpenLineMutationTarget $target,
+        bool $required,
+    ): void {
+        if (! $target instanceof Bitrix24OpenLineMutationTarget) {
+            if ($required) {
+                throw new Bitrix24OpenLineMutationAuthorityException(
+                    'openlines_mutation_target_missing',
+                    'REST-вызов не содержит проверенную цель маршрута и Bitrix chat.',
+                );
+            }
+
+            return;
+        }
+
+        $this->assertSameRoute(
+            $target->portalDomain,
+            $target->connectorCode,
+            $target->lineId,
+        );
+
+        $chatId = $params['CHAT_ID'] ?? null;
+
+        if (! is_scalar($chatId)) {
+            throw new Bitrix24OpenLineMutationAuthorityException(
+                'openlines_mutation_identity_missing',
+                'REST payload не содержит обязательный CHAT_ID.',
+            );
+        }
+
+        $chatId = (string) $chatId;
+
+        if (trim($chatId) !== $chatId || $chatId !== $target->chatId) {
+            throw new Bitrix24OpenLineMutationAuthorityException(
+                'openlines_mutation_identity_mismatch',
+                'REST payload содержит CHAT_ID другой цели mutation.',
+            );
+        }
     }
 
     public function assertSameRoute(

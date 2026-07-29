@@ -726,6 +726,7 @@ class ExportManualReplyToBitrix24OpenLinesAction
                 ]),
                 connection: $connection,
                 transportRetry: false,
+                mutationTarget: $this->mutationTarget($route, $connection, $resolvedChat->chatId),
             );
         } catch (Bitrix24ApiException $exception) {
             throw new Bitrix24OpenLinesManualReplyExportException(
@@ -782,7 +783,7 @@ class ExportManualReplyToBitrix24OpenLinesAction
         }
 
         if ($allowRecovery && $this->isAccessDeniedResponse($response)) {
-            $this->recoverChatAccess($rootContact, $serviceUserId, $resolvedChat, $connection);
+            $this->recoverChatAccess($rootContact, $serviceUserId, $resolvedChat, $route, $connection);
 
             return $this->sendMessage(
                 message: $message,
@@ -841,6 +842,7 @@ class ExportManualReplyToBitrix24OpenLinesAction
         Contact $rootContact,
         int $serviceUserId,
         Bitrix24OpenLinesManualReplyChatData $resolvedChat,
+        Bitrix24OpenLinesRouteData $route,
         Bitrix24Connection $connection,
     ): void {
         try {
@@ -852,6 +854,7 @@ class ExportManualReplyToBitrix24OpenLinesAction
                 ]),
                 connection: $connection,
                 transportRetry: false,
+                mutationTarget: $this->mutationTarget($route, $connection, $resolvedChat->chatId),
             );
         } catch (Bitrix24ApiException $exception) {
             throw new Bitrix24OpenLinesManualReplyExportException(
@@ -883,6 +886,19 @@ class ExportManualReplyToBitrix24OpenLinesAction
                 $response->errorMessage ?? 'Unknown error.'
             ),
             Bitrix24MessageExport::FAILURE_CHAT_USER_ADD_FAILED,
+        );
+    }
+
+    private function mutationTarget(
+        Bitrix24OpenLinesRouteData $route,
+        Bitrix24Connection $connection,
+        string $chatId,
+    ): Bitrix24OpenLineMutationTarget {
+        return new Bitrix24OpenLineMutationTarget(
+            portalDomain: (string) $connection->portal_domain,
+            connectorCode: $route->connectorCode,
+            lineId: $route->lineId,
+            chatId: $chatId,
         );
     }
 

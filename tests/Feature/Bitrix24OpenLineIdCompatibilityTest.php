@@ -295,6 +295,101 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
         $this->assertSame([], glob($this->storageDirectory.'/*.backup.*') ?: []);
     }
 
+    public function test_legacy_profile_line_id_is_included_in_preflight_hash_and_migration(): void
+    {
+        $profile = $this->insertLegacyProfile(
+            telegramLineId: '014',
+            maxLineId: null,
+        );
+        $artifactPath = $this->storageDirectory.'/legacy-profile-line-id.json';
+        $service = app(Bitrix24OpenLineIdCompatibilityService::class);
+
+        $preflight = $service->preflight($this->storageDirectory);
+
+        $this->assertTrue($preflight['ready']);
+        $this->assertSame(1, $preflight['source_counts']['profile_database']);
+        $this->assertSame('profile_database', $preflight['migrations'][0]['source']);
+        $this->assertSame('telegram_line_id', $preflight['migrations'][0]['record_field']);
+        $this->assertSame('014', $preflight['migrations'][0]['from']);
+        $this->assertSame('14', $preflight['migrations'][0]['to']);
+        $this->assertIsString($preflight['source_hashes']['profile_database']);
+
+        $artifact = $service->migrate($this->storageDirectory, $artifactPath);
+
+        $this->assertTrue($artifact['ready']);
+        $this->assertTrue($artifact['migration_applied']);
+        $this->assertSame(
+            $preflight['source_hashes']['profile_database'],
+            $artifact['preflight_source_hashes']['profile_database'],
+        );
+        $this->assertNotSame(
+            $preflight['source_hashes']['profile_database'],
+            $artifact['source_hashes']['profile_database'],
+        );
+        $this->assertSame('14', $profile->fresh()->telegram_line_id);
+        $this->assertSame([], $service->preflight($this->storageDirectory)['migrations']);
+    }
+
+    public function test_invalid_legacy_profile_line_id_blocks_preflight_and_migration(): void
+    {
+        $profile = $this->insertLegacyProfile(
+            telegramLineId: 'not-a-line-id',
+            maxLineId: null,
+        );
+        $artifactPath = $this->storageDirectory.'/invalid-legacy-profile-line-id.json';
+        $service = app(Bitrix24OpenLineIdCompatibilityService::class);
+
+        $preflight = $service->preflight($this->storageDirectory);
+
+        $this->assertFalse($preflight['ready']);
+        $this->assertSame([
+            [
+                'source' => 'profile_database',
+                'locator' => 'profile:'.$profile->id.'/telegram_line_id',
+                'line_id' => 'not-a-line-id',
+            ],
+        ], $preflight['invalid']);
+
+        try {
+            $service->migrate($this->storageDirectory, $artifactPath);
+            $this->fail('Invalid legacy profile LINE_ID must block compatibility migration.');
+        } catch (Bitrix24OpenLineIdCompatibilityException $exception) {
+            $this->assertSame('openlines_line_id_compatibility_blocked', $exception->errorCode);
+        }
+
+        $this->assertSame('not-a-line-id', $profile->fresh()->telegram_line_id);
+        $this->assertFileDoesNotExist($artifactPath);
+    }
+
+    public function test_legacy_profile_014_and_14_collision_blocks_migration(): void
+    {
+        $profile = $this->insertLegacyProfile(
+            telegramLineId: '014',
+            maxLineId: '14',
+        );
+        $artifactPath = $this->storageDirectory.'/legacy-profile-collision.json';
+        $service = app(Bitrix24OpenLineIdCompatibilityService::class);
+
+        $preflight = $service->preflight($this->storageDirectory);
+
+        $this->assertFalse($preflight['ready']);
+        $this->assertSame(2, $preflight['source_counts']['profile_database']);
+        $this->assertCount(1, $preflight['collisions']);
+        $this->assertSame('stagecrm.fvds.ru#14', $preflight['collisions'][0]['resource']);
+
+        try {
+            $service->migrate($this->storageDirectory, $artifactPath);
+            $this->fail('Legacy profile LINE_ID collision must block compatibility migration.');
+        } catch (Bitrix24OpenLineIdCompatibilityException $exception) {
+            $this->assertSame('openlines_line_id_compatibility_blocked', $exception->errorCode);
+        }
+
+        $profile->refresh();
+        $this->assertSame('014', $profile->telegram_line_id);
+        $this->assertSame('14', $profile->max_line_id);
+        $this->assertFileDoesNotExist($artifactPath);
+    }
+
     public function test_malformed_registry_and_lease_records_block_migration_without_data_loss(): void
     {
         $owner = $this->owner('local-1', '14');
@@ -465,6 +560,34 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
             'created_at' => now(),
             'updated_at' => now(),
         ]);
+    }
+
+    private function insertLegacyProfile(
+        ?string $telegramLineId,
+        ?string $maxLineId,
+    ): Bitrix24Profile {
+        $profile = Bitrix24Profile::query()->create([
+            'portal_domain' => 'stagecrm.fvds.ru',
+            'profile_key' => Bitrix24Profile::PROFILE_KEY_STAGING,
+            'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
+            'display_name' => 'Staging',
+            'callback_base_url' => 'https://local-1.example.test',
+            'telegram_connector_code' => 'abrikosoff_telegram',
+            'max_connector_code' => 'abrikosoff_max',
+        ]);
+        Bitrix24CallbackOwner::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'owner_key' => 'local-1',
+            'display_name' => 'Local 1',
+            'callback_base_url' => 'https://local-1.example.test',
+            'status' => Bitrix24CallbackOwner::STATUS_ACTIVE,
+        ]);
+        $profile->forceFill([
+            'telegram_line_id' => $telegramLineId,
+            'max_line_id' => $maxLineId,
+        ])->save();
+
+        return $profile;
     }
 
     /**

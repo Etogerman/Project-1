@@ -20,6 +20,7 @@ use App\Services\Bitrix24\AutoSetupBitrix24OpenLineRouteAction;
 use App\Services\Bitrix24\Bitrix24ApiClient;
 use App\Services\Bitrix24\Bitrix24ApiException;
 use App\Services\Bitrix24\Bitrix24AuthRefreshException;
+use App\Services\Bitrix24\Bitrix24OpenLineMutationTarget;
 use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryClient;
 use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryException;
 use Filament\Facades\Filament;
@@ -1886,10 +1887,15 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         $this->mock(Bitrix24ApiClient::class, function ($mock) use ($connection): void {
             $mock->shouldReceive('call')
                 ->once()
-                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection, bool $transportRetry): bool => $method === 'imopenlines.operator.another.finish'
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection, bool $transportRetry, ?\Closure $beforeRestAttempt, Bitrix24OpenLineMutationTarget $mutationTarget): bool => $method === 'imopenlines.operator.another.finish'
                     && ($params['CHAT_ID'] ?? null) === '23'
                     && $usedConnection->is($connection)
-                    && $transportRetry === false)
+                    && $transportRetry === false
+                    && $beforeRestAttempt === null
+                    && $mutationTarget->portalDomain === $connection->portal_domain
+                    && $mutationTarget->connectorCode === 'abc_telegram'
+                    && $mutationTarget->lineId === '10'
+                    && $mutationTarget->chatId === '23')
                 ->andReturn($this->bitrixResponse(true, true));
         });
 
@@ -2001,10 +2007,15 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         $this->mock(Bitrix24ApiClient::class, function ($mock) use ($connection): void {
             $mock->shouldReceive('call')
                 ->once()
-                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection, bool $transportRetry): bool => $method === 'imopenlines.operator.another.finish'
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection, bool $transportRetry, ?\Closure $beforeRestAttempt, Bitrix24OpenLineMutationTarget $mutationTarget): bool => $method === 'imopenlines.operator.another.finish'
                     && ($params['CHAT_ID'] ?? null) === '23'
                     && $usedConnection->is($connection)
-                    && $transportRetry === false)
+                    && $transportRetry === false
+                    && $beforeRestAttempt === null
+                    && $mutationTarget->portalDomain === $connection->portal_domain
+                    && $mutationTarget->connectorCode === 'abc_telegram'
+                    && $mutationTarget->lineId === '10'
+                    && $mutationTarget->chatId === '23')
                 ->andReturn($this->bitrixResponse(false, null, 'ACCESS_DENIED', 'Недостаточно прав.'));
         });
 
@@ -2093,10 +2104,15 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         $this->mock(Bitrix24ApiClient::class, function ($mock) use ($connection): void {
             $mock->shouldReceive('call')
                 ->once()
-                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection, bool $transportRetry): bool => $method === 'imopenlines.operator.another.finish'
+                ->withArgs(fn (string $method, array $params, Bitrix24Connection $usedConnection, bool $transportRetry, ?\Closure $beforeRestAttempt, Bitrix24OpenLineMutationTarget $mutationTarget): bool => $method === 'imopenlines.operator.another.finish'
                     && ($params['CHAT_ID'] ?? null) === '23'
                     && $usedConnection->is($connection)
-                    && $transportRetry === false)
+                    && $transportRetry === false
+                    && $beforeRestAttempt === null
+                    && $mutationTarget->portalDomain === $connection->portal_domain
+                    && $mutationTarget->connectorCode === 'abc_telegram'
+                    && $mutationTarget->lineId === '10'
+                    && $mutationTarget->chatId === '23')
                 ->andThrow(new Bitrix24ApiException('Bitrix24 REST call failed without transport retry.'));
         });
 

@@ -31,6 +31,7 @@ class Bitrix24ApiClient
         ?Bitrix24Connection $connection = null,
         bool $transportRetry = true,
         ?Closure $beforeRestAttempt = null,
+        ?Bitrix24OpenLineMutationTarget $mutationTarget = null,
     ): Bitrix24RestResponseData {
         Bitrix24OpenLineRestMethodPolicy::assertClassified($method);
         $mutationAuthority = $this->authorityContext->current();
@@ -54,6 +55,7 @@ class Bitrix24ApiClient
             $connection,
             $method,
             $params,
+            $mutationTarget,
             remoteAttempt: false,
         );
 
@@ -67,6 +69,7 @@ class Bitrix24ApiClient
                 $connection,
                 $method,
                 $params,
+                $mutationTarget,
                 remoteAttempt: false,
             );
         }
@@ -79,6 +82,7 @@ class Bitrix24ApiClient
             $transportRetry,
             beforeRestAttempt: $beforeRestAttempt,
             mutationAuthority: $mutationAuthority,
+            mutationTarget: $mutationTarget,
         );
 
         if (! $attemptedRefresh && $this->shouldRefreshToken->handle($connection, $response)) {
@@ -91,6 +95,7 @@ class Bitrix24ApiClient
                 $connection,
                 $method,
                 $params,
+                $mutationTarget,
                 remoteAttempt: false,
             );
             $response = $this->performRestCall(
@@ -102,6 +107,7 @@ class Bitrix24ApiClient
                 true,
                 $beforeRestAttempt,
                 $mutationAuthority,
+                $mutationTarget,
             );
         }
 
@@ -130,6 +136,7 @@ class Bitrix24ApiClient
         bool $attemptedRefresh = false,
         ?Closure $beforeRestAttempt = null,
         ?Bitrix24OpenLineMutationAuthority $mutationAuthority = null,
+        ?Bitrix24OpenLineMutationTarget $mutationTarget = null,
     ): Bitrix24RestResponseData {
         $url = $this->buildRestUrl->handle($connection, $method);
         $requestPayload = array_merge($params, [
@@ -145,6 +152,7 @@ class Bitrix24ApiClient
             $connection,
             $method,
             $params,
+            $mutationTarget,
         );
         /** @var array<string, mixed> $responseData */
         $responseData = $response->json() ?? [];
@@ -194,12 +202,14 @@ class Bitrix24ApiClient
         Bitrix24Connection $connection,
         string $method,
         array $params,
+        ?Bitrix24OpenLineMutationTarget $mutationTarget,
     ): Response {
         $attemptPreflight = function () use (
             $beforeRestAttempt,
             $connection,
             $method,
             $mutationAuthority,
+            $mutationTarget,
             $params,
         ): void {
             $this->assertMutationAuthority(
@@ -207,6 +217,7 @@ class Bitrix24ApiClient
                 $connection,
                 $method,
                 $params,
+                $mutationTarget,
                 remoteAttempt: true,
             );
             $beforeRestAttempt?->__invoke();
@@ -283,6 +294,7 @@ class Bitrix24ApiClient
         Bitrix24Connection $connection,
         string $method,
         array $params,
+        ?Bitrix24OpenLineMutationTarget $mutationTarget,
         bool $remoteAttempt,
     ): void {
         if (! $authority instanceof Bitrix24OpenLineMutationAuthority) {
@@ -297,7 +309,7 @@ class Bitrix24ApiClient
         }
 
         if (Bitrix24OpenLineRestMethodPolicy::requiresAuthority($method)) {
-            $authority->assertAllows($connection, $method, $params);
+            $authority->assertAllows($connection, $method, $params, $mutationTarget);
         }
 
         $authority->deadline->assertAvailableFor(

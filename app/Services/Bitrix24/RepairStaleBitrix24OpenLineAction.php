@@ -101,6 +101,12 @@ class RepairStaleBitrix24OpenLineAction
                 ],
                 $connection,
                 transportRetry: false,
+                mutationTarget: new Bitrix24OpenLineMutationTarget(
+                    portalDomain: (string) $connection->portal_domain,
+                    connectorCode: (string) $route->connector_code,
+                    lineId: (string) $route->line_id,
+                    chatId: $sourceChatId,
+                ),
             );
         } catch (Bitrix24ApiException $exception) {
             $message = $exception->getMessage() ?: 'Bitrix24 REST call failed.';

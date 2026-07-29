@@ -3,6 +3,7 @@
 namespace App\Services\Bitrix24;
 
 use App\Models\Bitrix24OpenLineRoute;
+use App\Models\Bitrix24Profile;
 use Closure;
 use Illuminate\Support\Facades\DB;
 use JsonException;
@@ -38,15 +39,20 @@ final class Bitrix24OpenLineIdCompatibilityService
         bool $lockDatabaseRows = false,
     ): array {
         $invalid = [];
-        $entries = $this->databaseEntries($lockDatabaseRows);
-        $sourceCounts = ['database' => count($entries)];
+        $databaseEntries = $this->databaseEntries($lockDatabaseRows);
+        $profileDatabaseEntries = $this->profileDatabaseEntries($lockDatabaseRows);
+        $entries = [...$databaseEntries, ...$profileDatabaseEntries];
+        $sourceCounts = [
+            'database' => count($databaseEntries),
+            'profile_database' => count($profileDatabaseEntries),
+        ];
         $documents = [];
         $registryPortal = null;
 
         foreach ($entries as $entry) {
             if ($entry['canonical_line_id'] === null) {
                 $invalid[] = [
-                    'source' => 'database',
+                    'source' => $entry['source'],
                     'locator' => $entry['locator'],
                     'line_id' => $entry['line_id'],
                 ];
@@ -93,7 +99,7 @@ final class Bitrix24OpenLineIdCompatibilityService
             'migrations' => $migrations,
             'collisions' => $collisions,
             'invalid' => $invalid,
-            'source_hashes' => $this->sourceHashes($storageDirectory),
+            'source_hashes' => $this->sourceHashes($storageDirectory, $entries),
         ];
     }
 
@@ -231,30 +237,10 @@ final class Bitrix24OpenLineIdCompatibilityService
                 }
 
                 foreach ($lockedReport['migrations'] as $migration) {
-                    if (($migration['source'] ?? '') !== 'database') {
-                        continue;
-                    }
-
-                    $routeId = (int) ($migration['record_id'] ?? 0);
-                    $from = (string) ($migration['from'] ?? '');
-                    $to = (string) ($migration['to'] ?? '');
-                    $usable = (bool) ($migration['usable'] ?? false);
-                    $portal = (string) ($migration['portal'] ?? '');
-
-                    $updated = Bitrix24OpenLineRoute::query()
-                        ->whereKey($routeId)
-                        ->where('line_id', $from)
-                        ->update([
-                            'line_id' => $to,
-                            'line_owner_key' => $usable ? $portal.'#'.$to : null,
-                            'updated_at' => now(),
-                        ]);
-
-                    if ($updated !== 1) {
-                        throw new Bitrix24OpenLineIdCompatibilityException(
-                            'openlines_line_id_database_changed',
-                            'Маршрут изменился после compatibility preflight.',
-                        );
+                    if (($migration['source'] ?? '') === 'database') {
+                        $this->migrateRouteDatabaseEntry($migration);
+                    } elseif (($migration['source'] ?? '') === 'profile_database') {
+                        $this->migrateProfileDatabaseEntry($migration);
                     }
                 }
 
@@ -326,6 +312,93 @@ final class Bitrix24OpenLineIdCompatibilityService
                 );
             })
             ->all();
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function profileDatabaseEntries(bool $lockForUpdate = false): array
+    {
+        return Bitrix24Profile::query()
+            ->with(['callbackOwners:id,bitrix24_profile_id,owner_key,callback_base_url'])
+            ->where(function ($query): void {
+                $query
+                    ->whereNotNull('telegram_line_id')
+                    ->orWhereNotNull('max_line_id');
+            })
+            ->when($lockForUpdate, fn ($query) => $query->lockForUpdate())
+            ->orderBy('id')
+            ->get()
+            ->flatMap(function (Bitrix24Profile $profile): array {
+                $entries = [];
+
+                foreach ([
+                    'telegram_line_id' => [
+                        'connector_code' => (string) $profile->telegram_connector_code,
+                        'connector_type' => Bitrix24OpenLineRoute::OPEN_LINES_CONNECTOR_TYPE_TELEGRAM,
+                    ],
+                    'max_line_id' => [
+                        'connector_code' => (string) $profile->max_connector_code,
+                        'connector_type' => Bitrix24OpenLineRoute::OPEN_LINES_CONNECTOR_TYPE_MAX,
+                    ],
+                ] as $field => $connector) {
+                    $lineId = (string) $profile->{$field};
+
+                    if (trim($lineId) === '') {
+                        continue;
+                    }
+
+                    [$ownerKey, $callbackBaseUrl] = $this->profileOwnerIdentity($profile);
+                    $entries[] = $this->entry(
+                        source: 'profile_database',
+                        locator: sprintf('profile:%d/%s', $profile->id, $field),
+                        recordId: (int) $profile->id,
+                        portal: (string) $profile->portal_domain,
+                        lineId: $lineId,
+                        identity: implode('|', [
+                            $ownerKey,
+                            $callbackBaseUrl,
+                            $connector['connector_code'],
+                            $connector['connector_type'],
+                        ]),
+                        claiming: true,
+                        usable: false,
+                        recordField: $field,
+                    );
+                }
+
+                return $entries;
+            })
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @return array{string, string}
+     */
+    private function profileOwnerIdentity(Bitrix24Profile $profile): array
+    {
+        $profileCallbackBaseUrl = rtrim(trim((string) $profile->callback_base_url), '/');
+        $matchingOwners = $profile->callbackOwners
+            ->filter(
+                fn ($owner): bool => rtrim(trim((string) $owner->callback_base_url), '/')
+                    === $profileCallbackBaseUrl,
+            )
+            ->values();
+
+        if ($matchingOwners->count() === 1) {
+            $owner = $matchingOwners->first();
+
+            return [
+                (string) $owner->owner_key,
+                rtrim((string) $owner->callback_base_url, '/'),
+            ];
+        }
+
+        return [
+            'profile:'.(string) $profile->profile_key,
+            $profileCallbackBaseUrl,
+        ];
     }
 
     /**
@@ -508,6 +581,7 @@ final class Bitrix24OpenLineIdCompatibilityService
                     'source' => $entry['source'],
                     'locator' => $entry['locator'],
                     'record_id' => $entry['record_id'],
+                    'record_field' => $entry['record_field'],
                     'portal' => $entry['portal'],
                     'from' => $entry['line_id'],
                     'to' => $canonical,
@@ -573,11 +647,13 @@ final class Bitrix24OpenLineIdCompatibilityService
         string $identity,
         bool $claiming,
         bool $usable,
+        ?string $recordField = null,
     ): array {
         return [
             'source' => $source,
             'locator' => $locator,
             'record_id' => $recordId,
+            'record_field' => $recordField,
             'portal' => $this->normalizePortal($portal),
             'line_id' => $lineId,
             'canonical_line_id' => Bitrix24OpenLineRoute::canonicalLineId($lineId),
@@ -716,9 +792,12 @@ final class Bitrix24OpenLineIdCompatibilityService
     /**
      * @return array<string, string|null>
      */
-    private function sourceHashes(string $storageDirectory): array
+    private function sourceHashes(string $storageDirectory, array $entries): array
     {
-        $hashes = [];
+        $hashes = [
+            'database' => $this->entriesHash($entries, 'database'),
+            'profile_database' => $this->entriesHash($entries, 'profile_database'),
+        ];
 
         foreach (self::FILES as $source => $fileName) {
             $path = rtrim($storageDirectory, DIRECTORY_SEPARATOR).DIRECTORY_SEPARATOR.$fileName;
@@ -726,6 +805,93 @@ final class Bitrix24OpenLineIdCompatibilityService
         }
 
         return $hashes;
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $entries
+     */
+    private function entriesHash(array $entries, string $source): string
+    {
+        $sourceEntries = array_values(array_filter(
+            $entries,
+            fn (array $entry): bool => ($entry['source'] ?? null) === $source,
+        ));
+        usort(
+            $sourceEntries,
+            fn (array $left, array $right): int => strcmp(
+                (string) ($left['locator'] ?? ''),
+                (string) ($right['locator'] ?? ''),
+            ),
+        );
+
+        return hash(
+            'sha256',
+            json_encode(
+                $sourceEntries,
+                JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
+            ),
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $migration
+     */
+    private function migrateRouteDatabaseEntry(array $migration): void
+    {
+        $routeId = (int) ($migration['record_id'] ?? 0);
+        $from = (string) ($migration['from'] ?? '');
+        $to = (string) ($migration['to'] ?? '');
+        $usable = (bool) ($migration['usable'] ?? false);
+        $portal = (string) ($migration['portal'] ?? '');
+
+        $updated = Bitrix24OpenLineRoute::query()
+            ->whereKey($routeId)
+            ->where('line_id', $from)
+            ->update([
+                'line_id' => $to,
+                'line_owner_key' => $usable ? $portal.'#'.$to : null,
+                'updated_at' => now(),
+            ]);
+
+        if ($updated !== 1) {
+            throw new Bitrix24OpenLineIdCompatibilityException(
+                'openlines_line_id_database_changed',
+                'Маршрут изменился после compatibility preflight.',
+            );
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $migration
+     */
+    private function migrateProfileDatabaseEntry(array $migration): void
+    {
+        $profileId = (int) ($migration['record_id'] ?? 0);
+        $field = (string) ($migration['record_field'] ?? '');
+        $from = (string) ($migration['from'] ?? '');
+        $to = (string) ($migration['to'] ?? '');
+
+        if (! in_array($field, ['telegram_line_id', 'max_line_id'], true)) {
+            throw new Bitrix24OpenLineIdCompatibilityException(
+                'openlines_line_id_profile_field_invalid',
+                'Compatibility migration получила неизвестное поле профиля Bitrix24.',
+            );
+        }
+
+        $updated = Bitrix24Profile::query()
+            ->whereKey($profileId)
+            ->where($field, $from)
+            ->update([
+                $field => $to,
+                'updated_at' => now(),
+            ]);
+
+        if ($updated !== 1) {
+            throw new Bitrix24OpenLineIdCompatibilityException(
+                'openlines_line_id_profile_changed',
+                'Старая настройка LINE_ID профиля изменилась после compatibility preflight.',
+            );
+        }
     }
 
     /**
