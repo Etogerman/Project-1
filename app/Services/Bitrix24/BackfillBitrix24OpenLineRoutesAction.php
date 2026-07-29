@@ -14,6 +14,7 @@ class BackfillBitrix24OpenLineRoutesAction
 {
     public function __construct(
         private readonly Bitrix24OpenLineRouteOperationLock $routeOperationLock,
+        private readonly Bitrix24OpenLineRouteMutationFence $mutationFence,
     ) {}
 
     /**
@@ -147,6 +148,16 @@ class BackfillBitrix24OpenLineRoutesAction
         } catch (Bitrix24OpenLinesRouteRegistryException $exception) {
             $this->recordSkip($result, sprintf(
                 'Профиль `%s`, `%s:%s`: registry отклонил backfill (%s).',
+                $profile->profile_key,
+                $connectorCode,
+                $canonicalLineId,
+                $exception->errorCode,
+            ));
+
+            return;
+        } catch (Bitrix24OpenLineMutationAuthorityException $exception) {
+            $this->recordSkip($result, sprintf(
+                'Профиль `%s`, `%s:%s`: mutation fence отклонил backfill (%s).',
                 $profile->profile_key,
                 $connectorCode,
                 $canonicalLineId,
@@ -304,59 +315,51 @@ class BackfillBitrix24OpenLineRoutesAction
             $connectorCode,
             $connectorType,
             $lineId,
-            fn (Bitrix24OpenLineRouteLeaseDeadline $leaseDeadline): array => $this->pinDialogsUnderLease(
+            fn (
+                Bitrix24OpenLineRouteLeaseDeadline $_leaseDeadline,
+                Bitrix24OpenLineMutationAuthority $authority,
+            ): array => $this->pinDialogsUnderAuthority(
                 $profile,
                 $channel,
-                $route,
                 $owner,
                 $connectorCode,
                 $lineId,
                 $sourceId,
-                $leaseDeadline,
+                $authority,
             ),
+            scope: Bitrix24OpenLineMutationAuthority::SCOPE_LINE_RUNTIME,
+            route: $route,
+            operationType: 'backfill_open_line_route',
         );
     }
 
     /**
      * @return array{successful:bool,route_updated:bool,dialogs_pinned:int,warning:string}
      */
-    private function pinDialogsUnderLease(
+    private function pinDialogsUnderAuthority(
         Bitrix24Profile $profile,
         Channel $channel,
-        Bitrix24OpenLineRoute $expectedRoute,
         Bitrix24CallbackOwner $expectedOwner,
         string $connectorCode,
         string $lineId,
         ?string $sourceId,
-        Bitrix24OpenLineRouteLeaseDeadline $leaseDeadline,
+        Bitrix24OpenLineMutationAuthority $authority,
     ): array {
-        $this->routeOperationLock->assertLeaseAllowsDatabaseTransition($leaseDeadline);
-
-        return $this->routeOperationLock->runDatabaseTransaction(
-            function () use (
+        return $this->mutationFence->runMutation(
+            $authority,
+            function (?Bitrix24OpenLineRoute $route) use (
                 $profile,
                 $channel,
-                $expectedRoute,
                 $expectedOwner,
                 $connectorCode,
                 $lineId,
                 $sourceId,
-                $leaseDeadline,
             ): array {
-                $route = Bitrix24OpenLineRoute::query()
-                    ->where('bitrix24_profile_id', $profile->id)
-                    ->where('channel_id', $channel->id)
-                    ->whereKey($expectedRoute->getKey())
-                    ->lockForUpdate()
-                    ->first();
-
                 $owner = Bitrix24CallbackOwner::query()
                     ->where('bitrix24_profile_id', $profile->id)
                     ->whereKey($expectedOwner->getKey())
                     ->lockForUpdate()
                     ->first();
-
-                $this->routeOperationLock->assertLeaseAllowsDatabaseTransition($leaseDeadline);
 
                 if (! $route instanceof Bitrix24OpenLineRoute
                     || ! $route->isUsable()
@@ -380,12 +383,10 @@ class BackfillBitrix24OpenLineRoutesAction
 
                 if ($sourceId !== null && (string) $route->source_id !== $sourceId) {
                     $route->forceFill(['source_id' => $sourceId]);
-                    $this->routeOperationLock->assertLeaseAllowsDatabaseTransition($leaseDeadline);
                     $route->save();
                     $routeUpdated = true;
                 }
 
-                $this->routeOperationLock->assertLeaseAllowsDatabaseTransition($leaseDeadline);
                 $dialogsPinned = Dialog::query()
                     ->where('channel_id', $channel->id)
                     ->whereNull('bitrix24_open_line_route_id')

@@ -10,9 +10,12 @@ use App\Models\Contact;
 use App\Models\ContactIdentity;
 use App\Models\Dialog;
 use App\Services\Bitrix24\BackfillBitrix24OpenLineRoutesAction;
+use App\Services\Bitrix24\Bitrix24OpenLineMutationAuthority;
 use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryClient;
 use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryException;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\Feature\Concerns\InteractsWithBitrix24RuntimeProfile;
 use Tests\TestCase;
 
@@ -132,6 +135,111 @@ class Bitrix24OpenLineRoutesBackfillTest extends TestCase
         $this->assertSame(Bitrix24OpenLineRoute::STATUS_ACTIVE, $route->fresh()->status);
         $this->assertSame('ABRIKOSOFF_TELEGRAM_NEW', $route->fresh()->source_id);
         $this->assertSame($route->id, $dialog->fresh()->bitrix24_open_line_route_id);
+    }
+
+    public function test_backfill_rolls_back_route_and_dialog_writes_when_registry_lease_expires_before_commit(): void
+    {
+        $connection = $this->makeProfileLinkedActiveBitrix24Connection(profileOverrides: [
+            'telegram_connector_code' => 'abrikosoff_telegram',
+            'telegram_line_id' => '48',
+            'telegram_source_id' => 'ABRIKOSOFF_TELEGRAM_NEW',
+            'max_connector_code' => null,
+            'max_line_id' => null,
+            'max_source_id' => null,
+        ]);
+        $profile = $connection->profile()->firstOrFail();
+        $owner = Bitrix24CallbackOwner::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'owner_key' => 'expiring-lease-owner',
+            'display_name' => 'Expiring lease owner',
+            'callback_base_url' => $profile->callback_base_url,
+            'status' => Bitrix24CallbackOwner::STATUS_ACTIVE,
+        ]);
+        $channel = $this->makeTelegramBotChannel();
+        $route = Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT,
+            'connector_code' => 'abrikosoff_telegram',
+            'line_id' => '48',
+            'callback_owner_id' => $owner->id,
+            'source_id' => 'ABRIKOSOFF_TELEGRAM_OLD',
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+        ]);
+        $dialog = $this->makeLiveDialog($channel, 'b24-chat-expiring-lease');
+        $this->mock(Bitrix24OpenLinesRouteRegistryClient::class, function ($mock) use ($owner, $profile): void {
+            $mock->shouldReceive('acquireLineLease')
+                ->once()
+                ->withArgs(fn (
+                    Bitrix24Profile $usedProfile,
+                    Bitrix24CallbackOwner $usedOwner,
+                    string $connectorCode,
+                    string $connectorType,
+                    string $lineId,
+                    int $leaseSeconds,
+                    string $scope,
+                ): bool => $usedProfile->is($profile)
+                    && $usedOwner->is($owner)
+                    && $connectorCode === 'abrikosoff_telegram'
+                    && $connectorType === Bitrix24OpenLineRoute::OPEN_LINES_CONNECTOR_TYPE_TELEGRAM
+                    && $lineId === '48'
+                    && $leaseSeconds >= 180
+                    && $scope === Bitrix24OpenLineMutationAuthority::SCOPE_LINE_RUNTIME)
+                ->andReturn([
+                    'lease_token' => str_repeat('c', 64),
+                    'expires_at' => now()->addMinutes(10)->toIso8601String(),
+                ]);
+            $mock->shouldReceive('releaseLineLease')
+                ->once()
+                ->withArgs(fn (
+                    Bitrix24Profile $usedProfile,
+                    Bitrix24CallbackOwner $usedOwner,
+                    string $lineId,
+                    string $leaseToken,
+                    string $scope,
+                ): bool => $usedProfile->is($profile)
+                    && $usedOwner->is($owner)
+                    && $lineId === '48'
+                    && $leaseToken === str_repeat('c', 64)
+                    && $scope === Bitrix24OpenLineMutationAuthority::SCOPE_LINE_RUNTIME);
+        });
+
+        $leaseExpiredAfterDialogWrite = false;
+
+        DB::listen(function (QueryExecuted $query) use (&$leaseExpiredAfterDialogWrite): void {
+            $sql = mb_strtolower(ltrim($query->sql));
+
+            if ($leaseExpiredAfterDialogWrite
+                || ! str_starts_with($sql, 'update')
+                || ! str_contains($sql, 'dialogs')
+                || ! str_contains($sql, 'bitrix24_open_line_route_id')
+            ) {
+                return;
+            }
+
+            $leaseExpiredAfterDialogWrite = true;
+            $this->travel(10)->minutes();
+        });
+
+        try {
+            $result = app(BackfillBitrix24OpenLineRoutesAction::class)->handle();
+        } finally {
+            $this->travelBack();
+        }
+
+        $this->assertTrue($leaseExpiredAfterDialogWrite);
+        $this->assertSame(0, $result['routes_created']);
+        $this->assertSame(0, $result['routes_updated']);
+        $this->assertSame(0, $result['dialogs_pinned']);
+        $this->assertSame(1, $result['skipped']);
+        $this->assertStringContainsString(
+            'route_registry_line_lease_expiring',
+            $result['warnings'][0],
+        );
+        $this->assertSame('ABRIKOSOFF_TELEGRAM_OLD', $route->fresh()->source_id);
+        $this->assertNull($dialog->fresh()->bitrix24_open_line_route_id);
     }
 
     public function test_backfill_rejects_non_numeric_legacy_line_before_registry_or_database_mutation(): void
