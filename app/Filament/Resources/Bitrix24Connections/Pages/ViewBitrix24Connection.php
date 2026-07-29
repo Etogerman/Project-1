@@ -23,6 +23,7 @@ use App\Services\Bitrix24\Bitrix24OpenLineRouteLeaseDeadline;
 use App\Services\Bitrix24\Bitrix24OpenLineRouteMutationFence;
 use App\Services\Bitrix24\Bitrix24OpenLineRouteOperationLock;
 use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryException;
+use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistrySnapshotLock;
 use App\Services\Bitrix24\DoctorBitrix24OpenLinesRouteRegistryAction;
 use App\Services\Bitrix24\PublishBitrix24OpenLinesRouteRegistryAction;
 use App\Services\Bitrix24\RepairStaleBitrix24OpenLineAction;
@@ -659,6 +660,7 @@ class ViewBitrix24Connection extends ViewRecord
             ? (int) $preflightRoute->mutation_state_version
             : null;
         $routeOperationLock = app(Bitrix24OpenLineRouteOperationLock::class);
+        $snapshotLock = app(Bitrix24OpenLinesRouteRegistrySnapshotLock::class);
         $mutationFence = app(Bitrix24OpenLineRouteMutationFence::class);
         $owner = $this->resolveActiveCallbackOwner($profile, $form['callback_owner_id']);
         $connectorType = Bitrix24OpenLineRoute::openLinesConnectorTypeForChannelType(
@@ -794,41 +796,44 @@ class ViewBitrix24Connection extends ViewRecord
         };
 
         try {
-            $saved = $routeOperationLock->run(
-                $profile->id,
-                $channel->id,
-                function () use (
+            $saved = $snapshotLock->run(
+                fn (): bool => $routeOperationLock->run(
+                    $profile->id,
+                    $channel->id,
+                    function () use (
+                        $connectorType,
+                        $form,
+                        $owner,
+                        $profile,
+                        $requiresOwnershipLease,
+                        $routeOperationLock,
+                        $saveRoute,
+                    ): bool {
+                        if (! $requiresOwnershipLease) {
+                            return $routeOperationLock->runForLine(
+                                (string) $profile->portal_domain,
+                                $form['line_id'],
+                                $saveRoute,
+                            );
+                        }
 
-                    $connectorType,
-                    $form,
-                    $owner,
-                    $profile,
-                    $requiresOwnershipLease,
-                    $routeOperationLock,
-                    $saveRoute,
-                ): bool {
-                    if (! $requiresOwnershipLease) {
-                        return $routeOperationLock->runForLine(
-                            (string) $profile->portal_domain,
+                        return $routeOperationLock->runForOwnedLine(
+                            $profile,
+                            $owner,
+                            $form['connector_code'],
+                            $connectorType,
                             $form['line_id'],
                             $saveRoute,
+                            scope: Bitrix24OpenLineMutationAuthority::SCOPE_CONNECTOR_REGISTRATION,
+                            operationType: 'generic_route_save',
                         );
-                    }
-
-                    return $routeOperationLock->runForOwnedLine(
-                        $profile,
-                        $owner,
-                        $form['connector_code'],
-                        $connectorType,
-                        $form['line_id'],
-                        $saveRoute,
-                        scope: Bitrix24OpenLineMutationAuthority::SCOPE_CONNECTOR_REGISTRATION,
-                        operationType: 'generic_route_save',
-                    );
-                },
+                    },
+                ),
             );
-        } catch (LockTimeoutException) {
-            $this->failOpenLineRouteSave(Bitrix24OpenLineRouteOperationLock::BUSY_MESSAGE);
+        } catch (LockTimeoutException $exception) {
+            $this->failOpenLineRouteSave(
+                $exception->getMessage() ?: Bitrix24OpenLineRouteOperationLock::BUSY_MESSAGE,
+            );
 
             return;
         } catch (Bitrix24OpenLineMutationAuthorityException) {
@@ -903,6 +908,10 @@ class ViewBitrix24Connection extends ViewRecord
                 ],
             );
         } catch (Bitrix24CallbackOwnerIdentityLockedException $exception) {
+            $this->failCallbackOwnerSave($exception->getMessage());
+
+            return;
+        } catch (LockTimeoutException $exception) {
             $this->failCallbackOwnerSave($exception->getMessage());
 
             return;
@@ -1005,6 +1014,10 @@ class ViewBitrix24Connection extends ViewRecord
                 ],
             );
         } catch (Bitrix24CallbackOwnerIdentityLockedException $exception) {
+            $this->failCallbackOwnerSave($exception->getMessage());
+
+            return;
+        } catch (LockTimeoutException $exception) {
             $this->failCallbackOwnerSave($exception->getMessage());
 
             return;

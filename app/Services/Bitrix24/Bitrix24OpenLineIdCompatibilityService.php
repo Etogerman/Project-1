@@ -2,9 +2,11 @@
 
 namespace App\Services\Bitrix24;
 
+use App\Models\Bitrix24CallbackOwner;
 use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Bitrix24Profile;
 use Closure;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\DB;
 use JsonException;
 use Throwable;
@@ -17,6 +19,10 @@ final class Bitrix24OpenLineIdCompatibilityService
         'active_leases' => 'route_registry_line_leases.json',
     ];
 
+    public function __construct(
+        private readonly Bitrix24OpenLinesRouteRegistrySnapshotLock $snapshotLock,
+    ) {}
+
     /**
      * @return array<string, mixed>
      */
@@ -24,10 +30,12 @@ final class Bitrix24OpenLineIdCompatibilityService
     {
         $storageDirectory = $this->validatedStorageDirectory($storageDirectory);
 
-        return $this->withRegistryLock(
-            $storageDirectory,
-            LOCK_SH,
-            fn (): array => $this->preflightUnlocked($storageDirectory),
+        return $this->runWithSnapshotLock(
+            fn (): array => $this->withRegistryLock(
+                $storageDirectory,
+                LOCK_SH,
+                fn (): array => $this->preflightUnlocked($storageDirectory),
+            ),
         );
     }
 
@@ -38,9 +46,13 @@ final class Bitrix24OpenLineIdCompatibilityService
         string $storageDirectory,
         bool $lockDatabaseRows = false,
     ): array {
+        if ($lockDatabaseRows) {
+            $this->lockDatabaseSourceRows();
+        }
+
         $invalid = [];
-        $databaseEntries = $this->databaseEntries($lockDatabaseRows);
-        $profileDatabaseEntries = $this->profileDatabaseEntries($lockDatabaseRows);
+        $databaseEntries = $this->databaseEntries();
+        $profileDatabaseEntries = $this->profileDatabaseEntries();
         $entries = [...$databaseEntries, ...$profileDatabaseEntries];
         $sourceCounts = [
             'database' => count($databaseEntries),
@@ -111,16 +123,18 @@ final class Bitrix24OpenLineIdCompatibilityService
         $storageDirectory = $this->validatedStorageDirectory($storageDirectory);
         $artifactPath = $this->validatedArtifactPath($storageDirectory, $artifactPath);
 
-        return $this->withRegistryLock(
-            $storageDirectory,
-            LOCK_SH,
-            fn (): array => DB::transaction(
-                fn (): array => $this->writeArtifact(
-                    $artifactPath,
-                    $this->preflightUnlocked($storageDirectory, lockDatabaseRows: true) + [
-                        'migration_applied' => false,
-                        'backup_files' => [],
-                    ],
+        return $this->runWithSnapshotLock(
+            fn (): array => $this->withRegistryLock(
+                $storageDirectory,
+                LOCK_SH,
+                fn (): array => DB::transaction(
+                    fn (): array => $this->writeArtifact(
+                        $artifactPath,
+                        $this->preflightUnlocked($storageDirectory, lockDatabaseRows: true) + [
+                            'migration_applied' => false,
+                            'backup_files' => [],
+                        ],
+                    ),
                 ),
             ),
         );
@@ -134,10 +148,12 @@ final class Bitrix24OpenLineIdCompatibilityService
         $storageDirectory = $this->validatedStorageDirectory($storageDirectory);
         $artifactPath = $this->validatedArtifactPath($storageDirectory, $artifactPath);
 
-        return $this->withRegistryLock(
-            $storageDirectory,
-            LOCK_EX,
-            fn (): array => $this->migrateUnlocked($storageDirectory, $artifactPath),
+        return $this->runWithSnapshotLock(
+            fn (): array => $this->withRegistryLock(
+                $storageDirectory,
+                LOCK_EX,
+                fn (): array => $this->migrateUnlocked($storageDirectory, $artifactPath),
+            ),
         );
     }
 
@@ -282,12 +298,12 @@ final class Bitrix24OpenLineIdCompatibilityService
     /**
      * @return list<array<string, mixed>>
      */
-    private function databaseEntries(bool $lockForUpdate = false): array
+    private function databaseEntries(): array
     {
         return Bitrix24OpenLineRoute::query()
             ->with(['callbackOwner:id,owner_key,callback_base_url'])
             ->whereNotNull('line_id')
-            ->when($lockForUpdate, fn ($query) => $query->lockForUpdate())
+            ->orderBy('id')
             ->get()
             ->map(function (Bitrix24OpenLineRoute $route): array {
                 $lineId = (string) $route->line_id;
@@ -317,7 +333,7 @@ final class Bitrix24OpenLineIdCompatibilityService
     /**
      * @return list<array<string, mixed>>
      */
-    private function profileDatabaseEntries(bool $lockForUpdate = false): array
+    private function profileDatabaseEntries(): array
     {
         return Bitrix24Profile::query()
             ->with(['callbackOwners:id,bitrix24_profile_id,owner_key,callback_base_url'])
@@ -326,7 +342,6 @@ final class Bitrix24OpenLineIdCompatibilityService
                     ->whereNotNull('telegram_line_id')
                     ->orWhereNotNull('max_line_id');
             })
-            ->when($lockForUpdate, fn ($query) => $query->lockForUpdate())
             ->orderBy('id')
             ->get()
             ->flatMap(function (Bitrix24Profile $profile): array {
@@ -371,6 +386,44 @@ final class Bitrix24OpenLineIdCompatibilityService
             })
             ->values()
             ->all();
+    }
+
+    /**
+     * Lock every database row that can contribute to a compatibility snapshot.
+     *
+     * Relations are loaded by separate queries, so locking only the route or
+     * profile row does not protect callback-owner identity. Keep one
+     * deterministic lock order for all sources before reading any relation.
+     */
+    private function lockDatabaseSourceRows(): void
+    {
+        Bitrix24Profile::query()
+            ->orderBy('id')
+            ->lockForUpdate()
+            ->get(['id']);
+
+        Bitrix24OpenLineRoute::query()
+            ->orderBy('id')
+            ->lockForUpdate()
+            ->get(['id']);
+
+        Bitrix24CallbackOwner::query()
+            ->orderBy('id')
+            ->lockForUpdate()
+            ->get(['id']);
+    }
+
+    private function runWithSnapshotLock(Closure $callback): mixed
+    {
+        try {
+            return $this->snapshotLock->run($callback);
+        } catch (LockTimeoutException $exception) {
+            throw new Bitrix24OpenLineIdCompatibilityException(
+                'openlines_line_id_snapshot_busy',
+                Bitrix24OpenLinesRouteRegistrySnapshotLock::BUSY_MESSAGE,
+                $exception,
+            );
+        }
     }
 
     /**

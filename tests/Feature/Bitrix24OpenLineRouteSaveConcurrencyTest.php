@@ -16,6 +16,7 @@ use App\Services\Bitrix24\Bitrix24OpenLineAutoSetupException;
 use App\Services\Bitrix24\Bitrix24OpenLineRouteOperationLock;
 use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryClient;
 use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryException;
+use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistrySnapshotLock;
 use App\Services\Bitrix24\SaveBitrix24CallbackOwnerAction;
 use Filament\Facades\Filament;
 use Illuminate\Database\Events\QueryExecuted;
@@ -379,6 +380,59 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
         $this->assertSame('Конкурентная ошибка refresh.', $route->last_error_message);
         $this->assertSame('abc_telegram', $route->connector_code);
         $this->assertSame('51', $route->line_id);
+    }
+
+    public function test_registry_snapshot_lock_blocks_inactive_generic_save_until_publish_finishes(): void
+    {
+        if (DB::getDriverName() !== 'pgsql') {
+            $this->markTestSkipped('The production registry snapshot lock is PostgreSQL-specific.');
+        }
+
+        [$admin, $connection, $channel, $route] = $this->makeRouteFixture();
+        $component = Livewire::actingAs($admin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->set(
+                "openLineRouteForms.{$channel->id}.status",
+                Bitrix24OpenLineRoute::STATUS_INACTIVE,
+            );
+        $defaultConnection = (string) config('database.default');
+        $concurrentConnection = 'bitrix24_registry_snapshot_concurrent';
+        config([
+            'database.connections.'.$concurrentConnection => config(
+                'database.connections.'.$defaultConnection,
+            ),
+        ]);
+        DB::purge($concurrentConnection);
+        $publishingLock = new Bitrix24OpenLinesRouteRegistrySnapshotLock(
+            DB::connection($concurrentConnection),
+        );
+
+        try {
+            $publishingLock->run(function () use ($channel, $component, $route): void {
+                $component
+                    ->call('saveOpenLineRoute', $channel->id)
+                    ->assertSet(
+                        'openLineRouteErrorMessage',
+                        Bitrix24OpenLinesRouteRegistrySnapshotLock::BUSY_MESSAGE,
+                    );
+
+                $this->assertSame(
+                    Bitrix24OpenLineRoute::STATUS_ACTIVE,
+                    $route->fresh()->status,
+                );
+            });
+
+            $component
+                ->call('saveOpenLineRoute', $channel->id)
+                ->assertSet('openLineRouteErrorMessage', null);
+        } finally {
+            DB::purge($concurrentConnection);
+        }
+
+        $this->assertSame(
+            Bitrix24OpenLineRoute::STATUS_INACTIVE,
+            $route->fresh()->status,
+        );
     }
 
     public function test_stale_form_cannot_override_a_misconfigured_transition_committed_first(): void

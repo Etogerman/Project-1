@@ -11,9 +11,11 @@ use App\Models\Channel;
 use App\Models\User;
 use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryClient;
 use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryException;
+use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistrySnapshotLock;
 use App\Services\Bitrix24\DoctorBitrix24OpenLinesRouteRegistryAction;
 use App\Services\Bitrix24\PublishBitrix24OpenLinesRouteRegistryAction;
 use Filament\Facades\Filament;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request;
@@ -127,6 +129,61 @@ class Bitrix24OpenLinesRouteRegistryTest extends TestCase
         $this->assertSame([], $inactivePayload['connectors']);
         $this->assertSame([], $inactivePayload['routes']);
         $this->assertRegistryRequestSigned($inactiveRequest, $secret, 'POST', '');
+    }
+
+    public function test_publish_holds_snapshot_lock_through_remote_request(): void
+    {
+        if (DB::getDriverName() !== 'pgsql') {
+            $this->markTestSkipped('The production registry snapshot lock is PostgreSQL-specific.');
+        }
+
+        $profile = $this->makeProfile([
+            'portal_domain' => 'stagecrm.fvds.ru',
+            'callback_base_url' => 'https://local.example.test/callback',
+            'openlines_route_registry_secret_encrypted' => 'registry-secret-for-snapshot-lock-test',
+        ]);
+        $defaultConnection = (string) config('database.default');
+        $concurrentConnection = 'bitrix24_registry_publish_snapshot_concurrent';
+        config([
+            'database.connections.'.$concurrentConnection => config(
+                'database.connections.'.$defaultConnection,
+            ),
+        ]);
+        DB::purge($concurrentConnection);
+        $concurrentLock = new Bitrix24OpenLinesRouteRegistrySnapshotLock(
+            DB::connection($concurrentConnection),
+        );
+        $lockObserved = false;
+
+        Http::fake(function () use (&$lockObserved, $concurrentLock) {
+            try {
+                $concurrentLock->run(fn (): bool => true);
+                $this->fail('A concurrent snapshot source write must not enter during publish.');
+            } catch (LockTimeoutException $exception) {
+                $lockObserved = true;
+                $this->assertSame(
+                    Bitrix24OpenLinesRouteRegistrySnapshotLock::BUSY_MESSAGE,
+                    $exception->getMessage(),
+                );
+            }
+
+            return Http::response([
+                'ok' => true,
+                'owner_profile_key' => Bitrix24CallbackOwner::DEFAULT_LOCAL_OWNER_KEY,
+                'published_routes' => 0,
+            ]);
+        });
+
+        try {
+            $result = app(PublishBitrix24OpenLinesRouteRegistryAction::class)
+                ->handle($profile->fresh());
+        } finally {
+            DB::purge($concurrentConnection);
+        }
+
+        $this->assertTrue($lockObserved);
+        $this->assertSame(1, $result['published_owners']);
+        $this->assertSame(0, $result['published_routes']);
     }
 
     public function test_publish_sends_numeric_only_max_connector_as_json_object_key(): void

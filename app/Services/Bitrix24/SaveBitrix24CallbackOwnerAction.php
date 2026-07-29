@@ -9,6 +9,10 @@ use Illuminate\Support\Facades\DB;
 
 class SaveBitrix24CallbackOwnerAction
 {
+    public function __construct(
+        private readonly Bitrix24OpenLinesRouteRegistrySnapshotLock $snapshotLock,
+    ) {}
+
     /**
      * @param  array{owner_key:string,display_name:?string,callback_base_url:string,status:string}  $values
      */
@@ -17,19 +21,24 @@ class SaveBitrix24CallbackOwnerAction
         int $ownerId,
         array $values,
     ): ?Bitrix24CallbackOwner {
-        return DB::transaction(function () use ($profile, $ownerId, $values): ?Bitrix24CallbackOwner {
-            $owner = Bitrix24CallbackOwner::query()
-                ->where('bitrix24_profile_id', $profile->id)
-                ->whereKey($ownerId)
-                ->lockForUpdate()
-                ->first();
+        return $this->snapshotLock->run(
+            fn (): ?Bitrix24CallbackOwner => DB::transaction(
+                function () use ($profile, $ownerId, $values): ?Bitrix24CallbackOwner {
+                    $owner = Bitrix24CallbackOwner::query()
+                        ->where('bitrix24_profile_id', $profile->id)
+                        ->whereKey($ownerId)
+                        ->lockForUpdate()
+                        ->first();
 
-            if (! $owner instanceof Bitrix24CallbackOwner) {
-                return null;
-            }
+                    if (! $owner instanceof Bitrix24CallbackOwner) {
+                        return null;
+                    }
 
-            return $this->saveLocked($owner, $values);
-        }, attempts: 3);
+                    return $this->saveLocked($owner, $values);
+                },
+                attempts: 3,
+            ),
+        );
     }
 
     /**
@@ -40,32 +49,37 @@ class SaveBitrix24CallbackOwnerAction
         string $ownerKey,
         array $values,
     ): Bitrix24CallbackOwner {
-        return DB::transaction(function () use ($profile, $ownerKey, $values): Bitrix24CallbackOwner {
-            $owner = Bitrix24CallbackOwner::query()
-                ->where('bitrix24_profile_id', $profile->id)
-                ->where('owner_key', $ownerKey)
-                ->lockForUpdate()
-                ->first();
-            $attributes = ['owner_key' => $ownerKey] + $values;
+        return $this->snapshotLock->run(
+            fn (): Bitrix24CallbackOwner => DB::transaction(
+                function () use ($profile, $ownerKey, $values): Bitrix24CallbackOwner {
+                    $owner = Bitrix24CallbackOwner::query()
+                        ->where('bitrix24_profile_id', $profile->id)
+                        ->where('owner_key', $ownerKey)
+                        ->lockForUpdate()
+                        ->first();
+                    $attributes = ['owner_key' => $ownerKey] + $values;
 
-            if (! $owner instanceof Bitrix24CallbackOwner) {
-                Bitrix24CallbackOwner::query()->createOrFirst(
-                    [
-                        'bitrix24_profile_id' => $profile->id,
-                        'owner_key' => $ownerKey,
-                    ],
-                    $values,
-                );
+                    if (! $owner instanceof Bitrix24CallbackOwner) {
+                        Bitrix24CallbackOwner::query()->createOrFirst(
+                            [
+                                'bitrix24_profile_id' => $profile->id,
+                                'owner_key' => $ownerKey,
+                            ],
+                            $values,
+                        );
 
-                $owner = Bitrix24CallbackOwner::query()
-                    ->where('bitrix24_profile_id', $profile->id)
-                    ->where('owner_key', $ownerKey)
-                    ->lockForUpdate()
-                    ->firstOrFail();
-            }
+                        $owner = Bitrix24CallbackOwner::query()
+                            ->where('bitrix24_profile_id', $profile->id)
+                            ->where('owner_key', $ownerKey)
+                            ->lockForUpdate()
+                            ->firstOrFail();
+                    }
 
-            return $this->saveLocked($owner, $attributes);
-        }, attempts: 3);
+                    return $this->saveLocked($owner, $attributes);
+                },
+                attempts: 3,
+            ),
+        );
     }
 
     /**
