@@ -11,12 +11,27 @@ final class MarkBitrix24OpenLineRouteMisconfiguredAction
         private readonly Bitrix24OpenLineRouteOperationLock $routeOperationLock,
         private readonly Bitrix24OpenLineRouteMutationFence $mutationFence,
         private readonly Bitrix24OpenLineMutationAuthorityContext $authorityContext,
+        private readonly Bitrix24OpenLinesRouteRegistrySnapshotLock $snapshotLock,
     ) {}
 
     public function handle(
         int $routeId,
         ?string $message,
         ?Bitrix24OpenLineMutationAuthority $authority = null,
+    ): ?Bitrix24OpenLineRoute {
+        return $this->snapshotLock->run(
+            fn (): ?Bitrix24OpenLineRoute => $this->handleUnderSnapshotLock(
+                $routeId,
+                $message,
+                $authority,
+            ),
+        );
+    }
+
+    private function handleUnderSnapshotLock(
+        int $routeId,
+        ?string $message,
+        ?Bitrix24OpenLineMutationAuthority $authority,
     ): ?Bitrix24OpenLineRoute {
         $authority ??= $this->authorityContext->current();
 
@@ -50,18 +65,20 @@ final class MarkBitrix24OpenLineRouteMisconfiguredAction
         Bitrix24OpenLineRoute $expectedRoute,
         ?string $message,
     ): ?Bitrix24OpenLineRoute {
-        return $this->routeOperationLock->runShortStateTransition(
-            (int) $expectedRoute->getKey(),
-            function (?Bitrix24OpenLineRoute $route) use (
-                $expectedRoute,
-                $message,
-            ): ?Bitrix24OpenLineRoute {
-                if (! $this->matchesExpectedState($route, $expectedRoute)) {
-                    return null;
-                }
+        return $this->snapshotLock->run(
+            fn (): ?Bitrix24OpenLineRoute => $this->routeOperationLock->runShortStateTransition(
+                (int) $expectedRoute->getKey(),
+                function (?Bitrix24OpenLineRoute $route) use (
+                    $expectedRoute,
+                    $message,
+                ): ?Bitrix24OpenLineRoute {
+                    if (! $this->matchesExpectedState($route, $expectedRoute)) {
+                        return null;
+                    }
 
-                return $this->mark($route, $message);
-            },
+                    return $this->mark($route, $message);
+                },
+            ),
         );
     }
 

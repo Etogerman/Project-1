@@ -9,10 +9,14 @@ use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Bitrix24Profile;
 use App\Models\Channel;
 use App\Models\User;
+use App\Services\Bitrix24\Bitrix24OpenLineMutationAuthorityContext;
+use App\Services\Bitrix24\Bitrix24OpenLineRouteMutationFence;
+use App\Services\Bitrix24\Bitrix24OpenLineRouteOperationLock;
 use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryClient;
 use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryException;
 use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistrySnapshotLock;
 use App\Services\Bitrix24\DoctorBitrix24OpenLinesRouteRegistryAction;
+use App\Services\Bitrix24\MarkBitrix24OpenLineRouteMisconfiguredAction;
 use App\Services\Bitrix24\PublishBitrix24OpenLinesRouteRegistryAction;
 use Filament\Facades\Filament;
 use Illuminate\Contracts\Cache\LockTimeoutException;
@@ -142,6 +146,25 @@ class Bitrix24OpenLinesRouteRegistryTest extends TestCase
             'callback_base_url' => 'https://local.example.test/callback',
             'openlines_route_registry_secret_encrypted' => 'registry-secret-for-snapshot-lock-test',
         ]);
+        $owner = $profile->callbackOwners()->firstOrFail();
+        $channel = Channel::factory()->create([
+            'name' => 'Telegram snapshot lock',
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+        $route = Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
+            'connector_code' => 'abc_snapshot_lock',
+            'line_id' => '51',
+            'line_name' => 'Telegram snapshot lock',
+            'callback_owner_id' => $owner->id,
+            'source_id' => 'ABC_SNAPSHOT_LOCK',
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+        ]);
         $defaultConnection = (string) config('database.default');
         $concurrentConnection = 'bitrix24_registry_publish_snapshot_concurrent';
         config([
@@ -153,12 +176,27 @@ class Bitrix24OpenLinesRouteRegistryTest extends TestCase
         $concurrentLock = new Bitrix24OpenLinesRouteRegistrySnapshotLock(
             DB::connection($concurrentConnection),
         );
+        $concurrentMarker = new MarkBitrix24OpenLineRouteMisconfiguredAction(
+            app(Bitrix24OpenLineRouteOperationLock::class),
+            app(Bitrix24OpenLineRouteMutationFence::class),
+            app(Bitrix24OpenLineMutationAuthorityContext::class),
+            $concurrentLock,
+        );
         $lockObserved = false;
+        $publishedRouteActive = null;
 
-        Http::fake(function () use (&$lockObserved, $concurrentLock) {
+        Http::fake(function (Request $request) use (
+            &$lockObserved,
+            &$publishedRouteActive,
+            $concurrentMarker,
+            $route,
+        ) {
             try {
-                $concurrentLock->run(fn (): bool => true);
-                $this->fail('A concurrent snapshot source write must not enter during publish.');
+                $concurrentMarker->handle(
+                    (int) $route->getKey(),
+                    'Конкурентная ошибка во время публикации.',
+                );
+                $this->fail('A concurrent route status transition must not enter during publish.');
             } catch (LockTimeoutException $exception) {
                 $lockObserved = true;
                 $this->assertSame(
@@ -167,10 +205,13 @@ class Bitrix24OpenLinesRouteRegistryTest extends TestCase
                 );
             }
 
+            $payload = json_decode($request->body(), true);
+            $publishedRouteActive = $payload['routes']['abc_snapshot_lock:51']['active'] ?? null;
+
             return Http::response([
                 'ok' => true,
                 'owner_profile_key' => Bitrix24CallbackOwner::DEFAULT_LOCAL_OWNER_KEY,
-                'published_routes' => 0,
+                'published_routes' => 1,
             ]);
         });
 
@@ -182,8 +223,20 @@ class Bitrix24OpenLinesRouteRegistryTest extends TestCase
         }
 
         $this->assertTrue($lockObserved);
+        $this->assertTrue($publishedRouteActive);
         $this->assertSame(1, $result['published_owners']);
-        $this->assertSame(0, $result['published_routes']);
+        $this->assertSame(1, $result['published_routes']);
+        $this->assertSame(Bitrix24OpenLineRoute::STATUS_ACTIVE, $route->fresh()->status);
+
+        app(MarkBitrix24OpenLineRouteMisconfiguredAction::class)->handle(
+            (int) $route->getKey(),
+            'Ошибка после завершения публикации.',
+        );
+
+        $this->assertSame(
+            Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
+            $route->fresh()->status,
+        );
     }
 
     public function test_publish_sends_numeric_only_max_connector_as_json_object_key(): void

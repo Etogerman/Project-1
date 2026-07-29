@@ -435,6 +435,55 @@ class Bitrix24OpenLineRouteSaveConcurrencyTest extends TestCase
         );
     }
 
+    public function test_registry_snapshot_lock_blocks_refresh_before_remote_mutations(): void
+    {
+        if (DB::getDriverName() !== 'pgsql') {
+            $this->markTestSkipped('The production registry snapshot lock is PostgreSQL-specific.');
+        }
+
+        [, $connection, , $route] = $this->makeRouteFixture();
+        $this->mock(Bitrix24OpenLinesRouteRegistryClient::class, function ($mock): void {
+            $mock->shouldNotReceive('acquireLineLease');
+            $mock->shouldNotReceive('releaseLineLease');
+        });
+        $this->mock(Bitrix24ApiClient::class, function ($mock): void {
+            $mock->shouldNotReceive('call');
+        });
+        $defaultConnection = (string) config('database.default');
+        $publishingConnection = 'bitrix24_registry_snapshot_refresh_concurrent';
+        config([
+            'database.connections.'.$publishingConnection => config(
+                'database.connections.'.$defaultConnection,
+            ),
+        ]);
+        DB::purge($publishingConnection);
+        $publishingLock = new Bitrix24OpenLinesRouteRegistrySnapshotLock(
+            DB::connection($publishingConnection),
+        );
+
+        try {
+            $publishingLock->run(function () use ($connection, $route): void {
+                try {
+                    app(AutoSetupBitrix24OpenLineRouteAction::class)
+                        ->refreshConnectorRegistration($connection, $route);
+                    $this->fail('Refresh must stop while registry publication owns the snapshot lock.');
+                } catch (Bitrix24OpenLineAutoSetupException $exception) {
+                    $this->assertSame(
+                        Bitrix24OpenLinesRouteRegistrySnapshotLock::BUSY_MESSAGE,
+                        $exception->getMessage(),
+                    );
+                }
+
+                $this->assertSame(
+                    Bitrix24OpenLineRoute::STATUS_ACTIVE,
+                    $route->fresh()->status,
+                );
+            });
+        } finally {
+            DB::purge($publishingConnection);
+        }
+    }
+
     public function test_stale_form_cannot_override_a_misconfigured_transition_committed_first(): void
     {
         [$admin, $connection, $channel, $route] = $this->makeRouteFixture();

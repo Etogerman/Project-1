@@ -32,6 +32,7 @@ class AutoSetupBitrix24OpenLineRouteAction
         private readonly Bitrix24OpenLineRouteOperationLock $routeOperationLock,
         private readonly MarkBitrix24OpenLineRouteMisconfiguredAction $markRouteMisconfiguredAction,
         private readonly Bitrix24OpenLineRouteMutationFence $mutationFence,
+        private readonly Bitrix24OpenLinesRouteRegistrySnapshotLock $snapshotLock,
     ) {}
 
     public function refreshConnectorRegistration(Bitrix24Connection $connection, Bitrix24OpenLineRoute $route): Bitrix24OpenLineRoute
@@ -40,33 +41,39 @@ class AutoSetupBitrix24OpenLineRouteAction
         $channelId = (int) $route->channel_id;
 
         try {
-            return $this->routeOperationLock->run(
-                $profileId,
-                $channelId,
-                function () use (
-                    $channelId,
-                    $connection,
+            return $this->snapshotLock->run(
+                fn (): Bitrix24OpenLineRoute => $this->routeOperationLock->run(
                     $profileId,
-                ): Bitrix24OpenLineRoute {
-                    try {
-                        return $this->refreshConnectorRegistrationUnderLock(
-                            $connection,
-                            $profileId,
-                            $channelId,
-                        );
-                    } catch (Bitrix24OpenLinesRouteRegistryException $exception) {
-                        $message = $this->ownershipErrorMessage($exception);
+                    $channelId,
+                    function () use (
+                        $channelId,
+                        $connection,
+                        $profileId,
+                    ): Bitrix24OpenLineRoute {
+                        try {
+                            return $this->refreshConnectorRegistrationUnderLock(
+                                $connection,
+                                $profileId,
+                                $channelId,
+                            );
+                        } catch (Bitrix24OpenLinesRouteRegistryException $exception) {
+                            $message = $this->ownershipErrorMessage($exception);
 
-                        throw new Bitrix24OpenLineAutoSetupException(
-                            $message,
-                            previous: $exception,
-                        );
-                    }
-                },
+                            throw new Bitrix24OpenLineAutoSetupException(
+                                $message,
+                                previous: $exception,
+                            );
+                        }
+                    },
+                ),
             );
         } catch (LockTimeoutException $exception) {
+            $message = $exception->getMessage() === Bitrix24OpenLinesRouteRegistrySnapshotLock::BUSY_MESSAGE
+                ? Bitrix24OpenLinesRouteRegistrySnapshotLock::BUSY_MESSAGE
+                : Bitrix24OpenLineRouteOperationLock::BUSY_MESSAGE;
+
             throw new Bitrix24OpenLineAutoSetupException(
-                Bitrix24OpenLineRouteOperationLock::BUSY_MESSAGE,
+                $message,
                 previous: $exception,
             );
         } catch (Bitrix24OpenLineMutationAuthorityException $exception) {
