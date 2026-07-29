@@ -2,15 +2,20 @@
 
 namespace App\Services\Bitrix24;
 
+use App\Models\Bitrix24CallbackOwner;
 use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Bitrix24Profile;
 use App\Models\Channel;
 use App\Models\Dialog;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\DB;
 
 class BackfillBitrix24OpenLineRoutesAction
 {
+    public function __construct(
+        private readonly Bitrix24OpenLineRouteOperationLock $routeOperationLock,
+    ) {}
+
     /**
      * @return array{routes_created:int,routes_updated:int,dialogs_pinned:int,skipped:int,warnings:list<string>}
      */
@@ -80,39 +85,88 @@ class BackfillBitrix24OpenLineRoutesAction
         }
 
         if ($connectorCode === null || $lineId === null) {
-            $result['skipped']++;
-            $result['warnings'][] = sprintf(
+            $this->recordSkip($result, sprintf(
                 'Профиль `%s`: старая настройка ОЛ для `%s` неполная, connector или line не заполнены.',
                 $profile->profile_key,
                 $platform,
-            );
+            ));
 
             return;
         }
 
-        DB::transaction(function () use ($profile, $platform, $connectorCode, $lineId, $sourceId, &$result): void {
-            $channel = $this->resolveLegacyChannel($profile, $platform, $connectorCode, $lineId, $result);
+        if (! Bitrix24OpenLineRoute::isValidConnectorCode($connectorCode)) {
+            $this->recordSkip($result, sprintf(
+                'Профиль `%s`: connector `%s` не соответствует допустимому формату.',
+                $profile->profile_key,
+                $connectorCode,
+            ));
 
-            if (! $channel instanceof Channel) {
-                return;
-            }
+            return;
+        }
 
-            $route = $this->upsertLegacyRoute($profile, $channel, $connectorCode, $lineId, $sourceId, $result);
+        $canonicalLineId = Bitrix24OpenLineRoute::canonicalLineId($lineId);
 
-            if (! $route instanceof Bitrix24OpenLineRoute || ! $route->isUsable()) {
-                return;
-            }
+        if ($canonicalLineId === null) {
+            $this->recordSkip($result, sprintf(
+                'Профиль `%s`: LINE_ID должен состоять из 1–64 цифр, значение `%s` не применено.',
+                $profile->profile_key,
+                $lineId,
+            ));
 
-            $result['dialogs_pinned'] += Dialog::query()
-                ->where('channel_id', $channel->id)
-                ->whereNull('bitrix24_open_line_route_id')
-                ->whereNotNull('bitrix24_live_chat_id')
-                ->where('bitrix24_live_chat_id', '!=', '')
-                ->update([
-                    'bitrix24_open_line_route_id' => $route->id,
-                    'updated_at' => now(),
-                ]);
-        });
+            return;
+        }
+
+        $channel = $this->resolveLegacyChannel(
+            $profile,
+            $platform,
+            $connectorCode,
+            $canonicalLineId,
+            $result,
+        );
+
+        if (! $channel instanceof Channel) {
+            return;
+        }
+
+        try {
+            $outcome = $this->routeOperationLock->run(
+                (int) $profile->getKey(),
+                (int) $channel->getKey(),
+                fn (): array => $this->pinDialogsForExistingRoute(
+                    $profile,
+                    $channel,
+                    $connectorCode,
+                    $canonicalLineId,
+                    $sourceId,
+                ),
+            );
+        } catch (LockTimeoutException $exception) {
+            $this->recordSkip($result, $exception->getMessage());
+
+            return;
+        } catch (Bitrix24OpenLinesRouteRegistryException $exception) {
+            $this->recordSkip($result, sprintf(
+                'Профиль `%s`, `%s:%s`: registry отклонил backfill (%s).',
+                $profile->profile_key,
+                $connectorCode,
+                $canonicalLineId,
+                $exception->errorCode,
+            ));
+
+            return;
+        }
+
+        if (! $outcome['successful']) {
+            $this->recordSkip($result, $outcome['warning']);
+
+            return;
+        }
+
+        if ($outcome['route_updated']) {
+            $result['routes_updated']++;
+        }
+
+        $result['dialogs_pinned'] += $outcome['dialogs_pinned'];
     }
 
     /**
@@ -133,7 +187,11 @@ class BackfillBitrix24OpenLineRoutesAction
             ->usable()
             ->first();
 
-        if ($existingRoute instanceof Bitrix24OpenLineRoute && $existingRoute->channel instanceof Channel) {
+        if ($existingRoute instanceof Bitrix24OpenLineRoute
+            && $existingRoute->channel instanceof Channel
+            && $existingRoute->channel->platform === $platform
+            && $existingRoute->channel->isBotConnection()
+        ) {
             return $existingRoute->channel;
         }
 
@@ -151,14 +209,13 @@ class BackfillBitrix24OpenLineRoutesAction
             ->get();
 
         if ($channels->isEmpty()) {
-            $result['skipped']++;
-            $result['warnings'][] = sprintf(
+            $this->recordSkip($result, sprintf(
                 'Для профиля `%s` не найден локальный канал платформы `%s` под старую ОЛ `%s:%s`.',
                 $profile->profile_key,
                 $platform,
                 $connectorCode,
                 $lineId,
-            );
+            ));
 
             return null;
         }
@@ -175,119 +232,225 @@ class BackfillBitrix24OpenLineRoutesAction
             return $channels->first();
         }
 
-        $result['skipped']++;
-        $result['warnings'][] = sprintf(
+        $this->recordSkip($result, sprintf(
             'Профиль `%s`: старую ОЛ `%s:%s` нельзя безопасно привязать автоматически, найдено несколько каналов `%s`.',
             $profile->profile_key,
             $connectorCode,
             $lineId,
             $platform,
-        );
+        ));
 
         return null;
     }
 
     /**
-     * @param  array{routes_created:int,routes_updated:int,dialogs_pinned:int,skipped:int,warnings:list<string>}  $result
+     * @return array{successful:bool,route_updated:bool,dialogs_pinned:int,warning:string}
      */
-    private function upsertLegacyRoute(
+    private function pinDialogsForExistingRoute(
         Bitrix24Profile $profile,
         Channel $channel,
         string $connectorCode,
         string $lineId,
         ?string $sourceId,
-        array &$result,
-    ): ?Bitrix24OpenLineRoute {
+    ): array {
         $route = Bitrix24OpenLineRoute::query()
+            ->with('callbackOwner')
             ->where('bitrix24_profile_id', $profile->id)
             ->where('channel_id', $channel->id)
             ->first();
 
-        if ($route instanceof Bitrix24OpenLineRoute) {
-            if ($route->isUsable()
-                && ((string) $route->connector_code !== $connectorCode || (string) $route->line_id !== $lineId)) {
-                $result['skipped']++;
-                $result['warnings'][] = sprintf(
-                    'Маршрут #%d уже использует другую ОЛ, старые значения `%s:%s` не применены.',
-                    $route->id,
-                    $connectorCode,
-                    $lineId,
-                );
-
-                return null;
-            }
-
-            $existingOwner = Bitrix24OpenLineRoute::query()
-                ->where('line_owner_key', sprintf('%s#%s', $profile->portal_domain, $lineId))
-                ->whereKeyNot($route->getKey())
-                ->first();
-
-            if ($existingOwner instanceof Bitrix24OpenLineRoute) {
-                $result['skipped']++;
-                $result['warnings'][] = sprintf(
-                    'ОЛ `%s:%s` уже занята маршрутом #%d, маршрут #%d не переведён в legacy.',
-                    $connectorCode,
-                    $lineId,
-                    $existingOwner->id,
-                    $route->id,
-                );
-
-                return null;
-            }
-
-            $updates = [
-                'portal_domain' => $profile->portal_domain,
-                'profile_key' => $profile->profile_key,
-                'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
-                'connector_code' => $connectorCode,
-                'line_id' => $lineId,
-                'source_id' => $sourceId,
-            ];
-
-            if (! $route->isUsable()) {
-                $updates['status'] = Bitrix24OpenLineRoute::STATUS_LEGACY;
-            }
-
-            $route->forceFill($updates);
-
-            if ($route->isDirty()) {
-                $route->save();
-                $result['routes_updated']++;
-            }
-
-            return $route->fresh();
-        }
-
-        $existingOwner = Bitrix24OpenLineRoute::query()
-            ->where('line_owner_key', sprintf('%s#%s', $profile->portal_domain, $lineId))
-            ->first();
-
-        if ($existingOwner instanceof Bitrix24OpenLineRoute) {
-            $result['skipped']++;
-            $result['warnings'][] = sprintf(
-                'ОЛ `%s:%s` уже занята маршрутом #%d, новый legacy-маршрут для канала #%d не создан.',
+        if (! $route instanceof Bitrix24OpenLineRoute || ! $route->isUsable()) {
+            return $this->failedOutcome(sprintf(
+                'Профиль `%s`, канал #%d: нужен заранее опубликованный usable-маршрут `%s:%s`; backfill не создаёт и не активирует маршруты.',
+                $profile->profile_key,
+                $channel->id,
                 $connectorCode,
                 $lineId,
-                $existingOwner->id,
-                $channel->id,
-            );
-
-            return null;
+            ));
         }
 
-        $result['routes_created']++;
+        $channelType = Bitrix24OpenLineRoute::channelTypeForChannel($channel);
+        $connectorType = Bitrix24OpenLineRoute::openLinesConnectorTypeForChannelType($channelType);
+        $owner = $route->callbackOwner;
 
-        return Bitrix24OpenLineRoute::query()->create([
-            'bitrix24_profile_id' => $profile->id,
-            'channel_id' => $channel->id,
-            'portal_domain' => $profile->portal_domain,
-            'profile_key' => $profile->profile_key,
-            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
-            'connector_code' => $connectorCode,
-            'line_id' => $lineId,
-            'source_id' => $sourceId,
-            'status' => Bitrix24OpenLineRoute::STATUS_LEGACY,
-        ]);
+        if (! $this->routeMatchesIdentity(
+            $route,
+            $profile,
+            $channel,
+            $connectorCode,
+            $lineId,
+        )) {
+            return $this->failedOutcome(sprintf(
+                'Маршрут #%d не совпадает с канонической identity старой ОЛ `%s:%s`; backfill не изменён.',
+                $route->id,
+                $connectorCode,
+                $lineId,
+            ));
+        }
+
+        if (! is_string($connectorType)
+            || ! $owner instanceof Bitrix24CallbackOwner
+            || ! $owner->isActive()
+        ) {
+            return $this->failedOutcome(sprintf(
+                'Маршрут #%d не имеет активного callback-владельца или поддерживаемого connector type; backfill не изменён.',
+                $route->id,
+            ));
+        }
+
+        return $this->routeOperationLock->runForOwnedLine(
+            $profile,
+            $owner,
+            $connectorCode,
+            $connectorType,
+            $lineId,
+            fn (Bitrix24OpenLineRouteLeaseDeadline $leaseDeadline): array => $this->pinDialogsUnderLease(
+                $profile,
+                $channel,
+                $route,
+                $owner,
+                $connectorCode,
+                $lineId,
+                $sourceId,
+                $leaseDeadline,
+            ),
+        );
+    }
+
+    /**
+     * @return array{successful:bool,route_updated:bool,dialogs_pinned:int,warning:string}
+     */
+    private function pinDialogsUnderLease(
+        Bitrix24Profile $profile,
+        Channel $channel,
+        Bitrix24OpenLineRoute $expectedRoute,
+        Bitrix24CallbackOwner $expectedOwner,
+        string $connectorCode,
+        string $lineId,
+        ?string $sourceId,
+        Bitrix24OpenLineRouteLeaseDeadline $leaseDeadline,
+    ): array {
+        $this->routeOperationLock->assertLeaseAllowsDatabaseTransition($leaseDeadline);
+
+        return $this->routeOperationLock->runDatabaseTransaction(
+            function () use (
+                $profile,
+                $channel,
+                $expectedRoute,
+                $expectedOwner,
+                $connectorCode,
+                $lineId,
+                $sourceId,
+                $leaseDeadline,
+            ): array {
+                $route = Bitrix24OpenLineRoute::query()
+                    ->where('bitrix24_profile_id', $profile->id)
+                    ->where('channel_id', $channel->id)
+                    ->whereKey($expectedRoute->getKey())
+                    ->lockForUpdate()
+                    ->first();
+
+                $owner = Bitrix24CallbackOwner::query()
+                    ->where('bitrix24_profile_id', $profile->id)
+                    ->whereKey($expectedOwner->getKey())
+                    ->lockForUpdate()
+                    ->first();
+
+                $this->routeOperationLock->assertLeaseAllowsDatabaseTransition($leaseDeadline);
+
+                if (! $route instanceof Bitrix24OpenLineRoute
+                    || ! $route->isUsable()
+                    || ! $owner instanceof Bitrix24CallbackOwner
+                    || ! $this->callbackOwnerMatchesIdentity($owner, $expectedOwner)
+                    || (int) $route->callback_owner_id !== (int) $expectedOwner->getKey()
+                    || ! $this->routeMatchesIdentity(
+                        $route,
+                        $profile,
+                        $channel,
+                        $connectorCode,
+                        $lineId,
+                    )
+                ) {
+                    return $this->failedOutcome(
+                        'Маршрут или callback-владелец изменились после начала backfill; изменения не применены.',
+                    );
+                }
+
+                $routeUpdated = false;
+
+                if ($sourceId !== null && (string) $route->source_id !== $sourceId) {
+                    $route->forceFill(['source_id' => $sourceId]);
+                    $this->routeOperationLock->assertLeaseAllowsDatabaseTransition($leaseDeadline);
+                    $route->save();
+                    $routeUpdated = true;
+                }
+
+                $this->routeOperationLock->assertLeaseAllowsDatabaseTransition($leaseDeadline);
+                $dialogsPinned = Dialog::query()
+                    ->where('channel_id', $channel->id)
+                    ->whereNull('bitrix24_open_line_route_id')
+                    ->whereNotNull('bitrix24_live_chat_id')
+                    ->where('bitrix24_live_chat_id', '!=', '')
+                    ->update([
+                        'bitrix24_open_line_route_id' => $route->id,
+                        'updated_at' => now(),
+                    ]);
+
+                return [
+                    'successful' => true,
+                    'route_updated' => $routeUpdated,
+                    'dialogs_pinned' => $dialogsPinned,
+                    'warning' => '',
+                ];
+            },
+        );
+    }
+
+    private function routeMatchesIdentity(
+        Bitrix24OpenLineRoute $route,
+        Bitrix24Profile $profile,
+        Channel $channel,
+        string $connectorCode,
+        string $lineId,
+    ): bool {
+        return (string) $route->portal_domain === (string) $profile->portal_domain
+            && (string) $route->profile_key === (string) $profile->profile_key
+            && (string) $route->channel_type === Bitrix24OpenLineRoute::channelTypeForChannel($channel)
+            && (string) $route->connector_code === $connectorCode
+            && (string) $route->line_id === $lineId;
+    }
+
+    private function callbackOwnerMatchesIdentity(
+        Bitrix24CallbackOwner $owner,
+        Bitrix24CallbackOwner $expectedOwner,
+    ): bool {
+        return $owner->isActive()
+            && (int) $owner->bitrix24_profile_id === (int) $expectedOwner->bitrix24_profile_id
+            && (string) $owner->owner_key === (string) $expectedOwner->owner_key
+            && (string) $owner->callback_base_url === (string) $expectedOwner->callback_base_url
+            && (string) $owner->status === (string) $expectedOwner->status;
+    }
+
+    /**
+     * @return array{successful:false,route_updated:false,dialogs_pinned:0,warning:string}
+     */
+    private function failedOutcome(string $warning): array
+    {
+        return [
+            'successful' => false,
+            'route_updated' => false,
+            'dialogs_pinned' => 0,
+            'warning' => $warning,
+        ];
+    }
+
+    /**
+     * @param  array{routes_created:int,routes_updated:int,dialogs_pinned:int,skipped:int,warnings:list<string>}  $result
+     */
+    private function recordSkip(array &$result, string $warning): void
+    {
+        $result['skipped']++;
+        $result['warnings'][] = $warning;
     }
 
     private function nullableString(mixed $value): ?string
