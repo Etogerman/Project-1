@@ -18,6 +18,8 @@ class Bitrix24ApiClient
         private readonly ShouldRefreshBitrix24TokenAction $shouldRefreshToken,
         private readonly RefreshBitrix24AccessTokenAction $refreshAccessToken,
         private readonly LogBitrix24ApiCallAction $logApiCall,
+        private readonly Bitrix24OpenLineMutationAuthorityContext $authorityContext,
+        private readonly Bitrix24OpenLineRouteMutationFence $mutationFence,
     ) {}
 
     /**
@@ -30,12 +32,43 @@ class Bitrix24ApiClient
         bool $transportRetry = true,
         ?Closure $beforeRestAttempt = null,
     ): Bitrix24RestResponseData {
+        Bitrix24OpenLineRestMethodPolicy::assertClassified($method);
+        $mutationAuthority = $this->authorityContext->current();
+
+        if (Bitrix24OpenLineRestMethodPolicy::requiresAuthority($method)
+            && ! $mutationAuthority instanceof Bitrix24OpenLineMutationAuthority
+        ) {
+            throw new Bitrix24OpenLineMutationAuthorityException(
+                'openlines_mutation_authority_missing',
+                sprintf(
+                    'REST-метод %s требует действующий Open Lines mutation authority.',
+                    mb_strtolower(trim($method)),
+                ),
+            );
+        }
+
         $connection ??= $this->resolveActiveConnection->handle();
         $attemptedRefresh = false;
+        $this->assertMutationAuthority(
+            $mutationAuthority,
+            $connection,
+            $method,
+            $params,
+            remoteAttempt: false,
+        );
 
         if ($this->shouldRefreshToken->handle($connection)) {
-            $connection = $this->refreshAccessToken->handle($connection);
+            $connection = $mutationAuthority instanceof Bitrix24OpenLineMutationAuthority
+                ? $this->refreshAccessToken->handle($connection, $mutationAuthority)
+                : $this->refreshAccessToken->handle($connection);
             $attemptedRefresh = true;
+            $this->assertMutationAuthority(
+                $mutationAuthority,
+                $connection,
+                $method,
+                $params,
+                remoteAttempt: false,
+            );
         }
 
         $response = $this->performRestCall(
@@ -45,11 +78,21 @@ class Bitrix24ApiClient
             $attemptedRefresh ? 'rest_call_after_refresh' : 'rest_call',
             $transportRetry,
             beforeRestAttempt: $beforeRestAttempt,
+            mutationAuthority: $mutationAuthority,
         );
 
         if (! $attemptedRefresh && $this->shouldRefreshToken->handle($connection, $response)) {
-            $connection = $this->refreshAccessToken->handle($connection);
+            $connection = $mutationAuthority instanceof Bitrix24OpenLineMutationAuthority
+                ? $this->refreshAccessToken->handle($connection, $mutationAuthority)
+                : $this->refreshAccessToken->handle($connection);
             $attemptedRefresh = true;
+            $this->assertMutationAuthority(
+                $mutationAuthority,
+                $connection,
+                $method,
+                $params,
+                remoteAttempt: false,
+            );
             $response = $this->performRestCall(
                 $connection,
                 $method,
@@ -58,6 +101,7 @@ class Bitrix24ApiClient
                 $transportRetry,
                 true,
                 $beforeRestAttempt,
+                $mutationAuthority,
             );
         }
 
@@ -85,6 +129,7 @@ class Bitrix24ApiClient
         bool $transportRetry = true,
         bool $attemptedRefresh = false,
         ?Closure $beforeRestAttempt = null,
+        ?Bitrix24OpenLineMutationAuthority $mutationAuthority = null,
     ): Bitrix24RestResponseData {
         $url = $this->buildRestUrl->handle($connection, $method);
         $requestPayload = array_merge($params, [
@@ -96,6 +141,10 @@ class Bitrix24ApiClient
             $requestPayload,
             $transportRetry,
             $beforeRestAttempt,
+            $mutationAuthority,
+            $connection,
+            $method,
+            $params,
         );
         /** @var array<string, mixed> $responseData */
         $responseData = $response->json() ?? [];
@@ -141,15 +190,46 @@ class Bitrix24ApiClient
         array $requestPayload,
         bool $transportRetry,
         ?Closure $beforeRestAttempt,
+        ?Bitrix24OpenLineMutationAuthority $mutationAuthority,
+        Bitrix24Connection $connection,
+        string $method,
+        array $params,
     ): Response {
+        $attemptPreflight = function () use (
+            $beforeRestAttempt,
+            $connection,
+            $method,
+            $mutationAuthority,
+            $params,
+        ): void {
+            $this->assertMutationAuthority(
+                $mutationAuthority,
+                $connection,
+                $method,
+                $params,
+                remoteAttempt: true,
+            );
+            $beforeRestAttempt?->__invoke();
+        };
+        $timeoutSeconds = $mutationAuthority instanceof Bitrix24OpenLineMutationAuthority
+            ? $mutationAuthority->deadline->requestTimeoutSeconds(
+                (int) config('bitrix24.http.timeout_seconds', 15),
+            )
+            : (int) config('bitrix24.http.timeout_seconds', 15);
+        $connectTimeoutSeconds = $mutationAuthority instanceof Bitrix24OpenLineMutationAuthority
+            ? $mutationAuthority->deadline->requestTimeoutSeconds(
+                (int) config('bitrix24.http.connect_timeout_seconds', 5),
+            )
+            : (int) config('bitrix24.http.connect_timeout_seconds', 5);
+
         if (! $transportRetry) {
             try {
-                $beforeRestAttempt?->__invoke();
+                $attemptPreflight();
 
                 return Http::asForm()
                     ->acceptJson()
-                    ->timeout((int) config('bitrix24.http.timeout_seconds', 15))
-                    ->connectTimeout((int) config('bitrix24.http.connect_timeout_seconds', 5))
+                    ->timeout($timeoutSeconds)
+                    ->connectTimeout($connectTimeoutSeconds)
                     ->post($url, $requestPayload);
             } catch (ConnectionException $exception) {
                 throw new Bitrix24ApiException('Bitrix24 REST call failed without transport retry.', previous: $exception);
@@ -161,12 +241,12 @@ class Bitrix24ApiClient
 
         for ($attempt = 1; $attempt <= 2; $attempt++) {
             try {
-                $beforeRestAttempt?->__invoke();
+                $attemptPreflight();
 
                 $response = Http::asForm()
                     ->acceptJson()
-                    ->timeout((int) config('bitrix24.http.timeout_seconds', 15))
-                    ->connectTimeout((int) config('bitrix24.http.connect_timeout_seconds', 5))
+                    ->timeout($timeoutSeconds)
+                    ->connectTimeout($connectTimeoutSeconds)
                     ->post($url, $requestPayload);
             } catch (ConnectionException $exception) {
                 $lastConnectionException = $exception;
@@ -193,6 +273,43 @@ class Bitrix24ApiClient
             'Bitrix24 REST call failed without a response.',
             previous: $lastConnectionException,
         );
+    }
+
+    /**
+     * @param  array<string, mixed>  $params
+     */
+    private function assertMutationAuthority(
+        ?Bitrix24OpenLineMutationAuthority $authority,
+        Bitrix24Connection $connection,
+        string $method,
+        array $params,
+        bool $remoteAttempt,
+    ): void {
+        if (! $authority instanceof Bitrix24OpenLineMutationAuthority) {
+            if (Bitrix24OpenLineRestMethodPolicy::requiresAuthority($method)) {
+                throw new Bitrix24OpenLineMutationAuthorityException(
+                    'openlines_mutation_authority_missing',
+                    'Open Lines mutation authority отсутствует.',
+                );
+            }
+
+            return;
+        }
+
+        if (Bitrix24OpenLineRestMethodPolicy::requiresAuthority($method)) {
+            $authority->assertAllows($connection, $method, $params);
+        }
+
+        $authority->deadline->assertAvailableFor(
+            $remoteAttempt
+                ? max(
+                    1,
+                    (int) config('bitrix24.http.timeout_seconds', 15),
+                    (int) config('bitrix24.http.connect_timeout_seconds', 5),
+                )
+                : 1,
+        );
+        $this->mutationFence->assertCurrent($authority);
     }
 
     /**

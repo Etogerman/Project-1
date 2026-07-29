@@ -12,6 +12,7 @@ class QueueBitrix24HistoryExportAction
     public function __construct(
         private readonly ResolveRootContactAction $resolveRootContactAction,
         private readonly IsContactReadyForBitrix24HistoryExportAction $isContactReadyForBitrix24HistoryExportAction,
+        private readonly Bitrix24OpenLineScopedMutation $scopedMutation,
     ) {}
 
     public function handle(Contact|int $contact): Bitrix24HistoryExportQueueResultData
@@ -45,8 +46,11 @@ class QueueBitrix24HistoryExportAction
             $attributes['bitrix24_history_sync_status'] = Contact::BITRIX24_HISTORY_SYNC_STATUS_PENDING;
         }
 
-        $rootContact->forceFill($attributes)->save();
+        $this->scopedMutation->run(
+            fn () => $rootContact->forceFill($attributes)->save(),
+        );
 
+        $this->scopedMutation->assertCurrent();
         SyncChatHistoryToBitrix24Job::dispatch($rootContact->id);
 
         return new Bitrix24HistoryExportQueueResultData(

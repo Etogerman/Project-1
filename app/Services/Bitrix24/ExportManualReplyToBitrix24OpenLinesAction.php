@@ -22,6 +22,7 @@ class ExportManualReplyToBitrix24OpenLinesAction
         private readonly ResolveBitrix24OpenLinesDialogBindingAction $resolveDialogBindingAction,
         private readonly GuardBitrix24OpenLineMutationAction $guardOpenLineMutationAction,
         private readonly ResolveCurrentBitrix24OpenLineChatAction $resolveCurrentOpenLineChatAction,
+        private readonly Bitrix24OpenLineScopedMutation $scopedMutation,
     ) {}
 
     public function handle(Message $message, Dialog $dialog, Contact $rootContact): Bitrix24OpenLinesManualReplyExportData
@@ -340,11 +341,13 @@ class ExportManualReplyToBitrix24OpenLinesAction
 
     private function syncVerifiedBindingToCurrentChat(Dialog $dialog, Bitrix24CurrentOpenLineChatData $currentChat): void
     {
-        $dialog->forceFill([
-            'bitrix24_open_line_user_code_override' => $currentChat->userCode,
-            'bitrix24_open_line_resolved_chat_id_override' => $currentChat->chatId,
-            'bitrix24_open_line_binding_verified_at' => now(),
-        ])->save();
+        $this->scopedMutation->run(
+            fn () => $dialog->forceFill([
+                'bitrix24_open_line_user_code_override' => $currentChat->userCode,
+                'bitrix24_open_line_resolved_chat_id_override' => $currentChat->chatId,
+                'bitrix24_open_line_binding_verified_at' => now(),
+            ])->save(),
+        );
     }
 
     private function manualReplyExceptionFromGuard(

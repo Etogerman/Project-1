@@ -12,6 +12,7 @@ class QueueBitrix24DealSyncAction
     public function __construct(
         private readonly ResolveRootContactAction $resolveRootContactAction,
         private readonly IsContactReadyForBitrix24DealSyncAction $isContactReadyForBitrix24DealSyncAction,
+        private readonly Bitrix24OpenLineScopedMutation $scopedMutation,
     ) {}
 
     public function handle(Contact|int $contact): Bitrix24DealSyncQueueResultData
@@ -45,8 +46,11 @@ class QueueBitrix24DealSyncAction
             $attributes['bitrix24_deal_sync_status'] = Contact::BITRIX24_DEAL_SYNC_STATUS_PENDING;
         }
 
-        $rootContact->forceFill($attributes)->save();
+        $this->scopedMutation->run(
+            fn () => $rootContact->forceFill($attributes)->save(),
+        );
 
+        $this->scopedMutation->assertCurrent();
         EnsureBitrix24DealJob::dispatch($rootContact->id);
 
         return new Bitrix24DealSyncQueueResultData(

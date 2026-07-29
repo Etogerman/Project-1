@@ -37,6 +37,7 @@ use App\Policies\GeoCountryPolicy;
 use App\Policies\GeoRegionPolicy;
 use App\Policies\ScenarioPolicy;
 use App\Policies\UserPolicy;
+use App\Services\Bitrix24\Bitrix24OpenLineMutationAuthorityContext;
 use App\Services\Dialogs\DialogStageCatalog;
 use Illuminate\Auth\Events\Login;
 use Illuminate\Cache\RateLimiting\Limit;
@@ -54,6 +55,7 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->scoped(DialogStageCatalog::class);
+        $this->app->scoped(Bitrix24OpenLineMutationAuthorityContext::class);
     }
 
     /**

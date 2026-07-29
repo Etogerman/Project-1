@@ -2,11 +2,65 @@
 
 namespace Tests\Feature\Concerns;
 
+use App\Models\Bitrix24CallbackOwner;
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24Profile;
+use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryClient;
 
 trait InteractsWithBitrix24RuntimeProfile
 {
+    protected function fakeBitrix24OpenLineMutationLeases(): void
+    {
+        $client = $this->mock(Bitrix24OpenLinesRouteRegistryClient::class);
+        $client->shouldReceive('acquireLineLease')
+            ->byDefault()
+            ->andReturnUsing(
+                fn (
+                    Bitrix24Profile $profile,
+                    Bitrix24CallbackOwner $owner,
+                    string $connectorCode,
+                    string $connectorType,
+                    string $lineId,
+                    int $leaseSeconds,
+                    string $scope,
+                ): array => [
+                    'lease_token' => hash(
+                        'sha256',
+                        implode('|', [
+                            $profile->getKey(),
+                            $owner->getKey(),
+                            $connectorCode,
+                            $connectorType,
+                            $lineId,
+                            $scope,
+                        ]),
+                    ),
+                    'expires_at' => now()->addSeconds($leaseSeconds)->toIso8601String(),
+                ],
+            );
+        $client->shouldReceive('releaseLineLease')
+            ->byDefault()
+            ->andReturnNull();
+    }
+
+    protected function ensureActiveBitrix24CallbackOwner(Bitrix24Profile $profile): Bitrix24CallbackOwner
+    {
+        return Bitrix24CallbackOwner::query()->updateOrCreate(
+            [
+                'bitrix24_profile_id' => $profile->getKey(),
+                'owner_key' => Bitrix24CallbackOwner::DEFAULT_LOCAL_OWNER_KEY,
+            ],
+            [
+                'display_name' => 'Local test owner',
+                'callback_base_url' => filled($profile->callback_base_url)
+                    ? (string) $profile->callback_base_url
+                    : 'https://project.example.com',
+                'status' => Bitrix24CallbackOwner::STATUS_ACTIVE,
+                'last_seen_at' => now(),
+            ],
+        );
+    }
+
     /**
      * @param  array<string, mixed>  $connectionOverrides
      * @param  array<string, mixed>  $profileOverrides

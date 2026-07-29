@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\Bitrix24Connections\Pages;
 
+use App\Data\Bitrix24\Bitrix24OpenLinesRouteData;
 use App\Filament\Resources\Bitrix24Connections\Bitrix24ConnectionResource;
 use App\Models\Bitrix24CallbackOwner;
 use App\Models\Bitrix24Connection;
@@ -15,13 +16,17 @@ use App\Models\User;
 use App\Services\Bitrix24\AutoSetupBitrix24OpenLineRouteAction;
 use App\Services\Bitrix24\Bitrix24CallbackOwnerIdentityLockedException;
 use App\Services\Bitrix24\Bitrix24OpenLineAutoSetupException;
+use App\Services\Bitrix24\Bitrix24OpenLineMutationAuthority;
+use App\Services\Bitrix24\Bitrix24OpenLineMutationAuthorityException;
 use App\Services\Bitrix24\Bitrix24OpenLineRepairException;
 use App\Services\Bitrix24\Bitrix24OpenLineRouteLeaseDeadline;
+use App\Services\Bitrix24\Bitrix24OpenLineRouteMutationFence;
 use App\Services\Bitrix24\Bitrix24OpenLineRouteOperationLock;
 use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryException;
 use App\Services\Bitrix24\DoctorBitrix24OpenLinesRouteRegistryAction;
 use App\Services\Bitrix24\PublishBitrix24OpenLinesRouteRegistryAction;
 use App\Services\Bitrix24\RepairStaleBitrix24OpenLineAction;
+use App\Services\Bitrix24\RunBitrix24OpenLineMutationWithAuthorityAction;
 use App\Services\Bitrix24\SaveBitrix24CallbackOwnerAction;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
@@ -582,10 +587,14 @@ class ViewBitrix24Connection extends ViewRecord
         foreach ($routes as $route) {
             $connectorType = Bitrix24OpenLineRoute::openLinesConnectorTypeForChannelType((string) $route->channel_type);
             $connectorCode = trim((string) $route->connector_code);
-            $lineId = trim((string) $route->line_id);
+            $lineId = (string) $route->line_id;
 
-            if ($connectorType === null || $connectorCode === '' || $lineId === '') {
+            if ($connectorType === null) {
                 continue;
+            }
+
+            if ($connectorCode === '' || ! Bitrix24OpenLineRoute::isValidLineId($lineId)) {
+                return null;
             }
 
             if (isset($connectorTypes[$connectorCode]) && $connectorTypes[$connectorCode] !== $connectorType) {
@@ -634,7 +643,23 @@ class ViewBitrix24Connection extends ViewRecord
 
         $form = $this->normalizeOpenLineRouteForm($this->openLineRouteForms[$channel->id] ?? []);
         $user = auth()->user();
+        $preflightRoute = Bitrix24OpenLineRoute::query()
+            ->where('bitrix24_profile_id', $profile->id)
+            ->where('channel_id', $channel->id)
+            ->first();
+
+        if (! $this->validateStoredOpenLineRouteTransition($preflightRoute, $form)
+            || ! $this->validateOpenLineRouteForm($profile, $channel, $preflightRoute, $form)
+        ) {
+            return;
+        }
+
+        $expectedRouteId = $preflightRoute?->getKey();
+        $expectedRouteStateVersion = $preflightRoute instanceof Bitrix24OpenLineRoute
+            ? (int) $preflightRoute->mutation_state_version
+            : null;
         $routeOperationLock = app(Bitrix24OpenLineRouteOperationLock::class);
+        $mutationFence = app(Bitrix24OpenLineRouteMutationFence::class);
         $owner = $this->resolveActiveCallbackOwner($profile, $form['callback_owner_id']);
         $connectorType = Bitrix24OpenLineRoute::openLinesConnectorTypeForChannelType(
             Bitrix24OpenLineRoute::channelTypeForChannel($channel),
@@ -655,22 +680,27 @@ class ViewBitrix24Connection extends ViewRecord
 
         $guardsOwnerIdentity = $claimsExternalLine
             && $owner instanceof Bitrix24CallbackOwner;
-        $requiresOwnershipLease = in_array($form['status'], Bitrix24OpenLineRoute::usableStatuses(), true)
-            && $hasValidClaimIdentity
+        $requiresOwnershipLease = $hasValidClaimIdentity
             && $owner instanceof Bitrix24CallbackOwner;
         $expectedOwnerIdentity = $guardsOwnerIdentity
             ? $this->callbackOwnerIdentity($owner)
             : null;
-        $saveRoute = function (?Bitrix24OpenLineRouteLeaseDeadline $leaseDeadline = null) use (
+        $saveRoute = function (
+            ?Bitrix24OpenLineRouteLeaseDeadline $leaseDeadline = null,
+            ?Bitrix24OpenLineMutationAuthority $authority = null,
+        ) use (
             $profile,
             $channel,
             $form,
             $user,
             $routeOperationLock,
+            $mutationFence,
             $guardsOwnerIdentity,
             $expectedOwnerIdentity,
+            $expectedRouteId,
+            $expectedRouteStateVersion,
         ): bool {
-            $save = function () use (
+            $save = function (?Bitrix24OpenLineRoute $fencedRoute = null) use (
                 $profile,
                 $channel,
                 $form,
@@ -679,16 +709,37 @@ class ViewBitrix24Connection extends ViewRecord
                 $leaseDeadline,
                 $guardsOwnerIdentity,
                 $expectedOwnerIdentity,
+                $expectedRouteId,
+                $expectedRouteStateVersion,
             ): bool {
                 if ($leaseDeadline instanceof Bitrix24OpenLineRouteLeaseDeadline) {
                     $routeOperationLock->assertLeaseAllowsDatabaseTransition($leaseDeadline);
                 }
 
-                $route = Bitrix24OpenLineRoute::query()
-                    ->where('bitrix24_profile_id', $profile->id)
-                    ->where('channel_id', $channel->id)
-                    ->lockForUpdate()
-                    ->first();
+                $route = $fencedRoute;
+
+                if (! $route instanceof Bitrix24OpenLineRoute) {
+                    $route = Bitrix24OpenLineRoute::query()
+                        ->where('bitrix24_profile_id', $profile->id)
+                        ->where('channel_id', $channel->id)
+                        ->lockForUpdate()
+                        ->first();
+                }
+
+                if (
+                    ($expectedRouteId === null) !== ($route === null)
+                    || ($expectedRouteId !== null && (
+                        ! $route instanceof Bitrix24OpenLineRoute
+                        || (int) $route->getKey() !== (int) $expectedRouteId
+                        || (int) $route->mutation_state_version !== $expectedRouteStateVersion
+                    ))
+                ) {
+                    $this->failOpenLineRouteSave(
+                        'Маршрут изменился во время операции. Обновите карточку и повторите сохранение.',
+                    );
+
+                    return false;
+                }
 
                 if (
                     $guardsOwnerIdentity
@@ -733,32 +784,57 @@ class ViewBitrix24Connection extends ViewRecord
                 return true;
             };
 
+            if ($authority instanceof Bitrix24OpenLineMutationAuthority) {
+                return $mutationFence->runMutation($authority, $save);
+            }
+
             return $leaseDeadline instanceof Bitrix24OpenLineRouteLeaseDeadline
-                ? $routeOperationLock->runDatabaseTransaction($save)
-                : DB::transaction($save, attempts: 3);
+                ? $routeOperationLock->runDatabaseTransaction(fn (): bool => $save())
+                : DB::transaction(fn (): bool => $save(), attempts: 3);
         };
 
         try {
             $saved = $routeOperationLock->run(
                 $profile->id,
                 $channel->id,
-                fn (): bool => $requiresOwnershipLease
-                    ? $routeOperationLock->runForOwnedLine(
+                function () use (
+
+                    $connectorType,
+                    $form,
+                    $owner,
+                    $profile,
+                    $requiresOwnershipLease,
+                    $routeOperationLock,
+                    $saveRoute,
+                ): bool {
+                    if (! $requiresOwnershipLease) {
+                        return $routeOperationLock->runForLine(
+                            (string) $profile->portal_domain,
+                            $form['line_id'],
+                            $saveRoute,
+                        );
+                    }
+
+                    return $routeOperationLock->runForOwnedLine(
                         $profile,
                         $owner,
                         $form['connector_code'],
                         $connectorType,
                         $form['line_id'],
                         $saveRoute,
-                    )
-                    : $routeOperationLock->runForLine(
-                        (string) $profile->portal_domain,
-                        $form['line_id'],
-                        $saveRoute,
-                    ),
+                        scope: Bitrix24OpenLineMutationAuthority::SCOPE_CONNECTOR_REGISTRATION,
+                        operationType: 'generic_route_save',
+                    );
+                },
             );
         } catch (LockTimeoutException) {
             $this->failOpenLineRouteSave(Bitrix24OpenLineRouteOperationLock::BUSY_MESSAGE);
+
+            return;
+        } catch (Bitrix24OpenLineMutationAuthorityException) {
+            $this->failOpenLineRouteSave(
+                'Маршрут изменился во время операции. Обновите карточку и повторите сохранение.',
+            );
 
             return;
         } catch (Bitrix24OpenLinesRouteRegistryException $exception) {
@@ -1098,15 +1174,84 @@ class ViewBitrix24Connection extends ViewRecord
         }
 
         $form = $this->normalizeOpenLineRouteForm($this->openLineRouteForms[$route->channel_id] ?? []);
-        $staleDialogIds = $route->dialogs()
-            ->select(['id', 'bitrix24_open_line_user_code_override', 'bitrix24_open_line_binding_verified_at'])
-            ->whereNotNull('bitrix24_open_line_binding_verified_at')
-            ->get()
-            ->filter(fn (Dialog $dialog): bool => $this->isDialogBindingStale($dialog, $form))
-            ->pluck('id')
-            ->all();
+        $channel = $route->channel;
 
-        if ($staleDialogIds === []) {
+        if (! $channel instanceof Channel) {
+            $this->failOpenLineRouteSave('Канал маршрута открытой линии не найден.');
+
+            return;
+        }
+
+        $routeData = new Bitrix24OpenLinesRouteData(
+            platform: (string) $channel->platform,
+            connectorCode: (string) $route->connector_code,
+            lineId: (string) $route->line_id,
+            routeId: (int) $route->getKey(),
+            status: (string) $route->status,
+            channelType: (string) $route->channel_type,
+        );
+
+        try {
+            $resetDialogCount = app(RunBitrix24OpenLineMutationWithAuthorityAction::class)
+                ->handle(
+                    $routeData,
+                    'reset_stale_open_line_bindings',
+                    fn (Bitrix24OpenLineMutationAuthority $authority): int => app(
+                        Bitrix24OpenLineRouteMutationFence::class,
+                    )->runMutation(
+                        $authority,
+                        function (?Bitrix24OpenLineRoute $lockedRoute) use ($form): int {
+                            if (! $lockedRoute instanceof Bitrix24OpenLineRoute) {
+                                throw new Bitrix24OpenLineMutationAuthorityException(
+                                    'openlines_mutation_route_changed',
+                                    'Маршрут изменился до сброса устаревших привязок.',
+                                );
+                            }
+
+                            $staleDialogIds = $lockedRoute->dialogs()
+                                ->select([
+                                    'id',
+                                    'bitrix24_open_line_user_code_override',
+                                    'bitrix24_open_line_binding_verified_at',
+                                ])
+                                ->whereNotNull('bitrix24_open_line_binding_verified_at')
+                                ->lockForUpdate()
+                                ->get()
+                                ->filter(fn (Dialog $dialog): bool => $this->isDialogBindingStale($dialog, $form))
+                                ->pluck('id')
+                                ->all();
+
+                            if ($staleDialogIds !== []) {
+                                Dialog::query()
+                                    ->whereKey($staleDialogIds)
+                                    ->update([
+                                        'bitrix24_open_line_user_code_override' => null,
+                                        'bitrix24_open_line_resolved_chat_id_override' => null,
+                                        'bitrix24_open_line_binding_verified_at' => null,
+                                    ]);
+                            }
+
+                            return count($staleDialogIds);
+                        },
+                    ),
+                );
+        } catch (LockTimeoutException) {
+            $this->failOpenLineRouteSave(Bitrix24OpenLineRouteOperationLock::BUSY_MESSAGE);
+
+            return;
+        } catch (Bitrix24OpenLineMutationAuthorityException) {
+            $this->failOpenLineRouteSave(
+                'Маршрут изменился во время операции. Обновите карточку и повторите действие.',
+            );
+
+            return;
+        } catch (Bitrix24OpenLinesRouteRegistryException $exception) {
+            $this->failOpenLineRouteSave($this->openLineOwnershipErrorMessage($exception));
+
+            return;
+        }
+
+        if ($resetDialogCount === 0) {
             Notification::make()
                 ->success()
                 ->title('Устаревших привязок не найдено')
@@ -1115,18 +1260,10 @@ class ViewBitrix24Connection extends ViewRecord
             return;
         }
 
-        Dialog::query()
-            ->whereKey($staleDialogIds)
-            ->update([
-                'bitrix24_open_line_user_code_override' => null,
-                'bitrix24_open_line_resolved_chat_id_override' => null,
-                'bitrix24_open_line_binding_verified_at' => null,
-            ]);
-
         Notification::make()
             ->success()
             ->title('Устаревшие привязки сброшены')
-            ->body(sprintf('Диалогов: %d. Следующий входящий callback заново подтвердит актуальную ОЛ.', count($staleDialogIds)))
+            ->body(sprintf('Диалогов: %d. Следующий входящий callback заново подтвердит актуальную ОЛ.', $resetDialogCount))
             ->send();
     }
 
@@ -1791,12 +1928,14 @@ class ViewBitrix24Connection extends ViewRecord
      */
     protected function normalizeOpenLineRouteForm(array $form): array
     {
-        $lineId = trim((string) ($form['line_id'] ?? ''));
+        $lineId = is_scalar($form['line_id'] ?? null)
+            ? (string) $form['line_id']
+            : '';
 
         return [
             'status' => trim((string) ($form['status'] ?? Bitrix24OpenLineRoute::STATUS_INACTIVE)),
             'connector_code' => trim((string) ($form['connector_code'] ?? '')),
-            'line_id' => Bitrix24OpenLineRoute::canonicalLineId($lineId) ?? $lineId,
+            'line_id' => $lineId,
             'line_name' => trim((string) ($form['line_name'] ?? '')),
             'callback_owner_id' => trim((string) ($form['callback_owner_id'] ?? '')),
             'source_id' => trim((string) ($form['source_id'] ?? '')),
@@ -1897,14 +2036,14 @@ class ViewBitrix24Connection extends ViewRecord
             return true;
         }
 
-        foreach (['connector_code', 'line_id'] as $field) {
-            if (trim((string) $route->{$field}) !== $form[$field]) {
-                $this->failOpenLineRouteSave(
-                    'Обычное сохранение не меняет код соединителя и LINE_ID существующего маршрута.',
-                );
+        if (trim((string) $route->connector_code) !== $form['connector_code']
+            || (string) $route->line_id !== $form['line_id']
+        ) {
+            $this->failOpenLineRouteSave(
+                'Обычное сохранение не меняет код соединителя и LINE_ID существующего маршрута.',
+            );
 
-                return false;
-            }
+            return false;
         }
 
         $storedCallbackOwnerId = $route->callback_owner_id !== null
@@ -2186,9 +2325,11 @@ class ViewBitrix24Connection extends ViewRecord
         array $form,
     ): ?Bitrix24SyncLog {
         $connectorCode = trim((string) ($form['connector_code'] ?? ''));
-        $lineId = trim((string) ($form['line_id'] ?? ''));
+        $lineId = is_scalar($form['line_id'] ?? null)
+            ? (string) $form['line_id']
+            : '';
 
-        if ($connectorCode === '' || $lineId === '') {
+        if ($connectorCode === '' || ! Bitrix24OpenLineRoute::isValidLineId($lineId)) {
             return null;
         }
 
@@ -2199,9 +2340,11 @@ class ViewBitrix24Connection extends ViewRecord
             ->get()
             ->first(function (Bitrix24SyncLog $log) use ($connectorCode, $lineId): bool {
                 $payload = is_array($log->request_payload) ? $log->request_payload : [];
+                $payloadLineId = data_get($payload, 'line_id');
 
                 return trim((string) data_get($payload, 'connector_code', '')) === $connectorCode
-                    && trim((string) data_get($payload, 'line_id', '')) === $lineId;
+                    && is_scalar($payloadLineId)
+                    && (string) $payloadLineId === $lineId;
             });
     }
 

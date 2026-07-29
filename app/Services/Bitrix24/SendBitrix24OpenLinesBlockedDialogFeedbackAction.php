@@ -17,6 +17,7 @@ class SendBitrix24OpenLinesBlockedDialogFeedbackAction
         private readonly ResolveContactDisplayNameAction $resolveContactDisplayNameAction,
         private readonly BuildBitrix24OpenLinesExternalUserIdAction $buildExternalUserIdAction,
         private readonly GuardBitrix24OpenLineMutationAction $guardOpenLineMutationAction,
+        private readonly RunBitrix24OpenLineMutationWithAuthorityAction $runWithAuthority,
     ) {}
 
     public function handle(
@@ -41,28 +42,34 @@ class SendBitrix24OpenLinesBlockedDialogFeedbackAction
         $userName = $this->resolveContactDisplayNameAction->handle($rootContact, $dialog);
         $userId = $this->buildExternalUserIdAction->handle($channel, $identity?->external_user_id, $rootContact->id);
 
-        $response = $this->bitrix24ApiClient->call('imconnector.send.messages', [
-            'CONNECTOR' => $route->connectorCode,
-            'LINE' => $route->lineId,
-            'MESSAGES' => [[
-                'chat' => [
-                    'id' => $bitrixMessage->chatId,
-                    'name' => $userName,
-                ],
-                'user' => [
-                    'id' => $userId,
-                    'name' => $userName,
-                ],
-                'message' => [
-                    'id' => $feedbackMessageId,
-                    'date' => now()->timestamp,
-                    'text' => $text,
-                ],
-            ]],
-        ]);
+        $this->runWithAuthority->handle(
+            $route,
+            'blocked_dialog_feedback',
+            function () use ($bitrixMessage, $feedbackMessageId, $route, $text, $userId, $userName): void {
+                $response = $this->bitrix24ApiClient->call('imconnector.send.messages', [
+                    'CONNECTOR' => $route->connectorCode,
+                    'LINE' => $route->lineId,
+                    'MESSAGES' => [[
+                        'chat' => [
+                            'id' => $bitrixMessage->chatId,
+                            'name' => $userName,
+                        ],
+                        'user' => [
+                            'id' => $userId,
+                            'name' => $userName,
+                        ],
+                        'message' => [
+                            'id' => $feedbackMessageId,
+                            'date' => now()->timestamp,
+                            'text' => $text,
+                        ],
+                    ]],
+                ]);
 
-        if (! $response->successful) {
-            throw new Bitrix24ApiException($response->errorMessage ?? 'Bitrix24 Open Lines blocked feedback message failed.');
-        }
+                if (! $response->successful) {
+                    throw new Bitrix24ApiException($response->errorMessage ?? 'Bitrix24 Open Lines blocked feedback message failed.');
+                }
+            },
+        );
     }
 }

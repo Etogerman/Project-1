@@ -28,6 +28,10 @@ final class RouteRegistry
 
     private const MAX_LINE_LEASES = 1000;
 
+    private const LINE_LEASE_SCOPE_RUNTIME = 'line_runtime';
+
+    private const LINE_LEASE_SCOPE_CONNECTOR_REGISTRATION = 'connector_registration';
+
     private const MAX_CONNECTORS_PER_OWNER = 500;
 
     private const MAX_ROUTES_PER_OWNER = 500;
@@ -487,6 +491,7 @@ final class RouteRegistry
                     'route_registry_conflict',
                     'route_registry_connector_type_conflict',
                     'route_registry_line_busy',
+                    'route_registry_connector_busy',
                 ], true) => 409,
                 in_array($publishResult['error_code'], [
                     'route_registry_storage_unavailable',
@@ -770,6 +775,27 @@ final class RouteRegistry
                         'conflicts' => [],
                     ];
                 }
+
+                if (trim((string) ($lease['lease_scope'] ?? '')) === self::LINE_LEASE_SCOPE_CONNECTOR_REGISTRATION) {
+                    $connectorCode = trim((string) ($lease['connector_code'] ?? ''));
+
+                    if (self::connectorMapping($registryBeforeUpdate, $connectorCode)
+                        !== self::connectorMapping($registry, $connectorCode)
+                    ) {
+                        self::logEvent($endpointConfig, 'route_registry_connector_busy', [
+                            'owner_profile_key' => $ownerKey,
+                            'connector_code' => $connectorCode,
+                            'line_id' => $lineId,
+                            'request_id' => $requestId,
+                            'error_code' => 'route_registry_connector_busy',
+                        ]);
+
+                        return [
+                            'error_code' => 'route_registry_connector_busy',
+                            'conflicts' => [],
+                        ];
+                    }
+                }
             }
 
             if ($activeLeases !== $leases) {
@@ -940,11 +966,24 @@ final class RouteRegistry
         }
 
         $lineId = is_scalar($payload['line_id'] ?? null)
-            ? trim((string) $payload['line_id'])
+            ? (string) $payload['line_id']
             : '';
 
-        if ($lineId === '' || self::canonicalLineId($lineId) !== $lineId) {
+        if ($lineId === ''
+            || trim($lineId) !== $lineId
+            || self::canonicalLineId($lineId) !== $lineId
+        ) {
             return 'route_registry_route_invalid';
+        }
+
+        if (array_key_exists('lease_scope', $payload)
+            && (! is_scalar($payload['lease_scope'])
+                || ! in_array(trim((string) $payload['lease_scope']), [
+                    self::LINE_LEASE_SCOPE_RUNTIME,
+                    self::LINE_LEASE_SCOPE_CONNECTOR_REGISTRATION,
+                ], true))
+        ) {
+            return 'route_registry_line_lease_scope_invalid';
         }
 
         if ($release) {
@@ -1065,7 +1104,12 @@ final class RouteRegistry
             }
 
             $connectorCode = trim((string) $payload['connector_code']);
-            $leasedConnectorLineId = self::leasedLineIdForConnector($leases, $connectorCode);
+            $leaseScope = self::lineLeaseScopeFromPayload($payload);
+            $leasedConnectorLineId = self::leasedLineIdForConnectorConflict(
+                $leases,
+                $connectorCode,
+                $leaseScope,
+            );
 
             if ($leasedConnectorLineId !== null) {
                 self::logEvent($endpointConfig, 'route_registry_connector_busy', [
@@ -1102,6 +1146,7 @@ final class RouteRegistry
                 ),
                 'connector_code' => trim((string) $payload['connector_code']),
                 'connector_type' => trim((string) $payload['connector_type']),
+                'lease_scope' => $leaseScope,
                 'token_hash' => hash('sha256', $leaseToken),
                 'expires_at' => $expiresAt,
             ];
@@ -1115,6 +1160,7 @@ final class RouteRegistry
                 'owner_profile_key' => trim((string) $payload['owner_profile_key']),
                 'connector_code' => trim((string) $payload['connector_code']),
                 'line_id' => $lineId,
+                'lease_scope' => $leaseScope,
                 'request_id' => $requestId,
             ]);
 
@@ -1174,7 +1220,10 @@ final class RouteRegistry
                 return ['error_code' => $writeError, 'released' => false];
             }
 
+            $leaseScope = self::lineLeaseScopeFromPayload($payload);
+
             if (trim((string) ($lease['owner_profile_key'] ?? '')) !== trim((string) $payload['owner_profile_key'])
+                || self::lineLeaseScope($lease) !== $leaseScope
                 || ! hash_equals(
                     (string) ($lease['token_hash'] ?? ''),
                     hash('sha256', trim((string) $payload['lease_token'])),
@@ -1193,6 +1242,7 @@ final class RouteRegistry
             self::logEvent($endpointConfig, 'route_registry_line_lease_released', [
                 'owner_profile_key' => trim((string) $payload['owner_profile_key']),
                 'line_id' => $lineId,
+                'lease_scope' => $leaseScope,
                 'request_id' => $requestId,
             ]);
 
@@ -1279,12 +1329,19 @@ final class RouteRegistry
         foreach ($decoded as $lineId => $lease) {
             $lineId = (string) $lineId;
 
+            $leaseScope = is_array($lease) ? self::lineLeaseScope($lease) : '';
+
             if (self::canonicalLineId($lineId) !== $lineId
                 || ! is_array($lease)
-                || trim((string) ($lease['line_id'] ?? '')) !== $lineId
+                || ! is_scalar($lease['line_id'] ?? null)
+                || (string) $lease['line_id'] !== $lineId
                 || ! preg_match('/^[a-zA-Z0-9._-]{1,128}$/', trim((string) ($lease['owner_profile_key'] ?? '')))
                 || ! self::validConnectorCode(trim((string) ($lease['connector_code'] ?? '')))
                 || ! in_array(trim((string) ($lease['connector_type'] ?? '')), ['telegram', 'max'], true)
+                || ! in_array($leaseScope, [
+                    self::LINE_LEASE_SCOPE_RUNTIME,
+                    self::LINE_LEASE_SCOPE_CONNECTOR_REGISTRATION,
+                ], true)
                 || self::normalizeCallbackBaseUrl((string) ($lease['owner_callback_base_url'] ?? '')) === ''
                 || preg_match('/^[a-f0-9]{64}$/', trim((string) ($lease['token_hash'] ?? ''))) !== 1
                 || ! is_int($lease['expires_at'] ?? null)
@@ -1293,6 +1350,8 @@ final class RouteRegistry
 
                 return null;
             }
+
+            $decoded[$lineId]['lease_scope'] = $leaseScope;
         }
 
         return $decoded;
@@ -1315,15 +1374,95 @@ final class RouteRegistry
     /**
      * @param  array<string, array<string, mixed>>  $leases
      */
-    private static function leasedLineIdForConnector(array $leases, string $connectorCode): ?string
-    {
+    private static function leasedLineIdForConnectorConflict(
+        array $leases,
+        string $connectorCode,
+        string $requestedScope,
+    ): ?string {
         foreach ($leases as $lineId => $lease) {
-            if (trim((string) ($lease['connector_code'] ?? '')) === $connectorCode) {
+            if (trim((string) ($lease['connector_code'] ?? '')) !== $connectorCode) {
+                continue;
+            }
+
+            if ($requestedScope === self::LINE_LEASE_SCOPE_CONNECTOR_REGISTRATION
+                || self::lineLeaseScope($lease) === self::LINE_LEASE_SCOPE_CONNECTOR_REGISTRATION
+            ) {
                 return (string) $lineId;
             }
         }
 
         return null;
+    }
+
+    /**
+     * Missing scope is the pre-scope lease format. It had connector-exclusive
+     * semantics, so the safe compatible interpretation is registration.
+     *
+     * @param  array<string, mixed>  $lease
+     */
+    private static function lineLeaseScope(array $lease): string
+    {
+        $scope = trim((string) ($lease['lease_scope'] ?? ''));
+
+        return $scope === '' ? self::LINE_LEASE_SCOPE_CONNECTOR_REGISTRATION : $scope;
+    }
+
+    /**
+     * Old application instances did not send lease_scope and only used these
+     * leases for connector registration.
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    private static function lineLeaseScopeFromPayload(array $payload): string
+    {
+        $scope = trim((string) ($payload['lease_scope'] ?? ''));
+
+        return $scope === '' ? self::LINE_LEASE_SCOPE_CONNECTOR_REGISTRATION : $scope;
+    }
+
+    /**
+     * @param  array<string, mixed>  $registry
+     * @return array<string, mixed>
+     */
+    private static function connectorMapping(array $registry, string $connectorCode): array
+    {
+        $mapping = [
+            'definitions' => [],
+            'routes' => [],
+        ];
+
+        foreach (self::normalizeOwners($registry['owners'] ?? []) as $ownerKey => $owner) {
+            $connectors = is_array($owner['connectors'] ?? null) ? $owner['connectors'] : [];
+            $connector = $connectors[$connectorCode] ?? null;
+
+            if (is_array($connector)) {
+                $mapping['definitions'][$ownerKey] = [
+                    'connector_code' => trim((string) ($connector['connector_code'] ?? '')),
+                    'connector_type' => trim((string) ($connector['connector_type'] ?? '')),
+                ];
+            }
+
+            $routes = is_array($owner['routes'] ?? null) ? $owner['routes'] : [];
+
+            foreach ($routes as $routeKey => $route) {
+                if (! is_array($route)
+                    || trim((string) ($route['connector_code'] ?? '')) !== $connectorCode
+                ) {
+                    continue;
+                }
+
+                $mapping['routes'][$ownerKey.':'.(string) $routeKey] = [
+                    'line_id' => trim((string) ($route['line_id'] ?? '')),
+                    'connector_type' => self::routeRegistryConnectorType($registry, $route),
+                    'active' => ($route['active'] ?? false) === true,
+                ];
+            }
+        }
+
+        ksort($mapping['definitions']);
+        ksort($mapping['routes']);
+
+        return $mapping;
     }
 
     /**
@@ -1490,9 +1629,7 @@ final class RouteRegistry
                 return 'route_registry_route_key_invalid';
             }
 
-            $routeKey = trim($routeKey);
-
-            if (! self::validRouteKey($routeKey)) {
+            if (trim($routeKey) !== $routeKey || ! self::validRouteKey($routeKey)) {
                 return 'route_registry_route_key_invalid';
             }
 
@@ -1505,10 +1642,11 @@ final class RouteRegistry
             }
 
             $connectorCode = trim((string) $route['connector_code']);
-            $lineId = trim((string) $route['line_id']);
+            $lineId = (string) $route['line_id'];
 
             if ($connectorCode === ''
                 || $lineId === ''
+                || trim($lineId) !== $lineId
                 || self::canonicalLineId($lineId) !== $lineId
                 || ! self::validRouteKey(self::routeKey($connectorCode, $lineId))
             ) {
@@ -2121,10 +2259,11 @@ final class RouteRegistry
         }
 
         $connectorCode = trim((string) $route['connector_code']);
-        $lineId = trim((string) $route['line_id']);
+        $lineId = (string) $route['line_id'];
 
         if ($connectorCode === ''
             || $lineId === ''
+            || trim($lineId) !== $lineId
             || self::canonicalLineId($lineId) !== $lineId
             || $routeKey !== self::routeKey($connectorCode, $lineId)
         ) {

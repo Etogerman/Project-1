@@ -4,6 +4,7 @@ namespace Tests\Unit;
 
 use App\Models\Bitrix24CallbackOwner;
 use App\Models\Bitrix24Profile;
+use App\Services\Bitrix24\Bitrix24OpenLineMutationAuthority;
 use App\Services\Bitrix24\Bitrix24OpenLineRouteLeaseDeadline;
 use App\Services\Bitrix24\Bitrix24OpenLineRouteOwnershipLease;
 use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryClient;
@@ -19,7 +20,15 @@ class Bitrix24OpenLineRouteOwnershipLeaseTest extends TestCase
         $client->shouldReceive('acquireLineLease')
             ->once()
             ->ordered()
-            ->with($profile, $owner, 'abc_max', 'max', '14', 360)
+            ->with(
+                $profile,
+                $owner,
+                'abc_max',
+                'max',
+                '14',
+                360,
+                Bitrix24OpenLineMutationAuthority::SCOPE_CONNECTOR_REGISTRATION,
+            )
             ->andReturn([
                 'lease_token' => str_repeat('a', 64),
                 'expires_at' => now()->addMinutes(6)->toIso8601String(),
@@ -27,7 +36,13 @@ class Bitrix24OpenLineRouteOwnershipLeaseTest extends TestCase
         $client->shouldReceive('releaseLineLease')
             ->once()
             ->ordered()
-            ->with($profile, $owner, '14', str_repeat('a', 64));
+            ->with(
+                $profile,
+                $owner,
+                '14',
+                str_repeat('a', 64),
+                Bitrix24OpenLineMutationAuthority::SCOPE_CONNECTOR_REGISTRATION,
+            );
         $callbackRan = false;
 
         $result = app(Bitrix24OpenLineRouteOwnershipLease::class)->run(
@@ -126,7 +141,13 @@ class Bitrix24OpenLineRouteOwnershipLeaseTest extends TestCase
         $client->shouldReceive('releaseLineLease')
             ->once()
             ->ordered()
-            ->with($profile, $owner, '14', str_repeat('b', 64));
+            ->with(
+                $profile,
+                $owner,
+                '14',
+                str_repeat('b', 64),
+                Bitrix24OpenLineMutationAuthority::SCOPE_CONNECTOR_REGISTRATION,
+            );
         $callbackRan = false;
 
         try {
@@ -163,7 +184,13 @@ class Bitrix24OpenLineRouteOwnershipLeaseTest extends TestCase
         $client->shouldReceive('releaseLineLease')
             ->once()
             ->ordered()
-            ->with($profile, $owner, '14', str_repeat('d', 64));
+            ->with(
+                $profile,
+                $owner,
+                '14',
+                str_repeat('d', 64),
+                Bitrix24OpenLineMutationAuthority::SCOPE_CONNECTOR_REGISTRATION,
+            );
         $callbackRan = false;
 
         try {

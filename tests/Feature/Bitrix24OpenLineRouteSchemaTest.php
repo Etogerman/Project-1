@@ -33,6 +33,9 @@ class Bitrix24OpenLineRouteSchemaTest extends TestCase
             'status',
             'last_error_message',
             'last_error_at',
+            'mutation_operation_id',
+            'mutation_state_version',
+            'mutation_lease_expires_at',
             'created_by_user_id',
             'updated_by_user_id',
         ]));
@@ -72,7 +75,7 @@ class Bitrix24OpenLineRouteSchemaTest extends TestCase
             'profile_key' => $profile->profile_key,
             'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($firstChannel),
             'connector_code' => 'abrikosoff_telegram',
-            'line_id' => 'line-telegram',
+            'line_id' => '13',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);
 
@@ -83,11 +86,11 @@ class Bitrix24OpenLineRouteSchemaTest extends TestCase
             'profile_key' => $profile->profile_key,
             'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($secondChannel),
             'connector_code' => 'abrikosoff_telegram',
-            'line_id' => 'line-telegram',
+            'line_id' => '13',
             'status' => Bitrix24OpenLineRoute::STATUS_INACTIVE,
         ]);
 
-        $this->assertSame('crm.example.test#line-telegram', $activeRoute->line_owner_key);
+        $this->assertSame('crm.example.test#13', $activeRoute->line_owner_key);
         $this->assertNull($draftRoute->line_owner_key);
 
         $this->expectException(QueryException::class);
@@ -99,12 +102,12 @@ class Bitrix24OpenLineRouteSchemaTest extends TestCase
             'profile_key' => $profile->profile_key,
             'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($thirdChannel),
             'connector_code' => 'abrikosoff_max',
-            'line_id' => 'line-telegram',
+            'line_id' => '13',
             'status' => Bitrix24OpenLineRoute::STATUS_LEGACY,
         ]);
     }
 
-    public function test_line_id_is_persisted_as_one_canonical_decimal_string(): void
+    public function test_noncanonical_line_id_is_rejected_instead_of_silently_migrated(): void
     {
         $profile = $this->makeProfile();
         $channel = Channel::factory()->create([
@@ -112,18 +115,6 @@ class Bitrix24OpenLineRouteSchemaTest extends TestCase
             'connection_type' => Channel::CONNECTION_TYPE_BOT,
         ]);
 
-        $route = Bitrix24OpenLineRoute::query()->create([
-            'bitrix24_profile_id' => $profile->id,
-            'channel_id' => $channel->id,
-            'portal_domain' => $profile->portal_domain,
-            'profile_key' => $profile->profile_key,
-            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
-            'connector_code' => 'abrikosoff_telegram',
-            'line_id' => '0001',
-            'status' => Bitrix24OpenLineRoute::STATUS_INACTIVE,
-        ]);
-
-        $this->assertSame('1', $route->line_id);
         $this->assertSame('1', Bitrix24OpenLineRoute::canonicalLineId('1'));
         $this->assertSame('1', Bitrix24OpenLineRoute::canonicalLineId('01'));
         $this->assertSame('1', Bitrix24OpenLineRoute::canonicalLineId('001'));
@@ -134,6 +125,22 @@ class Bitrix24OpenLineRouteSchemaTest extends TestCase
         $this->assertTrue(Bitrix24OpenLineRoute::isValidLineId('1'));
         $this->assertFalse(Bitrix24OpenLineRoute::isValidLineId('01'));
         $this->assertFalse(Bitrix24OpenLineRoute::isValidLineId('001'));
+        $this->assertFalse(Bitrix24OpenLineRoute::isValidLineId(' 1'));
+        $this->assertFalse(Bitrix24OpenLineRoute::isValidLineId('1 '));
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('каноническом виде');
+
+        Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
+            'connector_code' => 'abrikosoff_telegram',
+            'line_id' => '0001',
+            'status' => Bitrix24OpenLineRoute::STATUS_INACTIVE,
+        ]);
     }
 
     public function test_dialog_can_be_pinned_to_open_line_route(): void
@@ -154,7 +161,7 @@ class Bitrix24OpenLineRouteSchemaTest extends TestCase
             'profile_key' => $profile->profile_key,
             'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
             'connector_code' => 'abrikosoff_telegram',
-            'line_id' => 'line-telegram',
+            'line_id' => '13',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);
 

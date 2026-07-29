@@ -37,14 +37,16 @@ class DeferredParameterAutoReplyFlowTest extends TestCase
         config()->set('bitrix24.application.client_secret', 'local.secret');
         config()->set('bitrix24.features.openlines_enabled', true);
         config()->set('bitrix24.openlines.telegram_connector_code', 'abrikosoff_telegram');
-        config()->set('bitrix24.openlines.telegram_line_id', 'line-telegram');
+        config()->set('bitrix24.openlines.telegram_line_id', '13');
         config()->set('bitrix24.openlines.max_connector_code', 'abrikosoff_max');
-        config()->set('bitrix24.openlines.max_line_id', 'line-max');
+        config()->set('bitrix24.openlines.max_line_id', '14');
         config()->set('bitrix24.sources.telegram_id', 'ABRIKOSOFF_TELEGRAM');
         config()->set('bitrix24.sources.max_id', 'ABRIKOSOFF_MAX');
         config()->set('bitrix24.duplicate_phone_diagnostic.enabled', false);
         config()->set('bitrix24.http.retry_sleep_milliseconds', 0);
         config()->set('bots.legacy_auto_reply_rules_enabled', true);
+
+        $this->fakeBitrix24OpenLineMutationLeases();
     }
 
     public function test_parameter_inbound_captured_before_qualification_is_sent_after_sync_without_retry_requirement(): void
@@ -372,15 +374,17 @@ class DeferredParameterAutoReplyFlowTest extends TestCase
     private function makeOpenLineRoute(Bitrix24Connection $connection, Channel $channel): Bitrix24OpenLineRoute
     {
         $profile = $connection->profile()->firstOrFail();
+        $owner = $this->ensureActiveBitrix24CallbackOwner($profile);
 
         return Bitrix24OpenLineRoute::query()->create([
             'bitrix24_profile_id' => $profile->id,
+            'callback_owner_id' => $owner->id,
             'channel_id' => $channel->id,
             'portal_domain' => $profile->portal_domain,
             'profile_key' => $profile->profile_key,
             'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
             'connector_code' => $profile->openLinesConnectorCodeForPlatform($channel->platform),
-            'line_id' => $channel->platform === Channel::PLATFORM_MAX ? 'line-max' : 'line-telegram',
+            'line_id' => $channel->platform === Channel::PLATFORM_MAX ? '14' : '13',
             'source_id' => $profile->sourceIdForPlatform($channel->platform),
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);

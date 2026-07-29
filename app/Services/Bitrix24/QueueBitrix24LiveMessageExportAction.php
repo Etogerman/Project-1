@@ -20,14 +20,14 @@ class QueueBitrix24LiveMessageExportAction
         private readonly ResolveRootContactAction $resolveRootContactAction,
         private readonly IsMessageReadyForBitrix24LiveExportAction $isMessageReadyForBitrix24LiveExportAction,
         private readonly LogBitrix24ApiCallAction $logBitrix24ApiCallAction,
+        private readonly Bitrix24OpenLineScopedMutation $scopedMutation,
     ) {}
 
     public function handle(
         Message|int $message,
         bool $retryAfterSync = false,
         ?string $retryAfterSyncReason = null,
-    ): Bitrix24LiveMessageExportQueueResultData
-    {
+    ): Bitrix24LiveMessageExportQueueResultData {
         $message = $message instanceof Message
             ? $message
             : Message::query()->with(['contact', 'dialog'])->findOrFail($message);
@@ -89,27 +89,29 @@ class QueueBitrix24LiveMessageExportAction
 
         $liveBatchUuid = (string) Str::uuid();
 
-        Bitrix24MessageExport::query()->updateOrCreate(
-            [
-                'message_id' => $message->id,
-                'export_mode' => Bitrix24MessageExport::MODE_LIVE,
-            ],
-            [
-                'contact_id' => $rootContact->id,
-                'bitrix24_contact_id' => $rootContact->bitrix24_contact_id,
-                'export_status' => Bitrix24MessageExport::STATUS_PENDING,
-                'live_batch_uuid' => $liveBatchUuid,
-                'live_claim_uuid' => null,
-                'live_claimed_at' => null,
-                'live_claim_expires_at' => null,
-                'batch_uuid' => null,
-                'bitrix24_timeline_entry_id' => null,
-                'exported_at' => null,
-                'failed_at' => null,
-                'failure_code' => null,
-                'failure_uncertain' => false,
-                'failure_reason' => null,
-            ],
+        $this->scopedMutation->run(
+            fn () => Bitrix24MessageExport::query()->updateOrCreate(
+                [
+                    'message_id' => $message->id,
+                    'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+                ],
+                [
+                    'contact_id' => $rootContact->id,
+                    'bitrix24_contact_id' => $rootContact->bitrix24_contact_id,
+                    'export_status' => Bitrix24MessageExport::STATUS_PENDING,
+                    'live_batch_uuid' => $liveBatchUuid,
+                    'live_claim_uuid' => null,
+                    'live_claimed_at' => null,
+                    'live_claim_expires_at' => null,
+                    'batch_uuid' => null,
+                    'bitrix24_timeline_entry_id' => null,
+                    'exported_at' => null,
+                    'failed_at' => null,
+                    'failure_code' => null,
+                    'failure_uncertain' => false,
+                    'failure_reason' => null,
+                ],
+            ),
         );
 
         $this->logLiveExportQueued(
@@ -121,6 +123,7 @@ class QueueBitrix24LiveMessageExportAction
             $existingExport,
         );
 
+        $this->scopedMutation->assertCurrent();
         ExportMessageToBitrix24OpenLinesJob::dispatch(
             $message->id,
             $retryAfterSync,
@@ -130,6 +133,7 @@ class QueueBitrix24LiveMessageExportAction
             ->onQueue(ExportMessageToBitrix24OpenLinesJob::queueName())
             ->afterCommit();
         // The delayed recovery path must survive a failed afterCommit handoff of the immediate job.
+        $this->scopedMutation->assertCurrent();
         ExportMessageToBitrix24OpenLinesJob::dispatch(
             $message->id,
             $retryAfterSync,

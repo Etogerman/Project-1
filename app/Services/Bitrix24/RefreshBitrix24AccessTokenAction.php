@@ -13,10 +13,13 @@ class RefreshBitrix24AccessTokenAction
     public function __construct(
         private readonly PersistBitrix24RefreshResultAction $persistRefreshResult,
         private readonly LogBitrix24ApiCallAction $logApiCall,
+        private readonly Bitrix24OpenLineRouteMutationFence $mutationFence,
     ) {}
 
-    public function handle(Bitrix24Connection $connection): Bitrix24Connection
-    {
+    public function handle(
+        Bitrix24Connection $connection,
+        ?Bitrix24OpenLineMutationAuthority $mutationAuthority = null,
+    ): Bitrix24Connection {
         $clientId = $this->resolveClientId($connection);
         $clientSecret = (string) config('bitrix24.application.client_secret');
         $refreshToken = (string) $connection->refresh_token_encrypted;
@@ -30,7 +33,6 @@ class RefreshBitrix24AccessTokenAction
                 Bitrix24Connection::STATUS_NEEDS_REINSTALL,
                 $message,
             );
-
             $this->logApiCall->handle(
                 direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
                 operation: 'token_refresh_failed',
@@ -56,12 +58,19 @@ class RefreshBitrix24AccessTokenAction
             'client_secret' => $clientSecret,
             'refresh_token' => $refreshToken,
         ];
+        $this->assertAuthorityAllowsRequest($mutationAuthority);
+        $timeoutSeconds = $mutationAuthority?->deadline->requestTimeoutSeconds(
+            (int) config('bitrix24.http.timeout_seconds', 15),
+        ) ?? (int) config('bitrix24.http.timeout_seconds', 15);
+        $connectTimeoutSeconds = $mutationAuthority?->deadline->requestTimeoutSeconds(
+            (int) config('bitrix24.http.connect_timeout_seconds', 5),
+        ) ?? (int) config('bitrix24.http.connect_timeout_seconds', 5);
 
         try {
             $response = Http::asForm()
                 ->acceptJson()
-                ->timeout((int) config('bitrix24.http.timeout_seconds', 15))
-                ->connectTimeout((int) config('bitrix24.http.connect_timeout_seconds', 5))
+                ->timeout($timeoutSeconds)
+                ->connectTimeout($connectTimeoutSeconds)
                 ->post($authServerUrl, $requestPayload);
         } catch (RequestException|\Throwable $exception) {
             $connection = $this->persistRefreshResult->handleFailure(
@@ -69,7 +78,6 @@ class RefreshBitrix24AccessTokenAction
                 $connection->status,
                 $exception->getMessage(),
             );
-
             $this->logApiCall->handle(
                 direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
                 operation: 'token_refresh_failed',
@@ -107,7 +115,6 @@ class RefreshBitrix24AccessTokenAction
                 $failureStatus,
                 $errorMessage,
             );
-
             $this->logApiCall->handle(
                 direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
                 operation: 'token_refresh_failed',
@@ -136,7 +143,6 @@ class RefreshBitrix24AccessTokenAction
             $nextRefreshToken,
             $expiresAt,
         );
-
         $this->logApiCall->handle(
             direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
             operation: 'token_refresh',
@@ -154,6 +160,20 @@ class RefreshBitrix24AccessTokenAction
         );
 
         return $connection;
+    }
+
+    private function assertAuthorityAllowsRequest(?Bitrix24OpenLineMutationAuthority $authority): void
+    {
+        if (! $authority instanceof Bitrix24OpenLineMutationAuthority) {
+            return;
+        }
+
+        $authority->deadline->assertAvailableFor(max(
+            1,
+            (int) config('bitrix24.http.timeout_seconds', 15),
+            (int) config('bitrix24.http.connect_timeout_seconds', 5),
+        ));
+        $this->mutationFence->assertCurrent($authority);
     }
 
     private function shouldInvalidateRefreshFailure(?string $errorCode): bool

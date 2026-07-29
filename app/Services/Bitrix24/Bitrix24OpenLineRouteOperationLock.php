@@ -88,6 +88,9 @@ final class Bitrix24OpenLineRouteOperationLock
         string $connectorType,
         string $lineId,
         Closure $callback,
+        string $scope = Bitrix24OpenLineMutationAuthority::SCOPE_CONNECTOR_REGISTRATION,
+        ?Bitrix24OpenLineRoute $route = null,
+        string $operationType = 'openlines_mutation',
     ): mixed {
         return $this->runForLine(
             (string) $profile->portal_domain,
@@ -100,6 +103,9 @@ final class Bitrix24OpenLineRouteOperationLock
                 $lineId,
                 $this->lockSeconds(),
                 $callback,
+                $scope,
+                $route,
+                $operationType,
             ),
         );
     }

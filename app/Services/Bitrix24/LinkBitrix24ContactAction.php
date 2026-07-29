@@ -9,6 +9,7 @@ class LinkBitrix24ContactAction
 {
     public function __construct(
         private readonly ResolveRootContactAction $resolveRootContactAction,
+        private readonly Bitrix24OpenLineScopedMutation $scopedMutation,
     ) {}
 
     public function handle(Contact|int $contact, string $bitrix24ContactId): Contact
@@ -25,7 +26,9 @@ class LinkBitrix24ContactAction
             $attributes['bitrix24_linked_at'] = now();
         }
 
-        $rootContact->forceFill($attributes)->save();
+        $this->scopedMutation->run(
+            fn () => $rootContact->forceFill($attributes)->save(),
+        );
 
         return $rootContact->fresh();
     }

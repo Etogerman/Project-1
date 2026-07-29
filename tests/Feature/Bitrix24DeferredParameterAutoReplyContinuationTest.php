@@ -36,14 +36,16 @@ class Bitrix24DeferredParameterAutoReplyContinuationTest extends TestCase
         config()->set('bitrix24.application.client_secret', 'local.secret');
         config()->set('bitrix24.features.openlines_enabled', true);
         config()->set('bitrix24.openlines.telegram_connector_code', 'abrikosoff_telegram');
-        config()->set('bitrix24.openlines.telegram_line_id', 'line-telegram');
+        config()->set('bitrix24.openlines.telegram_line_id', '13');
         config()->set('bitrix24.openlines.max_connector_code', 'abrikosoff_max');
-        config()->set('bitrix24.openlines.max_line_id', 'line-max');
+        config()->set('bitrix24.openlines.max_line_id', '14');
         config()->set('bitrix24.sources.telegram_id', 'ABRIKOSOFF_TELEGRAM');
         config()->set('bitrix24.sources.max_id', 'ABRIKOSOFF_MAX');
         config()->set('bitrix24.duplicate_phone_diagnostic.enabled', false);
         config()->set('bitrix24.http.retry_sleep_milliseconds', 0);
         config()->set('bots.legacy_auto_reply_rules_enabled', true);
+
+        $this->fakeBitrix24OpenLineMutationLeases();
     }
 
     public function test_first_successful_sync_queues_deferred_parameter_job_for_pending_dialog_without_relevant_retry(): void
@@ -817,7 +819,7 @@ class Bitrix24DeferredParameterAutoReplyContinuationTest extends TestCase
         }
 
         $connectorCode = $profile->openLinesConnectorCodeForPlatform($channel->platform);
-        $lineId = $channel->platform === Channel::PLATFORM_MAX ? 'line-max' : 'line-telegram';
+        $lineId = $channel->platform === Channel::PLATFORM_MAX ? '14' : '13';
 
         if (! filled($connectorCode) || ! filled($lineId)) {
             return null;
@@ -829,6 +831,7 @@ class Bitrix24DeferredParameterAutoReplyContinuationTest extends TestCase
                 'channel_id' => $channel->id,
             ],
             [
+                'callback_owner_id' => $this->ensureActiveBitrix24CallbackOwner($profile)->id,
                 'portal_domain' => $profile->portal_domain,
                 'profile_key' => $profile->profile_key,
                 'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),

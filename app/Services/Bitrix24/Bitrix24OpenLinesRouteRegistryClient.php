@@ -39,6 +39,7 @@ class Bitrix24OpenLinesRouteRegistryClient
         string $connectorType,
         string $lineId,
         int $leaseSeconds,
+        string $scope = Bitrix24OpenLineMutationAuthority::SCOPE_CONNECTOR_REGISTRATION,
     ): array {
         $lineId = $this->validatedLineId($lineId);
         $response = $this->request($profile, 'POST', 'action=acquire-line-lease', [
@@ -49,6 +50,7 @@ class Bitrix24OpenLinesRouteRegistryClient
             'connector_type' => trim($connectorType),
             'line_id' => $lineId,
             'lease_seconds' => $leaseSeconds,
+            'lease_scope' => $scope,
         ]);
         $leaseToken = is_scalar($response['lease_token'] ?? null)
             ? trim((string) $response['lease_token'])
@@ -75,6 +77,7 @@ class Bitrix24OpenLinesRouteRegistryClient
         Bitrix24CallbackOwner $owner,
         string $lineId,
         string $leaseToken,
+        string $scope = Bitrix24OpenLineMutationAuthority::SCOPE_CONNECTOR_REGISTRATION,
     ): void {
         $lineId = $this->validatedLineId($lineId);
         $this->request($profile, 'POST', 'action=release-line-lease', [
@@ -82,17 +85,16 @@ class Bitrix24OpenLinesRouteRegistryClient
             'owner_profile_key' => trim((string) $owner->owner_key),
             'line_id' => $lineId,
             'lease_token' => trim($leaseToken),
+            'lease_scope' => $scope,
         ]);
     }
 
     private function validatedLineId(string $lineId): string
     {
-        $lineId = Bitrix24OpenLineRoute::canonicalLineId($lineId);
-
-        if ($lineId === null) {
+        if (! Bitrix24OpenLineRoute::isValidLineId($lineId)) {
             throw new Bitrix24OpenLinesRouteRegistryException(
                 'route_registry_line_id_invalid',
-                'LINE_ID открытой линии должен состоять из 1–64 цифр.',
+                'LINE_ID открытой линии должен быть канонической строкой из 1–64 цифр.',
             );
         }
 

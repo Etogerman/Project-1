@@ -31,6 +31,7 @@ class AutoSetupBitrix24OpenLineRouteAction
         private readonly Bitrix24ApiClient $apiClient,
         private readonly Bitrix24OpenLineRouteOperationLock $routeOperationLock,
         private readonly MarkBitrix24OpenLineRouteMisconfiguredAction $markRouteMisconfiguredAction,
+        private readonly Bitrix24OpenLineRouteMutationFence $mutationFence,
     ) {}
 
     public function refreshConnectorRegistration(Bitrix24Connection $connection, Bitrix24OpenLineRoute $route): Bitrix24OpenLineRoute
@@ -46,7 +47,6 @@ class AutoSetupBitrix24OpenLineRouteAction
                     $channelId,
                     $connection,
                     $profileId,
-                    $route,
                 ): Bitrix24OpenLineRoute {
                     try {
                         return $this->refreshConnectorRegistrationUnderLock(
@@ -56,10 +56,6 @@ class AutoSetupBitrix24OpenLineRouteAction
                         );
                     } catch (Bitrix24OpenLinesRouteRegistryException $exception) {
                         $message = $this->ownershipErrorMessage($exception);
-                        $this->markRouteMisconfiguredAction->handle(
-                            (int) $route->getKey(),
-                            $message,
-                        );
 
                         throw new Bitrix24OpenLineAutoSetupException(
                             $message,
@@ -71,6 +67,11 @@ class AutoSetupBitrix24OpenLineRouteAction
         } catch (LockTimeoutException $exception) {
             throw new Bitrix24OpenLineAutoSetupException(
                 Bitrix24OpenLineRouteOperationLock::BUSY_MESSAGE,
+                previous: $exception,
+            );
+        } catch (Bitrix24OpenLineMutationAuthorityException $exception) {
+            throw new Bitrix24OpenLineAutoSetupException(
+                'Маршрут изменился во время операции. Обновите карточку и повторите действие.',
                 previous: $exception,
             );
         }
@@ -114,22 +115,40 @@ class AutoSetupBitrix24OpenLineRouteAction
         $this->assertRefreshContextSupported($connection, $profile, $channel, $route);
         $routeIdentity = $this->canonicalRefreshRouteIdentity($channel, $route);
 
-        return $this->routeOperationLock->runForOwnedLine(
-            $profile,
-            $owner,
-            $routeIdentity['connector_code'],
-            $routeIdentity['connector_type'],
-            $routeIdentity['line_id'],
-            fn (Bitrix24OpenLineRouteLeaseDeadline $leaseDeadline): Bitrix24OpenLineRoute => $this->refreshConnectorRegistrationForLine(
-                $connection,
+        try {
+            return $this->routeOperationLock->runForOwnedLine(
                 $profile,
-                $channel,
-                $route,
+                $owner,
                 $routeIdentity['connector_code'],
+                $routeIdentity['connector_type'],
                 $routeIdentity['line_id'],
-                $leaseDeadline,
-            ),
-        );
+                fn (
+                    Bitrix24OpenLineRouteLeaseDeadline $leaseDeadline,
+                    Bitrix24OpenLineMutationAuthority $authority,
+                ): Bitrix24OpenLineRoute => $this->refreshConnectorRegistrationForLine(
+                    $connection,
+                    $profile,
+                    $channel,
+                    $route,
+                    $routeIdentity['connector_code'],
+                    $routeIdentity['line_id'],
+                    $leaseDeadline,
+                    $authority,
+                ),
+                scope: Bitrix24OpenLineMutationAuthority::SCOPE_CONNECTOR_REGISTRATION,
+                route: $route,
+                operationType: 'refresh_connector_registration',
+            );
+        } catch (Bitrix24OpenLinesRouteRegistryException $exception) {
+            if ($exception->errorCode === 'route_registry_line_owner_conflict') {
+                $this->markRouteMisconfiguredAction->handleExpected(
+                    $route,
+                    $this->ownershipErrorMessage($exception),
+                );
+            }
+
+            throw $exception;
+        }
     }
 
     private function refreshConnectorRegistrationForLine(
@@ -140,15 +159,16 @@ class AutoSetupBitrix24OpenLineRouteAction
         string $connectorCode,
         string $lineId,
         Bitrix24OpenLineRouteLeaseDeadline $leaseDeadline,
+        Bitrix24OpenLineMutationAuthority $authority,
     ): Bitrix24OpenLineRoute {
-        $initialStateVersion = (string) $route->getAttribute('state_version');
         $refreshedRoute = null;
 
         try {
-            $this->assertRouteConfigurationValidForRefresh($profile, $channel, $route);
+            $this->assertRouteConfigurationValidForRefresh($profile, $channel, $route, $authority);
             $connection = $this->refreshApplicationNameForConnectorRegistration(
                 $connection,
                 $leaseDeadline,
+                $authority,
             );
             $this->routeOperationLock->assertLeaseAllowsRemoteOperation($leaseDeadline);
             $this->registerConnector(
@@ -168,26 +188,16 @@ class AutoSetupBitrix24OpenLineRouteAction
                 $leaseDeadline,
             );
 
-            if ($this->routeStateVersionMatches(
-                (int) $route->getKey(),
-                $initialStateVersion,
+            $this->routeOperationLock->assertLeaseAllowsRemoteOperation($leaseDeadline);
+            $this->syncOpenLineCrmSettings(
+                $connection,
+                $lineId,
+                (string) $route->source_id,
                 $leaseDeadline,
-            )) {
-                $this->routeOperationLock->assertLeaseAllowsRemoteOperation($leaseDeadline);
-                $this->syncOpenLineCrmSettings(
-                    $connection,
-                    $lineId,
-                    (string) $route->source_id,
-                    $leaseDeadline,
-                );
-                $refreshedRoute = $this->completeRefreshStateTransition(
-                    $route,
-                    $initialStateVersion,
-                    $leaseDeadline,
-                );
-            }
+            );
+            $refreshedRoute = $this->completeRefreshStateTransition($authority);
         } catch (Bitrix24OpenLineAutoSetupException $exception) {
-            $this->markRouteError($route, $exception->getMessage());
+            $this->markRouteError($route, $exception->getMessage(), $authority);
 
             throw $exception;
         } catch (Bitrix24AuthRefreshException $exception) {
@@ -202,7 +212,7 @@ class AutoSetupBitrix24OpenLineRouteAction
                 ? $exception->getMessage()
                 : 'Не удалось обновить регистрацию соединителя Bitrix24.';
 
-            $this->markRouteError($route, $message);
+            $this->markRouteError($route, $message, $authority);
 
             throw new Bitrix24OpenLineAutoSetupException($message, previous: $exception);
         }
@@ -217,28 +227,15 @@ class AutoSetupBitrix24OpenLineRouteAction
     }
 
     private function completeRefreshStateTransition(
-        Bitrix24OpenLineRoute $route,
-        string $initialStateVersion,
-        Bitrix24OpenLineRouteLeaseDeadline $leaseDeadline,
+        Bitrix24OpenLineMutationAuthority $authority,
     ): ?Bitrix24OpenLineRoute {
-        $routeId = (int) $route->getKey();
-        $this->routeOperationLock->assertLeaseAllowsDatabaseTransition($leaseDeadline);
-
-        return $this->routeOperationLock->runShortStateTransition(
-            $routeId,
-            function (?Bitrix24OpenLineRoute $lockedRoute) use (
-                $initialStateVersion,
-                $leaseDeadline,
-            ): ?Bitrix24OpenLineRoute {
+        return $this->mutationFence->runMutation(
+            $authority,
+            function (?Bitrix24OpenLineRoute $lockedRoute): ?Bitrix24OpenLineRoute {
                 if (! $lockedRoute instanceof Bitrix24OpenLineRoute) {
                     throw new Bitrix24OpenLineAutoSetupException('Маршрут ОЛ больше не существует.');
                 }
 
-                if ((string) $lockedRoute->getAttribute('state_version') !== $initialStateVersion) {
-                    return null;
-                }
-
-                $this->routeOperationLock->assertLeaseAllowsDatabaseTransition($leaseDeadline);
                 $lockedRoute->forceFill([
                     'last_error_message' => null,
                     'last_error_at' => null,
@@ -247,20 +244,6 @@ class AutoSetupBitrix24OpenLineRouteAction
 
                 return $lockedRoute->refresh();
             },
-        );
-    }
-
-    private function routeStateVersionMatches(
-        int $routeId,
-        string $expectedStateVersion,
-        Bitrix24OpenLineRouteLeaseDeadline $leaseDeadline,
-    ): bool {
-        $this->routeOperationLock->assertLeaseAllowsDatabaseTransition($leaseDeadline);
-
-        return $this->routeOperationLock->runShortStateTransition(
-            $routeId,
-            fn (?Bitrix24OpenLineRoute $lockedRoute): bool => $lockedRoute instanceof Bitrix24OpenLineRoute
-                && (string) $lockedRoute->getAttribute('state_version') === $expectedStateVersion,
         );
     }
 
@@ -332,8 +315,7 @@ class AutoSetupBitrix24OpenLineRouteAction
         Bitrix24OpenLineRoute $route,
     ): array {
         $connectorCode = trim((string) $route->connector_code);
-        $storedLineId = trim((string) $route->line_id);
-        $lineId = Bitrix24OpenLineRoute::canonicalLineId($storedLineId) ?? $storedLineId;
+        $storedLineId = (string) $route->line_id;
         $connectorType = Bitrix24OpenLineRoute::openLinesConnectorTypeForChannelType(
             Bitrix24OpenLineRoute::channelTypeForChannel($channel),
         );
@@ -341,6 +323,12 @@ class AutoSetupBitrix24OpenLineRouteAction
         if (! Bitrix24OpenLineRoute::isValidConnectorCode($connectorCode)) {
             throw new Bitrix24OpenLineAutoSetupException(
                 'Код соединителя должен состоять из 1–64 латинских букв, цифр или символов ".", "_" и "-".',
+            );
+        }
+
+        if (! Bitrix24OpenLineRoute::isValidLineId($storedLineId)) {
+            throw new Bitrix24OpenLineAutoSetupException(
+                'LINE_ID маршрута неканоничен. Сначала выполните compatibility preflight/migration.',
             );
         }
 
@@ -353,7 +341,7 @@ class AutoSetupBitrix24OpenLineRouteAction
         return [
             'connector_code' => $connectorCode,
             'connector_type' => $connectorType,
-            'line_id' => $lineId,
+            'line_id' => $storedLineId,
         ];
     }
 
@@ -361,6 +349,7 @@ class AutoSetupBitrix24OpenLineRouteAction
         Bitrix24Profile $profile,
         Channel $channel,
         Bitrix24OpenLineRoute $route,
+        Bitrix24OpenLineMutationAuthority $authority,
     ): void {
         foreach ([
             'connector_code' => 'В маршруте ОЛ не заполнен код соединителя.',
@@ -372,7 +361,14 @@ class AutoSetupBitrix24OpenLineRouteAction
             }
         }
 
-        $this->assertLineIsNotUsedByAnotherRoute($profile, $channel, (string) $route->line_id);
+        $this->mutationFence->runMutation(
+            $authority,
+            fn () => $this->assertLineIsNotUsedByAnotherRoute(
+                $profile,
+                $channel,
+                (string) $route->line_id,
+            ),
+        );
     }
 
     private function syncOpenLineCrmSettings(
@@ -547,6 +543,7 @@ class AutoSetupBitrix24OpenLineRouteAction
     private function refreshApplicationNameForConnectorRegistration(
         Bitrix24Connection $connection,
         Bitrix24OpenLineRouteLeaseDeadline $leaseDeadline,
+        Bitrix24OpenLineMutationAuthority $authority,
     ): Bitrix24Connection {
         $currentName = $this->displayName($connection->application_name);
 
@@ -562,7 +559,8 @@ class AutoSetupBitrix24OpenLineRouteAction
 
         $this->routeOperationLock->assertLeaseAllowsDatabaseTransition($leaseDeadline);
 
-        return $this->routeOperationLock->runDatabaseTransaction(
+        return $this->mutationFence->runMutation(
+            $authority,
             function () use ($connection, $applicationName, $leaseDeadline): Bitrix24Connection {
                 $lockedConnection = Bitrix24Connection::query()
                     ->whereKey($connection->getKey())
@@ -579,11 +577,15 @@ class AutoSetupBitrix24OpenLineRouteAction
         );
     }
 
-    private function markRouteError(Bitrix24OpenLineRoute $route, string $message): void
-    {
+    private function markRouteError(
+        Bitrix24OpenLineRoute $route,
+        string $message,
+        Bitrix24OpenLineMutationAuthority $authority,
+    ): void {
         $this->markRouteMisconfiguredAction->handle(
             (int) $route->getKey(),
             $this->sanitizeErrorMessage($message),
+            $authority,
         );
     }
 

@@ -39,7 +39,7 @@ class BuildBitrix24OpenLinesRouteRegistryOwnerSnapshotAction
                 ->get()
                 ->each(function (Bitrix24OpenLineRoute $route) use (&$connectors, &$routes, &$lineIds): void {
                     $connectorCode = trim((string) $route->connector_code);
-                    $lineId = trim((string) $route->line_id);
+                    $lineId = (string) $route->line_id;
 
                     if ($connectorCode === '' || $lineId === '') {
                         return;

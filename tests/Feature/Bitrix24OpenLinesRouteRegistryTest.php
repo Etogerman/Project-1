@@ -275,6 +275,7 @@ class Bitrix24OpenLinesRouteRegistryTest extends TestCase
             'connector_type' => 'max',
             'line_id' => '14',
             'lease_seconds' => 360,
+            'lease_scope' => 'connector_registration',
         ], $payload);
         $this->assertRegistryRequestSigned(
             $request,
@@ -284,7 +285,7 @@ class Bitrix24OpenLinesRouteRegistryTest extends TestCase
         );
     }
 
-    public function test_acquire_line_lease_rejects_non_numeric_line_id_before_http_request(): void
+    public function test_acquire_line_lease_rejects_noncanonical_line_id_before_http_request(): void
     {
         $profile = $this->makeProfile([
             'portal_domain' => 'stagecrm.fvds.ru',
@@ -294,22 +295,24 @@ class Bitrix24OpenLinesRouteRegistryTest extends TestCase
         $owner = $profile->callbackOwners()->firstOrFail();
         Http::preventStrayRequests();
 
-        try {
-            app(Bitrix24OpenLinesRouteRegistryClient::class)->acquireLineLease(
-                $profile,
-                $owner,
-                'abc_max',
-                'max',
-                'line-editable',
-                360,
-            );
-            $this->fail('Non-numeric LINE_ID must fail before the registry request.');
-        } catch (Bitrix24OpenLinesRouteRegistryException $exception) {
-            $this->assertSame('route_registry_line_id_invalid', $exception->errorCode);
-            $this->assertSame(
-                'LINE_ID открытой линии должен состоять из 1–64 цифр.',
-                $exception->getMessage(),
-            );
+        foreach (['line-editable', '014', ' 14 '] as $lineId) {
+            try {
+                app(Bitrix24OpenLinesRouteRegistryClient::class)->acquireLineLease(
+                    $profile,
+                    $owner,
+                    'abc_max',
+                    'max',
+                    $lineId,
+                    360,
+                );
+                $this->fail('Noncanonical LINE_ID must fail before the registry request.');
+            } catch (Bitrix24OpenLinesRouteRegistryException $exception) {
+                $this->assertSame('route_registry_line_id_invalid', $exception->errorCode);
+                $this->assertSame(
+                    'LINE_ID открытой линии должен быть канонической строкой из 1–64 цифр.',
+                    $exception->getMessage(),
+                );
+            }
         }
 
         $this->assertCount(0, Http::recorded());
@@ -708,7 +711,7 @@ class Bitrix24OpenLinesRouteRegistryTest extends TestCase
             'connection_type' => Channel::CONNECTION_TYPE_BOT,
         ]);
 
-        Bitrix24OpenLineRoute::query()->create([
+        DB::table('bitrix24_open_line_routes')->insert([
             'bitrix24_profile_id' => $profile->id,
             'channel_id' => $channel->id,
             'portal_domain' => $profile->portal_domain,
@@ -720,6 +723,8 @@ class Bitrix24OpenLinesRouteRegistryTest extends TestCase
             'callback_owner_id' => $owner->id,
             'source_id' => 'ABC_MAX',
             'status' => Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
+            'created_at' => now(),
+            'updated_at' => now(),
         ]);
 
         Http::fake();

@@ -59,4 +59,33 @@ final class Bitrix24OpenLineRouteLeaseDeadline
             'Общая operation lease закончится раньше безопасного завершения операции.',
         );
     }
+
+    public function remainingSeconds(): int
+    {
+        return max(0, (int) floor(CarbonImmutable::now()->diffInSeconds($this->deadline, false)));
+    }
+
+    public function boundedDatabaseTimeoutSeconds(int $maximumSeconds): int
+    {
+        $available = $this->remainingSeconds() - $this->safetyMarginSeconds;
+
+        if ($available < 1) {
+            $this->assertAvailableFor(1);
+        }
+
+        return max(1, min(max(1, $maximumSeconds), $available));
+    }
+
+    public function requestTimeoutSeconds(int $configuredSeconds): int
+    {
+        $configuredSeconds = max(1, $configuredSeconds);
+        $this->assertAvailableFor($configuredSeconds);
+
+        return min($configuredSeconds, max(1, $this->remainingSeconds() - $this->safetyMarginSeconds));
+    }
+
+    public function expiresAt(): CarbonImmutable
+    {
+        return $this->deadline;
+    }
 }

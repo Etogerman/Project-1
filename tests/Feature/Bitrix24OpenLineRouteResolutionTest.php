@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Bitrix24OpenLineRoute;
+use App\Models\Bitrix24Profile;
 use App\Models\Channel;
 use App\Models\Contact;
 use App\Models\ContactIdentity;
@@ -27,6 +28,8 @@ class Bitrix24OpenLineRouteResolutionTest extends TestCase
 
         config()->set('bitrix24.features.openlines_enabled', true);
         config()->set('bitrix24.features.fake_happy_path_enabled', true);
+
+        $this->fakeBitrix24OpenLineMutationLeases();
     }
 
     public function test_resolver_uses_usable_route_for_current_profile_and_channel(): void
@@ -36,7 +39,7 @@ class Bitrix24OpenLineRouteResolutionTest extends TestCase
         $route = $this->makeRoute($dialog, [
             'bitrix24_profile_id' => $connection->profile_id,
             'connector_code' => 'abrikosoff_telegram_custom',
-            'line_id' => 'line-telegram-custom',
+            'line_id' => '113',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);
 
@@ -47,7 +50,7 @@ class Bitrix24OpenLineRouteResolutionTest extends TestCase
         $this->assertSame(Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT, $resolved->channelType);
         $this->assertSame(Bitrix24OpenLineRoute::STATUS_ACTIVE, $resolved->status);
         $this->assertSame('abrikosoff_telegram_custom', $resolved->connectorCode);
-        $this->assertSame('line-telegram-custom', $resolved->lineId);
+        $this->assertSame('113', $resolved->lineId);
     }
 
     public function test_resolver_requires_explicit_route_instead_of_profile_fallback(): void
@@ -71,7 +74,7 @@ class Bitrix24OpenLineRouteResolutionTest extends TestCase
         $route = $this->makeRoute($dialog, [
             'bitrix24_profile_id' => $connection->profile_id,
             'connector_code' => 'abrikosoff_telegram',
-            'line_id' => 'line-telegram',
+            'line_id' => '13',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);
         $message = Message::factory()->create([
@@ -120,7 +123,7 @@ class Bitrix24OpenLineRouteResolutionTest extends TestCase
         $route = $this->makeRoute($dialog, [
             'bitrix24_profile_id' => $connection->profile_id,
             'connector_code' => 'abrikosoff_telegram',
-            'line_id' => 'line-telegram',
+            'line_id' => '13',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);
 
@@ -129,7 +132,7 @@ class Bitrix24OpenLineRouteResolutionTest extends TestCase
         ])->save();
 
         $resolved = app(ResolveBitrix24OpenLinesRouteAction::class)
-            ->handleIncomingCallback($dialog, 'abrikosoff_telegram', 'line-telegram');
+            ->handleIncomingCallback($dialog, 'abrikosoff_telegram', '13');
 
         $this->assertSame($route->id, $resolved->routeId);
         $this->assertSame(Bitrix24OpenLineRoute::STATUS_ACTIVE, $resolved->status);
@@ -142,12 +145,12 @@ class Bitrix24OpenLineRouteResolutionTest extends TestCase
         $route = $this->makeRoute($dialog, [
             'bitrix24_profile_id' => $connection->profile_id,
             'connector_code' => 'abrikosoff_telegram',
-            'line_id' => 'line-telegram',
+            'line_id' => '13',
             'status' => Bitrix24OpenLineRoute::STATUS_LEGACY,
         ]);
 
         $resolved = app(ResolveBitrix24OpenLinesRouteAction::class)
-            ->handleIncomingCallback($dialog, 'abrikosoff_telegram', 'line-telegram');
+            ->handleIncomingCallback($dialog, 'abrikosoff_telegram', '13');
 
         $this->assertSame($route->id, $resolved->routeId);
         $this->assertSame(Bitrix24OpenLineRoute::STATUS_LEGACY, $resolved->status);
@@ -161,12 +164,12 @@ class Bitrix24OpenLineRouteResolutionTest extends TestCase
         $route = $this->makeRoute($dialog, [
             'bitrix24_profile_id' => $connection->profile_id,
             'connector_code' => 'abrikosoff_telegram',
-            'line_id' => 'line-telegram',
+            'line_id' => '13',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);
 
         $resolved = app(ResolveBitrix24OpenLinesRouteAction::class)
-            ->handleIncomingCallback($dialog, 'abrikosoff_telegram', 'line-telegram');
+            ->handleIncomingCallback($dialog, 'abrikosoff_telegram', '13');
 
         $this->assertSame($route->id, $resolved->routeId);
         $this->assertSame(Bitrix24OpenLineRoute::STATUS_ACTIVE, $resolved->status);
@@ -180,7 +183,7 @@ class Bitrix24OpenLineRouteResolutionTest extends TestCase
         $this->makeRoute($dialog, [
             'bitrix24_profile_id' => $connection->profile_id,
             'connector_code' => 'abrikosoff_telegram',
-            'line_id' => 'line-telegram',
+            'line_id' => '13',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);
 
@@ -207,7 +210,7 @@ class Bitrix24OpenLineRouteResolutionTest extends TestCase
         $this->expectExceptionMessage('must include connector and line');
 
         app(ResolveBitrix24OpenLinesRouteAction::class)
-            ->handleIncomingCallback($dialog, '', 'line-telegram');
+            ->handleIncomingCallback($dialog, '', '13');
     }
 
     /**
@@ -252,6 +255,7 @@ class Bitrix24OpenLineRouteResolutionTest extends TestCase
         }
 
         $channel = $dialog->channel()->firstOrFail();
+        $profile = Bitrix24Profile::query()->findOrFail($profileId);
 
         return Bitrix24OpenLineRoute::query()->create(array_merge([
             'bitrix24_profile_id' => $profileId,
@@ -260,7 +264,8 @@ class Bitrix24OpenLineRouteResolutionTest extends TestCase
             'profile_key' => 'staging',
             'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
             'connector_code' => 'abrikosoff_telegram',
-            'line_id' => 'line-telegram',
+            'line_id' => '13',
+            'callback_owner_id' => $this->ensureActiveBitrix24CallbackOwner($profile)->id,
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ], $attributes));
     }

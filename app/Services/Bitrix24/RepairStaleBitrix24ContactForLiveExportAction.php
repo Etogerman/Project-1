@@ -22,6 +22,7 @@ class RepairStaleBitrix24ContactForLiveExportAction
         private readonly QueueBitrix24LiveMessageExportAction $queueBitrix24LiveMessageExportAction,
         private readonly LogBitrix24ApiCallAction $logBitrix24ApiCallAction,
         private readonly ResolveCurrentBitrix24ConnectionAction $resolveCurrentConnectionAction,
+        private readonly Bitrix24OpenLineScopedMutation $scopedMutation,
     ) {}
 
     public function handle(Message $triggerMessage, Contact $rootContact, string $oldBitrix24ContactId): Bitrix24StaleContactRepairResultData
@@ -117,11 +118,13 @@ class RepairStaleBitrix24ContactForLiveExportAction
 
     private function createReplacementContact(Contact $rootContact, string $oldBitrix24ContactId): Contact
     {
-        $rootContact->forceFill([
-            'bitrix24_contact_id' => null,
-            'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_PENDING,
-            'bitrix24_sync_pending' => true,
-        ])->save();
+        $this->scopedMutation->run(
+            fn () => $rootContact->forceFill([
+                'bitrix24_contact_id' => null,
+                'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_PENDING,
+                'bitrix24_sync_pending' => true,
+            ])->save(),
+        );
 
         $syncedContact = $this->syncContactToBitrix24Action->handle(
             $rootContact->fresh(),
@@ -129,9 +132,11 @@ class RepairStaleBitrix24ContactForLiveExportAction
         );
 
         if (filled($syncedContact->bitrix24_contact_id) && $syncedContact->bitrix24_sync_status === Contact::BITRIX24_SYNC_STATUS_SYNCED) {
-            $syncedContact->forceFill([
-                'bitrix24_sync_pending' => false,
-            ])->save();
+            $this->scopedMutation->run(
+                fn () => $syncedContact->forceFill([
+                    'bitrix24_sync_pending' => false,
+                ])->save(),
+            );
         }
 
         return $syncedContact->fresh() ?? $syncedContact;
@@ -243,35 +248,44 @@ class RepairStaleBitrix24ContactForLiveExportAction
         ?string $newBitrix24ContactId,
         string $repairOutcome,
     ): void {
-        $contactIds = $this->contactIdsForOpenLineBindingInvalidation($rootContact);
-        $contactIds[] = (int) $triggerMessage->contact_id;
-        $contactIds = array_values(array_unique(array_filter($contactIds, static fn (int $id): bool => $id > 0)));
+        [$contactIds, $dialogIds] = $this->scopedMutation->run(
+            function () use ($rootContact, $triggerMessage): array {
+                $contactIds = $this->contactIdsForOpenLineBindingInvalidation($rootContact);
+                $contactIds[] = (int) $triggerMessage->contact_id;
+                $contactIds = array_values(array_unique(array_filter(
+                    $contactIds,
+                    static fn (int $id): bool => $id > 0,
+                )));
 
-        $dialogIds = Dialog::query()
-            ->where(function ($query) use ($contactIds, $triggerMessage): void {
-                $query
-                    ->whereIn('contact_id', $contactIds)
-                    ->orWhere('id', $triggerMessage->dialog_id);
-            })
-            ->where(function ($query): void {
-                $query
-                    ->whereNotNull('bitrix24_open_line_user_code_override')
-                    ->orWhereNotNull('bitrix24_open_line_resolved_chat_id_override')
-                    ->orWhereNotNull('bitrix24_open_line_binding_verified_at');
-            })
-            ->pluck('id')
-            ->map(static fn (mixed $id): int => (int) $id)
-            ->all();
+                $dialogIds = Dialog::query()
+                    ->where(function ($query) use ($contactIds, $triggerMessage): void {
+                        $query
+                            ->whereIn('contact_id', $contactIds)
+                            ->orWhere('id', $triggerMessage->dialog_id);
+                    })
+                    ->where(function ($query): void {
+                        $query
+                            ->whereNotNull('bitrix24_open_line_user_code_override')
+                            ->orWhereNotNull('bitrix24_open_line_resolved_chat_id_override')
+                            ->orWhereNotNull('bitrix24_open_line_binding_verified_at');
+                    })
+                    ->pluck('id')
+                    ->map(static fn (mixed $id): int => (int) $id)
+                    ->all();
 
-        if ($dialogIds !== []) {
-            Dialog::query()
-                ->whereKey($dialogIds)
-                ->update([
-                    'bitrix24_open_line_user_code_override' => null,
-                    'bitrix24_open_line_resolved_chat_id_override' => null,
-                    'bitrix24_open_line_binding_verified_at' => null,
-                ]);
-        }
+                if ($dialogIds !== []) {
+                    Dialog::query()
+                        ->whereKey($dialogIds)
+                        ->update([
+                            'bitrix24_open_line_user_code_override' => null,
+                            'bitrix24_open_line_resolved_chat_id_override' => null,
+                            'bitrix24_open_line_binding_verified_at' => null,
+                        ]);
+                }
+
+                return [$contactIds, $dialogIds];
+            },
+        );
 
         $this->logBitrix24ApiCallAction->handle(
             direction: Bitrix24SyncLog::DIRECTION_SYSTEM,

@@ -134,14 +134,14 @@ class Bitrix24SetupReportCommandTest extends TestCase
             'create_open_line_routes' => false,
         ]);
         $this->createActiveConnection($profile);
-        $this->createOpenLineRoute($profile, Channel::PLATFORM_TELEGRAM, 'line-from-route');
-        $this->createOpenLineRoute($profile, Channel::PLATFORM_MAX, 'line-max');
+        $this->createOpenLineRoute($profile, Channel::PLATFORM_TELEGRAM, '113');
+        $this->createOpenLineRoute($profile, Channel::PLATFORM_MAX, '14');
 
         $report = app(BuildBitrix24SetupReportAction::class)->handle();
 
         $this->assertFalse($report->hasBlockingIssues(), json_encode($report->blockingChecks()));
         $this->assertSame(
-            'line-from-route',
+            '113',
             collect($report->checks)->firstWhere('key', 'runtime.openline_routes.telegram_line_ids')['value'] ?? null,
         );
     }
@@ -153,8 +153,8 @@ class Bitrix24SetupReportCommandTest extends TestCase
             'create_open_line_routes' => false,
         ]);
         $this->createActiveConnection($profile);
-        $telegramRoute = $this->createOpenLineRoute($profile, Channel::PLATFORM_TELEGRAM, 'line-from-route');
-        $this->createOpenLineRoute($profile, Channel::PLATFORM_MAX, 'line-max');
+        $telegramRoute = $this->createOpenLineRoute($profile, Channel::PLATFORM_TELEGRAM, '113');
+        $this->createOpenLineRoute($profile, Channel::PLATFORM_MAX, '14');
         $this->createLiveExportForRoute($telegramRoute, [
             'export_status' => Bitrix24MessageExport::STATUS_FAILED,
             'failure_code' => Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED,
@@ -168,7 +168,7 @@ class Bitrix24SetupReportCommandTest extends TestCase
 
         $this->assertTrue($report->hasBlockingIssues(), json_encode($report->blockingChecks()));
         $this->assertSame(Bitrix24SetupReportResult::STATUS_MISSING, $check['status'] ?? null);
-        $this->assertSame('line-from-route', $check['value'] ?? null);
+        $this->assertSame('113', $check['value'] ?? null);
         $this->assertStringContainsString('inactive LINE_ID', $check['notes'] ?? '');
     }
 
@@ -179,8 +179,8 @@ class Bitrix24SetupReportCommandTest extends TestCase
             'create_open_line_routes' => false,
         ]);
         $this->createActiveConnection($profile);
-        $telegramRoute = $this->createOpenLineRoute($profile, Channel::PLATFORM_TELEGRAM, 'line-from-route');
-        $this->createOpenLineRoute($profile, Channel::PLATFORM_MAX, 'line-max');
+        $telegramRoute = $this->createOpenLineRoute($profile, Channel::PLATFORM_TELEGRAM, '113');
+        $this->createOpenLineRoute($profile, Channel::PLATFORM_MAX, '14');
         $this->createLiveExportForRoute($telegramRoute, [
             'export_status' => Bitrix24MessageExport::STATUS_FAILED,
             'failure_code' => Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED,
@@ -212,8 +212,8 @@ class Bitrix24SetupReportCommandTest extends TestCase
             'create_open_line_routes' => false,
         ]);
         $this->createActiveConnection($profile);
-        $this->createOpenLineRoute($profile, Channel::PLATFORM_TELEGRAM, 'line-from-route');
-        $this->createOpenLineRoute($profile, Channel::PLATFORM_MAX, 'line-max');
+        $this->createOpenLineRoute($profile, Channel::PLATFORM_TELEGRAM, '113');
+        $this->createOpenLineRoute($profile, Channel::PLATFORM_MAX, '14');
 
         Bitrix24SyncLog::query()->create([
             'direction' => Bitrix24SyncLog::DIRECTION_OUTBOUND,
@@ -227,7 +227,7 @@ class Bitrix24SetupReportCommandTest extends TestCase
             'request_payload' => [
                 'params' => [
                     'CONNECTOR' => 'abc_telegram',
-                    'LINE' => 'line-from-route',
+                    'LINE' => '113',
                 ],
             ],
             'response_payload' => [
@@ -241,7 +241,7 @@ class Bitrix24SetupReportCommandTest extends TestCase
 
         $this->assertTrue($report->hasBlockingIssues(), json_encode($report->blockingChecks()));
         $this->assertSame(Bitrix24SetupReportResult::STATUS_MISSING, $check['status'] ?? null);
-        $this->assertSame('line-from-route', $check['value'] ?? null);
+        $this->assertSame('113', $check['value'] ?? null);
         $this->assertStringContainsString('inactive LINE_ID', $check['notes'] ?? '');
     }
 
@@ -252,8 +252,8 @@ class Bitrix24SetupReportCommandTest extends TestCase
             'create_open_line_routes' => false,
         ]);
         $this->createActiveConnection($profile);
-        $telegramRoute = $this->createOpenLineRoute($profile, Channel::PLATFORM_TELEGRAM, 'line-from-route');
-        $this->createOpenLineRoute($profile, Channel::PLATFORM_MAX, 'line-max');
+        $telegramRoute = $this->createOpenLineRoute($profile, Channel::PLATFORM_TELEGRAM, '113');
+        $this->createOpenLineRoute($profile, Channel::PLATFORM_MAX, '14');
 
         Bitrix24SyncLog::query()->forceCreate([
             'direction' => Bitrix24SyncLog::DIRECTION_OUTBOUND,
@@ -267,7 +267,7 @@ class Bitrix24SetupReportCommandTest extends TestCase
             'request_payload' => [
                 'params' => [
                     'CONNECTOR' => 'abc_telegram',
-                    'LINE' => 'line-from-route',
+                    'LINE' => '113',
                 ],
             ],
             'response_payload' => [
@@ -296,14 +296,14 @@ class Bitrix24SetupReportCommandTest extends TestCase
             'create_open_line_routes' => false,
         ]);
         $this->createActiveConnection($profile);
-        $this->createOpenLineRoute($profile, Channel::PLATFORM_TELEGRAM, 'line-telegram');
-        $this->createOpenLineRoute($profile, Channel::PLATFORM_MAX, 'line-max-from-route');
+        $this->createOpenLineRoute($profile, Channel::PLATFORM_TELEGRAM, '13');
+        $this->createOpenLineRoute($profile, Channel::PLATFORM_MAX, '114');
 
         $report = app(BuildBitrix24SetupReportAction::class)->handle();
 
         $this->assertFalse($report->hasBlockingIssues(), json_encode($report->blockingChecks()));
         $this->assertSame(
-            'line-max-from-route',
+            '114',
             collect($report->checks)->firstWhere('key', 'runtime.openline_routes.max_line_ids')['value'] ?? null,
         );
     }
@@ -455,8 +455,8 @@ class Bitrix24SetupReportCommandTest extends TestCase
         ], $overrides));
 
         if ($createOpenLineRoutes && $profile->profile_type === Bitrix24Profile::TYPE_FULL_LIVE) {
-            $this->createOpenLineRoute($profile, Channel::PLATFORM_TELEGRAM, 'line-telegram');
-            $this->createOpenLineRoute($profile, Channel::PLATFORM_MAX, 'line-max');
+            $this->createOpenLineRoute($profile, Channel::PLATFORM_TELEGRAM, '13');
+            $this->createOpenLineRoute($profile, Channel::PLATFORM_MAX, '14');
         }
 
         return $profile;

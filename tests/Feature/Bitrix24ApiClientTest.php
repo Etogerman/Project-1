@@ -9,13 +9,20 @@ use App\Models\Bitrix24SyncLog;
 use App\Services\Bitrix24\Bitrix24ApiClient;
 use App\Services\Bitrix24\Bitrix24AuthRefreshException;
 use App\Services\Bitrix24\Bitrix24ConnectionStateException;
+use App\Services\Bitrix24\Bitrix24OpenLineMutationAuthority;
+use App\Services\Bitrix24\Bitrix24OpenLineMutationAuthorityContext;
+use App\Services\Bitrix24\Bitrix24OpenLineMutationAuthorityException;
+use App\Services\Bitrix24\Bitrix24OpenLineRestMethodPolicy;
+use App\Services\Bitrix24\Bitrix24OpenLineRouteLeaseDeadline;
 use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryException;
 use App\Services\Bitrix24\NoActiveBitrix24ConnectionException;
 use App\Services\Bitrix24\RefreshBitrix24AccessTokenAction;
 use App\Services\Bitrix24\ResolveCurrentBitrix24ConnectionAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 use Tests\Feature\Concerns\InteractsWithBitrix24RuntimeProfile;
 use Tests\TestCase;
 
@@ -512,6 +519,184 @@ class Bitrix24ApiClientTest extends TestCase
         Http::assertSentCount(2);
     }
 
+    public function test_protected_open_lines_method_without_authority_is_blocked_before_http(): void
+    {
+        $connection = $this->makeActiveConnection();
+        Http::fake();
+
+        try {
+            app(Bitrix24ApiClient::class)->call(
+                'imconnector.send.messages',
+                [
+                    'CONNECTOR' => 'abrikosoff_telegram',
+                    'LINE' => '13',
+                    'MESSAGES' => [],
+                ],
+                $connection,
+            );
+            $this->fail('Protected Open Lines method must require authority.');
+        } catch (Bitrix24OpenLineMutationAuthorityException $exception) {
+            $this->assertSame('openlines_mutation_authority_missing', $exception->errorCode);
+        }
+
+        Http::assertNothingSent();
+    }
+
+    public function test_unknown_open_lines_method_is_blocked_before_http(): void
+    {
+        $connection = $this->makeActiveConnection();
+        Http::fake();
+
+        try {
+            app(Bitrix24ApiClient::class)->call(
+                'imopenlines.future.mutate',
+                [],
+                $connection,
+            );
+            $this->fail('Unknown Open Lines method must fail closed.');
+        } catch (Bitrix24OpenLineMutationAuthorityException $exception) {
+            $this->assertSame('openlines_rest_method_unclassified', $exception->errorCode);
+        }
+
+        Http::assertNothingSent();
+    }
+
+    public function test_read_only_open_lines_method_remains_available_without_authority(): void
+    {
+        $connection = $this->makeActiveConnection();
+        Http::fake([
+            'https://client-endpoint.example/rest/imopenlines.config.get.json' => Http::response([
+                'result' => ['ID' => 13],
+            ]),
+        ]);
+
+        $response = app(Bitrix24ApiClient::class)->call(
+            'imopenlines.config.get',
+            ['CONFIG_ID' => '13'],
+            $connection,
+        );
+
+        $this->assertTrue($response->successful);
+        Http::assertSentCount(1);
+    }
+
+    public function test_protected_payload_missing_required_line_identity_is_blocked_before_http(): void
+    {
+        $connection = $this->makeActiveConnection();
+        Http::fake();
+
+        try {
+            app(Bitrix24OpenLineMutationAuthorityContext::class)->run(
+                $this->mutationAuthority(),
+                fn () => app(Bitrix24ApiClient::class)->call(
+                    'imconnector.send.messages',
+                    [
+                        'CONNECTOR' => 'abrikosoff_telegram',
+                        'MESSAGES' => [],
+                    ],
+                    $connection,
+                ),
+            );
+            $this->fail('Protected payload must expose the route identity it supports.');
+        } catch (Bitrix24OpenLineMutationAuthorityException $exception) {
+            $this->assertSame('openlines_mutation_identity_missing', $exception->errorCode);
+        }
+
+        Http::assertNothingSent();
+    }
+
+    public function test_protected_payload_with_noncanonical_user_code_line_is_blocked_before_http(): void
+    {
+        $connection = $this->makeActiveConnection();
+        Http::fake();
+
+        try {
+            app(Bitrix24OpenLineMutationAuthorityContext::class)->run(
+                $this->mutationAuthority(),
+                fn () => app(Bitrix24ApiClient::class)->call(
+                    'imopenlines.session.open',
+                    [
+                        'USER_CODE' => 'abrikosoff_telegram|013|chat|user',
+                    ],
+                    $connection,
+                ),
+            );
+            $this->fail('Protected payload must use canonical LINE_ID.');
+        } catch (Bitrix24OpenLineMutationAuthorityException $exception) {
+            $this->assertSame('openlines_mutation_identity_mismatch', $exception->errorCode);
+        }
+
+        Http::assertNothingSent();
+    }
+
+    public function test_protected_payload_with_whitespace_aliased_user_code_is_blocked_before_http(): void
+    {
+        $connection = $this->makeActiveConnection();
+        Http::fake();
+
+        try {
+            app(Bitrix24OpenLineMutationAuthorityContext::class)->run(
+                $this->mutationAuthority(),
+                fn () => app(Bitrix24ApiClient::class)->call(
+                    'imopenlines.session.open',
+                    [
+                        'USER_CODE' => ' abrikosoff_telegram|13|chat|user',
+                    ],
+                    $connection,
+                ),
+            );
+            $this->fail('Protected payload must not normalize a whitespace USER_CODE alias.');
+        } catch (Bitrix24OpenLineMutationAuthorityException $exception) {
+            $this->assertSame('openlines_mutation_identity_mismatch', $exception->errorCode);
+        }
+
+        Http::assertNothingSent();
+    }
+
+    public function test_open_lines_method_classification_and_identity_catalogs_are_complete_together(): void
+    {
+        $mutatingMethods = array_keys(Bitrix24OpenLineRestMethodPolicy::MUTATING_METHOD_SCOPES);
+        $identityMethods = array_keys(Bitrix24OpenLineRestMethodPolicy::MUTATING_METHOD_IDENTITIES);
+
+        sort($mutatingMethods);
+        sort($identityMethods);
+
+        $this->assertSame($mutatingMethods, $identityMethods);
+        $this->assertNotEmpty(Bitrix24OpenLineRestMethodPolicy::READ_ONLY_METHODS);
+    }
+
+    public function test_every_literal_open_lines_rest_call_used_by_application_is_classified(): void
+    {
+        $usedMethods = [];
+
+        foreach (File::allFiles(app_path()) as $file) {
+            preg_match_all(
+                '/->call\\(\\s*[\'"]((?:imconnector|imopenlines)\\.[^\'"]+)[\'"]/',
+                $file->getContents(),
+                $matches,
+            );
+
+            array_push($usedMethods, ...($matches[1] ?? []));
+        }
+
+        $usedMethods = array_values(array_unique(array_map(
+            static fn (string $method): string => mb_strtolower(trim($method)),
+            $usedMethods,
+        )));
+        sort($usedMethods);
+        $classifiedMethods = array_values(array_unique([
+            ...Bitrix24OpenLineRestMethodPolicy::READ_ONLY_METHODS,
+            ...array_keys(Bitrix24OpenLineRestMethodPolicy::MUTATING_METHOD_SCOPES),
+        ]));
+        sort($classifiedMethods);
+
+        $this->assertSame(
+            [],
+            array_values(array_diff($usedMethods, $classifiedMethods)),
+            'В app/ появился неклассифицированный literal Open Lines REST-вызов.',
+        );
+    }
+
     public function test_refresh_job_refreshes_specific_connection(): void
     {
         config()->set('bitrix24.oauth.server_url', 'https://oauth.example');
@@ -628,6 +813,29 @@ class Bitrix24ApiClientTest extends TestCase
                 'callback_base_url' => $callbackBaseUrl,
             ],
             useForCurrentRuntime: $callbackBaseUrl === 'https://project.example.com',
+        );
+    }
+
+    private function mutationAuthority(): Bitrix24OpenLineMutationAuthority
+    {
+        return new Bitrix24OpenLineMutationAuthority(
+            portalDomain: 'crm.alexlesley.biz',
+            lineId: '13',
+            ownerProfileKey: 'local-1',
+            ownerCallbackBaseUrl: 'https://project.example.com',
+            connectorCode: 'abrikosoff_telegram',
+            connectorType: 'telegram',
+            scope: Bitrix24OpenLineMutationAuthority::SCOPE_LINE_RUNTIME,
+            leaseToken: str_repeat('a', 64),
+            deadline: Bitrix24OpenLineRouteLeaseDeadline::fromRegistryLease(
+                now()->addMinutes(6)->toAtomString(),
+                360,
+                1,
+            ),
+            operationId: (string) Str::uuid(),
+            operationType: 'test',
+            routeId: null,
+            expectedStateVersion: null,
         );
     }
 }
