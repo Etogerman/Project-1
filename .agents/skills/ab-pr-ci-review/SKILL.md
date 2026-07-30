@@ -1,6 +1,6 @@
 ---
 name: ab-pr-ci-review
-description: Read-only inspect AB Connector PR/CI/review, Russian title/body and guards, Spec fields, result/terminal Issue/Spec Closure, verdict, and next checkpoint without merging or bypassing gates.
+description: Read-only inspect AB Connector PR/CI/review, independently review a delegated ready code/runtime PR before reading external AI findings, verify the same HEAD, Russian title/body and guards, Spec fields, result/terminal Issue/Spec Closure, consolidated verdict, and next checkpoint without merging or bypassing gates.
 ---
 
 # Проверка PR, CI и review
@@ -16,6 +16,10 @@ checkpoint, но не выполняет его.
 Skill не создаёт PR, не редактирует PR title/body, не комментирует PR, не
 approve, не request changes, не dismiss review, не переводит PR в ready, не делает
 merge, deploy или smoke и не закрывает/переоткрывает Issue.
+
+Skill не запрашивает review у стороннего ИИ-ревьюера. Пользователь переводит PR
+в `ready`, явно делегирует агенту независимую проверку и передаёт тот же `HEAD`
+стороннему ИИ-ревьюеру.
 
 Skill не меняет code diff и не меняет git-состояние.
 
@@ -41,12 +45,18 @@ Merge в `staging`/`main` и close/reopen Issue выполняет только 
 - release-process-guard;
 - ab-readiness-check;
 - PR body;
+- самостоятельным review агента;
+- пакетом независимых проверок одного `HEAD`;
 - следующим PR checkpoint или result/terminal Issue/Spec Closure.
 
-Этот skill проверяет наличие и статус review comments. После Copilot/reviewer
-review skill разбирает comments только для технического вердикта, но не
-реализует изменения по ним. Если review status, comments/threads или CI status
-недоступны либо неоднозначны, skill не даёт вердикт `готово к merge`.
+По явной команде `готово, проведи независимое ревью` или равнозначной skill
+сначала самостоятельно проверяет текущий diff и тесты, не читая выводы,
+summary и comments стороннего ИИ-ревьюера. После завершения самостоятельной
+проверки skill читает внешний review и все актуальные threads только для
+сводного технического вердикта, но не реализует изменения по ним. Если одна из
+проверок отсутствует, относится к другому `HEAD` либо review status,
+comments/threads или CI status недоступны или неоднозначны, skill не даёт
+вердикт `готово к merge`.
 
 ## Источники
 
@@ -54,10 +64,11 @@ review skill разбирает comments только для техническ�
 
 1. `AGENTS.md`
 2. `docs/task-delivery-workflow.md`
-3. `.github/PULL_REQUEST_TEMPLATE.md`
-4. `.github/scripts/ab-readiness-check.mjs`
-5. `.github/scripts/release-process-guard.mjs`
-6. GitHub PR state и CI checks, если нужна live-проверка
+3. `docs/action-ownership.md`
+4. `.github/PULL_REQUEST_TEMPLATE.md`
+5. `.github/scripts/ab-readiness-check.mjs`
+6. `.github/scripts/release-process-guard.mjs`
+7. GitHub PR state и CI checks, если нужна live-проверка
 
 Если `docs/agent-routing.md` или `docs/agent-docs-lifecycle.md` существуют только
 как локальные черновики, скажи об этом и не используй их как активные правила.
@@ -69,8 +80,10 @@ review skill разбирает comments только для техническ�
 - PR number и target branch;
 - draft или ready;
 - base/head branch;
+- полный commit SHA текущего `HEAD`;
 - текущее состояние CI;
-- текущее состояние review;
+- завершена ли самостоятельная проверка агента для текущего `HEAD`;
+- текущее состояние review стороннего ИИ-ревьюера и относится ли оно к тому же `HEAD`;
 - mergeability как справочный сигнал;
 - русский title PR;
 - русские разделы и человекочитаемый русский текст в PR body;
@@ -85,7 +98,7 @@ review skill разбирает comments только для техническ�
 
 Skill может прочитать текущее состояние CI по явной задаче пользователя, когда
 пользователь вернул красный или неоднозначный CI агенту, либо когда после
-Copilot/reviewer review нужен технический вердикт перед merge.
+пакета независимых проверок нужен сводный технический вердикт перед merge.
 
 Skill не запускает ожидание CI, не мониторит проверки до зелёного состояния и не
 считает CI подтверждённым по памяти.
@@ -98,6 +111,14 @@ checkpoint строится по delivery rules, CI/review status и полям 
 closing Issues и полные commit messages; зафиксируй timestamp, HEAD/body revision
 и Issues/commit SHAs. Closing keyword или изменение evidence блокирует verdict.
 
+При самостоятельной проверке после `ready` сначала собери только PR metadata,
+текущий `HEAD`, diff, изменённые файлы, относящиеся к ним код/тесты/ТЗ и CI.
+Не открывай внешний review, его summary, comments или threads, пока собственные
+findings не сформулированы и не зафиксированы в текущей задаче вместе со строкой
+`Review HEAD: <sha>`. Если внешний review ещё выполняется, верни собственные
+findings и статус ожидания без сводного вердикта. После завершения внешнего
+review отдельным шагом прочитай его полностью и сопоставь findings.
+
 ## Обязательные правила
 
 Нетривиальный PR сначала создаётся как `draft`.
@@ -107,24 +128,35 @@ target branch и статус.
 
 CI не отслеживается и review не выполняется без отдельной команды пользователя.
 Обычную проверку CI на draft PR выполняет пользователь: если всё ок, он
-переводит PR в ready; если есть ошибки, возвращает задачу агенту.
+возвращает задачу агенту для обязательной авторской самопроверки до `ready`;
+если есть ошибки, возвращает задачу агенту для разбора и исправления.
 
-После пользовательского подтверждения зелёного CI на draft PR, валидных полей
-готовности и отсутствия blocker-ов следующий checkpoint — пользователь переводит
-PR в ready.
+После пользовательского подтверждения зелёного CI на draft PR, завершённой
+авторской самопроверки до `ready`, валидных полей готовности и отсутствия
+blocker-ов следующий checkpoint — пользователь переводит PR в ready, пишет
+`готово, проведи независимое ревью` или равнозначную команду и передаёт тот же
+`HEAD` стороннему ИИ-ревьюеру.
 
-После пользовательского ready следующий checkpoint — Copilot/reviewer review.
-После Copilot/reviewer review агент читает review и даёт технический вердикт:
-`готово к merge`, `нужны правки` или `нужен выбор пользователя`.
-После вердикта `готово к merge` следующий checkpoint — пользовательский merge.
+После пользовательского ready агент и сторонний ИИ-ревьюер параллельно и
+независимо проверяют один зафиксированный `HEAD`. Агент формулирует собственные
+findings до чтения внешнего review. После завершения обеих проверок агент читает
+внешний review, все актуальные comments/threads и CI того же commit и даёт
+сводный технический вердикт: `готово к merge`, `нужны правки` или `нужен выбор
+пользователя`. После вердикта `готово к merge` следующий checkpoint —
+пользовательский merge.
 
-Вердикт `готово к merge` допустим только если агенту доступны review status,
-comments/threads и CI status. Если данные недоступны, неполны или противоречат
-друг другу, следующий checkpoint — получить данные или решение пользователя.
+Вердикт `готово к merge` допустим только если обе проверки завершены для одного
+текущего `HEAD` и агенту доступны review status, comments/threads и зелёный CI
+того же commit. Если данные недоступны, неполны или противоречат друг другу,
+следующий checkpoint — получить данные или решение пользователя.
 
-Copilot/reviewer review считается выполненным только когда review завершён, не
-находится в pending/in-progress состоянии и агент может прочитать актуальный
-результат review.
+Внешний review считается выполненным только когда он завершён, относится к
+текущему `HEAD`, запущен после пользовательского `ready`, не находится в
+pending/in-progress состоянии и агент может прочитать актуальный результат.
+Review draft PR считается предварительным и не закрывает пакет. Новый commit
+обнуляет обе проверки и требует
+дождаться нового CI, пользовательского подтверждения зелёного результата,
+повторной явной делегации обеим сторонам и полного пакета независимых проверок.
 
 PR в `staging` не включает merge в `staging`, staging smoke, PR в `main` или merge
 в `main`.
@@ -195,10 +227,12 @@ Staging smoke: https://github.com/.../actions/runs/...
 
 - draft PR создан -> пользователь или reviewer проверяет PR;
 - draft PR + CI не проверен -> пользователь проверяет CI;
-- draft PR + CI зелёный + поля готовности валидны + blocker-ов нет -> пользователь переводит PR в ready;
+- draft PR + CI зелёный + авторская самопроверка до ready не завершена -> агент выполняет авторскую самопроверку текущего HEAD по отдельной команде пользователя;
+- draft PR + CI зелёный + авторская самопроверка завершена + поля готовности валидны + blocker-ов нет -> пользователь переводит PR в ready, явно делегирует агенту независимую проверку и передаёт тот же HEAD стороннему ИИ-ревьюеру;
 - draft PR + CI красный или неоднозначный -> пользователь возвращает задачу агенту, агент разбирает ошибку и предлагает исправление;
-- PR ready -> Copilot/reviewer выполняет review;
-- PR ready + Copilot/reviewer review выполнен + review status/comments/threads и CI status доступны + вердикт агента ещё не дан -> агент читает review и даёт технический вердикт;
+- PR ready + текущий HEAD появился после прошлой делегации либо его зелёный CI не подтверждён пользователем -> пользователь проверяет CI и повторно делегирует обе проверки текущего HEAD;
+- PR ready + текущий HEAD явно делегирован обеим сторонам + пакет не закрыт -> агент и сторонний ИИ-ревьюер параллельно и независимо проверяют один HEAD;
+- обе проверки текущего HEAD выполнены + внешний review/comments/threads и зелёный CI доступны + сводный вердикт ещё не дан -> агент сопоставляет обе проверки и даёт сводный технический вердикт;
 - вердикт агента `готово к merge` -> пользователь выполняет merge;
 - вердикт агента `нужны правки` -> рекомендовать исправление в текущем scope;
 - вердикт агента `нужен выбор пользователя` -> показать риск и запросить решение пользователя;
@@ -214,10 +248,13 @@ Staging smoke: https://github.com/.../actions/runs/...
 
 - PR;
 - base/head;
+- commit SHA зафиксированного `HEAD`;
 - draft/ready;
 - CI status;
-- review status;
-- review verdict;
+- статус самостоятельной проверки агента;
+- статус проверки стороннего ИИ-ревьюера;
+- совпадение `HEAD` обеих проверок и CI;
+- сводный review verdict;
 - PR body/readiness status;
 - Issue/Spec Closure status, если PR уже дошёл до этого checkpoint;
 - текущий delivery level;
