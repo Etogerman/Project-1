@@ -34,8 +34,8 @@
 
 - локальный незапубликованный diff по текущему шагу
 - открытый draft PR или обычный PR в `staging` или `main`
-- смерженный PR в `staging`, у которого ещё не закрыты staging deploy-check, staging smoke или staging QA
-- staging deploy-check, staging smoke и staging QA либо явно принятый остаточный риск закрыты, но тот же validated diff ещё не проведён отдельным PR в `main`
+- смерженный PR в `staging`, у которого ещё не закрыт staging deploy-check или staging smoke либо не подтверждён staging QA при отсутствии явно принятого пользователем остаточного риска
+- staging deploy-check и staging smoke закрыты, а staging QA подтверждён либо пользователь явно принял остаточный риск, но тот же validated diff ещё не проведён отдельным PR в `main`
 - смерженный PR в `main`, который ещё не выкачен в production, если production входит в release flow
 - завершившийся production deploy без закрытого production smoke-check
 - result/no-result route без outcome/records либо закрытых Issue/Spec checkpoint
@@ -52,7 +52,7 @@
 Перед запуском нового clean stream обязателен preflight-check:
 
 1. проверить, есть ли активный PR по предыдущему шагу
-2. проверить, есть ли незавершённый staging deploy-check, staging smoke или staging QA
+2. проверить, закрыты ли staging deploy-check и staging smoke; если staging QA не подтверждён — проверить, принял ли пользователь остаточный риск
 3. проверить, есть ли незавершённый production deploy или production smoke
 4. проверить основание закрытия, `Issue Closure` и применимый `Spec Closure`
 5. проверить хвост очистки веток: слитые удалённые и локальные ветки, устаревшие рабочие каталоги (`worktree`) и локальные ветки без отслеживаемой удалённой ветки
@@ -137,7 +137,7 @@ workflow и не требует пакета двух независимых п�
    технический вердикт
 8. merge staging PR выполняет только пользователь и только после вердикта
    `готово к merge`
-9. staging deploy, staging smoke и staging QA
+9. staging deploy-check и staging smoke, затем staging QA либо явное принятие пользователем остаточного риска
 10. отдельный draft PR в `main` из проверенного diff
 11. в PR в `main` повторяется тот же порядок: авторская самопроверка
     окончательного опубликованного снимка до передачи пользователю, пользовательская проверка
@@ -230,7 +230,7 @@ workflow и не требует пакета двух независимых п�
 
 ## Практический принцип
 
-Сначала:
+Для code/runtime clean stream сначала:
 
 - read-only audit
 - findings
@@ -243,7 +243,7 @@ workflow и не требует пакета двух независимых п�
 - авторская самопроверка окончательного опубликованного снимка PR
 - пользовательская проверка GitHub checks
 
-Только потом:
+Для code/runtime clean stream только потом:
 
 - прямой пользовательский `Ready for review`, если проверки зелёные и снимок не
   изменился; повторный вызов агента только ради статуса проверок не требуется
@@ -255,6 +255,10 @@ workflow и не требует пакета двух независимых п�
 - merge
 - deploy
 - post-deploy smoke-check
+
+Для docs-only/process-only clean stream применяется отдельный `docs-only path`
+канонического workflow; пакет двух независимых проверок требуется только по
+явному запросу пользователя.
 
 Это дешевле и безопаснее, чем пытаться тащить всю mixed-ветку до конца как
 один большой пакет.
