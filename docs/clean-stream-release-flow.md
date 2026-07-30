@@ -34,8 +34,8 @@
 
 - локальный незапубликованный diff по текущему шагу
 - открытый draft PR или обычный PR в `staging` или `main`
-- смерженный PR в `staging`, у которого ещё не закрыты staging deploy или staging smoke
-- staging smoke завершён, но тот же validated diff ещё не проведён отдельным PR в `main`
+- смерженный PR в `staging`, у которого ещё не закрыты staging deploy-check, staging smoke или staging QA
+- staging deploy-check, staging smoke и staging QA либо явно принятый остаточный риск закрыты, но тот же validated diff ещё не проведён отдельным PR в `main`
 - смерженный PR в `main`, который ещё не выкачен в production, если production входит в release flow
 - завершившийся production deploy без закрытого production smoke-check
 - result/no-result route без outcome/records либо закрытых Issue/Spec checkpoint
@@ -52,7 +52,7 @@
 Перед запуском нового clean stream обязателен preflight-check:
 
 1. проверить, есть ли активный PR по предыдущему шагу
-2. проверить, есть ли незавершённый staging deploy или staging smoke
+2. проверить, есть ли незавершённый staging deploy-check, staging smoke или staging QA
 3. проверить, есть ли незавершённый production deploy или production smoke
 4. проверить основание закрытия, `Issue Closure` и применимый `Spec Closure`
 5. проверить хвост очистки веток: слитые удалённые и локальные ветки, устаревшие рабочие каталоги (`worktree`) и локальные ветки без отслеживаемой удалённой ветки

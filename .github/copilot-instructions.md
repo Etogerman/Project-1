@@ -3,7 +3,7 @@
 ## Release process
 
 - Для любых кодовых или runtime-изменений соблюдай staging-first маршрут:
-  локальная реализация -> операторская приемка -> draft PR в `staging` -> зеленые проверки -> merge в `staging` -> staging smoke -> draft PR в `main` -> зеленые проверки -> merge в `main` -> ручной production deploy -> production smoke.
+  локальная реализация -> операторская приемка -> draft PR в `staging` -> зеленые проверки -> merge в `staging` -> staging deploy-check -> staging smoke -> staging QA либо явное принятие остаточного риска -> draft PR в `main` -> зеленые проверки -> merge в `main` -> ручной production deploy -> production smoke.
 - Не предлагай прямой merge в `main` для кодовых или runtime-изменений без явного исключения от владельца проекта.
 - Merge в `main` не является production deploy. Production deploy выполняется отдельно и вручную.
 - Если PR направлен в `main` и меняет код, тесты, маршруты, миграции, сборку, Docker, frontend/backend runtime или сценарии, проверь, что описание PR содержит:
