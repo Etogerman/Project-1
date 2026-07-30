@@ -37,10 +37,13 @@ use App\Policies\GeoCountryPolicy;
 use App\Policies\GeoRegionPolicy;
 use App\Policies\ScenarioPolicy;
 use App\Policies\UserPolicy;
+use App\Services\Bitrix24\Bitrix24OpenLineMutationAuthorityContext;
+use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistrySnapshotLock;
 use App\Services\Dialogs\DialogStageCatalog;
 use Illuminate\Auth\Events\Login;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\RateLimiter;
@@ -54,6 +57,13 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->scoped(DialogStageCatalog::class);
+        $this->app->scoped(Bitrix24OpenLineMutationAuthorityContext::class);
+        $this->app->scoped(
+            Bitrix24OpenLinesRouteRegistrySnapshotLock::class,
+            fn (): Bitrix24OpenLinesRouteRegistrySnapshotLock => new Bitrix24OpenLinesRouteRegistrySnapshotLock(
+                DB::connection(),
+            ),
+        );
     }
 
     /**

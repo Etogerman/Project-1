@@ -27,11 +27,11 @@ class Bitrix24BindOpenLineDialogCommandTest extends TestCase
             ],
             profileOverrides: [
                 'max_connector_code' => 'abrikosoff_max',
-                'max_line_id' => 'line-max',
+                'max_line_id' => '14',
             ],
         );
         $dialog = $this->makeMaxDialog($connection);
-        $userCode = sprintf('imol|abrikosoff_max|line-max|abrikosoff-dialog:%d|5', $dialog->id);
+        $userCode = sprintf('imol|abrikosoff_max|14|abrikosoff-dialog:%d|5', $dialog->id);
 
         $this->mock(Bitrix24ApiClient::class, function ($mock) use ($connection, $dialog): void {
             $mock->shouldReceive('call')
@@ -43,7 +43,7 @@ class Bitrix24BindOpenLineDialogCommandTest extends TestCase
                     bool $transportRetry,
                 ) use ($connection, $dialog): bool {
                     return $method === 'imopenlines.dialog.get'
-                        && $params['USER_CODE'] === sprintf('abrikosoff_max|line-max|abrikosoff-dialog:%d|5', $dialog->id)
+                        && $params['USER_CODE'] === sprintf('abrikosoff_max|14|abrikosoff-dialog:%d|5', $dialog->id)
                         && $usedConnection->is($connection)
                         && $transportRetry === false;
                 })
@@ -107,7 +107,7 @@ class Bitrix24BindOpenLineDialogCommandTest extends TestCase
 
         $dialog->refresh();
 
-        $this->assertSame(sprintf('abrikosoff_max|line-max|abrikosoff-dialog:%d|5', $dialog->id), $dialog->bitrix24_open_line_user_code_override);
+        $this->assertSame(sprintf('abrikosoff_max|14|abrikosoff-dialog:%d|5', $dialog->id), $dialog->bitrix24_open_line_user_code_override);
         $this->assertSame('7', $dialog->bitrix24_open_line_resolved_chat_id_override);
         $this->assertNotNull($dialog->bitrix24_open_line_binding_verified_at);
         $this->assertSame('abrikosoff-dialog:'.$dialog->id, $dialog->bitrix24_live_chat_id);
@@ -119,7 +119,7 @@ class Bitrix24BindOpenLineDialogCommandTest extends TestCase
         $connection = $this->makeProfileLinkedActiveBitrix24Connection(
             profileOverrides: [
                 'max_connector_code' => 'abrikosoff_max',
-                'max_line_id' => 'line-max',
+                'max_line_id' => '14',
             ],
         );
         $dialog = $this->makeMaxDialog($connection);
@@ -145,7 +145,7 @@ class Bitrix24BindOpenLineDialogCommandTest extends TestCase
 
         $this->artisan('bitrix24:bind-openline-dialog', [
             'dialog' => $dialog->id,
-            '--user-code' => sprintf('abrikosoff_max|line-max|abrikosoff-dialog:%d|5', $dialog->id),
+            '--user-code' => sprintf('abrikosoff_max|14|abrikosoff-dialog:%d|5', $dialog->id),
             '--chat-id' => '7',
         ])->assertFailed();
 
@@ -161,7 +161,7 @@ class Bitrix24BindOpenLineDialogCommandTest extends TestCase
         $connection = $this->makeProfileLinkedActiveBitrix24Connection(
             profileOverrides: [
                 'max_connector_code' => 'abrikosoff_max',
-                'max_line_id' => 'line-max',
+                'max_line_id' => '14',
             ],
         );
         $dialog = $this->makeMaxDialog($connection);
@@ -224,7 +224,7 @@ class Bitrix24BindOpenLineDialogCommandTest extends TestCase
 
         $this->artisan('bitrix24:bind-openline-dialog', [
             'dialog' => $dialog->id,
-            '--user-code' => sprintf('abrikosoff_max|line-max|abrikosoff-dialog:%d|5', $dialog->id),
+            '--user-code' => sprintf('abrikosoff_max|14|abrikosoff-dialog:%d|5', $dialog->id),
             '--chat-id' => '7',
         ])
             ->expectsOutput('Bitrix24 подтвердил USER_CODE, но chat id [7] не найден среди активных чатов CONTACT [9]. Такой binding не подходит для отправки через imopenlines.crm.message.add.')
@@ -242,7 +242,7 @@ class Bitrix24BindOpenLineDialogCommandTest extends TestCase
         $connection = $this->makeProfileLinkedActiveBitrix24Connection(
             profileOverrides: [
                 'max_connector_code' => 'abrikosoff_max',
-                'max_line_id' => 'line-max',
+                'max_line_id' => '14',
             ],
         );
         $dialog = $this->makeMaxDialog($connection, [
@@ -271,7 +271,7 @@ class Bitrix24BindOpenLineDialogCommandTest extends TestCase
 
         $this->artisan('bitrix24:bind-openline-dialog', [
             'dialog' => $dialog->id,
-            '--user-code' => sprintf('abrikosoff_max|line-max|abrikosoff-dialog:%d|5', $dialog->id),
+            '--user-code' => sprintf('abrikosoff_max|14|abrikosoff-dialog:%d|5', $dialog->id),
             '--chat-id' => '7',
         ])
             ->expectsOutput('Диалог нельзя привязать к старой ОЛ до синхронизации контакта с Bitrix24 CONTACT.')
@@ -289,7 +289,7 @@ class Bitrix24BindOpenLineDialogCommandTest extends TestCase
         $connection = $this->makeProfileLinkedActiveBitrix24Connection(
             profileOverrides: [
                 'max_connector_code' => 'abrikosoff_max',
-                'max_line_id' => 'line-max',
+                'max_line_id' => '14',
             ],
         );
         $dialog = $this->makeMaxDialog($connection);
@@ -300,7 +300,7 @@ class Bitrix24BindOpenLineDialogCommandTest extends TestCase
 
         $this->artisan('bitrix24:bind-openline-dialog', [
             'dialog' => $dialog->id,
-            '--user-code' => 'abrikosoff_max|line-max|foreign-dialog:999|5',
+            '--user-code' => 'abrikosoff_max|14|foreign-dialog:999|5',
             '--chat-id' => '7',
         ])
             ->expectsOutput(sprintf(
@@ -344,7 +344,7 @@ class Bitrix24BindOpenLineDialogCommandTest extends TestCase
             'profile_key' => $profile->profile_key,
             'channel_type' => Bitrix24OpenLineRoute::CHANNEL_TYPE_MAX,
             'connector_code' => 'abrikosoff_max',
-            'line_id' => 'line-max',
+            'line_id' => '14',
             'source_id' => 'ABRIKOSOFF_MAX',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);

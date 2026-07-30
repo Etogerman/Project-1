@@ -23,6 +23,8 @@ use App\Models\User;
 use App\Services\Bitrix24\Bitrix24ApiException;
 use App\Services\Bitrix24\Bitrix24ConnectionStateException;
 use App\Services\Bitrix24\Bitrix24LiveExportTransportException;
+use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryClient;
+use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryException;
 use App\Services\Bitrix24\BuildBitrix24OpenLinesMessagePayloadAction;
 use App\Services\Bitrix24\DedupeBitrix24ContactPhonesAction;
 use App\Services\Bitrix24\ExportMessageToBitrix24OpenLinesAction;
@@ -64,12 +66,14 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         config()->set('bitrix24.features.openlines_enabled', true);
         config()->set('bitrix24.features.fast_inbound_export_enabled', false);
         config()->set('bitrix24.openlines.telegram_connector_code', 'abrikosoff_telegram');
-        config()->set('bitrix24.openlines.telegram_line_id', 'line-telegram');
+        config()->set('bitrix24.openlines.telegram_line_id', '13');
         config()->set('bitrix24.openlines.max_connector_code', 'abrikosoff_max');
-        config()->set('bitrix24.openlines.max_line_id', 'line-max');
+        config()->set('bitrix24.openlines.max_line_id', '14');
         config()->set('bitrix24.openlines.service_user_id', 321);
         config()->set('bitrix24.duplicate_phone_diagnostic.enabled', false);
         config()->set('bitrix24.http.retry_sleep_milliseconds', 0);
+
+        $this->fakeBitrix24OpenLineMutationLeases();
     }
 
     public function test_dialogs_table_has_bitrix24_live_fields_with_expected_defaults(): void
@@ -316,7 +320,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
     public function test_telegram_manual_reply_does_not_use_controlled_max_connector_mirror_path(): void
     {
         $this->makeActiveConnection();
-        $userCode = 'abrikosoff_telegram|line-telegram|abrikosoff-dialog:23|101154';
+        $userCode = 'abrikosoff_telegram|13|abrikosoff-dialog:23|101154';
         $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_TELEGRAM, dialogAttributes: [
             'bitrix24_open_line_user_code_override' => $userCode,
             'bitrix24_open_line_resolved_chat_id_override' => '162490',
@@ -415,7 +419,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             parse_str($request->body(), $payload);
 
             return ($payload['CONNECTOR'] ?? null) === 'abrikosoff_telegram'
-                && ($payload['LINE'] ?? null) === 'line-telegram'
+                && ($payload['LINE'] ?? null) === '13'
                 && ($payload['MESSAGES'][0]['chat']['id'] ?? null) === 'abrikosoff-dialog:23'
                 && ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'ℹ️ [Оператор] Telegram manual reply через единый mirror';
         });
@@ -447,7 +451,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             useForCurrentRuntime: false,
         );
 
-        $userCode = 'abrikosoff_max|line-max|abrikosoff-dialog:396|101154';
+        $userCode = 'abrikosoff_max|14|abrikosoff-dialog:396|101154';
         $dialog = $this->createLiveReadyDialog(
             platform: Channel::PLATFORM_MAX,
             dialogAttributes: [
@@ -534,7 +538,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
     {
         $this->makeActiveConnection();
         $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_MAX, dialogAttributes: [
-            'bitrix24_open_line_user_code_override' => 'abrikosoff_max|line-max|legacy-dialog-23|legacy-user-5',
+            'bitrix24_open_line_user_code_override' => 'abrikosoff_max|14|legacy-dialog-23|legacy-user-5',
             'bitrix24_open_line_resolved_chat_id_override' => 'legacy-chat-7',
             'bitrix24_open_line_binding_verified_at' => now(),
         ]);
@@ -563,7 +567,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                         'ID' => (string) $request['ID'],
                         'IM' => [
                             [
-                                'VALUE' => 'imol|abrikosoff_max|line-max|legacy-dialog-23|legacy-user-5',
+                                'VALUE' => 'imol|abrikosoff_max|14|legacy-dialog-23|legacy-user-5',
                                 'VALUE_TYPE' => 'IMOL',
                             ],
                         ],
@@ -623,7 +627,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $this->assertSame('legacy-chat-7', data_get($syncLog->response_payload, 'returned_session_chat_id'));
 
         Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.dialog.get.json'
-            && $request['USER_CODE'] === 'abrikosoff_max|line-max|legacy-dialog-23|legacy-user-5');
+            && $request['USER_CODE'] === 'abrikosoff_max|14|legacy-dialog-23|legacy-user-5');
         Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json'
             && $request['ACTIVE_ONLY'] === 'Y');
         Http::assertSent(function (Request $request): bool {
@@ -634,7 +638,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             parse_str($request->body(), $payload);
 
             return ($payload['CONNECTOR'] ?? null) === 'abrikosoff_max'
-                && ($payload['LINE'] ?? null) === 'line-max'
+                && ($payload['LINE'] ?? null) === '14'
                 && ($payload['MESSAGES'][0]['chat']['id'] ?? null) === 'legacy-dialog-23'
                 && ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'ℹ️ [Оператор] Ручной ответ через verified binding';
         });
@@ -653,7 +657,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 'bitrix24_contact_id' => '71034',
             ],
             dialogAttributes: [
-                'bitrix24_open_line_user_code_override' => 'abrikosoff_max|line-max|abrikosoff-dialog:396|101154',
+                'bitrix24_open_line_user_code_override' => 'abrikosoff_max|14|abrikosoff-dialog:396|101154',
                 'bitrix24_open_line_resolved_chat_id_override' => '162490',
                 'bitrix24_open_line_binding_verified_at' => now(),
             ],
@@ -683,7 +687,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                         'ID' => (string) $request['ID'],
                         'IM' => [
                             [
-                                'VALUE' => 'imol|abrikosoff_max|line-max|abrikosoff-dialog:396|101154',
+                                'VALUE' => 'imol|abrikosoff_max|14|abrikosoff-dialog:396|101154',
                                 'VALUE_TYPE' => 'IMOL',
                             ],
                         ],
@@ -752,7 +756,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
     public function test_max_manual_reply_connector_mirror_does_not_retry_mutating_send_on_server_error(): void
     {
         $this->makeActiveConnection();
-        $userCode = 'abrikosoff_max|line-max|abrikosoff-dialog:396|101154';
+        $userCode = 'abrikosoff_max|14|abrikosoff-dialog:396|101154';
         $dialog = $this->createLiveReadyDialog(
             platform: Channel::PLATFORM_MAX,
             contactAttributes: [
@@ -868,7 +872,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
     public function test_inactive_line_send_failure_marks_open_line_route_misconfigured(): void
     {
         $this->makeActiveConnection();
-        $userCode = 'abrikosoff_max|line-max|abrikosoff-dialog:396|101154';
+        $userCode = 'abrikosoff_max|14|abrikosoff-dialog:396|101154';
         $dialog = $this->createLiveReadyDialog(
             platform: Channel::PLATFORM_MAX,
             contactAttributes: [
@@ -1012,7 +1016,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
     public function test_max_manual_reply_marks_connector_success_without_returned_session_chat_uncertain(): void
     {
         $this->makeActiveConnection();
-        $userCode = 'abrikosoff_max|line-max|abrikosoff-dialog:396|101154';
+        $userCode = 'abrikosoff_max|14|abrikosoff-dialog:396|101154';
         $dialog = $this->createLiveReadyDialog(
             platform: Channel::PLATFORM_MAX,
             contactAttributes: [
@@ -1098,7 +1102,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
     public function test_max_manual_reply_marks_connector_success_with_wrong_session_chat_uncertain(): void
     {
         $this->makeActiveConnection();
-        $userCode = 'abrikosoff_max|line-max|abrikosoff-dialog:396|101154';
+        $userCode = 'abrikosoff_max|14|abrikosoff-dialog:396|101154';
         $dialog = $this->createLiveReadyDialog(
             platform: Channel::PLATFORM_MAX,
             contactAttributes: [
@@ -1197,8 +1201,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 'bitrix24_contact_id' => '9',
             ],
         );
-        $returnedUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|15', $dialog->id);
-        $storedUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|19', $dialog->id);
+        $returnedUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|15', $dialog->id);
+        $storedUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|19', $dialog->id);
 
         $dialog->forceFill([
             'bitrix24_open_line_user_code_override' => $storedUserCode,
@@ -1318,8 +1322,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 'bitrix24_contact_id' => '9',
             ],
         );
-        $oldUserCode = sprintf('abrikosoff_max|line-max|abrikosoff-dialog:%d|14', $dialog->id);
-        $newUserCode = sprintf('abrikosoff_max|line-max|abrikosoff-dialog:%d|23', $dialog->id);
+        $oldUserCode = sprintf('abrikosoff_max|14|abrikosoff-dialog:%d|14', $dialog->id);
+        $newUserCode = sprintf('abrikosoff_max|14|abrikosoff-dialog:%d|23', $dialog->id);
 
         $dialog->forceFill([
             'bitrix24_open_line_user_code_override' => $oldUserCode,
@@ -1456,8 +1460,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 'bitrix24_contact_id' => '9',
             ],
         );
-        $oldUserCode = sprintf('abrikosoff_max|line-max|abrikosoff-dialog:%d|14', $dialog->id);
-        $newUserCode = sprintf('abrikosoff_max|line-max|abrikosoff-dialog:%d|23', $dialog->id);
+        $oldUserCode = sprintf('abrikosoff_max|14|abrikosoff-dialog:%d|14', $dialog->id);
+        $newUserCode = sprintf('abrikosoff_max|14|abrikosoff-dialog:%d|23', $dialog->id);
 
         $dialog->forceFill([
             'bitrix24_open_line_user_code_override' => $oldUserCode,
@@ -1781,7 +1785,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             parse_str($request->body(), $payload);
 
             return ($payload['CONNECTOR'] ?? null) === 'abrikosoff_telegram'
-                && ($payload['LINE'] ?? null) === 'line-telegram'
+                && ($payload['LINE'] ?? null) === '13'
                 && ($payload['MESSAGES'][0]['chat']['id'] ?? null) === 'abrikosoff-dialog:'.$dialog->id
                 && ($payload['MESSAGES'][0]['user']['id'] ?? null) === $this->expectedOpenLinesExternalUserId($dialog)
                 && ($payload['MESSAGES'][0]['user']['name'] ?? null) === 'Герман Германов'
@@ -1801,7 +1805,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'first_name' => 'Герман',
             'bitrix24_contact_id' => '9',
         ]);
-        $storedUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|15', $dialog->id);
+        $storedUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|15', $dialog->id);
         $dialog->forceFill([
             'bitrix24_open_line_user_code_override' => $storedUserCode,
             'bitrix24_open_line_resolved_chat_id_override' => '23',
@@ -1868,7 +1872,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $dialog->refresh();
 
         $this->assertSame('abrikosoff-dialog:'.$dialog->id, $dialog->bitrix24_live_chat_id);
-        $this->assertSame('abrikosoff_telegram|line-telegram|abrikosoff-dialog:'.$dialog->id.'|15', $dialog->bitrix24_open_line_user_code_override);
+        $this->assertSame('abrikosoff_telegram|13|abrikosoff-dialog:'.$dialog->id.'|15', $dialog->bitrix24_open_line_user_code_override);
         $this->assertSame('23', $dialog->bitrix24_open_line_resolved_chat_id_override);
         $this->assertNotNull($dialog->bitrix24_open_line_binding_verified_at);
         $this->assertDatabaseHas('bitrix24_message_exports', [
@@ -1895,7 +1899,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             parse_str($request->body(), $payload);
 
             return ($payload['CONNECTOR'] ?? null) === 'abrikosoff_telegram'
-                && ($payload['LINE'] ?? null) === 'line-telegram'
+                && ($payload['LINE'] ?? null) === '13'
                 && ($payload['MESSAGES'][0]['chat']['id'] ?? null) === 'abrikosoff-dialog:'.$dialog->id
                 && ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'Быстрый входящий путь';
         });
@@ -1915,8 +1919,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $dialog = $this->createLiveReadyDialog(contactAttributes: [
             'bitrix24_contact_id' => '9',
         ]);
-        $oldUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|15', $dialog->id);
-        $newUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|19', $dialog->id);
+        $oldUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|15', $dialog->id);
+        $newUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|19', $dialog->id);
         $dialog->forceFill([
             'bitrix24_open_line_user_code_override' => $oldUserCode,
             'bitrix24_open_line_resolved_chat_id_override' => '23',
@@ -2048,7 +2052,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $dialog = $this->createLiveReadyDialog(contactAttributes: [
             'bitrix24_contact_id' => '9',
         ]);
-        $storedUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|15', $dialog->id);
+        $storedUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|15', $dialog->id);
         $dialog->forceFill([
             'bitrix24_open_line_user_code_override' => $storedUserCode,
             'bitrix24_open_line_resolved_chat_id_override' => '23',
@@ -2151,8 +2155,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $dialog = $this->createLiveReadyDialog(contactAttributes: [
             'bitrix24_contact_id' => '9',
         ]);
-        $returnedUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|15', $dialog->id);
-        $storedUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|19', $dialog->id);
+        $returnedUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|15', $dialog->id);
+        $storedUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|19', $dialog->id);
         $dialog->forceFill([
             'bitrix24_open_line_user_code_override' => $storedUserCode,
             'bitrix24_open_line_resolved_chat_id_override' => '26',
@@ -2333,7 +2337,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $connection = $this->makeActiveConnection();
         $legacyExternalUserId = 'legacy-external-user-5';
         $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_MAX, dialogAttributes: [
-            'bitrix24_open_line_user_code_override' => 'abrikosoff_max|line-max|legacy-dialog-23|legacy-user-5',
+            'bitrix24_open_line_user_code_override' => 'abrikosoff_max|14|legacy-dialog-23|legacy-user-5',
             'bitrix24_open_line_resolved_chat_id_override' => 'legacy-chat-7',
             'bitrix24_open_line_binding_verified_at' => now(),
         ]);
@@ -2346,7 +2350,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $this->seedBitrix24SendMessagesLog(
             $connection,
             'abrikosoff_max',
-            'line-max',
+            '14',
             'legacy-dialog-23',
             $legacyExternalUserId,
             responseChatId: 'legacy-chat-7',
@@ -2364,7 +2368,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'https://client-endpoint.example/rest/imopenlines.dialog.get.json' => Http::response([
                 'result' => [
                     'id' => 'legacy-chat-7',
-                    'entity_id' => 'abrikosoff_max|line-max|legacy-dialog-23|legacy-user-5',
+                    'entity_id' => 'abrikosoff_max|14|legacy-dialog-23|legacy-user-5',
                     'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|B24-CONTACT-100|DEAL|12',
                 ],
             ], 200),
@@ -2412,14 +2416,14 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             parse_str($request->body(), $payload);
 
             return ($payload['CONNECTOR'] ?? null) === 'abrikosoff_max'
-                && ($payload['LINE'] ?? null) === 'line-max'
+                && ($payload['LINE'] ?? null) === '14'
                 && ($payload['MESSAGES'][0]['chat']['id'] ?? null) === 'legacy-dialog-23'
                 && ($payload['MESSAGES'][0]['user']['id'] ?? null) === $legacyExternalUserId
                 && ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'Сообщение в старую ОЛ';
         });
         Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json');
         Http::assertSent(fn (Request $request): bool => $request->url() === 'https://client-endpoint.example/rest/imopenlines.dialog.get.json'
-            && $request['USER_CODE'] === 'abrikosoff_max|line-max|legacy-dialog-23|legacy-user-5');
+            && $request['USER_CODE'] === 'abrikosoff_max|14|legacy-dialog-23|legacy-user-5');
         $this->assertDatabaseHas('bitrix24_sync_logs', [
             'operation' => 'identity_mode_selected',
             'entity_type' => 'message',
@@ -2433,7 +2437,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $connection = $this->makeActiveConnection();
         $legacyExternalUserId = 'legacy-external-user-older-than-limit';
         $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_MAX, dialogAttributes: [
-            'bitrix24_open_line_user_code_override' => 'abrikosoff_max|line-max|legacy-dialog-23|legacy-user-5',
+            'bitrix24_open_line_user_code_override' => 'abrikosoff_max|14|legacy-dialog-23|legacy-user-5',
             'bitrix24_open_line_resolved_chat_id_override' => 'legacy-chat-7',
             'bitrix24_open_line_binding_verified_at' => now(),
         ]);
@@ -2447,7 +2451,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $this->seedBitrix24SendMessagesLog(
             $connection,
             'abrikosoff_max',
-            'line-max',
+            '14',
             'legacy-dialog-23',
             $legacyExternalUserId,
             responseChatId: 'legacy-chat-7',
@@ -2457,7 +2461,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             $this->seedBitrix24SendMessagesLog(
                 $connection,
                 'abrikosoff_max',
-                'line-max',
+                '14',
                 'other-dialog-'.$index,
                 'other-user-'.$index,
                 responseChatId: 'other-chat-'.$index,
@@ -2476,7 +2480,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'https://client-endpoint.example/rest/imopenlines.dialog.get.json' => Http::response([
                 'result' => [
                     'id' => 'legacy-chat-7',
-                    'entity_id' => 'abrikosoff_max|line-max|legacy-dialog-23|legacy-user-5',
+                    'entity_id' => 'abrikosoff_max|14|legacy-dialog-23|legacy-user-5',
                     'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|B24-CONTACT-100|DEAL|12',
                 ],
             ], 200),
@@ -2530,7 +2534,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $legacyExternalUserId = 'telegram:1874351863';
         $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_TELEGRAM, dialogAttributes: [
             'external_chat_id' => 'abrikosoff-dialog:581',
-            'bitrix24_open_line_user_code_override' => 'abrikosoff_telegram|line-telegram|abrikosoff-dialog:581|101121',
+            'bitrix24_open_line_user_code_override' => 'abrikosoff_telegram|13|abrikosoff-dialog:581|101121',
             'bitrix24_open_line_resolved_chat_id_override' => '162377',
             'bitrix24_open_line_binding_verified_at' => now(),
         ]);
@@ -2544,7 +2548,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $this->seedBitrix24SendMessagesLog(
             $connection,
             'abrikosoff_telegram',
-            'line-telegram',
+            '13',
             'abrikosoff-dialog:581',
             $legacyExternalUserId,
             responseChatId: '162377',
@@ -2555,7 +2559,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             $this->seedBitrix24SendMessagesLog(
                 $connection,
                 'abrikosoff_telegram',
-                'line-telegram',
+                '13',
                 'abrikosoff-dialog:581',
                 'other-external-user-'.$index,
                 responseChatId: (string) (162900 + $index),
@@ -2575,7 +2579,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'https://client-endpoint.example/rest/imopenlines.dialog.get.json' => Http::response([
                 'result' => [
                     'id' => '162377',
-                    'entity_id' => 'abrikosoff_telegram|line-telegram|abrikosoff-dialog:581|101121',
+                    'entity_id' => 'abrikosoff_telegram|13|abrikosoff-dialog:581|101121',
                     'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|B24-CONTACT-100|DEAL|12',
                 ],
             ], 200),
@@ -2630,7 +2634,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $legacyExternalUserId = 'telegram:1874351863';
         $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_TELEGRAM, dialogAttributes: [
             'external_chat_id' => 'abrikosoff-dialog:581',
-            'bitrix24_open_line_user_code_override' => 'abrikosoff_telegram|line-telegram|abrikosoff-dialog:581|101121',
+            'bitrix24_open_line_user_code_override' => 'abrikosoff_telegram|13|abrikosoff-dialog:581|101121',
             'bitrix24_open_line_resolved_chat_id_override' => '162377',
             'bitrix24_open_line_binding_verified_at' => now(),
         ]);
@@ -2644,7 +2648,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $this->seedBitrix24SendMessagesLog(
             $connection,
             'abrikosoff_telegram',
-            'line-telegram',
+            '13',
             'abrikosoff-dialog:581',
             $legacyExternalUserId,
             responseConnectorUserId: '101121',
@@ -2662,7 +2666,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'https://client-endpoint.example/rest/imopenlines.dialog.get.json' => Http::response([
                 'result' => [
                     'id' => '162377',
-                    'entity_id' => 'abrikosoff_telegram|line-telegram|abrikosoff-dialog:581|101121',
+                    'entity_id' => 'abrikosoff_telegram|13|abrikosoff-dialog:581|101121',
                     'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|B24-CONTACT-100|DEAL|12',
                 ],
             ], 200),
@@ -2716,7 +2720,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $connection = $this->makeActiveConnection();
         $unsafeLegacyExternalUserId = 'failed-legacy-external-user';
         $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_MAX, dialogAttributes: [
-            'bitrix24_open_line_user_code_override' => 'abrikosoff_max|line-max|legacy-dialog-23|legacy-user-5',
+            'bitrix24_open_line_user_code_override' => 'abrikosoff_max|14|legacy-dialog-23|legacy-user-5',
             'bitrix24_open_line_resolved_chat_id_override' => 'legacy-chat-7',
             'bitrix24_open_line_binding_verified_at' => now(),
         ]);
@@ -2731,7 +2735,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $this->seedBitrix24SendMessagesLog(
             $connection,
             'abrikosoff_max',
-            'line-max',
+            '14',
             'legacy-dialog-23',
             $unsafeLegacyExternalUserId,
             responseChatId: 'legacy-chat-7',
@@ -2750,7 +2754,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'https://client-endpoint.example/rest/imopenlines.dialog.get.json' => Http::response([
                 'result' => [
                     'id' => 'legacy-chat-7',
-                    'entity_id' => 'abrikosoff_max|line-max|legacy-dialog-23|legacy-user-5',
+                    'entity_id' => 'abrikosoff_max|14|legacy-dialog-23|legacy-user-5',
                     'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|B24-CONTACT-100|DEAL|12',
                 ],
             ], 200),
@@ -2804,7 +2808,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $connection = $this->makeActiveConnection();
         $unsafeLegacyExternalUserId = 'unsafe-legacy-external-user';
         $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_MAX, dialogAttributes: [
-            'bitrix24_open_line_user_code_override' => 'abrikosoff_max|line-max|legacy-dialog-23|legacy-user-5',
+            'bitrix24_open_line_user_code_override' => 'abrikosoff_max|14|legacy-dialog-23|legacy-user-5',
             'bitrix24_open_line_resolved_chat_id_override' => 'legacy-chat-7',
             'bitrix24_open_line_binding_verified_at' => now(),
         ]);
@@ -2819,7 +2823,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $this->seedBitrix24SendMessagesLog(
             $connection,
             'abrikosoff_max',
-            'line-max',
+            '14',
             'legacy-dialog-23',
             $unsafeLegacyExternalUserId,
             responseChatId: 'other-returned-chat',
@@ -2837,7 +2841,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'https://client-endpoint.example/rest/imopenlines.dialog.get.json' => Http::response([
                 'result' => [
                     'id' => 'legacy-chat-7',
-                    'entity_id' => 'abrikosoff_max|line-max|legacy-dialog-23|legacy-user-5',
+                    'entity_id' => 'abrikosoff_max|14|legacy-dialog-23|legacy-user-5',
                     'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|B24-CONTACT-100|DEAL|12',
                 ],
             ], 200),
@@ -2892,7 +2896,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $unsafeLegacyExternalUserId = 'telegram:1874351863';
         $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_TELEGRAM, dialogAttributes: [
             'external_chat_id' => 'abrikosoff-dialog:581',
-            'bitrix24_open_line_user_code_override' => 'abrikosoff_telegram|line-telegram|abrikosoff-dialog:581|101121',
+            'bitrix24_open_line_user_code_override' => 'abrikosoff_telegram|13|abrikosoff-dialog:581|101121',
             'bitrix24_open_line_resolved_chat_id_override' => '162377',
             'bitrix24_open_line_binding_verified_at' => now(),
         ]);
@@ -2907,7 +2911,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $this->seedBitrix24SendMessagesLog(
             $connection,
             'abrikosoff_telegram',
-            'line-telegram',
+            '13',
             'abrikosoff-dialog:581',
             $unsafeLegacyExternalUserId,
             responseChatId: '162907',
@@ -2926,7 +2930,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'https://client-endpoint.example/rest/imopenlines.dialog.get.json' => Http::response([
                 'result' => [
                     'id' => '162377',
-                    'entity_id' => 'abrikosoff_telegram|line-telegram|abrikosoff-dialog:581|101121',
+                    'entity_id' => 'abrikosoff_telegram|13|abrikosoff-dialog:581|101121',
                     'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|B24-CONTACT-100|DEAL|12',
                 ],
             ], 200),
@@ -2980,7 +2984,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
     {
         $connection = $this->makeActiveConnection();
         $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_MAX, dialogAttributes: [
-            'bitrix24_open_line_user_code_override' => 'abrikosoff_max|line-max|legacy-dialog-23|legacy-user-5',
+            'bitrix24_open_line_user_code_override' => 'abrikosoff_max|14|legacy-dialog-23|legacy-user-5',
             'bitrix24_open_line_resolved_chat_id_override' => 'legacy-chat-7',
             'bitrix24_open_line_binding_verified_at' => now(),
         ]);
@@ -2995,7 +2999,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $this->seedBitrix24SendMessagesLog(
             $connection,
             'abrikosoff_max',
-            'line-max',
+            '14',
             'legacy-dialog-23',
             'legacy-external-user-a',
             responseChatId: 'legacy-chat-7',
@@ -3003,7 +3007,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         $this->seedBitrix24SendMessagesLog(
             $connection,
             'abrikosoff_max',
-            'line-max',
+            '14',
             'legacy-dialog-23',
             'legacy-external-user-b',
             responseChatId: 'legacy-chat-7',
@@ -3021,7 +3025,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'https://client-endpoint.example/rest/imopenlines.dialog.get.json' => Http::response([
                 'result' => [
                     'id' => 'legacy-chat-7',
-                    'entity_id' => 'abrikosoff_max|line-max|legacy-dialog-23|legacy-user-5',
+                    'entity_id' => 'abrikosoff_max|14|legacy-dialog-23|legacy-user-5',
                     'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|B24-CONTACT-100|DEAL|12',
                 ],
             ], 200),
@@ -3086,7 +3090,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         );
         $foreignLegacyExternalUserId = 'foreign-legacy-external-user-5';
         $dialog = $this->createLiveReadyDialog(platform: Channel::PLATFORM_MAX, dialogAttributes: [
-            'bitrix24_open_line_user_code_override' => 'abrikosoff_max|line-max|legacy-dialog-23|legacy-user-5',
+            'bitrix24_open_line_user_code_override' => 'abrikosoff_max|14|legacy-dialog-23|legacy-user-5',
             'bitrix24_open_line_resolved_chat_id_override' => 'legacy-chat-7',
             'bitrix24_open_line_binding_verified_at' => now(),
         ]);
@@ -3106,7 +3110,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'request_payload' => [
                 'params' => [
                     'CONNECTOR' => 'abrikosoff_max',
-                    'LINE' => 'line-max',
+                    'LINE' => '14',
                     'MESSAGES' => [[
                         'chat' => ['id' => 'legacy-dialog-23'],
                         'user' => ['id' => $foreignLegacyExternalUserId],
@@ -3127,7 +3131,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'https://client-endpoint.example/rest/imopenlines.dialog.get.json' => Http::response([
                 'result' => [
                     'id' => 'legacy-chat-7',
-                    'entity_id' => 'abrikosoff_max|line-max|legacy-dialog-23|legacy-user-5',
+                    'entity_id' => 'abrikosoff_max|14|legacy-dialog-23|legacy-user-5',
                     'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|B24-CONTACT-100|DEAL|12',
                 ],
             ], 200),
@@ -3193,8 +3197,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 'bitrix24_contact_id' => '18',
             ],
         );
-        $oldUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|101107', $dialog->id);
-        $newUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|101203', $dialog->id);
+        $oldUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|101107', $dialog->id);
+        $newUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|101203', $dialog->id);
         $dialog->forceFill([
             'bitrix24_open_line_user_code_override' => $oldUserCode,
             'bitrix24_open_line_resolved_chat_id_override' => '162351',
@@ -3316,7 +3320,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 'bitrix24_contact_id' => '9',
             ],
         );
-        $userCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|19', $dialog->id);
+        $userCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|19', $dialog->id);
         $dialog->forceFill([
             'bitrix24_open_line_user_code_override' => $userCode,
             'bitrix24_open_line_resolved_chat_id_override' => '26',
@@ -3392,7 +3396,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             parse_str($request->body(), $payload);
 
             return ($payload['CONNECTOR'] ?? null) === 'abrikosoff_telegram'
-                && ($payload['LINE'] ?? null) === 'line-telegram'
+                && ($payload['LINE'] ?? null) === '13'
                 && ($payload['MESSAGES'][0]['chat']['id'] ?? null) === 'abrikosoff-dialog:'.$dialog->id
                 && ($payload['MESSAGES'][0]['user']['id'] ?? null) === $this->expectedOpenLinesExternalUserId($dialog)
             && ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'Клиент пишет в актуальную ОЛ';
@@ -3410,8 +3414,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         );
         $this->seedSuccessfulLegacyManualReplyTransportExport($dialog, '23');
 
-        $oldUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|15', $dialog->id);
-        $newUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|19', $dialog->id);
+        $oldUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|15', $dialog->id);
+        $newUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|19', $dialog->id);
         $message = $this->makeMessage($dialog, [
             'direction' => Message::DIRECTION_INBOUND,
             'message_kind' => Message::KIND_INBOUND_USER,
@@ -3525,9 +3529,9 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         );
         $this->seedSuccessfulLegacyManualReplyTransportExport($dialog, '23');
 
-        $oldUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|6', $dialog->id);
-        $currentUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|15', $dialog->id);
-        $newerUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|19', $dialog->id);
+        $oldUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|6', $dialog->id);
+        $currentUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|15', $dialog->id);
+        $newerUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|19', $dialog->id);
 
         $dialog->forceFill([
             'bitrix24_open_line_user_code_override' => $newerUserCode,
@@ -3652,8 +3656,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             ],
         );
 
-        $oldUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|6', $dialog->id);
-        $currentUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|15', $dialog->id);
+        $oldUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|6', $dialog->id);
+        $currentUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|15', $dialog->id);
 
         $dialog->forceFill([
             'bitrix24_open_line_user_code_override' => $oldUserCode,
@@ -3760,8 +3764,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             ],
         );
 
-        $returnedUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|15', $dialog->id);
-        $storedUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|19', $dialog->id);
+        $returnedUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|15', $dialog->id);
+        $storedUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|19', $dialog->id);
 
         $dialog->forceFill([
             'bitrix24_open_line_user_code_override' => $storedUserCode,
@@ -3868,8 +3872,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             ],
         );
 
-        $returnedUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|15', $dialog->id);
-        $storedUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|19', $dialog->id);
+        $returnedUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|15', $dialog->id);
+        $storedUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|19', $dialog->id);
 
         $dialog->forceFill([
             'bitrix24_open_line_user_code_override' => $storedUserCode,
@@ -3984,8 +3988,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         );
         $this->seedSuccessfulLegacyManualReplyTransportExport($dialog, '23');
 
-        $oldUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|15', $dialog->id);
-        $newUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|19', $dialog->id);
+        $oldUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|15', $dialog->id);
+        $newUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|19', $dialog->id);
         $message = $this->makeMessage($dialog, [
             'direction' => Message::DIRECTION_INBOUND,
             'message_kind' => Message::KIND_INBOUND_USER,
@@ -4113,8 +4117,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 'bitrix24_contact_id' => '9',
             ],
         );
-        $oldUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|14', $dialog->id);
-        $newUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|23', $dialog->id);
+        $oldUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|14', $dialog->id);
+        $newUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|23', $dialog->id);
 
         $dialog->forceFill([
             'bitrix24_open_line_user_code_override' => $oldUserCode,
@@ -4232,8 +4236,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 'bitrix24_contact_id' => '9',
             ],
         );
-        $oldUserCode = sprintf('abrikosoff_max|line-max|abrikosoff-dialog:%d|14', $dialog->id);
-        $newUserCode = sprintf('abrikosoff_max|line-max|abrikosoff-dialog:%d|23', $dialog->id);
+        $oldUserCode = sprintf('abrikosoff_max|14|abrikosoff-dialog:%d|14', $dialog->id);
+        $newUserCode = sprintf('abrikosoff_max|14|abrikosoff-dialog:%d|23', $dialog->id);
 
         $dialog->forceFill([
             'bitrix24_open_line_user_code_override' => $oldUserCode,
@@ -4338,7 +4342,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             parse_str($request->body(), $payload);
 
             return ($payload['CONNECTOR'] ?? null) === 'abrikosoff_max'
-                && ($payload['LINE'] ?? null) === 'line-max'
+                && ($payload['LINE'] ?? null) === '14'
                 && ($payload['MESSAGES'][0]['chat']['id'] ?? null) === 'abrikosoff-dialog:'.$dialog->id
                 && ($payload['MESSAGES'][0]['user']['id'] ?? null) === $this->expectedOpenLinesExternalUserId($dialog)
                 && ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'MAX binding должен обновиться до отправки';
@@ -4354,7 +4358,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 'bitrix24_contact_id' => '9',
             ],
             dialogAttributes: [
-                'bitrix24_open_line_user_code_override' => 'abrikosoff_telegram|line-telegram|legacy-dialog-24|legacy-user-15',
+                'bitrix24_open_line_user_code_override' => 'abrikosoff_telegram|13|legacy-dialog-24|legacy-user-15',
                 'bitrix24_open_line_resolved_chat_id_override' => '23',
                 'bitrix24_open_line_binding_verified_at' => now(),
             ],
@@ -4423,7 +4427,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 'bitrix24_contact_id' => '10',
             ],
             dialogAttributes: [
-                'bitrix24_open_line_user_code_override' => 'abrikosoff_max|line-max|abrikosoff-dialog:2|27',
+                'bitrix24_open_line_user_code_override' => 'abrikosoff_max|14|abrikosoff-dialog:2|27',
                 'bitrix24_open_line_resolved_chat_id_override' => '34',
                 'bitrix24_open_line_binding_verified_at' => now(),
             ],
@@ -4447,7 +4451,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'https://client-endpoint.example/rest/imopenlines.dialog.get.json' => Http::response([
                 'result' => [
                     'id' => 34,
-                    'entity_id' => 'abrikosoff_max|line-max|abrikosoff-dialog:2|27',
+                    'entity_id' => 'abrikosoff_max|14|abrikosoff-dialog:2|27',
                     'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|9|DEAL|0',
                 ],
             ], 200),
@@ -4456,7 +4460,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                     'ID' => '10',
                     'IM' => [
                         [
-                            'VALUE' => 'imol|abrikosoff_telegram|line-telegram|abrikosoff-dialog:1|26',
+                            'VALUE' => 'imol|abrikosoff_telegram|13|abrikosoff-dialog:1|26',
                             'VALUE_TYPE' => 'IMOL',
                         ],
                     ],
@@ -4506,7 +4510,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 'bitrix24_contact_id' => '9',
             ],
             dialogAttributes: [
-                'bitrix24_open_line_user_code_override' => 'abrikosoff_max|line-max|abrikosoff-dialog:23|27',
+                'bitrix24_open_line_user_code_override' => 'abrikosoff_max|14|abrikosoff-dialog:23|27',
                 'bitrix24_open_line_resolved_chat_id_override' => '34',
                 'bitrix24_open_line_binding_verified_at' => now(),
             ],
@@ -4540,7 +4544,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'https://client-endpoint.example/rest/imopenlines.dialog.get.json' => Http::response([
                 'result' => [
                     'id' => 34,
-                    'entity_id' => 'abrikosoff_max|line-max|abrikosoff-dialog:23|27',
+                    'entity_id' => 'abrikosoff_max|14|abrikosoff-dialog:23|27',
                     'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|9|DEAL|12',
                 ],
             ], 200),
@@ -4609,8 +4613,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 'bitrix24_contact_id' => '9',
             ],
         );
-        $oldUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|14', $dialog->id);
-        $newUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|23', $dialog->id);
+        $oldUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|14', $dialog->id);
+        $newUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|23', $dialog->id);
 
         $dialog->forceFill([
             'bitrix24_open_line_user_code_override' => $oldUserCode,
@@ -4738,8 +4742,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 'bitrix24_contact_id' => '9',
             ],
         );
-        $oldUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|14', $dialog->id);
-        $newUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|23', $dialog->id);
+        $oldUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|14', $dialog->id);
+        $newUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|23', $dialog->id);
 
         $dialog->forceFill([
             'bitrix24_open_line_user_code_override' => $newUserCode,
@@ -4862,8 +4866,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 'bitrix24_contact_id' => '9',
             ],
         );
-        $currentUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|23', $dialog->id);
-        $otherDialogUserCode = 'abrikosoff_telegram|line-telegram|abrikosoff-dialog:999|31';
+        $currentUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|23', $dialog->id);
+        $otherDialogUserCode = 'abrikosoff_telegram|13|abrikosoff-dialog:999|31';
 
         $dialog->forceFill([
             'bitrix24_open_line_user_code_override' => $currentUserCode,
@@ -4997,8 +5001,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'merged_into_contact_id' => $rootContact->id,
         ]);
 
-        $oldUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|14', $dialog->id);
-        $newUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|23', $dialog->id);
+        $oldUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|14', $dialog->id);
+        $newUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|23', $dialog->id);
 
         $dialog->forceFill([
             'bitrix24_open_line_user_code_override' => $oldUserCode,
@@ -5122,7 +5126,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 'bitrix24_contact_id' => '9',
             ],
             dialogAttributes: [
-                'bitrix24_open_line_user_code_override' => 'abrikosoff_telegram|line-telegram|legacy-dialog-24|legacy-user-15',
+                'bitrix24_open_line_user_code_override' => 'abrikosoff_telegram|13|legacy-dialog-24|legacy-user-15',
                 'bitrix24_open_line_resolved_chat_id_override' => '23',
                 'bitrix24_open_line_binding_verified_at' => now(),
             ],
@@ -5165,7 +5169,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'https://client-endpoint.example/rest/imopenlines.dialog.get.json' => Http::response([
                 'result' => [
                     'id' => 23,
-                    'entity_id' => 'abrikosoff_telegram|line-telegram|legacy-dialog-24|legacy-user-15',
+                    'entity_id' => 'abrikosoff_telegram|13|legacy-dialog-24|legacy-user-15',
                     'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|9|DEAL|12',
                 ],
             ], 200),
@@ -5205,7 +5209,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 'bitrix24_contact_id' => '9',
             ],
             dialogAttributes: [
-                'bitrix24_open_line_user_code_override' => 'abrikosoff_telegram|line-telegram|legacy-dialog-24|legacy-user-15',
+                'bitrix24_open_line_user_code_override' => 'abrikosoff_telegram|13|legacy-dialog-24|legacy-user-15',
                 'bitrix24_open_line_resolved_chat_id_override' => '23',
                 'bitrix24_open_line_binding_verified_at' => now(),
             ],
@@ -5251,7 +5255,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 return Http::response([
                     'result' => [
                         'id' => 23,
-                        'entity_id' => 'abrikosoff_telegram|line-telegram|legacy-dialog-24|legacy-user-15',
+                        'entity_id' => 'abrikosoff_telegram|13|legacy-dialog-24|legacy-user-15',
                         'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|9|DEAL|12',
                     ],
                 ], 200);
@@ -5308,7 +5312,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 'bitrix24_contact_id' => '70951',
             ],
             dialogAttributes: [
-                'bitrix24_open_line_user_code_override' => 'abrikosoff_telegram|line-telegram|legacy-dialog-24|legacy-user-15',
+                'bitrix24_open_line_user_code_override' => 'abrikosoff_telegram|13|legacy-dialog-24|legacy-user-15',
                 'bitrix24_open_line_resolved_chat_id_override' => '23',
                 'bitrix24_open_line_binding_verified_at' => now(),
             ],
@@ -5368,7 +5372,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                             'ID' => '70951',
                             'IM' => [
                                 [
-                                    'VALUE' => 'imol|abrikosoff_telegram|line-telegram|legacy-dialog-24|legacy-user-15',
+                                    'VALUE' => 'imol|abrikosoff_telegram|13|legacy-dialog-24|legacy-user-15',
                                     'VALUE_TYPE' => 'IMOL',
                                 ],
                             ],
@@ -5386,7 +5390,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 return Http::response([
                     'result' => [
                         'id' => 23,
-                        'entity_id' => 'abrikosoff_telegram|line-telegram|legacy-dialog-24|legacy-user-15',
+                        'entity_id' => 'abrikosoff_telegram|13|legacy-dialog-24|legacy-user-15',
                         'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|70951|DEAL|12',
                     ],
                 ], 200);
@@ -5438,8 +5442,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 'bitrix24_contact_id' => '9',
             ],
         );
-        $oldUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|14', $dialog->id);
-        $newUserCode = sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|23', $dialog->id);
+        $oldUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|14', $dialog->id);
+        $newUserCode = sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|23', $dialog->id);
 
         $dialog->forceFill([
             'bitrix24_open_line_user_code_override' => $oldUserCode,
@@ -5568,7 +5572,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                     'ID' => '9',
                     'IM' => [
                         [
-                            'VALUE' => sprintf('imol|abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|legacy-user-6', $dialog->id),
+                            'VALUE' => sprintf('imol|abrikosoff_telegram|13|abrikosoff-dialog:%d|legacy-user-6', $dialog->id),
                             'VALUE_TYPE' => 'IMOL',
                         ],
                     ],
@@ -5651,11 +5655,11 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                     'ID' => 'B24-CONTACT-100',
                     'IM' => [
                         [
-                            'VALUE' => sprintf('imol|abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|legacy-user-6', $dialog->id),
+                            'VALUE' => sprintf('imol|abrikosoff_telegram|13|abrikosoff-dialog:%d|legacy-user-6', $dialog->id),
                             'VALUE_TYPE' => 'IMOL',
                         ],
                         [
-                            'VALUE' => sprintf('imol|abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|legacy-user-15', $dialog->id),
+                            'VALUE' => sprintf('imol|abrikosoff_telegram|13|abrikosoff-dialog:%d|legacy-user-15', $dialog->id),
                             'VALUE_TYPE' => 'IMOL',
                         ],
                     ],
@@ -5721,7 +5725,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                     'ID' => 'B24-CONTACT-100',
                     'IM' => [
                         [
-                            'VALUE' => sprintf('imol|abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|legacy-user-6', $dialog->id),
+                            'VALUE' => sprintf('imol|abrikosoff_telegram|13|abrikosoff-dialog:%d|legacy-user-6', $dialog->id),
                             'VALUE_TYPE' => 'IMOL',
                         ],
                     ],
@@ -5779,7 +5783,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                     'ID' => 'B24-CONTACT-100',
                     'IM' => [
                         [
-                            'VALUE' => sprintf('imol|abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|legacy-user-6', $dialog->id),
+                            'VALUE' => sprintf('imol|abrikosoff_telegram|13|abrikosoff-dialog:%d|legacy-user-6', $dialog->id),
                             'VALUE_TYPE' => 'IMOL',
                         ],
                     ],
@@ -6130,11 +6134,11 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'channel_id' => $maxChannel->id,
             'current_contact_identity_id' => $maxIdentity->id,
             'external_chat_id' => 'max-chat-'.$contact->id,
-            'bitrix24_open_line_user_code_override' => 'abrikosoff_max|line-max|max-chat-'.$contact->id.'|max-user-'.$contact->id,
+            'bitrix24_open_line_user_code_override' => 'abrikosoff_max|14|max-chat-'.$contact->id.'|max-user-'.$contact->id,
             'bitrix24_open_line_resolved_chat_id_override' => '34',
             'bitrix24_open_line_binding_verified_at' => now(),
         ]);
-        $this->pinDialogOpenLineRoute($siblingDialog, $profile, 'abrikosoff_max', 'line-max');
+        $this->pinDialogOpenLineRoute($siblingDialog, $profile, 'abrikosoff_max', '14');
 
         $message = $this->makeMessage($dialog, [
             'direction' => Message::DIRECTION_INBOUND,
@@ -6218,7 +6222,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         ]);
 
         $dialog->forceFill([
-            'bitrix24_open_line_user_code_override' => sprintf('abrikosoff_telegram|line-telegram|abrikosoff-dialog:%d|14', $dialog->id),
+            'bitrix24_open_line_user_code_override' => sprintf('abrikosoff_telegram|13|abrikosoff-dialog:%d|14', $dialog->id),
             'bitrix24_open_line_resolved_chat_id_override' => '19',
             'bitrix24_open_line_binding_verified_at' => now(),
         ])->save();
@@ -6289,7 +6293,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
                 'bitrix24_contact_id' => '9',
             ],
             dialogAttributes: [
-                'bitrix24_open_line_user_code_override' => 'abrikosoff_telegram|line-telegram|abrikosoff-dialog:1|101154',
+                'bitrix24_open_line_user_code_override' => 'abrikosoff_telegram|13|abrikosoff-dialog:1|101154',
                 'bitrix24_open_line_resolved_chat_id_override' => '35',
                 'bitrix24_open_line_binding_verified_at' => now(),
             ],
@@ -6630,7 +6634,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             new Bitrix24OpenLinesRouteData(
                 platform: Channel::PLATFORM_TELEGRAM,
                 connectorCode: 'abrikosoff_telegram',
-                lineId: 'line-telegram',
+                lineId: '13',
             ),
         );
 
@@ -6666,7 +6670,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             new Bitrix24OpenLinesRouteData(
                 platform: Channel::PLATFORM_TELEGRAM,
                 connectorCode: 'abrikosoff_telegram',
-                lineId: 'line-telegram',
+                lineId: '13',
             ),
         );
 
@@ -6693,7 +6697,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             new Bitrix24OpenLinesRouteData(
                 platform: Channel::PLATFORM_TELEGRAM,
                 connectorCode: 'abrikosoff_telegram',
-                lineId: 'line-telegram',
+                lineId: '13',
             ),
         );
 
@@ -6726,7 +6730,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             new Bitrix24OpenLinesRouteData(
                 platform: Channel::PLATFORM_TELEGRAM,
                 connectorCode: 'abrikosoff_telegram',
-                lineId: 'line-telegram',
+                lineId: '13',
             ),
             true,
         );
@@ -6885,7 +6889,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         ]);
         $returnedChatId = '34';
         $returnedConnectorUserId = '27';
-        $wrongConnectorUserCode = sprintf('abrikosoff_max|line-max|abrikosoff-dialog:%d|99', $dialog->id);
+        $wrongConnectorUserCode = sprintf('abrikosoff_max|14|abrikosoff-dialog:%d|99', $dialog->id);
         $sendCompleted = false;
 
         Http::fake(function (Request $request) use (
@@ -7049,7 +7053,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'text' => 'Retry с неполным ответом Bitrix',
         ]);
         $returnedChatId = '34';
-        $currentUserCode = sprintf('abrikosoff_max|line-max|abrikosoff-dialog:%d|27', $dialog->id);
+        $currentUserCode = sprintf('abrikosoff_max|14|abrikosoff-dialog:%d|27', $dialog->id);
         $sendCompleted = false;
 
         Http::fake(function (Request $request) use (
@@ -7141,7 +7145,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         ]);
         $returnedChatId = '34';
         $currentChatId = '35';
-        $currentUserCode = sprintf('abrikosoff_max|line-max|abrikosoff-dialog:%d|27', $dialog->id);
+        $currentUserCode = sprintf('abrikosoff_max|14|abrikosoff-dialog:%d|27', $dialog->id);
         $sendCompleted = false;
 
         Http::fake(function (Request $request) use (
@@ -7388,7 +7392,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             new Bitrix24OpenLinesRouteData(
                 platform: Channel::PLATFORM_MAX,
                 connectorCode: 'abrikosoff_max',
-                lineId: 'line-max',
+                lineId: '14',
             ),
         );
 
@@ -7421,7 +7425,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             new Bitrix24OpenLinesRouteData(
                 platform: Channel::PLATFORM_TELEGRAM,
                 connectorCode: 'abrikosoff_telegram',
-                lineId: 'line-telegram',
+                lineId: '13',
             ),
         );
 
@@ -7474,7 +7478,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             new Bitrix24OpenLinesRouteData(
                 platform: Channel::PLATFORM_TELEGRAM,
                 connectorCode: 'abrikosoff_telegram',
-                lineId: 'line-telegram',
+                lineId: '13',
             ),
         );
 
@@ -7506,7 +7510,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         ]);
     }
 
-    public function test_missing_openlines_route_config_marks_export_failed_without_sending_request(): void
+    public function test_missing_openlines_route_config_fails_before_claim_or_local_state_change(): void
     {
         $this->makeProfileLinkedActiveBitrix24Connection(
             profileOverrides: [
@@ -7533,13 +7537,49 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
 
         $dialog->refresh();
 
-        $this->assertSame(Dialog::BITRIX24_LIVE_STATUS_FAILED, $dialog->bitrix24_live_status);
-        $this->assertDatabaseHas('bitrix24_message_exports', [
+        $this->assertSame(Dialog::BITRIX24_LIVE_STATUS_NOT_LINKED, $dialog->bitrix24_live_status);
+        $this->assertDatabaseMissing('bitrix24_message_exports', [
             'message_id' => $message->id,
             'export_mode' => Bitrix24MessageExport::MODE_LIVE,
-            'export_status' => Bitrix24MessageExport::STATUS_FAILED,
         ]);
 
+        Http::assertNothingSent();
+    }
+
+    public function test_registry_lease_refusal_fails_before_claim_http_or_local_state_change(): void
+    {
+        $dialog = $this->createLiveReadyDialog();
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_INBOUND,
+            'message_kind' => Message::KIND_INBOUND_USER,
+            'sent_by_type' => Message::SENT_BY_TYPE_CONTACT,
+            'text' => 'Registry должен разрешить отправку',
+        ]);
+        $registryClient = Mockery::mock(Bitrix24OpenLinesRouteRegistryClient::class);
+        $registryClient->shouldReceive('acquireLineLease')
+            ->once()
+            ->andThrow(new Bitrix24OpenLinesRouteRegistryException(
+                'route_registry_line_busy',
+                'LINE_ID занят другой mutating operation.',
+            ));
+        $registryClient->shouldNotReceive('releaseLineLease');
+        $this->app->instance(Bitrix24OpenLinesRouteRegistryClient::class, $registryClient);
+        Http::fake();
+
+        try {
+            app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+            $this->fail('Registry lease refusal must stop live export.');
+        } catch (Bitrix24OpenLinesRouteRegistryException $exception) {
+            $this->assertSame('route_registry_line_busy', $exception->errorCode);
+        }
+
+        $dialog->refresh();
+
+        $this->assertSame(Dialog::BITRIX24_LIVE_STATUS_NOT_LINKED, $dialog->bitrix24_live_status);
+        $this->assertDatabaseMissing('bitrix24_message_exports', [
+            'message_id' => $message->id,
+            'export_mode' => Bitrix24MessageExport::MODE_LIVE,
+        ]);
         Http::assertNothingSent();
     }
 
@@ -8242,8 +8282,8 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
     private function routeConnectorAndLineForPlatform(string $platform): array
     {
         return match ($platform) {
-            Channel::PLATFORM_MAX => ['abrikosoff_max', 'line-max'],
-            default => ['abrikosoff_telegram', 'line-telegram'],
+            Channel::PLATFORM_MAX => ['abrikosoff_max', '14'],
+            default => ['abrikosoff_telegram', '13'],
         };
     }
 
@@ -8319,6 +8359,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         string $lineId,
     ): Bitrix24OpenLineRoute {
         $dialog->loadMissing('channel');
+        $owner = $this->ensureActiveBitrix24CallbackOwner($profile);
 
         $route = Bitrix24OpenLineRoute::query()
             ->where('bitrix24_profile_id', $profile->id)
@@ -8328,6 +8369,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
         if (! $route instanceof Bitrix24OpenLineRoute) {
             $route = Bitrix24OpenLineRoute::query()->create([
                 'bitrix24_profile_id' => $profile->id,
+                'callback_owner_id' => $owner->id,
                 'channel_id' => $dialog->channel_id,
                 'portal_domain' => $profile->portal_domain,
                 'profile_key' => $profile->profile_key,
@@ -8341,6 +8383,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             ]);
         } else {
             $route->forceFill([
+                'callback_owner_id' => $owner->id,
                 'source_id' => $dialog->channel->platform === Channel::PLATFORM_MAX
                     ? $profile->max_source_id
                     : $profile->telegram_source_id,

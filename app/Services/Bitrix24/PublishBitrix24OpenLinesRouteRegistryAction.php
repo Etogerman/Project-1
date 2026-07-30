@@ -4,6 +4,7 @@ namespace App\Services\Bitrix24;
 
 use App\Models\Bitrix24CallbackOwner;
 use App\Models\Bitrix24Profile;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Str;
 
 class PublishBitrix24OpenLinesRouteRegistryAction
@@ -11,12 +12,32 @@ class PublishBitrix24OpenLinesRouteRegistryAction
     public function __construct(
         private readonly BuildBitrix24OpenLinesRouteRegistryOwnerSnapshotAction $buildOwnerSnapshotAction,
         private readonly Bitrix24OpenLinesRouteRegistryClient $client,
+        private readonly Bitrix24OpenLinesRouteRegistrySnapshotLock $snapshotLock,
     ) {}
 
     /**
      * @return array{published_owners:int,published_routes:int,owners:list<array{owner_profile_key:string,published_routes:int}>}
      */
     public function handle(Bitrix24Profile $profile): array
+    {
+        try {
+            return $this->snapshotLock->run(
+                fn (): array => $this->publishUnderLock($profile->refresh()),
+            );
+        } catch (LockTimeoutException) {
+            $this->markFailed($profile, 'route_registry_snapshot_busy');
+
+            throw new Bitrix24OpenLinesRouteRegistryException(
+                'route_registry_snapshot_busy',
+                Bitrix24OpenLinesRouteRegistrySnapshotLock::BUSY_MESSAGE,
+            );
+        }
+    }
+
+    /**
+     * @return array{published_owners:int,published_routes:int,owners:list<array{owner_profile_key:string,published_routes:int}>}
+     */
+    private function publishUnderLock(Bitrix24Profile $profile): array
     {
         $owners = $profile->callbackOwners()
             ->orderBy('owner_key')

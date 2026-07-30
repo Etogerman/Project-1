@@ -13,6 +13,7 @@ class BackfillBitrix24ConnectionProfilesAction
 {
     public function __construct(
         private readonly NormalizeBitrix24CallbackBaseUrlAction $normalizeCallbackBaseUrl,
+        private readonly SaveBitrix24CallbackOwnerAction $saveCallbackOwner,
     ) {}
 
     public function handle(): void
@@ -178,11 +179,9 @@ class BackfillBitrix24ConnectionProfilesAction
             return;
         }
 
-        Bitrix24CallbackOwner::query()->updateOrCreate(
-            [
-                'bitrix24_profile_id' => $profile->id,
-                'owner_key' => Bitrix24CallbackOwner::DEFAULT_LOCAL_OWNER_KEY,
-            ],
+        $this->saveCallbackOwner->updateOrCreate(
+            $profile,
+            Bitrix24CallbackOwner::DEFAULT_LOCAL_OWNER_KEY,
             [
                 'display_name' => 'Локалка 1',
                 'callback_base_url' => $callbackBaseUrl,

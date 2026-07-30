@@ -12,6 +12,8 @@ class Bitrix24OpenLineRoute extends Model
 {
     use HasFactory;
 
+    private bool $preserveMutationFenceVersion = false;
+
     public const STATUS_ACTIVE = 'active';
 
     public const STATUS_LEGACY = 'legacy';
@@ -50,6 +52,9 @@ class Bitrix24OpenLineRoute extends Model
         'status',
         'last_error_message',
         'last_error_at',
+        'mutation_operation_id',
+        'mutation_state_version',
+        'mutation_lease_expires_at',
         'created_by_user_id',
         'updated_by_user_id',
     ];
@@ -59,13 +64,48 @@ class Bitrix24OpenLineRoute extends Model
      */
     protected $casts = [
         'last_error_at' => 'datetime',
+        'mutation_state_version' => 'integer',
+        'mutation_lease_expires_at' => 'datetime',
     ];
 
     protected static function booted(): void
     {
         static::saving(function (Bitrix24OpenLineRoute $route): void {
+            if ($route->connector_code !== null) {
+                $route->connector_code = trim((string) $route->connector_code);
+            }
+
+            if (filled($route->line_id) && ! self::isValidLineId((string) $route->line_id)) {
+                throw new \InvalidArgumentException(
+                    'LINE_ID должен быть сохранён в каноническом виде без ведущих нулей.',
+                );
+            }
+
             $route->line_owner_key = $route->buildLineOwnerKey();
+
+            if ($route->exists
+                && $route->isDirty()
+                && ! $route->preserveMutationFenceVersion
+                && ! $route->isDirty('mutation_state_version')
+                && ! $route->isDirty('mutation_operation_id')
+            ) {
+                $route->mutation_state_version = (int) $route->getOriginal('mutation_state_version') + 1;
+            }
         });
+    }
+
+    public function preserveMutationFenceVersion(): static
+    {
+        $this->preserveMutationFenceVersion = true;
+
+        return $this;
+    }
+
+    public function resumeMutationFenceVersioning(): static
+    {
+        $this->preserveMutationFenceVersion = false;
+
+        return $this;
     }
 
     /**
@@ -77,6 +117,41 @@ class Bitrix24OpenLineRoute extends Model
             self::STATUS_ACTIVE,
             self::STATUS_LEGACY,
         ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    public static function claimingStatuses(): array
+    {
+        return [
+            ...self::usableStatuses(),
+            self::STATUS_MISCONFIGURED,
+        ];
+    }
+
+    public static function canonicalLineId(string $lineId): ?string
+    {
+        $lineId = trim($lineId);
+
+        if (preg_match('/^[0-9]{1,64}$/', $lineId) !== 1) {
+            return null;
+        }
+
+        $canonical = ltrim($lineId, '0');
+
+        return $canonical === '' ? '0' : $canonical;
+    }
+
+    public static function isValidLineId(string $lineId): bool
+    {
+        return trim($lineId) === $lineId
+            && self::canonicalLineId($lineId) === $lineId;
+    }
+
+    public static function isValidConnectorCode(string $connectorCode): bool
+    {
+        return preg_match('/^[a-zA-Z0-9._-]{1,64}$/', trim($connectorCode)) === 1;
     }
 
     public static function channelTypeForChannel(Channel $channel): string
@@ -101,6 +176,13 @@ class Bitrix24OpenLineRoute extends Model
     public function isUsable(): bool
     {
         return in_array($this->status, self::usableStatuses(), true)
+            && filled($this->connector_code)
+            && filled($this->line_id);
+    }
+
+    public function claimsExternalLine(): bool
+    {
+        return in_array($this->status, self::claimingStatuses(), true)
             && filled($this->connector_code)
             && filled($this->line_id);
     }

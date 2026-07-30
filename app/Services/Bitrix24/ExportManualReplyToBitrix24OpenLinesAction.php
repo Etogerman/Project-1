@@ -22,6 +22,7 @@ class ExportManualReplyToBitrix24OpenLinesAction
         private readonly ResolveBitrix24OpenLinesDialogBindingAction $resolveDialogBindingAction,
         private readonly GuardBitrix24OpenLineMutationAction $guardOpenLineMutationAction,
         private readonly ResolveCurrentBitrix24OpenLineChatAction $resolveCurrentOpenLineChatAction,
+        private readonly Bitrix24OpenLineScopedMutation $scopedMutation,
     ) {}
 
     public function handle(Message $message, Dialog $dialog, Contact $rootContact): Bitrix24OpenLinesManualReplyExportData
@@ -340,11 +341,13 @@ class ExportManualReplyToBitrix24OpenLinesAction
 
     private function syncVerifiedBindingToCurrentChat(Dialog $dialog, Bitrix24CurrentOpenLineChatData $currentChat): void
     {
-        $dialog->forceFill([
-            'bitrix24_open_line_user_code_override' => $currentChat->userCode,
-            'bitrix24_open_line_resolved_chat_id_override' => $currentChat->chatId,
-            'bitrix24_open_line_binding_verified_at' => now(),
-        ])->save();
+        $this->scopedMutation->run(
+            fn () => $dialog->forceFill([
+                'bitrix24_open_line_user_code_override' => $currentChat->userCode,
+                'bitrix24_open_line_resolved_chat_id_override' => $currentChat->chatId,
+                'bitrix24_open_line_binding_verified_at' => now(),
+            ])->save(),
+        );
     }
 
     private function manualReplyExceptionFromGuard(
@@ -723,6 +726,7 @@ class ExportManualReplyToBitrix24OpenLinesAction
                 ]),
                 connection: $connection,
                 transportRetry: false,
+                mutationTarget: $this->mutationTarget($route, $connection, $resolvedChat->chatId),
             );
         } catch (Bitrix24ApiException $exception) {
             throw new Bitrix24OpenLinesManualReplyExportException(
@@ -779,7 +783,7 @@ class ExportManualReplyToBitrix24OpenLinesAction
         }
 
         if ($allowRecovery && $this->isAccessDeniedResponse($response)) {
-            $this->recoverChatAccess($rootContact, $serviceUserId, $resolvedChat, $connection);
+            $this->recoverChatAccess($rootContact, $serviceUserId, $resolvedChat, $route, $connection);
 
             return $this->sendMessage(
                 message: $message,
@@ -838,6 +842,7 @@ class ExportManualReplyToBitrix24OpenLinesAction
         Contact $rootContact,
         int $serviceUserId,
         Bitrix24OpenLinesManualReplyChatData $resolvedChat,
+        Bitrix24OpenLinesRouteData $route,
         Bitrix24Connection $connection,
     ): void {
         try {
@@ -849,6 +854,7 @@ class ExportManualReplyToBitrix24OpenLinesAction
                 ]),
                 connection: $connection,
                 transportRetry: false,
+                mutationTarget: $this->mutationTarget($route, $connection, $resolvedChat->chatId),
             );
         } catch (Bitrix24ApiException $exception) {
             throw new Bitrix24OpenLinesManualReplyExportException(
@@ -880,6 +886,19 @@ class ExportManualReplyToBitrix24OpenLinesAction
                 $response->errorMessage ?? 'Unknown error.'
             ),
             Bitrix24MessageExport::FAILURE_CHAT_USER_ADD_FAILED,
+        );
+    }
+
+    private function mutationTarget(
+        Bitrix24OpenLinesRouteData $route,
+        Bitrix24Connection $connection,
+        string $chatId,
+    ): Bitrix24OpenLineMutationTarget {
+        return new Bitrix24OpenLineMutationTarget(
+            portalDomain: (string) $connection->portal_domain,
+            connectorCode: $route->connectorCode,
+            lineId: $route->lineId,
+            chatId: $chatId,
         );
     }
 
