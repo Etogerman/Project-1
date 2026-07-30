@@ -92,7 +92,6 @@ class AutoSetupBitrix24OpenLineRouteAction
         $connection->loadMissing('profile');
         $route = Bitrix24OpenLineRoute::query()
             ->select('bitrix24_open_line_routes.*')
-            ->selectRaw('bitrix24_open_line_routes.xmin::text as state_version')
             ->with(['bitrix24Profile', 'callbackOwner', 'channel'])
             ->where('bitrix24_profile_id', $profileId)
             ->where('channel_id', $channelId)
