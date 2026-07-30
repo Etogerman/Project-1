@@ -60,7 +60,7 @@ production deploy.
 - merge или push в `staging` должен проверяться staging smoke
 - staging становится главным автоматическим acceptance gate уже после публикации change-set в среду, а не trigger-ом выхода из локалки
 - для code/runtime stream-а после успешного automatic smoke отдельно проводится staging QA затронутого рабочего сценария
-- переход к `draft PR` в `main` запрещён, если staging QA нашёл blocker или не был проведён
+- staging deploy-check и staging smoke обязательны; после них переход к `draft PR` в `main` разрешён, если staging QA подтверждён либо пользователь явно принял остаточный риск
 
 Staging QA фиксируется коротко:
 
