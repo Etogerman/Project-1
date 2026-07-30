@@ -146,7 +146,6 @@ final class Bitrix24OpenLineRouteOperationLock
                         ->setConnection($connectionName)
                         ->newQuery()
                         ->select('bitrix24_open_line_routes.*')
-                        ->selectRaw('bitrix24_open_line_routes.xmin::text as state_version')
                         ->whereKey($routeId)
                         ->lockForUpdate()
                         ->first();
