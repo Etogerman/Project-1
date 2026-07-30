@@ -14,6 +14,7 @@ use App\Services\Bitrix24\Bitrix24ApiClient;
 use App\Services\Bitrix24\Bitrix24OpenLineMutationGuardException;
 use App\Services\Bitrix24\GuardBitrix24OpenLineMutationAction;
 use App\Services\Bitrix24\ResolveBitrix24OpenLinesRouteAction;
+use App\Services\Bitrix24\RunBitrix24OpenLineMutationWithAuthorityAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Mockery;
 use Tests\TestCase;
@@ -123,6 +124,7 @@ class Bitrix24OpenLineMutationGuardTest extends TestCase
             $apiClient,
             $routeResolver,
             $this->guard(),
+            app(RunBitrix24OpenLineMutationWithAuthorityAction::class),
         );
 
         try {

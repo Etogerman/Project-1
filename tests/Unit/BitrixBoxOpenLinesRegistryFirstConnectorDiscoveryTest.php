@@ -535,6 +535,523 @@ class BitrixBoxOpenLinesRegistryFirstConnectorDiscoveryTest extends TestCase
         $this->assertArrayNotHasKey('connectors', $registry['owners']['local-1']);
     }
 
+    public function test_signed_line_lease_serializes_independent_contours_and_rejects_wrong_owner(): void
+    {
+        $publish = $this->publishRequest(
+            $this->publishPayload(
+                ownerKey: 'local-1',
+                connectors: [
+                    'dynamic_max' => $this->connector('dynamic_max', 'max'),
+                ],
+                routes: [
+                    'dynamic_max:14' => $this->route('dynamic_max', '14', 'Repairing MAX', false),
+                ],
+            ),
+            'lease-owner-publish',
+        );
+
+        $this->assertSame(200, $publish['status']);
+
+        $firstLease = $this->lineLeaseRequest(
+            action: 'acquire-line-lease',
+            payload: $this->lineLeasePayload('local-1', 'dynamic_max', '14'),
+            requestId: 'lease-first-contour',
+        );
+
+        $this->assertSame(200, $firstLease['status']);
+        $this->assertMatchesRegularExpression('/^[a-f0-9]{64}$/', $firstLease['body']['lease_token']);
+
+        $sameOwnerSecondContour = $this->lineLeaseRequest(
+            action: 'acquire-line-lease',
+            payload: $this->lineLeasePayload('local-1', 'dynamic_max', '14'),
+            requestId: 'lease-second-contour',
+        );
+
+        $this->assertSame(409, $sameOwnerSecondContour['status']);
+        $this->assertSame('route_registry_line_busy', $sameOwnerSecondContour['body']['error_code']);
+
+        $wrongOwner = $this->lineLeaseRequest(
+            action: 'acquire-line-lease',
+            payload: $this->lineLeasePayload('local-2', 'dynamic_max', '14'),
+            requestId: 'lease-wrong-owner',
+        );
+
+        $this->assertSame(409, $wrongOwner['status']);
+        $this->assertSame('route_registry_line_owner_conflict', $wrongOwner['body']['error_code']);
+
+        $release = $this->lineLeaseRequest(
+            action: 'release-line-lease',
+            payload: [
+                'portal_domain' => 'stagecrm.fvds.ru',
+                'owner_profile_key' => 'local-1',
+                'line_id' => '14',
+                'lease_token' => $firstLease['body']['lease_token'],
+                'lease_scope' => 'connector_registration',
+            ],
+            requestId: 'lease-release-first-contour',
+        );
+
+        $this->assertSame(200, $release['status']);
+        $this->assertTrue($release['body']['released']);
+        $this->assertSame(
+            200,
+            $this->lineLeaseRequest(
+                action: 'acquire-line-lease',
+                payload: $this->lineLeasePayload('local-1', 'dynamic_max', '14'),
+                requestId: 'lease-after-release',
+            )['status'],
+        );
+    }
+
+    public function test_signed_line_lease_serializes_shared_connector_across_different_lines(): void
+    {
+        $firstPublish = $this->publishRequest(
+            $this->publishPayload(
+                ownerKey: 'local-1',
+                connectors: [
+                    'dynamic_max' => $this->connector('dynamic_max', 'max'),
+                ],
+                routes: [
+                    'dynamic_max:14' => $this->route('dynamic_max', '14', 'Primary MAX'),
+                ],
+            ),
+            'shared-connector-first-owner-publish',
+        );
+        $secondPublish = $this->publishRequest(
+            $this->publishPayload(
+                ownerKey: 'local-2',
+                connectors: [
+                    'dynamic_max' => $this->connector('dynamic_max', 'max'),
+                ],
+                routes: [
+                    'dynamic_max:15' => $this->route('dynamic_max', '15', 'Secondary MAX'),
+                ],
+            ),
+            'shared-connector-second-owner-publish',
+        );
+
+        $this->assertSame(200, $firstPublish['status']);
+        $this->assertSame(200, $secondPublish['status']);
+
+        $firstLease = $this->lineLeaseRequest(
+            action: 'acquire-line-lease',
+            payload: $this->lineLeasePayload('local-1', 'dynamic_max', '14'),
+            requestId: 'shared-connector-first-line',
+        );
+
+        $this->assertSame(200, $firstLease['status']);
+
+        $secondLine = $this->lineLeaseRequest(
+            action: 'acquire-line-lease',
+            payload: $this->lineLeasePayload('local-2', 'dynamic_max', '15'),
+            requestId: 'shared-connector-second-line',
+        );
+
+        $this->assertSame(409, $secondLine['status']);
+        $this->assertSame('route_registry_connector_busy', $secondLine['body']['error_code']);
+
+        $release = $this->lineLeaseRequest(
+            action: 'release-line-lease',
+            payload: [
+                'portal_domain' => 'stagecrm.fvds.ru',
+                'owner_profile_key' => 'local-1',
+                'line_id' => '14',
+                'lease_token' => $firstLease['body']['lease_token'],
+                'lease_scope' => 'connector_registration',
+            ],
+            requestId: 'shared-connector-first-line-release',
+        );
+
+        $this->assertSame(200, $release['status']);
+        $this->assertSame(
+            200,
+            $this->lineLeaseRequest(
+                action: 'acquire-line-lease',
+                payload: $this->lineLeasePayload('local-2', 'dynamic_max', '15'),
+                requestId: 'shared-connector-second-line-after-release',
+            )['status'],
+        );
+    }
+
+    public function test_line_runtime_leases_allow_shared_connector_across_different_lines(): void
+    {
+        $this->assertSame(
+            200,
+            $this->publishRequest(
+                $this->publishPayload(
+                    ownerKey: 'local-1',
+                    connectors: [
+                        'dynamic_max' => $this->connector('dynamic_max', 'max'),
+                    ],
+                    routes: [
+                        'dynamic_max:14' => $this->route('dynamic_max', '14', 'Primary MAX'),
+                    ],
+                ),
+                'runtime-shared-connector-first-owner-publish',
+            )['status'],
+        );
+        $this->assertSame(
+            200,
+            $this->publishRequest(
+                $this->publishPayload(
+                    ownerKey: 'local-2',
+                    connectors: [
+                        'dynamic_max' => $this->connector('dynamic_max', 'max'),
+                    ],
+                    routes: [
+                        'dynamic_max:15' => $this->route('dynamic_max', '15', 'Secondary MAX'),
+                    ],
+                ),
+                'runtime-shared-connector-second-owner-publish',
+            )['status'],
+        );
+
+        $firstLease = $this->lineLeaseRequest(
+            action: 'acquire-line-lease',
+            payload: $this->lineLeasePayload('local-1', 'dynamic_max', '14', 'line_runtime'),
+            requestId: 'runtime-shared-connector-first-line',
+        );
+        $secondLease = $this->lineLeaseRequest(
+            action: 'acquire-line-lease',
+            payload: $this->lineLeasePayload('local-2', 'dynamic_max', '15', 'line_runtime'),
+            requestId: 'runtime-shared-connector-second-line',
+        );
+
+        $this->assertSame(200, $firstLease['status']);
+        $this->assertSame(200, $secondLease['status']);
+        $this->assertSame(
+            200,
+            $this->lineLeaseRequest(
+                action: 'release-line-lease',
+                payload: [
+                    'portal_domain' => 'stagecrm.fvds.ru',
+                    'owner_profile_key' => 'local-1',
+                    'line_id' => '14',
+                    'lease_token' => $firstLease['body']['lease_token'],
+                    'lease_scope' => 'line_runtime',
+                ],
+                requestId: 'runtime-shared-connector-first-line-release',
+            )['status'],
+        );
+        $this->assertSame(
+            200,
+            $this->lineLeaseRequest(
+                action: 'release-line-lease',
+                payload: [
+                    'portal_domain' => 'stagecrm.fvds.ru',
+                    'owner_profile_key' => 'local-2',
+                    'line_id' => '15',
+                    'lease_token' => $secondLease['body']['lease_token'],
+                    'lease_scope' => 'line_runtime',
+                ],
+                requestId: 'runtime-shared-connector-second-line-release',
+            )['status'],
+        );
+    }
+
+    public function test_connector_registration_scope_is_exclusive_against_runtime_on_same_connector(): void
+    {
+        $this->publishSharedConnectorRoutes();
+
+        $runtimeLease = $this->lineLeaseRequest(
+            action: 'acquire-line-lease',
+            payload: $this->lineLeasePayload('local-1', 'dynamic_max', '14', 'line_runtime'),
+            requestId: 'scope-matrix-runtime-first',
+        );
+        $registrationWhileRuntime = $this->lineLeaseRequest(
+            action: 'acquire-line-lease',
+            payload: $this->lineLeasePayload('local-2', 'dynamic_max', '15'),
+            requestId: 'scope-matrix-registration-blocked',
+        );
+
+        $this->assertSame(200, $runtimeLease['status']);
+        $this->assertSame(409, $registrationWhileRuntime['status']);
+        $this->assertSame('route_registry_connector_busy', $registrationWhileRuntime['body']['error_code']);
+
+        $this->assertSame(
+            200,
+            $this->lineLeaseRequest(
+                action: 'release-line-lease',
+                payload: [
+                    'portal_domain' => 'stagecrm.fvds.ru',
+                    'owner_profile_key' => 'local-1',
+                    'line_id' => '14',
+                    'lease_token' => $runtimeLease['body']['lease_token'],
+                    'lease_scope' => 'line_runtime',
+                ],
+                requestId: 'scope-matrix-runtime-release',
+            )['status'],
+        );
+
+        $registrationLease = $this->lineLeaseRequest(
+            action: 'acquire-line-lease',
+            payload: $this->lineLeasePayload('local-2', 'dynamic_max', '15'),
+            requestId: 'scope-matrix-registration-first',
+        );
+        $runtimeWhileRegistration = $this->lineLeaseRequest(
+            action: 'acquire-line-lease',
+            payload: $this->lineLeasePayload('local-1', 'dynamic_max', '14', 'line_runtime'),
+            requestId: 'scope-matrix-runtime-blocked',
+        );
+
+        $this->assertSame(200, $registrationLease['status']);
+        $this->assertSame(409, $runtimeWhileRegistration['status']);
+        $this->assertSame('route_registry_connector_busy', $runtimeWhileRegistration['body']['error_code']);
+    }
+
+    public function test_legacy_lease_request_without_scope_remains_connector_exclusive(): void
+    {
+        $this->publishSharedConnectorRoutes();
+        $legacyPayload = $this->lineLeasePayload('local-1', 'dynamic_max', '14');
+        unset($legacyPayload['lease_scope']);
+
+        $legacyLease = $this->lineLeaseRequest(
+            action: 'acquire-line-lease',
+            payload: $legacyPayload,
+            requestId: 'legacy-scope-acquire',
+        );
+        $runtimeWhileLegacy = $this->lineLeaseRequest(
+            action: 'acquire-line-lease',
+            payload: $this->lineLeasePayload('local-2', 'dynamic_max', '15', 'line_runtime'),
+            requestId: 'legacy-scope-runtime-blocked',
+        );
+
+        $this->assertSame(200, $legacyLease['status']);
+        $this->assertSame(409, $runtimeWhileLegacy['status']);
+        $this->assertSame('route_registry_connector_busy', $runtimeWhileLegacy['body']['error_code']);
+
+        $this->assertSame(
+            200,
+            $this->lineLeaseRequest(
+                action: 'release-line-lease',
+                payload: [
+                    'portal_domain' => 'stagecrm.fvds.ru',
+                    'owner_profile_key' => 'local-1',
+                    'line_id' => '14',
+                    'lease_token' => $legacyLease['body']['lease_token'],
+                ],
+                requestId: 'legacy-scope-release',
+            )['status'],
+        );
+    }
+
+    public function test_signed_line_lease_rejects_non_numeric_line_id(): void
+    {
+        $result = $this->lineLeaseRequest(
+            action: 'acquire-line-lease',
+            payload: $this->lineLeasePayload('local-1', 'dynamic_max', 'line-editable'),
+            requestId: 'lease-invalid-line-id',
+        );
+
+        $this->assertSame(422, $result['status']);
+        $this->assertSame('route_registry_route_invalid', $result['body']['error_code']);
+    }
+
+    public function test_signed_line_lease_rejects_non_canonical_line_alias(): void
+    {
+        foreach (['014', ' 14 '] as $index => $lineId) {
+            $result = $this->lineLeaseRequest(
+                action: 'acquire-line-lease',
+                payload: $this->lineLeasePayload('local-1', 'dynamic_max', $lineId),
+                requestId: 'lease-non-canonical-line-id-'.$index,
+            );
+
+            $this->assertSame(422, $result['status']);
+            $this->assertSame('route_registry_route_invalid', $result['body']['error_code']);
+            $this->assertFileDoesNotExist($this->storageDir.'/route_registry_line_leases.json');
+        }
+    }
+
+    public function test_publish_rejects_non_canonical_line_alias(): void
+    {
+        $cases = [
+            ['dynamic_max:014', '014', 'route_registry_route_key_invalid'],
+            ['dynamic_max:14', ' 14 ', 'route_registry_route_invalid'],
+        ];
+
+        foreach ($cases as $index => [$routeKey, $lineId, $errorCode]) {
+            $result = $this->publishRequest(
+                $this->publishPayload(
+                    ownerKey: 'local-1',
+                    connectors: [
+                        'dynamic_max' => $this->connector('dynamic_max', 'max'),
+                    ],
+                    routes: [
+                        $routeKey => $this->route('dynamic_max', $lineId, 'Aliased MAX'),
+                    ],
+                ),
+                'publish-non-canonical-line-id-'.$index,
+            );
+
+            $this->assertSame(422, $result['status']);
+            $this->assertSame($errorCode, $result['body']['error_code']);
+            $this->assertFileDoesNotExist($this->storageDir.'/route_registry.json');
+        }
+    }
+
+    public function test_snapshot_rejects_stored_route_with_non_canonical_line_alias(): void
+    {
+        $this->writeRegistry([
+            'local-1' => $this->ownerSnapshot(
+                connectors: [
+                    'dynamic_max' => $this->connector('dynamic_max', 'max'),
+                ],
+                routes: [
+                    'dynamic_max:14' => $this->route('dynamic_max', ' 14 ', 'Aliased MAX'),
+                ],
+            ),
+        ]);
+
+        $result = $this->snapshotRequest('snapshot-non-canonical-line-id');
+
+        $this->assertSame(500, $result['status']);
+        $this->assertSame('route_registry_invalid', $result['body']['error_code']);
+    }
+
+    public function test_line_lease_read_rejects_stored_non_canonical_line_alias_without_rewrite(): void
+    {
+        $this->assertSame(
+            200,
+            $this->publishRequest(
+                $this->publishPayload(
+                    ownerKey: 'local-1',
+                    connectors: [
+                        'dynamic_max' => $this->connector('dynamic_max', 'max'),
+                    ],
+                    routes: [
+                        'dynamic_max:14' => $this->route('dynamic_max', '14', 'Primary MAX'),
+                    ],
+                ),
+                'publish-before-invalid-stored-lease',
+            )['status'],
+        );
+
+        $leaseFile = $this->storageDir.'/route_registry_line_leases.json';
+        $invalidLeases = json_encode([
+            '14' => [
+                'line_id' => ' 14 ',
+                'owner_profile_key' => 'local-1',
+                'owner_callback_base_url' => 'https://local-1.example.test',
+                'connector_code' => 'dynamic_max',
+                'connector_type' => 'max',
+                'lease_scope' => 'connector_registration',
+                'token_hash' => str_repeat('a', 64),
+                'expires_at' => time() + 360,
+            ],
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $this->assertIsString($invalidLeases);
+        file_put_contents($leaseFile, $invalidLeases);
+
+        $result = $this->lineLeaseRequest(
+            action: 'acquire-line-lease',
+            payload: $this->lineLeasePayload('local-1', 'dynamic_max', '14'),
+            requestId: 'read-invalid-stored-lease',
+        );
+
+        $this->assertSame(500, $result['status']);
+        $this->assertSame('route_registry_line_leases_invalid', $result['body']['error_code']);
+        $this->assertSame($invalidLeases, file_get_contents($leaseFile));
+    }
+
+    public function test_publish_cannot_change_line_ownership_while_shared_lease_is_active(): void
+    {
+        $payload = $this->publishPayload(
+            ownerKey: 'local-1',
+            connectors: [
+                'dynamic_max' => $this->connector('dynamic_max', 'max'),
+            ],
+            routes: [
+                'dynamic_max:14' => $this->route('dynamic_max', '14', 'Dynamic MAX'),
+            ],
+        );
+
+        $this->assertSame(200, $this->publishRequest($payload, 'leased-publish-owner')['status']);
+
+        $lease = $this->lineLeaseRequest(
+            action: 'acquire-line-lease',
+            payload: $this->lineLeasePayload('local-1', 'dynamic_max', '14'),
+            requestId: 'leased-publish-acquire',
+        );
+        $registryBeforeConflict = file_get_contents($this->storageDir.'/route_registry.json');
+        $changeTypeWhileLeased = $this->publishRequest(
+            $this->publishPayload(
+                ownerKey: 'local-1',
+                connectors: [
+                    'dynamic_max' => $this->connector('dynamic_max', 'telegram'),
+                ],
+                routes: [
+                    'dynamic_max:14' => $this->route('dynamic_max', '14', 'Dynamic MAX'),
+                ],
+            ),
+            'leased-publish-type-change',
+        );
+        $removeWhileLeased = $this->publishRequest(
+            $this->publishPayload(
+                ownerKey: 'local-1',
+                connectors: [],
+                routes: [],
+            ),
+            'leased-publish-remove',
+        );
+
+        $this->assertSame(409, $changeTypeWhileLeased['status']);
+        $this->assertSame('route_registry_line_busy', $changeTypeWhileLeased['body']['error_code']);
+        $this->assertSame(409, $removeWhileLeased['status']);
+        $this->assertSame('route_registry_line_busy', $removeWhileLeased['body']['error_code']);
+        $this->assertSame($registryBeforeConflict, file_get_contents($this->storageDir.'/route_registry.json'));
+
+        $this->assertSame(
+            200,
+            $this->lineLeaseRequest(
+                action: 'release-line-lease',
+                payload: [
+                    'portal_domain' => 'stagecrm.fvds.ru',
+                    'owner_profile_key' => 'local-1',
+                    'line_id' => '14',
+                    'lease_token' => $lease['body']['lease_token'],
+                    'lease_scope' => 'connector_registration',
+                ],
+                requestId: 'leased-publish-release',
+            )['status'],
+        );
+        $this->assertSame(
+            200,
+            $this->publishRequest(
+                $this->publishPayload(ownerKey: 'local-1', connectors: [], routes: []),
+                'leased-publish-remove-after-release',
+            )['status'],
+        );
+    }
+
+    public function test_inactive_registry_claim_rejects_same_line_from_another_owner(): void
+    {
+        $first = $this->publishPayload(
+            ownerKey: 'local-1',
+            connectors: [
+                'dynamic_max' => $this->connector('dynamic_max', 'max'),
+            ],
+            routes: [
+                'dynamic_max:14' => $this->route('dynamic_max', '14', 'Repairing MAX', false),
+            ],
+        );
+        $second = $this->publishPayload(
+            ownerKey: 'local-2',
+            connectors: [
+                'dynamic_telegram' => $this->connector('dynamic_telegram', 'telegram'),
+            ],
+            routes: [
+                'dynamic_telegram:14' => $this->route('dynamic_telegram', '14', 'Repairing Telegram', false),
+            ],
+        );
+
+        $this->assertSame(200, $this->publishRequest($first, 'inactive-claim-first')['status']);
+
+        $conflict = $this->publishRequest($second, 'inactive-claim-second');
+
+        $this->assertSame(409, $conflict['status']);
+        $this->assertSame('route_registry_conflict', $conflict['body']['error_code']);
+    }
+
     /**
      * @param  array<string, array<string, mixed>>  $connectors
      * @return array<string, mixed>
@@ -609,13 +1126,13 @@ class BitrixBoxOpenLinesRegistryFirstConnectorDiscoveryTest extends TestCase
     /**
      * @return array{connector_code: string, line_id: string, line_name: string, active: bool}
      */
-    private function route(string $connectorCode, string $lineId, string $lineName): array
+    private function route(string $connectorCode, string $lineId, string $lineName, bool $active = true): array
     {
         return [
             'connector_code' => $connectorCode,
             'line_id' => $lineId,
             'line_name' => $lineName,
-            'active' => true,
+            'active' => $active,
         ];
     }
 
@@ -728,6 +1245,105 @@ class BitrixBoxOpenLinesRegistryFirstConnectorDiscoveryTest extends TestCase
                 ),
             ],
             '',
+            [
+                'shared_secret' => 'registry-secret',
+                'expected_portal_domain' => 'stagecrm.fvds.ru',
+                'allowed_owner_profile_keys' => ['local-1', 'local-2'],
+                'storage_dir' => $this->storageDir,
+                'validate_dns' => false,
+            ],
+        );
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function lineLeasePayload(
+        string $ownerKey,
+        string $connectorCode,
+        string $lineId,
+        string $scope = 'connector_registration',
+    ): array {
+        return [
+            'portal_domain' => 'stagecrm.fvds.ru',
+            'owner_profile_key' => $ownerKey,
+            'owner_callback_base_url' => 'https://'.$ownerKey.'.example.test',
+            'connector_code' => $connectorCode,
+            'connector_type' => str_contains($connectorCode, 'max') ? 'max' : 'telegram',
+            'line_id' => $lineId,
+            'lease_seconds' => 360,
+            'lease_scope' => $scope,
+        ];
+    }
+
+    private function publishSharedConnectorRoutes(): void
+    {
+        $this->assertSame(
+            200,
+            $this->publishRequest(
+                $this->publishPayload(
+                    ownerKey: 'local-1',
+                    connectors: [
+                        'dynamic_max' => $this->connector('dynamic_max', 'max'),
+                    ],
+                    routes: [
+                        'dynamic_max:14' => $this->route('dynamic_max', '14', 'Primary MAX'),
+                    ],
+                ),
+                'scope-matrix-first-owner-publish',
+            )['status'],
+        );
+        $this->assertSame(
+            200,
+            $this->publishRequest(
+                $this->publishPayload(
+                    ownerKey: 'local-2',
+                    connectors: [
+                        'dynamic_max' => $this->connector('dynamic_max', 'max'),
+                    ],
+                    routes: [
+                        'dynamic_max:15' => $this->route('dynamic_max', '15', 'Secondary MAX'),
+                    ],
+                ),
+                'scope-matrix-second-owner-publish',
+            )['status'],
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array{status: int, body: array<string, mixed>}
+     */
+    private function lineLeaseRequest(string $action, array $payload, string $requestId): array
+    {
+        $path = '/local/tools/abrikosoff_openlines/route-registry.php';
+        $query = 'action='.$action;
+        $timestamp = (string) time();
+        $rawBody = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        $this->assertIsString($rawBody);
+
+        return RouteRegistry::handleRequest(
+            [
+                'REQUEST_METHOD' => 'POST',
+                'REQUEST_URI' => $path.'?'.$query,
+                'SCRIPT_NAME' => $path,
+                'QUERY_STRING' => $query,
+            ],
+            [
+                'X-ABR-Timestamp' => $timestamp,
+                'X-ABR-Request-Id' => $requestId,
+                'X-ABR-Signature' => RouteRegistry::requestSignature(
+                    'registry-secret',
+                    'POST',
+                    $path,
+                    $query,
+                    $timestamp,
+                    $requestId,
+                    $rawBody,
+                ),
+            ],
+            $rawBody,
             [
                 'shared_secret' => 'registry-secret',
                 'expected_portal_domain' => 'stagecrm.fvds.ru',

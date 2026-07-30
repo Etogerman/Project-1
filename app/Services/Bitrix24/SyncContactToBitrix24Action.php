@@ -30,6 +30,7 @@ class SyncContactToBitrix24Action
         private readonly LogBitrix24ApiCallAction $logApiCallAction,
         private readonly ResolveCurrentBitrix24ConnectionAction $resolveCurrentConnectionAction,
         private readonly ResolveBitrix24ProfileSchemaAction $resolveProfileSchemaAction,
+        private readonly Bitrix24OpenLineScopedMutation $scopedMutation,
     ) {}
 
     /**
@@ -52,9 +53,9 @@ class SyncContactToBitrix24Action
         $sourceId = $this->resolveContactSourceAction->handle($rootContact);
 
         if (! filled($sourceId)) {
-            $rootContact->forceFill([
+            $this->saveContact($rootContact, [
                 'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_FAILED,
-            ])->save();
+            ]);
 
             $this->logApiCallAction->handle(
                 direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
@@ -151,9 +152,9 @@ class SyncContactToBitrix24Action
         $payload = $this->buildContactPayloadAction->handle($contact);
 
         if ($payload === []) {
-            $contact->forceFill([
+            $this->saveContact($contact, [
                 'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_FAILED,
-            ])->save();
+            ]);
 
             $this->logApiCallAction->handle(
                 direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
@@ -224,9 +225,9 @@ class SyncContactToBitrix24Action
 
     private function markConflict(Contact $contact, Bitrix24ContactMatchResultData $matchResult): Contact
     {
-        $contact->forceFill([
+        $this->saveContact($contact, [
             'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_PENDING_REVIEW,
-        ])->save();
+        ]);
 
         $this->logApiCallAction->handle(
             direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
@@ -328,11 +329,11 @@ class SyncContactToBitrix24Action
 
     private function persistSyncedContactState(Contact $contact, string $fingerprint): Contact
     {
-        $contact->forceFill([
+        $this->saveContact($contact, [
             'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_SYNCED,
             'bitrix24_last_synced_at' => now(),
             'bitrix24_sync_fingerprint' => $fingerprint,
-        ])->save();
+        ]);
 
         return $contact->fresh();
     }
@@ -355,7 +356,7 @@ class SyncContactToBitrix24Action
             $attributes['bitrix24_linked_at'] = now();
         }
 
-        $contact->forceFill($attributes)->save();
+        $this->saveContact($contact, $attributes);
 
         $this->logApiCallAction->handle(
             direction: Bitrix24SyncLog::DIRECTION_SYSTEM,
@@ -375,6 +376,16 @@ class SyncContactToBitrix24Action
         );
 
         return $contact->fresh();
+    }
+
+    /**
+     * @param  array<string, mixed>  $attributes
+     */
+    private function saveContact(Contact $contact, array $attributes): void
+    {
+        $this->scopedMutation->run(
+            fn () => $contact->forceFill($attributes)->save(),
+        );
     }
 
     private function fakeHappyPathEnabled(): bool

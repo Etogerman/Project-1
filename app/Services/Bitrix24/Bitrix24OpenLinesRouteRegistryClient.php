@@ -2,6 +2,8 @@
 
 namespace App\Services\Bitrix24;
 
+use App\Models\Bitrix24CallbackOwner;
+use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Bitrix24Profile;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Response;
@@ -25,6 +27,78 @@ class Bitrix24OpenLinesRouteRegistryClient
     public function publish(Bitrix24Profile $profile, array $payload): array
     {
         return $this->request($profile, 'POST', '', $payload);
+    }
+
+    /**
+     * @return array{lease_token:string,expires_at:string}
+     */
+    public function acquireLineLease(
+        Bitrix24Profile $profile,
+        Bitrix24CallbackOwner $owner,
+        string $connectorCode,
+        string $connectorType,
+        string $lineId,
+        int $leaseSeconds,
+        string $scope = Bitrix24OpenLineMutationAuthority::SCOPE_CONNECTOR_REGISTRATION,
+    ): array {
+        $lineId = $this->validatedLineId($lineId);
+        $response = $this->request($profile, 'POST', 'action=acquire-line-lease', [
+            'portal_domain' => trim((string) $profile->portal_domain),
+            'owner_profile_key' => trim((string) $owner->owner_key),
+            'owner_callback_base_url' => trim((string) $owner->callback_base_url),
+            'connector_code' => trim($connectorCode),
+            'connector_type' => trim($connectorType),
+            'line_id' => $lineId,
+            'lease_seconds' => $leaseSeconds,
+            'lease_scope' => $scope,
+        ]);
+        $leaseToken = is_scalar($response['lease_token'] ?? null)
+            ? trim((string) $response['lease_token'])
+            : '';
+        $expiresAt = is_scalar($response['expires_at'] ?? null)
+            ? trim((string) $response['expires_at'])
+            : '';
+
+        if (preg_match('/^[a-f0-9]{64}$/', $leaseToken) !== 1 || $expiresAt === '') {
+            throw new Bitrix24OpenLinesRouteRegistryException(
+                'route_registry_line_lease_response_invalid',
+                'OpenLines registry вернул некорректную operation lease.',
+            );
+        }
+
+        return [
+            'lease_token' => $leaseToken,
+            'expires_at' => $expiresAt,
+        ];
+    }
+
+    public function releaseLineLease(
+        Bitrix24Profile $profile,
+        Bitrix24CallbackOwner $owner,
+        string $lineId,
+        string $leaseToken,
+        string $scope = Bitrix24OpenLineMutationAuthority::SCOPE_CONNECTOR_REGISTRATION,
+    ): void {
+        $lineId = $this->validatedLineId($lineId);
+        $this->request($profile, 'POST', 'action=release-line-lease', [
+            'portal_domain' => trim((string) $profile->portal_domain),
+            'owner_profile_key' => trim((string) $owner->owner_key),
+            'line_id' => $lineId,
+            'lease_token' => trim($leaseToken),
+            'lease_scope' => $scope,
+        ]);
+    }
+
+    private function validatedLineId(string $lineId): string
+    {
+        if (! Bitrix24OpenLineRoute::isValidLineId($lineId)) {
+            throw new Bitrix24OpenLinesRouteRegistryException(
+                'route_registry_line_id_invalid',
+                'LINE_ID открытой линии должен быть канонической строкой из 1–64 цифр.',
+            );
+        }
+
+        return $lineId;
     }
 
     /**
@@ -62,8 +136,8 @@ class Bitrix24OpenLinesRouteRegistryClient
         $url = $query === '' ? $endpoint : $endpoint.'?'.$query;
 
         $pending = Http::acceptJson()
-            ->timeout(15)
-            ->connectTimeout(5)
+            ->timeout((int) config('bitrix24.http.timeout_seconds', 15))
+            ->connectTimeout((int) config('bitrix24.http.connect_timeout_seconds', 5))
             ->withHeaders([
                 'X-ABR-Timestamp' => $timestamp,
                 'X-ABR-Request-Id' => $requestId,

@@ -9,7 +9,7 @@ class Bitrix24BackfillOpenLineRoutesCommand extends Command
 {
     protected $signature = 'bitrix24:backfill-openline-routes';
 
-    protected $description = 'Create legacy Bitrix24 Open Lines routes from old profile fields and pin existing dialogs.';
+    protected $description = 'Pin existing dialogs to pre-published Bitrix24 Open Lines routes from old profile fields.';
 
     public function __construct(
         private readonly BackfillBitrix24OpenLineRoutesAction $backfillBitrix24OpenLineRoutesAction,
@@ -21,7 +21,7 @@ class Bitrix24BackfillOpenLineRoutesCommand extends Command
     {
         $result = $this->backfillBitrix24OpenLineRoutesAction->handle();
 
-        $this->info('Legacy-маршруты открытых линий пересобраны.');
+        $this->info('Диалоги привязаны к заранее опубликованным маршрутам открытых линий.');
         $this->newLine();
         $this->table(
             ['Показатель', 'Количество'],

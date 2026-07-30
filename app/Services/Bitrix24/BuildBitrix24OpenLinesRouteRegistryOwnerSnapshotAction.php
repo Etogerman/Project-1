@@ -31,7 +31,7 @@ class BuildBitrix24OpenLinesRouteRegistryOwnerSnapshotAction
             Bitrix24OpenLineRoute::query()
                 ->where('bitrix24_profile_id', $profile->id)
                 ->where('callback_owner_id', $owner->id)
-                ->whereIn('status', Bitrix24OpenLineRoute::usableStatuses())
+                ->whereIn('status', Bitrix24OpenLineRoute::claimingStatuses())
                 ->whereNotNull('connector_code')
                 ->whereNotNull('line_id')
                 ->orderBy('connector_code')
@@ -39,10 +39,24 @@ class BuildBitrix24OpenLinesRouteRegistryOwnerSnapshotAction
                 ->get()
                 ->each(function (Bitrix24OpenLineRoute $route) use (&$connectors, &$routes, &$lineIds): void {
                     $connectorCode = trim((string) $route->connector_code);
-                    $lineId = trim((string) $route->line_id);
+                    $lineId = (string) $route->line_id;
 
                     if ($connectorCode === '' || $lineId === '') {
                         return;
+                    }
+
+                    if (! Bitrix24OpenLineRoute::isValidConnectorCode($connectorCode)) {
+                        throw new Bitrix24OpenLinesRouteRegistryException(
+                            'route_registry_connector_code_invalid',
+                            'Код соединителя должен состоять из 1–64 латинских букв, цифр или символов ".", "_" и "-".',
+                        );
+                    }
+
+                    if (! Bitrix24OpenLineRoute::isValidLineId($lineId)) {
+                        throw new Bitrix24OpenLinesRouteRegistryException(
+                            'route_registry_line_id_invalid',
+                            'LINE_ID открытой линии должен состоять из 1–64 цифр.',
+                        );
                     }
 
                     $routeKey = $connectorCode.':'.$lineId;
@@ -81,7 +95,7 @@ class BuildBitrix24OpenLinesRouteRegistryOwnerSnapshotAction
                         'connector_code' => $connectorCode,
                         'line_id' => $lineId,
                         'line_name' => trim((string) ($route->line_name ?? '')),
-                        'active' => true,
+                        'active' => in_array($route->status, Bitrix24OpenLineRoute::usableStatuses(), true),
                     ];
                 });
         }

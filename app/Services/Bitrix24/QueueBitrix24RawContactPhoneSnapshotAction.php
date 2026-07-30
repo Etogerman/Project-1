@@ -13,6 +13,7 @@ class QueueBitrix24RawContactPhoneSnapshotAction
     public function __construct(
         private readonly ResolveRootContactAction $resolveRootContactAction,
         private readonly ShouldRunBitrix24DuplicatePhoneDiagnosticAction $shouldRunDiagnosticAction,
+        private readonly Bitrix24OpenLineScopedMutation $scopedMutation,
     ) {}
 
     public function handle(
@@ -31,6 +32,7 @@ class QueueBitrix24RawContactPhoneSnapshotAction
             return false;
         }
 
+        $this->scopedMutation->assertCurrent();
         LogBitrix24RawContactPhoneSnapshotJob::dispatch(
             $rootContact->id,
             $stage,

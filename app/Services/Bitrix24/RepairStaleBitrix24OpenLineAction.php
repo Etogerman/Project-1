@@ -2,6 +2,7 @@
 
 namespace App\Services\Bitrix24;
 
+use App\Data\Bitrix24\Bitrix24OpenLinesRouteData;
 use App\Data\Bitrix24\Bitrix24RestResponseData;
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24OpenLineRoute;
@@ -18,6 +19,8 @@ class RepairStaleBitrix24OpenLineAction
         private readonly Bitrix24ApiClient $apiClient,
         private readonly LogBitrix24ApiCallAction $logBitrix24ApiCallAction,
         private readonly ResolveBitrix24OpenLinesDialogBindingAction $resolveDialogBindingAction,
+        private readonly RunBitrix24OpenLineMutationWithAuthorityAction $runWithAuthority,
+        private readonly Bitrix24OpenLineRouteMutationFence $mutationFence,
     ) {}
 
     /**
@@ -25,13 +28,53 @@ class RepairStaleBitrix24OpenLineAction
      */
     public function handle(Bitrix24Connection $connection, Bitrix24OpenLineRoute $route, Bitrix24SyncLog $staleLog): array
     {
-        $route->loadMissing('dialogs');
+        $routeData = new Bitrix24OpenLinesRouteData(
+            platform: (string) $route->channel?->platform,
+            connectorCode: (string) $route->connector_code,
+            lineId: (string) $route->line_id,
+            routeId: (int) $route->getKey(),
+            status: (string) $route->status,
+            channelType: (string) $route->channel_type,
+        );
+
+        return $this->runWithAuthority->handle(
+            $routeData,
+            'repair_stale_open_line',
+            fn (Bitrix24OpenLineMutationAuthority $authority): array => $this->repairUnderAuthority(
+                $connection,
+                (int) $route->getKey(),
+                (int) $staleLog->getKey(),
+                $authority,
+            ),
+            requireUsable: false,
+        );
+    }
+
+    /**
+     * @return array{source_chat_id:string,current_chat_id:string,reset_dialog_count:int}
+     */
+    private function repairUnderAuthority(
+        Bitrix24Connection $connection,
+        int $routeId,
+        int $staleLogId,
+        Bitrix24OpenLineMutationAuthority $authority,
+    ): array {
+        $route = Bitrix24OpenLineRoute::query()->find($routeId);
+        $staleLog = Bitrix24SyncLog::query()->find($staleLogId);
+
+        if (! $route instanceof Bitrix24OpenLineRoute || ! $staleLog instanceof Bitrix24SyncLog) {
+            throw new Bitrix24OpenLineRepairException('Маршрут или диагностика старой ОЛ уже изменены.');
+        }
 
         $payload = is_array($staleLog->request_payload) ? $staleLog->request_payload : [];
-        $sourceChatId = trim((string) data_get($payload, 'source_bitrix_chat_id', ''));
-        $currentChatId = trim((string) data_get($payload, 'current_bitrix_chat_id', ''));
-        $connectorCode = trim((string) data_get($payload, 'connector_code', ''));
-        $lineId = trim((string) data_get($payload, 'line_id', ''));
+        $rawSourceChatId = data_get($payload, 'source_bitrix_chat_id');
+        $rawCurrentChatId = data_get($payload, 'current_bitrix_chat_id');
+        $rawConnectorCode = data_get($payload, 'connector_code');
+        $rawLineId = data_get($payload, 'line_id');
+        $sourceChatId = is_scalar($rawSourceChatId) ? trim((string) $rawSourceChatId) : '';
+        $currentChatId = is_scalar($rawCurrentChatId) ? trim((string) $rawCurrentChatId) : '';
+        $connectorCode = is_scalar($rawConnectorCode) ? trim((string) $rawConnectorCode) : '';
+        $lineId = is_scalar($rawLineId) ? (string) $rawLineId : '';
 
         if ($sourceChatId === '') {
             throw new Bitrix24OpenLineRepairException('В диагностике старой ОЛ нет Bitrix chat id.');
@@ -41,7 +84,12 @@ class RepairStaleBitrix24OpenLineAction
             throw new Bitrix24OpenLineRepairException('Старая и текущая ОЛ совпадают. Закрытие не требуется.');
         }
 
-        if ($connectorCode !== (string) $route->connector_code || $lineId !== (string) $route->line_id) {
+        if ($connectorCode !== $authority->connectorCode
+            || ! Bitrix24OpenLineRoute::isValidLineId($lineId)
+            || $lineId !== $authority->lineId
+            || (string) $route->connector_code !== $authority->connectorCode
+            || (string) $route->line_id !== $authority->lineId
+        ) {
             throw new Bitrix24OpenLineRepairException('Диагностика относится к другому маршруту открытой линии.');
         }
 
@@ -53,6 +101,12 @@ class RepairStaleBitrix24OpenLineAction
                 ],
                 $connection,
                 transportRetry: false,
+                mutationTarget: new Bitrix24OpenLineMutationTarget(
+                    portalDomain: (string) $connection->portal_domain,
+                    connectorCode: (string) $route->connector_code,
+                    lineId: (string) $route->line_id,
+                    chatId: $sourceChatId,
+                ),
             );
         } catch (Bitrix24ApiException $exception) {
             $message = $exception->getMessage() ?: 'Bitrix24 REST call failed.';
@@ -73,31 +127,54 @@ class RepairStaleBitrix24OpenLineAction
 
         if (! $this->isSuccessfulFinishResponse($response)) {
             $message = $response->errorMessage ?: 'Bitrix24 не подтвердил закрытие старой ОЛ.';
-            $this->logRepairOutcome($connection, $route, $staleLog, $payload, $response, Bitrix24SyncLog::STATUS_FAILED, 0, $message);
+            $this->logRepairOutcome(
+                $connection,
+                $route,
+                $staleLog,
+                $payload,
+                $response,
+                Bitrix24SyncLog::STATUS_FAILED,
+                0,
+                $message,
+            );
 
             throw new Bitrix24OpenLineRepairException('Не удалось закрыть старую ОЛ: '.$message);
         }
 
-        $staleDialogIds = $route->dialogs()
-            ->select(['id', 'bitrix24_open_line_user_code_override', 'bitrix24_open_line_resolved_chat_id_override', 'bitrix24_open_line_binding_verified_at'])
-            ->whereNotNull('bitrix24_open_line_binding_verified_at')
-            ->get()
-            ->filter(fn (Dialog $dialog): bool => $this->isDialogBindingStale($dialog, $route, $sourceChatId))
-            ->pluck('id')
-            ->all();
+        $resetDialogCount = $this->mutationFence->runMutation(
+            $authority,
+            function () use ($route, $sourceChatId): int {
+                $staleDialogIds = $route->dialogs()
+                    ->select(['id', 'bitrix24_open_line_user_code_override', 'bitrix24_open_line_resolved_chat_id_override', 'bitrix24_open_line_binding_verified_at'])
+                    ->whereNotNull('bitrix24_open_line_binding_verified_at')
+                    ->lockForUpdate()
+                    ->get()
+                    ->filter(fn (Dialog $dialog): bool => $this->isDialogBindingStale($dialog, $route, $sourceChatId))
+                    ->pluck('id')
+                    ->all();
 
-        if ($staleDialogIds !== []) {
-            Dialog::query()
-                ->whereKey($staleDialogIds)
-                ->update([
-                    'bitrix24_open_line_user_code_override' => null,
-                    'bitrix24_open_line_resolved_chat_id_override' => null,
-                    'bitrix24_open_line_binding_verified_at' => null,
-                ]);
-        }
+                if ($staleDialogIds !== []) {
+                    Dialog::query()
+                        ->whereKey($staleDialogIds)
+                        ->update([
+                            'bitrix24_open_line_user_code_override' => null,
+                            'bitrix24_open_line_resolved_chat_id_override' => null,
+                            'bitrix24_open_line_binding_verified_at' => null,
+                        ]);
+                }
 
-        $resetDialogCount = count($staleDialogIds);
-        $this->logRepairOutcome($connection, $route, $staleLog, $payload, $response, Bitrix24SyncLog::STATUS_SUCCESS, $resetDialogCount);
+                return count($staleDialogIds);
+            },
+        );
+        $this->logRepairOutcome(
+            $connection,
+            $route,
+            $staleLog,
+            $payload,
+            $response,
+            Bitrix24SyncLog::STATUS_SUCCESS,
+            $resetDialogCount,
+        );
 
         return [
             'source_chat_id' => $sourceChatId,
