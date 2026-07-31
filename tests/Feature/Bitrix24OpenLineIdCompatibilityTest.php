@@ -141,6 +141,7 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
     public function test_active_lease_blocks_line_id_migration_without_data_loss(): void
     {
         $routeId = $this->insertNonCanonicalDatabaseRoute('014');
+        $this->writeJson('route_registry.json', $this->registry([]));
         $leases = [
             '014' => $this->lease(
                 'local-1',
@@ -161,9 +162,15 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
             [
                 'source' => 'active_leases',
                 'locator' => 'lease:014',
+                'portal' => 'stagecrm.fvds.ru',
                 'line_id' => '014',
                 'canonical_line_id' => '14',
+                'connector_code' => 'abrikosoff_telegram',
+                'lease_scope' => 'line_runtime',
                 'expires_at' => $leases['014']['expires_at'],
+                'matched_resources' => [
+                    'line:stagecrm.fvds.ru#14',
+                ],
             ],
         ], $preflight['active_lease_blocks']);
 
@@ -181,6 +188,360 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
         ]);
         $this->assertFileDoesNotExist($artifactPath);
         $this->assertSame([], glob($this->storageDirectory.'/*.backup.*') ?: []);
+    }
+
+    public function test_connector_registration_lease_blocks_same_connector_on_another_line(): void
+    {
+        $routeId = $this->insertNonCanonicalDatabaseRoute('014');
+        $this->writeJson('route_registry.json', $this->registry([]));
+        $leases = [
+            '15' => $this->lease(
+                ownerKey: 'another-owner',
+                lineId: '15',
+                scope: 'connector_registration',
+            ),
+        ];
+        $this->writeJson('route_registry_line_leases.json', $leases);
+        $artifactPath = $this->storageDirectory.'/connector-registration-block.json';
+        $service = app(Bitrix24OpenLineIdCompatibilityService::class);
+
+        $preflight = $service->preflight($this->storageDirectory);
+
+        $this->assertFalse($preflight['ready']);
+        $this->assertSame([
+            [
+                'source' => 'active_leases',
+                'locator' => 'lease:15',
+                'portal' => 'stagecrm.fvds.ru',
+                'line_id' => '15',
+                'canonical_line_id' => '15',
+                'connector_code' => 'abrikosoff_telegram',
+                'lease_scope' => 'connector_registration',
+                'expires_at' => $leases['15']['expires_at'],
+                'matched_resources' => [
+                    'connector:stagecrm.fvds.ru#abrikosoff_telegram',
+                ],
+            ],
+        ], $preflight['active_lease_blocks']);
+
+        $artifact = $service->preflightArtifact($this->storageDirectory, $artifactPath);
+
+        $this->assertFalse($artifact['ready']);
+        $this->assertSame($preflight['active_lease_blocks'], $artifact['active_lease_blocks']);
+        $this->assertFileExists($artifactPath);
+
+        try {
+            $service->migrate(
+                $this->storageDirectory,
+                $this->storageDirectory.'/blocked-migration.json',
+            );
+            $this->fail('Connector registration lease must block connector migration.');
+        } catch (Bitrix24OpenLineIdCompatibilityException $exception) {
+            $this->assertSame('openlines_line_id_compatibility_blocked', $exception->errorCode);
+        }
+
+        $this->assertDatabaseHas('bitrix24_open_line_routes', [
+            'id' => $routeId,
+            'line_id' => '014',
+        ]);
+        $this->assertFileDoesNotExist($this->storageDirectory.'/blocked-migration.json');
+    }
+
+    public function test_legacy_missing_or_empty_scope_is_connector_registration(): void
+    {
+        $this->insertNonCanonicalDatabaseRoute('014');
+        $this->writeJson('route_registry.json', $this->registry([]));
+        $service = app(Bitrix24OpenLineIdCompatibilityService::class);
+
+        foreach (['missing', 'empty'] as $variant) {
+            $lease = $this->lease('another-owner', '15');
+
+            if ($variant === 'missing') {
+                unset($lease['lease_scope']);
+            } else {
+                $lease['lease_scope'] = '';
+            }
+
+            $this->writeJson('route_registry_line_leases.json', ['15' => $lease]);
+            $preflight = $service->preflight($this->storageDirectory);
+
+            $this->assertFalse($preflight['ready'], $variant);
+            $this->assertSame(
+                'connector_registration',
+                $preflight['active_lease_blocks'][0]['lease_scope'],
+                $variant,
+            );
+            $this->assertSame([
+                'connector:stagecrm.fvds.ru#abrikosoff_telegram',
+            ], $preflight['active_lease_blocks'][0]['matched_resources'], $variant);
+        }
+    }
+
+    public function test_line_runtime_lease_on_another_line_does_not_block_connector_migration(): void
+    {
+        $this->insertNonCanonicalDatabaseRoute('014');
+        $this->writeJson('route_registry.json', $this->registry([]));
+        $this->writeJson('route_registry_line_leases.json', [
+            '15' => $this->lease('another-owner', '15', scope: 'line_runtime'),
+        ]);
+
+        $preflight = app(Bitrix24OpenLineIdCompatibilityService::class)
+            ->preflight($this->storageDirectory);
+
+        $this->assertTrue($preflight['ready']);
+        $this->assertCount(1, $preflight['migrations']);
+        $this->assertSame([], $preflight['active_lease_blocks']);
+    }
+
+    public function test_same_connector_on_another_portal_does_not_block_migration(): void
+    {
+        $this->insertNonCanonicalDatabaseRoute('014', portal: 'portal-b.example.test');
+        $this->writeJson(
+            'route_registry.json',
+            $this->registry([], 'portal-a.example.test'),
+        );
+        $this->writeJson('route_registry_line_leases.json', [
+            '15' => $this->lease(
+                ownerKey: 'another-owner',
+                lineId: '15',
+                scope: 'connector_registration',
+            ),
+        ]);
+
+        $preflight = app(Bitrix24OpenLineIdCompatibilityService::class)
+            ->preflight($this->storageDirectory);
+
+        $this->assertTrue($preflight['ready']);
+        $this->assertSame([], $preflight['active_lease_blocks']);
+    }
+
+    public function test_connector_registration_lease_matching_line_and_connector_has_one_additive_block(): void
+    {
+        $this->insertNonCanonicalDatabaseRoute('014');
+        $this->writeJson('route_registry.json', $this->registry([]));
+        $lease = $this->lease(
+            ownerKey: 'another-owner',
+            lineId: '014',
+            scope: 'connector_registration',
+        );
+        $this->writeJson('route_registry_line_leases.json', ['014' => $lease]);
+
+        $preflight = app(Bitrix24OpenLineIdCompatibilityService::class)
+            ->preflight($this->storageDirectory);
+
+        $this->assertFalse($preflight['ready']);
+        $this->assertCount(1, $preflight['active_lease_blocks']);
+        $this->assertSame([
+            'connector:stagecrm.fvds.ru#abrikosoff_telegram',
+            'line:stagecrm.fvds.ru#14',
+        ], $preflight['active_lease_blocks'][0]['matched_resources']);
+    }
+
+    public function test_lease_expiring_at_snapshot_is_inactive_and_entries_are_time_stable(): void
+    {
+        $snapshotAt = now()->startOfSecond();
+        $this->travelTo($snapshotAt);
+        $this->insertNonCanonicalDatabaseRoute('014');
+        $this->writeJson('route_registry.json', $this->registry([]));
+        $this->writeJson('route_registry_line_leases.json', [
+            '014' => $this->lease(
+                ownerKey: 'local-1',
+                lineId: '014',
+                expiresAt: $snapshotAt->timestamp + 1,
+            ),
+        ]);
+        $service = app(Bitrix24OpenLineIdCompatibilityService::class);
+
+        $beforeExpiry = $service->preflight($this->storageDirectory);
+        $this->travelTo($snapshotAt->copy()->addSecond());
+        $atExpiry = $service->preflight($this->storageDirectory);
+        $this->travelBack();
+
+        $this->assertFalse($beforeExpiry['ready']);
+        $this->assertCount(1, $beforeExpiry['active_lease_blocks']);
+        $this->assertTrue($atExpiry['ready']);
+        $this->assertSame([], $atExpiry['active_lease_blocks']);
+        $this->assertSame($beforeExpiry['entries'], $atExpiry['entries']);
+        $this->assertSame($beforeExpiry['source_hashes'], $atExpiry['source_hashes']);
+        $this->assertArrayNotHasKey(
+            'lease_active',
+            collect($atExpiry['entries'])->firstWhere('source', 'active_leases'),
+        );
+    }
+
+    public function test_invalid_registry_portal_fails_closed(): void
+    {
+        $this->writeJson('route_registry.json', $this->registry([], '...'));
+
+        $preflight = app(Bitrix24OpenLineIdCompatibilityService::class)
+            ->preflight($this->storageDirectory);
+
+        $this->assertFalse($preflight['ready']);
+        $this->assertContains([
+            'source' => 'current_registry',
+            'locator' => 'portal_domain',
+            'line_id' => 'invalid_registry_portal',
+        ], $preflight['invalid']);
+    }
+
+    public function test_mismatched_registry_portals_fail_closed(): void
+    {
+        $this->writeJson(
+            'route_registry.json',
+            $this->registry([], 'portal-a.example.test'),
+        );
+        $this->writeJson(
+            'route_registry.previous.json',
+            $this->registry([], 'portal-b.example.test'),
+        );
+
+        $preflight = app(Bitrix24OpenLineIdCompatibilityService::class)
+            ->preflight($this->storageDirectory);
+
+        $this->assertFalse($preflight['ready']);
+        $this->assertContains([
+            'source' => 'registry_portal',
+            'locator' => 'current_registry/previous_registry',
+            'line_id' => 'registry_portal_mismatch',
+        ], $preflight['invalid']);
+    }
+
+    public function test_nonempty_lease_file_without_registry_portal_fails_closed(): void
+    {
+        $this->writeJson('route_registry_line_leases.json', [
+            '14' => $this->lease('local-1', '14'),
+        ]);
+
+        $preflight = app(Bitrix24OpenLineIdCompatibilityService::class)
+            ->preflight($this->storageDirectory);
+
+        $this->assertFalse($preflight['ready']);
+        $this->assertContains([
+            'source' => 'active_leases',
+            'locator' => 'portal_domain',
+            'line_id' => 'lease_portal_unresolved',
+        ], $preflight['invalid']);
+    }
+
+    public function test_expired_lease_still_participates_in_structural_collision_detection(): void
+    {
+        $this->insertNonCanonicalDatabaseRoute('014');
+        $this->writeJson('route_registry.json', $this->registry([]));
+        $this->writeJson('route_registry_line_leases.json', [
+            '014' => $this->lease(
+                ownerKey: 'another-owner',
+                lineId: '014',
+                expiresAt: now()->subMinute()->timestamp,
+            ),
+        ]);
+
+        $preflight = app(Bitrix24OpenLineIdCompatibilityService::class)
+            ->preflight($this->storageDirectory);
+
+        $this->assertFalse($preflight['ready']);
+        $this->assertCount(1, $preflight['collisions']);
+        $this->assertSame('stagecrm.fvds.ru#14', $preflight['collisions'][0]['resource']);
+        $this->assertSame([], $preflight['active_lease_blocks']);
+    }
+
+    public function test_lease_only_migration_does_not_create_connector_resource_block(): void
+    {
+        $this->writeJson('route_registry.json', $this->registry([]));
+        $this->writeJson('route_registry_line_leases.json', [
+            '014' => $this->lease(
+                ownerKey: 'local-1',
+                lineId: '014',
+                expiresAt: now()->subMinute()->timestamp,
+            ),
+            '15' => $this->lease(
+                ownerKey: 'another-owner',
+                lineId: '15',
+                scope: 'connector_registration',
+            ),
+        ]);
+
+        $preflight = app(Bitrix24OpenLineIdCompatibilityService::class)
+            ->preflight($this->storageDirectory);
+
+        $this->assertTrue($preflight['ready']);
+        $this->assertCount(1, $preflight['migrations']);
+        $this->assertSame('active_leases', $preflight['migrations'][0]['source']);
+        $this->assertSame([], $preflight['active_lease_blocks']);
+    }
+
+    public function test_callback_and_identity_normalization_avoids_false_collision(): void
+    {
+        $this->writeJson('route_registry.json', $this->registry([
+            'local-1' => $this->owner('local-1', '014'),
+        ]));
+        $lease = $this->lease(
+            ownerKey: ' local-1 ',
+            lineId: '014',
+            expiresAt: now()->subMinute()->timestamp,
+            connectorCode: ' abrikosoff_telegram ',
+            callbackBaseUrl: 'HTTPS://LOCAL-1.EXAMPLE.TEST/callbacks/bitrix24/openlines/',
+            connectorType: ' telegram ',
+        );
+        $this->writeJson('route_registry_line_leases.json', ['014' => $lease]);
+
+        $preflight = app(Bitrix24OpenLineIdCompatibilityService::class)
+            ->preflight($this->storageDirectory);
+
+        $this->assertTrue($preflight['ready']);
+        $this->assertSame([], $preflight['collisions']);
+        $this->assertSame(
+            $preflight['entries'][0]['identity'],
+            collect($preflight['entries'])->firstWhere('source', 'active_leases')['identity'],
+        );
+    }
+
+    public function test_legacy_profile_owner_selection_uses_normalized_callback_identity(): void
+    {
+        $this->insertLegacyProfile(
+            telegramLineId: '014',
+            maxLineId: null,
+            profileCallbackBaseUrl: 'HTTPS://LOCAL-1.EXAMPLE.TEST/callbacks/bitrix24/openlines/',
+            ownerCallbackBaseUrl: 'https://local-1.example.test',
+        );
+        $this->writeJson('route_registry.json', $this->registry([
+            'local-1' => $this->owner('local-1', '014'),
+        ]));
+
+        $preflight = app(Bitrix24OpenLineIdCompatibilityService::class)
+            ->preflight($this->storageDirectory);
+
+        $this->assertTrue($preflight['ready']);
+        $this->assertSame([], $preflight['collisions']);
+        $this->assertSame(
+            collect($preflight['entries'])->firstWhere('source', 'current_registry')['identity'],
+            collect($preflight['entries'])->firstWhere('source', 'profile_database')['identity'],
+        );
+    }
+
+    public function test_invalid_database_portal_and_connector_fail_closed(): void
+    {
+        $routeId = $this->insertNonCanonicalDatabaseRoute('014');
+        DB::table('bitrix24_open_line_routes')
+            ->where('id', $routeId)
+            ->update([
+                'portal_domain' => '...',
+                'connector_code' => 'invalid connector',
+            ]);
+
+        $preflight = app(Bitrix24OpenLineIdCompatibilityService::class)
+            ->preflight($this->storageDirectory);
+
+        $this->assertFalse($preflight['ready']);
+        $this->assertContains([
+            'source' => 'database',
+            'locator' => 'route:'.$routeId,
+            'line_id' => 'invalid_portal',
+        ], $preflight['invalid']);
+        $this->assertContains([
+            'source' => 'database',
+            'locator' => 'route:'.$routeId,
+            'line_id' => 'invalid_connector_code',
+        ], $preflight['invalid']);
     }
 
     public function test_read_only_preflight_can_write_verifiable_artifact_without_mutation(): void
@@ -519,6 +880,7 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
 
     public function test_lease_preflight_matches_runtime_reader_schema(): void
     {
+        $this->writeJson('route_registry.json', $this->registry([]));
         $leases = [
             '14' => [
                 ...$this->lease('local-1', '14'),
@@ -585,6 +947,7 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
 
     public function test_lease_preflight_enforces_runtime_reader_limits(): void
     {
+        $this->writeJson('route_registry.json', $this->registry([]));
         $leases = [];
 
         for ($lineId = 1; $lineId <= 1001; $lineId++) {
@@ -625,11 +988,13 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
      * @param  array<string, array<string, mixed>>  $owners
      * @return array<string, mixed>
      */
-    private function registry(array $owners): array
-    {
+    private function registry(
+        array $owners,
+        string $portal = 'stagecrm.fvds.ru',
+    ): array {
         return [
             'schema_version' => 1,
-            'portal_domain' => 'stagecrm.fvds.ru',
+            'portal_domain' => $portal,
             'updated_at' => now()->toAtomString(),
             'owners' => $owners,
         ];
@@ -667,14 +1032,18 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
         string $ownerKey,
         string $lineId,
         ?int $expiresAt = null,
+        string $scope = 'line_runtime',
+        string $connectorCode = 'abrikosoff_telegram',
+        ?string $callbackBaseUrl = null,
+        string $connectorType = 'telegram',
     ): array {
         return [
             'line_id' => $lineId,
             'owner_profile_key' => $ownerKey,
-            'owner_callback_base_url' => 'https://'.$ownerKey.'.example.test',
-            'connector_code' => 'abrikosoff_telegram',
-            'connector_type' => 'telegram',
-            'lease_scope' => 'line_runtime',
+            'owner_callback_base_url' => $callbackBaseUrl ?? 'https://'.$ownerKey.'.example.test',
+            'connector_code' => $connectorCode,
+            'connector_type' => $connectorType,
+            'lease_scope' => $scope,
             'token_hash' => str_repeat('a', 64),
             'expires_at' => $expiresAt ?? now()->addMinutes(5)->timestamp,
         ];
@@ -683,19 +1052,22 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
     private function insertNonCanonicalDatabaseRoute(
         string $lineId,
         string $status = Bitrix24OpenLineRoute::STATUS_ACTIVE,
+        string $portal = 'stagecrm.fvds.ru',
+        string $connectorCode = 'abrikosoff_telegram',
+        string $callbackBaseUrl = 'https://local-1.example.test',
     ): int {
         $profile = Bitrix24Profile::query()->create([
-            'portal_domain' => 'stagecrm.fvds.ru',
+            'portal_domain' => $portal,
             'profile_key' => Bitrix24Profile::PROFILE_KEY_STAGING,
             'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
             'display_name' => 'Staging',
-            'callback_base_url' => 'https://local-1.example.test',
+            'callback_base_url' => $callbackBaseUrl,
         ]);
         $owner = Bitrix24CallbackOwner::query()->create([
             'bitrix24_profile_id' => $profile->id,
             'owner_key' => 'local-1',
             'display_name' => 'Local 1',
-            'callback_base_url' => 'https://local-1.example.test',
+            'callback_base_url' => $callbackBaseUrl,
             'status' => Bitrix24CallbackOwner::STATUS_ACTIVE,
         ]);
         $channel = Channel::factory()->create([
@@ -709,7 +1081,7 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
             'portal_domain' => $profile->portal_domain,
             'profile_key' => $profile->profile_key,
             'channel_type' => Bitrix24OpenLineRoute::CHANNEL_TYPE_TELEGRAM_BOT,
-            'connector_code' => 'abrikosoff_telegram',
+            'connector_code' => $connectorCode,
             'line_id' => $lineId,
             'line_name' => 'Telegram',
             'line_owner_key' => in_array($status, Bitrix24OpenLineRoute::usableStatuses(), true)
@@ -725,13 +1097,15 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
     private function insertLegacyProfile(
         ?string $telegramLineId,
         ?string $maxLineId,
+        string $profileCallbackBaseUrl = 'https://local-1.example.test',
+        string $ownerCallbackBaseUrl = 'https://local-1.example.test',
     ): Bitrix24Profile {
         $profile = Bitrix24Profile::query()->create([
             'portal_domain' => 'stagecrm.fvds.ru',
             'profile_key' => Bitrix24Profile::PROFILE_KEY_STAGING,
             'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
             'display_name' => 'Staging',
-            'callback_base_url' => 'https://local-1.example.test',
+            'callback_base_url' => $profileCallbackBaseUrl,
             'telegram_connector_code' => 'abrikosoff_telegram',
             'max_connector_code' => 'abrikosoff_max',
         ]);
@@ -739,7 +1113,7 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
             'bitrix24_profile_id' => $profile->id,
             'owner_key' => 'local-1',
             'display_name' => 'Local 1',
-            'callback_base_url' => 'https://local-1.example.test',
+            'callback_base_url' => $ownerCallbackBaseUrl,
             'status' => Bitrix24CallbackOwner::STATUS_ACTIVE,
         ]);
         $profile->forceFill([

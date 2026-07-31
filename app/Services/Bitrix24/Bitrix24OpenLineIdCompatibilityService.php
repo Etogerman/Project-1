@@ -52,6 +52,8 @@ final class Bitrix24OpenLineIdCompatibilityService
         string $storageDirectory,
         bool $lockDatabaseRows = false,
     ): array {
+        $snapshotAt = now()->toImmutable();
+
         if ($lockDatabaseRows) {
             $this->lockDatabaseSourceRows();
         }
@@ -65,7 +67,69 @@ final class Bitrix24OpenLineIdCompatibilityService
             'profile_database' => count($profileDatabaseEntries),
         ];
         $documents = [];
-        $registryPortal = null;
+        $sourceExists = [];
+
+        foreach (self::FILES as $source => $fileName) {
+            $path = $storageDirectory.DIRECTORY_SEPARATOR.$fileName;
+            $sourceExists[$source] = is_file($path);
+            $documents[$source] = $this->readOptionalJson($path, $source, $invalid);
+        }
+
+        $registryPortals = [];
+
+        foreach (['current_registry', 'previous_registry'] as $source) {
+            $portal = $this->registryPortal(
+                $source,
+                $documents[$source],
+                $sourceExists[$source],
+                $invalid,
+            );
+
+            if ($portal !== null) {
+                $registryPortals[$source] = $portal;
+            }
+
+            $fileEntries = $this->registryEntries(
+                $source,
+                $documents[$source],
+                $portal ?? '',
+                $sourceExists[$source],
+                $invalid,
+            );
+
+            $sourceCounts[$source] = count($fileEntries);
+            array_push($entries, ...$fileEntries);
+        }
+
+        $uniqueRegistryPortals = array_values(array_unique(array_values($registryPortals)));
+
+        if (count($uniqueRegistryPortals) > 1) {
+            $invalid[] = [
+                'source' => 'registry_portal',
+                'locator' => 'current_registry/previous_registry',
+                'line_id' => 'registry_portal_mismatch',
+            ];
+        }
+
+        $leaseDocument = $documents['active_leases'];
+        $leasePortal = count($uniqueRegistryPortals) === 1 ? $uniqueRegistryPortals[0] : '';
+
+        if ($leaseDocument !== [] && count($uniqueRegistryPortals) !== 1) {
+            $invalid[] = [
+                'source' => 'active_leases',
+                'locator' => 'portal_domain',
+                'line_id' => 'lease_portal_unresolved',
+            ];
+        }
+
+        $leaseEntries = $this->leaseEntries(
+            'active_leases',
+            $leaseDocument,
+            $leasePortal,
+            $invalid,
+        );
+        $sourceCounts['active_leases'] = count($leaseEntries);
+        array_push($entries, ...$leaseEntries);
 
         foreach ($entries as $entry) {
             if ($entry['canonical_line_id'] === null) {
@@ -75,42 +139,36 @@ final class Bitrix24OpenLineIdCompatibilityService
                     'line_id' => $entry['line_id'],
                 ];
             }
-        }
 
-        foreach (self::FILES as $source => $fileName) {
-            $path = $storageDirectory.DIRECTORY_SEPARATOR.$fileName;
-            $document = $this->readOptionalJson($path, $source, $invalid);
-            $documents[$source] = $document;
-
-            if (in_array($source, ['current_registry', 'previous_registry'], true)) {
-                $portal = $this->normalizePortal((string) ($document['portal_domain'] ?? ''));
-                $registryPortal ??= $portal !== '' ? $portal : null;
-                $fileEntries = $this->registryEntries(
-                    $source,
-                    $document,
-                    $portal,
-                    is_file($path),
-                    $invalid,
-                );
-            } else {
-                $fileEntries = $this->leaseEntries(
-                    $source,
-                    $document,
-                    $registryPortal ?? '',
-                    $invalid,
-                );
+            if (in_array($entry['source'], ['database', 'profile_database'], true)
+                && $entry['portal'] === ''
+            ) {
+                $invalid[] = [
+                    'source' => $entry['source'],
+                    'locator' => $entry['locator'],
+                    'line_id' => 'invalid_portal',
+                ];
             }
 
-            $sourceCounts[$source] = count($fileEntries);
-            array_push($entries, ...$fileEntries);
+            if (! Bitrix24OpenLineRoute::isValidConnectorCode($entry['connector_code'])) {
+                $invalid[] = [
+                    'source' => $entry['source'],
+                    'locator' => $entry['locator'],
+                    'line_id' => 'invalid_connector_code',
+                ];
+            }
         }
 
         [$migrations, $collisions] = $this->analyzeEntries($entries);
-        $activeLeaseBlocks = $this->activeLeaseBlocks($entries, $migrations);
+        $activeLeaseBlocks = $this->activeLeaseBlocks(
+            $entries,
+            $migrations,
+            $snapshotAt->timestamp,
+        );
 
         return [
             'schema_version' => 1,
-            'generated_at' => now()->toAtomString(),
+            'generated_at' => $snapshotAt->toAtomString(),
             'storage_directory' => $storageDirectory,
             'ready' => $invalid === []
                 && $collisions === []
@@ -327,12 +385,13 @@ final class Bitrix24OpenLineIdCompatibilityService
                     recordId: (int) $route->id,
                     portal: (string) $route->portal_domain,
                     lineId: $lineId,
-                    identity: implode('|', [
+                    connectorCode: (string) $route->connector_code,
+                    identity: $this->normalizedIdentity(
                         (string) $route->callbackOwner?->owner_key,
-                        rtrim((string) $route->callbackOwner?->callback_base_url, '/'),
+                        (string) $route->callbackOwner?->callback_base_url,
                         (string) $route->connector_code,
                         $connectorType,
-                    ]),
+                    ),
                     claiming: $route->claimsExternalLine(),
                     usable: $route->isUsable(),
                 );
@@ -380,12 +439,13 @@ final class Bitrix24OpenLineIdCompatibilityService
                         recordId: (int) $profile->id,
                         portal: (string) $profile->portal_domain,
                         lineId: $lineId,
-                        identity: implode('|', [
+                        connectorCode: $connector['connector_code'],
+                        identity: $this->normalizedIdentity(
                             $ownerKey,
                             $callbackBaseUrl,
                             $connector['connector_code'],
                             $connector['connector_type'],
-                        ]),
+                        ),
                         claiming: true,
                         usable: false,
                         recordField: $field,
@@ -441,10 +501,14 @@ final class Bitrix24OpenLineIdCompatibilityService
      */
     private function profileOwnerIdentity(Bitrix24Profile $profile): array
     {
-        $profileCallbackBaseUrl = rtrim(trim((string) $profile->callback_base_url), '/');
+        $profileCallbackBaseUrl = $this->normalizeCallbackBaseUrl(
+            (string) $profile->callback_base_url,
+        );
         $matchingOwners = $profile->callbackOwners
             ->filter(
-                fn ($owner): bool => rtrim(trim((string) $owner->callback_base_url), '/')
+                fn ($owner): bool => $this->normalizeCallbackBaseUrl(
+                    (string) $owner->callback_base_url,
+                )
                     === $profileCallbackBaseUrl,
             )
             ->values();
@@ -454,7 +518,7 @@ final class Bitrix24OpenLineIdCompatibilityService
 
             return [
                 (string) $owner->owner_key,
-                rtrim((string) $owner->callback_base_url, '/'),
+                (string) $owner->callback_base_url,
             ];
         }
 
@@ -462,6 +526,37 @@ final class Bitrix24OpenLineIdCompatibilityService
             'profile:'.(string) $profile->profile_key,
             $profileCallbackBaseUrl,
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $document
+     * @param  list<array<string, string>>  $invalid
+     */
+    private function registryPortal(
+        string $source,
+        array $document,
+        bool $sourceExists,
+        array &$invalid,
+    ): ?string {
+        if (! $sourceExists) {
+            return null;
+        }
+
+        $portalDomain = $document['portal_domain'] ?? null;
+
+        if (! is_scalar($portalDomain)
+            || $this->normalizePortal((string) $portalDomain) === ''
+        ) {
+            $invalid[] = [
+                'source' => $source,
+                'locator' => 'portal_domain',
+                'line_id' => 'invalid_registry_portal',
+            ];
+
+            return null;
+        }
+
+        return $this->normalizePortal((string) $portalDomain);
     }
 
     /**
@@ -545,24 +640,18 @@ final class Bitrix24OpenLineIdCompatibilityService
                     recordId: null,
                     portal: $portal,
                     lineId: $lineId,
-                    identity: implode('|', [
+                    connectorCode: $connectorCode,
+                    identity: $this->normalizedIdentity(
                         (string) $ownerKey,
-                        rtrim((string) ($owner['owner_callback_base_url'] ?? ''), '/'),
+                        (string) ($owner['owner_callback_base_url'] ?? ''),
                         $connectorCode,
                         trim((string) ($connector['connector_type'] ?? $route['connector_type'] ?? '')),
-                    ]),
+                    ),
                     claiming: true,
                     usable: true,
                 );
                 $entries[] = $entry;
 
-                if ($entry['canonical_line_id'] === null) {
-                    $invalid[] = [
-                        'source' => $source,
-                        'locator' => $entry['locator'],
-                        'line_id' => $lineId,
-                    ];
-                }
             }
         }
 
@@ -596,31 +685,26 @@ final class Bitrix24OpenLineIdCompatibilityService
             }
 
             $lineId = (string) $lease['line_id'];
+            $connectorCode = trim((string) $lease['connector_code']);
             $entry = $this->entry(
                 source: $source,
                 locator: 'lease:'.$key,
                 recordId: null,
                 portal: $portal,
                 lineId: $lineId,
-                identity: implode('|', [
+                connectorCode: $connectorCode,
+                identity: $this->normalizedIdentity(
                     trim((string) ($lease['owner_profile_key'] ?? '')),
-                    rtrim(trim((string) ($lease['owner_callback_base_url'] ?? '')), '/'),
-                    trim((string) ($lease['connector_code'] ?? '')),
+                    (string) ($lease['owner_callback_base_url'] ?? ''),
+                    $connectorCode,
                     trim((string) ($lease['connector_type'] ?? '')),
-                ]),
+                ),
                 claiming: true,
                 usable: true,
             );
+            $entry['lease_scope'] = $this->normalizedLeaseScope($lease['lease_scope'] ?? null);
             $entry['lease_expires_at'] = $lease['expires_at'];
             $entries[] = $entry;
-
-            if ($entry['canonical_line_id'] === null) {
-                $invalid[] = [
-                    'source' => $source,
-                    'locator' => $entry['locator'],
-                    'line_id' => $lineId,
-                ];
-            }
         }
 
         return $entries;
@@ -654,10 +738,7 @@ final class Bitrix24OpenLineIdCompatibilityService
             return false;
         }
 
-        $leaseScope = trim((string) ($lease['lease_scope'] ?? ''));
-        $leaseScope = $leaseScope === ''
-            ? Bitrix24OpenLineMutationAuthority::SCOPE_CONNECTOR_REGISTRATION
-            : $leaseScope;
+        $leaseScope = $this->normalizedLeaseScope($lease['lease_scope'] ?? null);
 
         return preg_match(
             '/^[a-zA-Z0-9._-]{1,128}$/',
@@ -671,7 +752,7 @@ final class Bitrix24OpenLineIdCompatibilityService
                 Bitrix24OpenLineMutationAuthority::SCOPE_LINE_RUNTIME,
                 Bitrix24OpenLineMutationAuthority::SCOPE_CONNECTOR_REGISTRATION,
             ], true)
-            && $this->normalizeLeaseCallbackBaseUrl(
+            && $this->normalizeCallbackBaseUrl(
                 (string) $lease['owner_callback_base_url'],
             ) !== ''
             && preg_match(
@@ -680,7 +761,7 @@ final class Bitrix24OpenLineIdCompatibilityService
             ) === 1;
     }
 
-    private function normalizeLeaseCallbackBaseUrl(string $callbackBaseUrl): string
+    private function normalizeCallbackBaseUrl(string $callbackBaseUrl): string
     {
         $callbackBaseUrl = trim($callbackBaseUrl);
 
@@ -720,6 +801,39 @@ final class Bitrix24OpenLineIdCompatibilityService
         return rtrim($normalized, '/');
     }
 
+    private function normalizedIdentity(
+        string $ownerKey,
+        string $callbackBaseUrl,
+        string $connectorCode,
+        string $connectorType,
+    ): string {
+        return implode('|', [
+            trim($ownerKey),
+            $this->normalizeCallbackBaseUrl($callbackBaseUrl),
+            trim($connectorCode),
+            trim($connectorType),
+        ]);
+    }
+
+    private function normalizedLeaseScope(mixed $scope): string
+    {
+        $scope = is_scalar($scope) ? trim((string) $scope) : '';
+
+        return $scope === ''
+            ? Bitrix24OpenLineMutationAuthority::SCOPE_CONNECTOR_REGISTRATION
+            : $scope;
+    }
+
+    private function lineResource(string $portal, string $canonicalLineId): string
+    {
+        return 'line:'.$portal.'#'.$canonicalLineId;
+    }
+
+    private function connectorResource(string $portal, string $connectorCode): string
+    {
+        return 'connector:'.$portal.'#'.trim($connectorCode);
+    }
+
     /**
      * @param  list<array<string, mixed>>  $entries
      * @return array{list<array<string, mixed>>, list<array<string, mixed>>}
@@ -743,6 +857,7 @@ final class Bitrix24OpenLineIdCompatibilityService
                     'record_id' => $entry['record_id'],
                     'record_field' => $entry['record_field'],
                     'portal' => $entry['portal'],
+                    'connector_code' => $entry['connector_code'],
                     'from' => $entry['line_id'],
                     'to' => $canonical,
                     'identity' => $entry['identity'],
@@ -800,46 +915,109 @@ final class Bitrix24OpenLineIdCompatibilityService
      * @param  list<array<string, mixed>>  $migrations
      * @return list<array<string, mixed>>
      */
-    private function activeLeaseBlocks(array $entries, array $migrations): array
-    {
-        $affectedLineIds = [];
+    private function activeLeaseBlocks(
+        array $entries,
+        array $migrations,
+        int $snapshotTimestamp,
+    ): array {
+        $affectedLineResources = [];
+        $affectedConnectorResources = [];
 
         foreach ($migrations as $migration) {
+            $portal = (string) ($migration['portal'] ?? '');
             $canonicalLineId = $migration['to'] ?? null;
 
-            if (is_string($canonicalLineId)) {
-                $affectedLineIds[$canonicalLineId] = true;
+            if ($portal !== '' && is_string($canonicalLineId)) {
+                $affectedLineResources[$this->lineResource($portal, $canonicalLineId)] = true;
+            }
+
+            if (in_array((string) ($migration['source'] ?? ''), [
+                'database',
+                'profile_database',
+                'current_registry',
+                'previous_registry',
+            ], true)) {
+                $connectorCode = (string) ($migration['connector_code'] ?? '');
+
+                if ($portal !== '' && Bitrix24OpenLineRoute::isValidConnectorCode($connectorCode)) {
+                    $affectedConnectorResources[$this->connectorResource($portal, $connectorCode)] = true;
+                }
             }
         }
 
-        if ($affectedLineIds === []) {
+        if ($affectedLineResources === [] && $affectedConnectorResources === []) {
             return [];
         }
 
-        $now = now()->timestamp;
         $blocks = [];
 
         foreach ($entries as $entry) {
+            $portal = (string) ($entry['portal'] ?? '');
             $canonicalLineId = $entry['canonical_line_id'] ?? null;
+            $connectorCode = (string) ($entry['connector_code'] ?? '');
+            $leaseScope = (string) ($entry['lease_scope'] ?? '');
             $expiresAt = $entry['lease_expires_at'] ?? null;
 
             if (($entry['source'] ?? null) !== 'active_leases'
+                || $portal === ''
                 || ! is_string($canonicalLineId)
-                || ! isset($affectedLineIds[$canonicalLineId])
                 || ! is_int($expiresAt)
-                || $expiresAt <= $now
+                || $expiresAt <= $snapshotTimestamp
             ) {
                 continue;
             }
 
+            $matchedResources = [];
+            $lineResource = $this->lineResource($portal, $canonicalLineId);
+
+            if (isset($affectedLineResources[$lineResource])) {
+                $matchedResources[] = $lineResource;
+            }
+
+            $connectorResource = $this->connectorResource($portal, $connectorCode);
+
+            if ($leaseScope === Bitrix24OpenLineMutationAuthority::SCOPE_CONNECTOR_REGISTRATION
+                && isset($affectedConnectorResources[$connectorResource])
+            ) {
+                $matchedResources[] = $connectorResource;
+            }
+
+            if ($matchedResources === []) {
+                continue;
+            }
+
+            sort($matchedResources, SORT_STRING);
+
             $blocks[] = [
                 'source' => 'active_leases',
                 'locator' => (string) $entry['locator'],
+                'portal' => $portal,
                 'line_id' => (string) $entry['line_id'],
                 'canonical_line_id' => $canonicalLineId,
+                'connector_code' => $connectorCode,
+                'lease_scope' => $leaseScope,
                 'expires_at' => $expiresAt,
+                'matched_resources' => $matchedResources,
             ];
         }
+
+        usort(
+            $blocks,
+            fn (array $left, array $right): int => strcmp(
+                implode('|', [
+                    (string) ($left['portal'] ?? ''),
+                    (string) ($left['canonical_line_id'] ?? ''),
+                    (string) ($left['connector_code'] ?? ''),
+                    (string) ($left['locator'] ?? ''),
+                ]),
+                implode('|', [
+                    (string) ($right['portal'] ?? ''),
+                    (string) ($right['canonical_line_id'] ?? ''),
+                    (string) ($right['connector_code'] ?? ''),
+                    (string) ($right['locator'] ?? ''),
+                ]),
+            ),
+        );
 
         return $blocks;
     }
@@ -853,6 +1031,7 @@ final class Bitrix24OpenLineIdCompatibilityService
         ?int $recordId,
         string $portal,
         string $lineId,
+        string $connectorCode,
         string $identity,
         bool $claiming,
         bool $usable,
@@ -866,6 +1045,7 @@ final class Bitrix24OpenLineIdCompatibilityService
             'portal' => $this->normalizePortal($portal),
             'line_id' => $lineId,
             'canonical_line_id' => Bitrix24OpenLineRoute::canonicalLineId($lineId),
+            'connector_code' => trim($connectorCode),
             'identity' => $identity,
             'claiming' => $claiming,
             'usable' => $usable,
