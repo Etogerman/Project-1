@@ -57,6 +57,7 @@ class Bitrix24OpenLineIdCompatibilityCommand extends Command
         );
         $this->line('Migration candidates: '.count($report['migrations'] ?? []));
         $this->line('Collisions: '.count($report['collisions'] ?? []));
+        $this->line('Блокирующие активные аренды: '.count($report['active_lease_blocks'] ?? []));
         $this->line('Invalid: '.count($report['invalid'] ?? []));
 
         if (($report['ready'] ?? false) !== true) {

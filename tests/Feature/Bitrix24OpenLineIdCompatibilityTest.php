@@ -42,7 +42,11 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
             'local-1' => $this->owner('local-1', '014'),
         ]);
         $leases = [
-            '014' => $this->lease('local-1', '014'),
+            '014' => $this->lease(
+                'local-1',
+                '014',
+                now()->subMinute()->timestamp,
+            ),
         ];
         $this->writeJson('route_registry.json', $registry);
         $this->writeJson('route_registry.previous.json', $registry);
@@ -101,7 +105,11 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
             'local-1' => $this->owner('local-1', ' 14 '),
         ]);
         $leases = [
-            ' 14 ' => $this->lease('local-1', ' 14 '),
+            ' 14 ' => $this->lease(
+                'local-1',
+                ' 14 ',
+                now()->subMinute()->timestamp,
+            ),
         ];
         $this->writeJson('route_registry.json', $registry);
         $this->writeJson('route_registry.previous.json', $registry);
@@ -128,6 +136,51 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
             'line_owner_key' => 'stagecrm.fvds.ru#14',
         ]);
         $this->assertSame([], $service->preflight($this->storageDirectory)['migrations']);
+    }
+
+    public function test_active_lease_blocks_line_id_migration_without_data_loss(): void
+    {
+        $routeId = $this->insertNonCanonicalDatabaseRoute('014');
+        $leases = [
+            '014' => $this->lease(
+                'local-1',
+                '014',
+                now()->addMinutes(5)->timestamp,
+            ),
+        ];
+        $this->writeJson('route_registry_line_leases.json', $leases);
+        $leasePath = $this->storageDirectory.'/route_registry_line_leases.json';
+        $leasesBefore = (string) file_get_contents($leasePath);
+        $artifactPath = $this->storageDirectory.'/active-lease-block.json';
+        $service = app(Bitrix24OpenLineIdCompatibilityService::class);
+
+        $preflight = $service->preflight($this->storageDirectory);
+
+        $this->assertFalse($preflight['ready']);
+        $this->assertSame([
+            [
+                'source' => 'active_leases',
+                'locator' => 'lease:014',
+                'line_id' => '014',
+                'canonical_line_id' => '14',
+                'expires_at' => $leases['014']['expires_at'],
+            ],
+        ], $preflight['active_lease_blocks']);
+
+        try {
+            $service->migrate($this->storageDirectory, $artifactPath);
+            $this->fail('Active lease must block LINE_ID migration.');
+        } catch (Bitrix24OpenLineIdCompatibilityException $exception) {
+            $this->assertSame('openlines_line_id_compatibility_blocked', $exception->errorCode);
+        }
+
+        $this->assertSame($leasesBefore, file_get_contents($leasePath));
+        $this->assertDatabaseHas('bitrix24_open_line_routes', [
+            'id' => $routeId,
+            'line_id' => '014',
+        ]);
+        $this->assertFileDoesNotExist($artifactPath);
+        $this->assertSame([], glob($this->storageDirectory.'/*.backup.*') ?: []);
     }
 
     public function test_read_only_preflight_can_write_verifiable_artifact_without_mutation(): void
@@ -464,6 +517,110 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
         $this->assertFileDoesNotExist($artifactPath);
     }
 
+    public function test_lease_preflight_matches_runtime_reader_schema(): void
+    {
+        $leases = [
+            '14' => [
+                ...$this->lease('local-1', '14'),
+                'owner_profile_key' => 'invalid owner',
+            ],
+            '15' => [
+                ...$this->lease('local-1', '15'),
+                'owner_callback_base_url' => '/',
+            ],
+            '16' => [
+                ...$this->lease('local-1', '16'),
+                'connector_code' => 'invalid connector',
+            ],
+            '17' => [
+                ...$this->lease('local-1', '17'),
+                'connector_type' => 'whatsapp',
+            ],
+            '18' => [
+                ...$this->lease('local-1', '18'),
+                'lease_scope' => 'unknown',
+            ],
+            '19' => [
+                ...$this->lease('local-1', '19'),
+                'token_hash' => 'invalid',
+            ],
+            '20' => [
+                ...$this->lease('local-1', '20'),
+                'expires_at' => (string) now()->addMinutes(5)->timestamp,
+            ],
+            '21' => [
+                ...$this->lease('local-1', '21'),
+                'line_id' => '22',
+            ],
+        ];
+        $this->writeJson('route_registry_line_leases.json', $leases);
+        $leasePath = $this->storageDirectory.'/route_registry_line_leases.json';
+        $before = (string) file_get_contents($leasePath);
+        $artifactPath = $this->storageDirectory.'/invalid-lease-schema.json';
+        $service = app(Bitrix24OpenLineIdCompatibilityService::class);
+
+        $preflight = $service->preflight($this->storageDirectory);
+
+        $this->assertFalse($preflight['ready']);
+        $this->assertCount(count($leases), $preflight['invalid']);
+
+        foreach (array_keys($leases) as $lineId) {
+            $this->assertContains([
+                'source' => 'active_leases',
+                'locator' => 'lease:'.$lineId,
+                'line_id' => 'invalid_lease',
+            ], $preflight['invalid']);
+        }
+
+        try {
+            $service->migrate($this->storageDirectory, $artifactPath);
+            $this->fail('Lease records rejected by runtime reader must block migration.');
+        } catch (Bitrix24OpenLineIdCompatibilityException $exception) {
+            $this->assertSame('openlines_line_id_compatibility_blocked', $exception->errorCode);
+        }
+
+        $this->assertSame($before, file_get_contents($leasePath));
+        $this->assertFileDoesNotExist($artifactPath);
+    }
+
+    public function test_lease_preflight_enforces_runtime_reader_limits(): void
+    {
+        $leases = [];
+
+        for ($lineId = 1; $lineId <= 1001; $lineId++) {
+            $leases[(string) $lineId] = $this->lease('local-1', (string) $lineId);
+        }
+
+        $this->writeJson('route_registry_line_leases.json', $leases);
+        $service = app(Bitrix24OpenLineIdCompatibilityService::class);
+        $tooManyLeases = $service->preflight($this->storageDirectory);
+        $resolvedStorageDirectory = realpath($this->storageDirectory);
+
+        $this->assertIsString($resolvedStorageDirectory);
+        $this->assertFalse($tooManyLeases['ready']);
+        $this->assertContains([
+            'source' => 'active_leases',
+            'locator' => $resolvedStorageDirectory.'/route_registry_line_leases.json',
+            'line_id' => 'too_many_leases',
+        ], $tooManyLeases['invalid']);
+
+        $oversizedLease = $this->lease('local-1', '14');
+        $oversizedLease['padding'] = str_repeat('x', 1048576);
+        $this->writeJson('route_registry_line_leases.json', [
+            '14' => $oversizedLease,
+        ]);
+        $oversizedFile = $service->preflight($this->storageDirectory);
+
+        $this->assertFalse($oversizedFile['ready']);
+        $this->assertSame([
+            [
+                'source' => 'active_leases',
+                'locator' => $resolvedStorageDirectory.'/route_registry_line_leases.json',
+                'line_id' => 'invalid_lease_file',
+            ],
+        ], $oversizedFile['invalid']);
+    }
+
     /**
      * @param  array<string, array<string, mixed>>  $owners
      * @return array<string, mixed>
@@ -506,8 +663,11 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
     /**
      * @return array<string, mixed>
      */
-    private function lease(string $ownerKey, string $lineId): array
-    {
+    private function lease(
+        string $ownerKey,
+        string $lineId,
+        ?int $expiresAt = null,
+    ): array {
         return [
             'line_id' => $lineId,
             'owner_profile_key' => $ownerKey,
@@ -516,7 +676,7 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
             'connector_type' => 'telegram',
             'lease_scope' => 'line_runtime',
             'token_hash' => str_repeat('a', 64),
-            'expires_at' => now()->addMinutes(5)->timestamp,
+            'expires_at' => $expiresAt ?? now()->addMinutes(5)->timestamp,
         ];
     }
 

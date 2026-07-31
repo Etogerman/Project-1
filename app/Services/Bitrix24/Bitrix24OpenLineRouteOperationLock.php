@@ -159,8 +159,12 @@ final class Bitrix24OpenLineRouteOperationLock
     private function stateTransitionConnectionName(): string
     {
         $defaultConnection = (string) config('database.default');
+        $connection = DB::connection($defaultConnection);
 
-        if (DB::connection($defaultConnection)->transactionLevel() > 0) {
+        if ($connection->transactionLevel() > 0
+            || ($connection->getDriverName() === 'sqlite'
+                && trim((string) $connection->getConfig('database')) === ':memory:')
+        ) {
             return $defaultConnection;
         }
 

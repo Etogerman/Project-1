@@ -124,6 +124,34 @@ class Bitrix24OpenLineRouteDatabasePortabilityTest extends TestCase
         $this->assertRouteQueriesArePortable($queries);
     }
 
+    public function test_short_state_transition_reuses_sqlite_memory_connection(): void
+    {
+        config()->set([
+            'database.connections.'.self::CONNECTION => [
+                'driver' => 'sqlite',
+                'database' => ':memory:',
+                'prefix' => '',
+                'foreign_key_constraints' => true,
+            ],
+            'database.connections.'.self::STATE_TRANSITION_CONNECTION => null,
+        ]);
+        DB::purge(self::STATE_TRANSITION_CONNECTION);
+        DB::purge(self::CONNECTION);
+        $this->app->forgetInstance(Bitrix24OpenLinesRouteRegistrySnapshotLock::class);
+        $this->createSqliteSchema();
+        $routeId = $this->insertRoute();
+
+        $route = app(MarkBitrix24OpenLineRouteMisconfiguredAction::class)->handle(
+            $routeId,
+            'SQLite memory transition',
+        );
+
+        $this->assertInstanceOf(Bitrix24OpenLineRoute::class, $route);
+        $this->assertSame(Bitrix24OpenLineRoute::STATUS_MISCONFIGURED, $route->status);
+        $this->assertSame(self::CONNECTION, $route->getConnectionName());
+        $this->assertNull(config('database.connections.'.self::STATE_TRANSITION_CONNECTION));
+    }
+
     public function test_connector_refresh_route_lookup_runs_on_sqlite_without_postgresql_system_columns(): void
     {
         $routeId = $this->insertRoute();
