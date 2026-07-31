@@ -13,6 +13,12 @@ use Throwable;
 
 final class Bitrix24OpenLineIdCompatibilityService
 {
+    private const MAX_LINE_LEASES = 1000;
+
+    private const MAX_LINE_LEASE_FILE_BYTES = 1048576;
+
+    private const OPENLINES_CALLBACK_PATH = '/callbacks/bitrix24/openlines';
+
     private const FILES = [
         'current_registry' => 'route_registry.json',
         'previous_registry' => 'route_registry.previous.json',
@@ -100,16 +106,20 @@ final class Bitrix24OpenLineIdCompatibilityService
         }
 
         [$migrations, $collisions] = $this->analyzeEntries($entries);
+        $activeLeaseBlocks = $this->activeLeaseBlocks($entries, $migrations);
 
         return [
             'schema_version' => 1,
             'generated_at' => now()->toAtomString(),
             'storage_directory' => $storageDirectory,
-            'ready' => $invalid === [] && $collisions === [],
+            'ready' => $invalid === []
+                && $collisions === []
+                && $activeLeaseBlocks === [],
             'source_counts' => $sourceCounts,
             'entries' => $entries,
             'migrations' => $migrations,
             'collisions' => $collisions,
+            'active_lease_blocks' => $activeLeaseBlocks,
             'invalid' => $invalid,
             'source_hashes' => $this->sourceHashes($storageDirectory, $entries),
         ];
@@ -167,7 +177,7 @@ final class Bitrix24OpenLineIdCompatibilityService
         if (($report['ready'] ?? false) !== true) {
             throw new Bitrix24OpenLineIdCompatibilityException(
                 'openlines_line_id_compatibility_blocked',
-                'Compatibility migration заблокирована invalid-значениями или collision.',
+                'Compatibility migration заблокирована invalid-значениями, collision или действующей арендой.',
             );
         }
 
@@ -573,20 +583,22 @@ final class Bitrix24OpenLineIdCompatibilityService
         $entries = [];
 
         foreach ($document as $key => $lease) {
-            if (! is_array($lease) || ! is_scalar($lease['line_id'] ?? $key)) {
+            $key = (string) $key;
+
+            if (! is_array($lease) || ! $this->validLeaseRecord($key, $lease)) {
                 $invalid[] = [
                     'source' => $source,
-                    'locator' => 'lease:'.(string) $key,
+                    'locator' => 'lease:'.$key,
                     'line_id' => 'invalid_lease',
                 ];
 
                 continue;
             }
 
-            $lineId = (string) ($lease['line_id'] ?? $key);
+            $lineId = (string) $lease['line_id'];
             $entry = $this->entry(
                 source: $source,
-                locator: 'lease:'.(string) $key,
+                locator: 'lease:'.$key,
                 recordId: null,
                 portal: $portal,
                 lineId: $lineId,
@@ -599,6 +611,7 @@ final class Bitrix24OpenLineIdCompatibilityService
                 claiming: true,
                 usable: true,
             );
+            $entry['lease_expires_at'] = $lease['expires_at'];
             $entries[] = $entry;
 
             if ($entry['canonical_line_id'] === null) {
@@ -611,6 +624,100 @@ final class Bitrix24OpenLineIdCompatibilityService
         }
 
         return $entries;
+    }
+
+    /**
+     * Match the runtime reader schema while still allowing a non-canonical
+     * LINE_ID/key pair to reach the explicit compatibility migration.
+     *
+     * @param  array<string, mixed>  $lease
+     */
+    private function validLeaseRecord(string $key, array $lease): bool
+    {
+        if (! array_key_exists('line_id', $lease)
+            || ! is_scalar($lease['line_id'])
+            || (string) $lease['line_id'] !== $key
+            || ! is_scalar($lease['owner_profile_key'] ?? null)
+            || ! is_scalar($lease['owner_callback_base_url'] ?? null)
+            || ! is_scalar($lease['connector_code'] ?? null)
+            || ! is_scalar($lease['connector_type'] ?? null)
+            || ! is_scalar($lease['token_hash'] ?? null)
+            || ! is_int($lease['expires_at'] ?? null)
+        ) {
+            return false;
+        }
+
+        if (array_key_exists('lease_scope', $lease)
+            && $lease['lease_scope'] !== null
+            && ! is_scalar($lease['lease_scope'])
+        ) {
+            return false;
+        }
+
+        $leaseScope = trim((string) ($lease['lease_scope'] ?? ''));
+        $leaseScope = $leaseScope === ''
+            ? Bitrix24OpenLineMutationAuthority::SCOPE_CONNECTOR_REGISTRATION
+            : $leaseScope;
+
+        return preg_match(
+            '/^[a-zA-Z0-9._-]{1,128}$/',
+            trim((string) $lease['owner_profile_key']),
+        ) === 1
+            && Bitrix24OpenLineRoute::isValidConnectorCode(
+                trim((string) $lease['connector_code']),
+            )
+            && in_array(trim((string) $lease['connector_type']), ['telegram', 'max'], true)
+            && in_array($leaseScope, [
+                Bitrix24OpenLineMutationAuthority::SCOPE_LINE_RUNTIME,
+                Bitrix24OpenLineMutationAuthority::SCOPE_CONNECTOR_REGISTRATION,
+            ], true)
+            && $this->normalizeLeaseCallbackBaseUrl(
+                (string) $lease['owner_callback_base_url'],
+            ) !== ''
+            && preg_match(
+                '/^[a-f0-9]{64}$/',
+                trim((string) $lease['token_hash']),
+            ) === 1;
+    }
+
+    private function normalizeLeaseCallbackBaseUrl(string $callbackBaseUrl): string
+    {
+        $callbackBaseUrl = trim($callbackBaseUrl);
+
+        if ($callbackBaseUrl === '') {
+            return '';
+        }
+
+        $parts = parse_url($callbackBaseUrl);
+
+        if (! is_array($parts)
+            || trim((string) ($parts['scheme'] ?? '')) === ''
+            || trim((string) ($parts['host'] ?? '')) === ''
+        ) {
+            return rtrim($callbackBaseUrl, '/');
+        }
+
+        $scheme = mb_strtolower((string) $parts['scheme']);
+        $host = mb_strtolower((string) $parts['host']);
+
+        if (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
+            $host = '['.$host.']';
+        }
+
+        $port = isset($parts['port']) ? ':'.(int) $parts['port'] : '';
+        $path = (string) ($parts['path'] ?? '');
+
+        if (rtrim($path, '/') === self::OPENLINES_CALLBACK_PATH) {
+            $path = '';
+        }
+
+        $normalized = $scheme.'://'.$host.$port;
+
+        if ($path !== '' && $path !== '/') {
+            $normalized .= '/'.trim($path, '/');
+        }
+
+        return rtrim($normalized, '/');
     }
 
     /**
@@ -689,6 +796,55 @@ final class Bitrix24OpenLineIdCompatibilityService
     }
 
     /**
+     * @param  list<array<string, mixed>>  $entries
+     * @param  list<array<string, mixed>>  $migrations
+     * @return list<array<string, mixed>>
+     */
+    private function activeLeaseBlocks(array $entries, array $migrations): array
+    {
+        $affectedLineIds = [];
+
+        foreach ($migrations as $migration) {
+            $canonicalLineId = $migration['to'] ?? null;
+
+            if (is_string($canonicalLineId)) {
+                $affectedLineIds[$canonicalLineId] = true;
+            }
+        }
+
+        if ($affectedLineIds === []) {
+            return [];
+        }
+
+        $now = now()->timestamp;
+        $blocks = [];
+
+        foreach ($entries as $entry) {
+            $canonicalLineId = $entry['canonical_line_id'] ?? null;
+            $expiresAt = $entry['lease_expires_at'] ?? null;
+
+            if (($entry['source'] ?? null) !== 'active_leases'
+                || ! is_string($canonicalLineId)
+                || ! isset($affectedLineIds[$canonicalLineId])
+                || ! is_int($expiresAt)
+                || $expiresAt <= $now
+            ) {
+                continue;
+            }
+
+            $blocks[] = [
+                'source' => 'active_leases',
+                'locator' => (string) $entry['locator'],
+                'line_id' => (string) $entry['line_id'],
+                'canonical_line_id' => $canonicalLineId,
+                'expires_at' => $expiresAt,
+            ];
+        }
+
+        return $blocks;
+    }
+
+    /**
      * @return array<string, mixed>
      */
     private function entry(
@@ -726,6 +882,20 @@ final class Bitrix24OpenLineIdCompatibilityService
             return [];
         }
 
+        if ($source === 'active_leases') {
+            $fileSize = @filesize($path);
+
+            if (! is_int($fileSize) || $fileSize > self::MAX_LINE_LEASE_FILE_BYTES) {
+                $invalid[] = [
+                    'source' => $source,
+                    'locator' => $path,
+                    'line_id' => 'invalid_lease_file',
+                ];
+
+                return [];
+            }
+        }
+
         try {
             $decoded = json_decode((string) file_get_contents($path), true, flags: JSON_THROW_ON_ERROR);
         } catch (JsonException $exception) {
@@ -746,6 +916,14 @@ final class Bitrix24OpenLineIdCompatibilityService
             ];
 
             return [];
+        }
+
+        if ($source === 'active_leases' && count($decoded) > self::MAX_LINE_LEASES) {
+            $invalid[] = [
+                'source' => $source,
+                'locator' => $path,
+                'line_id' => 'too_many_leases',
+            ];
         }
 
         return $decoded;
