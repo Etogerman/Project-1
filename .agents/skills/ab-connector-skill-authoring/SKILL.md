@@ -5,7 +5,7 @@ description: Create or update AB Connector repo skills under .agents/skills. Use
 
 # AB Connector Skill Authoring
 
-Use this skill to design focused repo-scoped skills for AB Connector. Keep the work aligned with `AGENTS.md` and `docs/task-delivery-workflow.md`.
+Use this skill to design focused repo-scoped skills for AB Connector. Keep the work aligned with `AGENTS.md`, `docs/workflow/README.md`, the current state module, and the remaining stages in `docs/task-delivery-workflow.md`.
 
 ## Workflow
 
@@ -30,8 +30,9 @@ Use this skill to design focused repo-scoped skills for AB Connector. Keep the w
    - Inputs and outputs: name the expected source docs, checks, and final answer shape.
 
 4. Keep the skill short.
-   - Do not copy large sections from `AGENTS.md` or `docs/task-delivery-workflow.md`.
+   - Do not copy large sections from `AGENTS.md`, state modules, or `docs/task-delivery-workflow.md`.
    - Route to canonical docs instead: tell Codex which local files and sections to read.
+   - For a modular workflow, route by stable state ID and load only the returned state document.
    - Prefer imperative steps.
    - Add scripts only when deterministic repeated automation is needed.
    - Add references only when the skill needs non-obvious detail that should not live in `SKILL.md`.

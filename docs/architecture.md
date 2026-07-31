@@ -36,8 +36,11 @@ Scheduler и queue workers являются частью локального и
 
 Канон инженерного знания живёт рядом с кодом:
 
-- `AGENTS.md` — верхнеуровневые ограничения и инварианты;
-- `docs/task-delivery-workflow.md` — подробный delivery-playbook;
+- `AGENTS.md` — короткая конституция с универсальными инвариантами;
+- `docs/workflow/README.md` — пошаговый маршрутизатор к небольшому модулю
+  текущего состояния;
+- `docs/task-delivery-workflow.md` — этапы delivery-playbook, ещё не вынесенные
+  в модуль;
 - `docs/runbooks/*` — повторяемые operational-процедуры;
 - `docs/reference/*` — справочные контексты, не полные ТЗ;
 - внешний `Project-1-specs` — полные ТЗ, статусы stream-ов и архив.

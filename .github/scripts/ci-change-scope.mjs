@@ -19,6 +19,7 @@ const PROCESS_ONLY_FILE_PATTERNS = [
   /^\.github\/scripts\/ab-readiness-check\.mjs$/,
   /^\.github\/scripts\/copilot-feasibility-spike\.mjs$/,
   /^\.github\/scripts\/copilot-merge-readiness\.mjs$/,
+  /^\.github\/scripts\/workflow-docs-check\.mjs$/,
   /^\.github\/workflows\/php-artisan-test\.ya?ml$/,
   /^\.github\/workflows\/release-process-guard\.ya?ml$/,
   /^\.github\/workflows\/ab-readiness-check\.ya?ml$/,
@@ -114,6 +115,12 @@ function selfTest() {
   });
 
   assert.deepEqual(classifyFiles([".github/copilot-instructions.md"]), {
+    scope: "process-only",
+    runPhpTests: false,
+    reason: "only process or CI files changed",
+  });
+
+  assert.deepEqual(classifyFiles([".github/scripts/workflow-docs-check.mjs"]), {
     scope: "process-only",
     runPhpTests: false,
     reason: "only process or CI files changed",

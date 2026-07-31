@@ -37,6 +37,11 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Check workflow documentation
+        run: |
+          node .github/scripts/workflow-docs-check.mjs --self-test
+          node .github/scripts/workflow-docs-check.mjs --check
+
       - name: Run self-test
         run: node .github/scripts/ab-readiness-check.mjs --self-test
 
