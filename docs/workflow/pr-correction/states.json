@@ -1,33 +1,233 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "workflow": "pr-correction",
   "entryState": "C01",
-  "transitionCount": 93,
+  "transitionCount": 107,
+  "externalExits": {
+    "main_process": {
+      "document": "docs/task-delivery-workflow.md",
+      "heading": "## Этап 12. Контрольные точки",
+      "purpose": "Вернуть готовый к merge снимок в основной процесс"
+    },
+    "main_process_stage_1": {
+      "document": "docs/task-delivery-workflow.md",
+      "heading": "## Этап 1. Классификация запроса",
+      "purpose": "Вернуть изменение объёма работ в классификацию основного процесса"
+    },
+    "main_process_spec_revision": {
+      "document": "docs/task-delivery-workflow.md",
+      "heading": "### Внешнее ТЗ",
+      "purpose": "Зафиксировать обязательную внешнюю ревизию ТЗ",
+      "resumeState": "G00"
+    },
+    "main_process_materialized_route": {
+      "document": "docs/task-delivery-workflow.md",
+      "heading": "## Этап 18. Закрытие stream",
+      "purpose": "Закрыть работу с материализованным результатом"
+    },
+    "main_process_no_result_closure": {
+      "document": "docs/task-delivery-workflow.md",
+      "heading": "### No-result terminal-route",
+      "purpose": "Закрыть работу после доказанного отсутствия результата"
+    }
+  },
   "states": {
-    "C01": { "name": "Регистрация сигнала", "actor": "Агент", "document": "docs/workflow/pr-correction/10-signal-and-qualification.md", "transitionCount": 1, "next": ["C02"] },
-    "C02": { "name": "Сбор доказательств", "actor": "Агент", "document": "docs/workflow/pr-correction/10-signal-and-qualification.md", "transitionCount": 5, "next": ["C02", "C03", "B01", "D01"] },
-    "B01": { "name": "Блокировка доказательств или доступа", "actor": "Назначенный владелец", "document": "docs/workflow/pr-correction/10-signal-and-qualification.md", "transitionCount": 2, "next": ["X03"], "dynamicNext": ["return_state"] },
-    "C03": { "name": "Техническая квалификация", "actor": "Агент", "document": "docs/workflow/pr-correction/10-signal-and-qualification.md", "transitionCount": 6, "next": ["C02", "C04", "C05", "C06", "C07", "D01"] },
-    "C04": { "name": "Доказательный ответ без изменения diff", "actor": "Агент", "document": "docs/workflow/pr-correction/10-signal-and-qualification.md", "transitionCount": 3, "next": ["C02", "C13", "D02"] },
-    "C05": { "name": "Операционное восстановление", "actor": "Назначенный владелец", "document": "docs/workflow/pr-correction/10-signal-and-qualification.md", "transitionCount": 3, "next": ["C02", "D02"], "dynamicNext": ["resume_state"] },
-    "C06": { "name": "Исправление метаданных PR", "actor": "Агент по явной команде", "document": "docs/workflow/pr-correction/10-signal-and-qualification.md", "transitionCount": 3, "next": ["C03", "C13", "D02"] },
-    "D01": { "name": "Решение по объёму работ, контракту или риску", "actor": "Пользователь", "document": "docs/workflow/pr-correction/20-delta-spec-and-decisions.md", "transitionCount": 7, "next": ["C04", "C07", "X02", "X03"] },
-    "C07": { "name": "Черновик delta-ТЗ", "actor": "Агент", "document": "docs/workflow/pr-correction/20-delta-spec-and-decisions.md", "transitionCount": 1, "next": ["C08"] },
-    "C08": { "name": "Критика delta-ТЗ", "actor": "Агент", "document": "docs/workflow/pr-correction/20-delta-spec-and-decisions.md", "transitionCount": 3, "next": ["C07", "C09", "D01"] },
-    "C09": { "name": "Итоговое delta-ТЗ", "actor": "Агент; пользователь в ручном режиме", "document": "docs/workflow/pr-correction/20-delta-spec-and-decisions.md", "transitionCount": 4, "next": ["C10", "D01", "D02", "X03"] },
-    "D02": { "name": "Разрешение или обязательное ручное действие", "actor": "Пользователь", "document": "docs/workflow/pr-correction/20-delta-spec-and-decisions.md", "transitionCount": 3, "next": ["C07", "X03"], "dynamicNext": ["resume_state"] },
-    "C10": { "name": "Локальная реализация", "actor": "Агент", "document": "docs/workflow/pr-correction/30-implementation-and-publication.md", "transitionCount": 4, "next": ["B01", "C07", "C11", "D01"] },
-    "C11": { "name": "Локальные тесты и авторская проверка", "actor": "Агент", "document": "docs/workflow/pr-correction/30-implementation-and-publication.md", "transitionCount": 5, "next": ["B01", "C07", "C10", "D01", "G01"] },
-    "G01": { "name": "Граница публикации исправления", "actor": "Агент", "document": "docs/workflow/pr-correction/30-implementation-and-publication.md", "transitionCount": 4, "next": ["B01", "C12", "C13", "D02"] },
-    "C12": { "name": "Commit и push исправления", "actor": "Агент в пределах разрешения", "document": "docs/workflow/pr-correction/30-implementation-and-publication.md", "transitionCount": 4, "next": ["B01", "C10", "C13", "D02"] },
-    "C13": { "name": "Идентичность снимка PR", "actor": "Агент", "document": "docs/workflow/pr-correction/40-snapshot-review-and-exit.md", "transitionCount": 4, "next": ["B01", "C06", "C12", "P01"] },
-    "P01": { "name": "CI текущего commit", "actor": "GitHub; результат проверяет пользователь", "document": "docs/workflow/pr-correction/40-snapshot-review-and-exit.md", "transitionCount": 7, "next": ["B02", "C01", "D03", "P01", "P02"] },
-    "B02": { "name": "Отсутствует обязательный CI", "actor": "Пользователь или администратор", "document": "docs/workflow/pr-correction/40-snapshot-review-and-exit.md", "transitionCount": 3, "next": ["D01", "P01", "X03"] },
-    "D03": { "name": "Ready и делегация текущего снимка", "actor": "Пользователь", "document": "docs/workflow/pr-correction/40-snapshot-review-and-exit.md", "transitionCount": 4, "next": ["P02", "X03"] },
-    "P02": { "name": "Проверка текущего снимка", "actor": "Назначенные ревьюеры", "document": "docs/workflow/pr-correction/40-snapshot-review-and-exit.md", "transitionCount": 5, "next": ["B01", "C01", "C13", "C14", "P02"] },
-    "C14": { "name": "Сводный технический вердикт", "actor": "Агент", "document": "docs/workflow/pr-correction/40-snapshot-review-and-exit.md", "transitionCount": 4, "next": ["C01", "C02", "D01", "X01"] },
-    "X01": { "name": "Возврат в основной процесс: готово к merge", "actor": "Пользователь выполняет merge", "document": "docs/workflow/pr-correction/40-snapshot-review-and-exit.md", "transitionCount": 3, "next": ["C01", "C13"], "exits": ["main_process"] },
-    "X02": { "name": "Возврат в полный цикл ТЗ или новый stream", "actor": "Пользователь и агент", "document": "docs/workflow/pr-correction/40-snapshot-review-and-exit.md", "transitionCount": 3, "next": ["C07", "X03"], "exits": ["main_process_stage_1"] },
-    "X03": { "name": "Контролируемая остановка", "actor": "Указанный владелец", "document": "docs/workflow/pr-correction/40-snapshot-review-and-exit.md", "transitionCount": 2, "next": [], "dynamicNext": ["return_state"], "exits": ["terminal"] }
+    "C01": {
+      "name": "Регистрация сигнала",
+      "actor": "Агент",
+      "document": "docs/workflow/pr-correction/10-signal-and-qualification.md",
+      "transitionCount": 1,
+      "next": ["C02"]
+    },
+    "C02": {
+      "name": "Сбор доказательств",
+      "actor": "Агент",
+      "document": "docs/workflow/pr-correction/10-signal-and-qualification.md",
+      "transitionCount": 5,
+      "next": ["C02", "C03", "B01", "D01"]
+    },
+    "B01": {
+      "name": "Блокировка доказательств или доступа",
+      "actor": "Назначенный владелец",
+      "document": "docs/workflow/pr-correction/10-signal-and-qualification.md",
+      "transitionCount": 2,
+      "next": ["X03"],
+      "dynamicNext": ["return_state"]
+    },
+    "C03": {
+      "name": "Техническая квалификация",
+      "actor": "Агент",
+      "document": "docs/workflow/pr-correction/10-signal-and-qualification.md",
+      "transitionCount": 6,
+      "next": ["C02", "C04", "C05", "C06", "C07", "D01"]
+    },
+    "C04": {
+      "name": "Доказательный ответ без изменения diff",
+      "actor": "Агент",
+      "document": "docs/workflow/pr-correction/10-signal-and-qualification.md",
+      "transitionCount": 3,
+      "next": ["C02", "C13", "D02"]
+    },
+    "C05": {
+      "name": "Операционное восстановление",
+      "actor": "Назначенный владелец",
+      "document": "docs/workflow/pr-correction/10-signal-and-qualification.md",
+      "transitionCount": 3,
+      "next": ["C02", "D02"],
+      "dynamicNext": ["resume_state"]
+    },
+    "C06": {
+      "name": "Исправление метаданных PR",
+      "actor": "Агент по явной команде",
+      "document": "docs/workflow/pr-correction/10-signal-and-qualification.md",
+      "transitionCount": 3,
+      "next": ["C03", "C13", "D02"]
+    },
+    "D01": {
+      "name": "Решение по объёму работ, контракту или риску",
+      "actor": "Пользователь",
+      "document": "docs/workflow/pr-correction/20-correction-spec-and-decisions.md",
+      "transitionCount": 7,
+      "next": ["C04", "C07", "X02", "X03"]
+    },
+    "C07": {
+      "name": "Черновик ТЗ исправления",
+      "actor": "Агент",
+      "document": "docs/workflow/pr-correction/20-correction-spec-and-decisions.md",
+      "transitionCount": 1,
+      "next": ["C08"]
+    },
+    "C08": {
+      "name": "Авторское ревью ТЗ исправления",
+      "actor": "Агент",
+      "document": "docs/workflow/pr-correction/20-correction-spec-and-decisions.md",
+      "transitionCount": 3,
+      "next": ["C07", "D01", "P03"]
+    },
+    "P03": {
+      "name": "Внешнее ревью ТЗ исправления",
+      "actor": "Claude и Gemini; запуск и квалификация — агент",
+      "document": "docs/workflow/pr-correction/25-external-spec-review.md",
+      "transitionCount": 6,
+      "next": ["P03", "C07", "D01", "B01", "X03", "C09"]
+    },
+    "C09": {
+      "name": "Итоговое ТЗ исправления",
+      "actor": "Агент; пользователь при требуемом выборе",
+      "document": "docs/workflow/pr-correction/20-correction-spec-and-decisions.md",
+      "transitionCount": 4,
+      "next": ["G00", "D01", "D02", "X03"]
+    },
+    "D02": {
+      "name": "Разрешение или обязательное ручное действие",
+      "actor": "Пользователь",
+      "document": "docs/workflow/pr-correction/20-correction-spec-and-decisions.md",
+      "transitionCount": 3,
+      "next": ["C07", "X03"],
+      "dynamicNext": ["resume_state"]
+    },
+    "G00": {
+      "name": "Проверка ТЗ, Spec и разрешений перед реализацией",
+      "actor": "Агент",
+      "document": "docs/workflow/pr-correction/27-implementation-entry-gate.md",
+      "transitionCount": 5,
+      "next": ["C10", "D01", "D02", "B01"],
+      "exits": ["main_process_spec_revision"]
+    },
+    "C10": {
+      "name": "Локальная реализация",
+      "actor": "Агент",
+      "document": "docs/workflow/pr-correction/30-implementation-and-publication.md",
+      "transitionCount": 4,
+      "next": ["B01", "C07", "C11", "D01"]
+    },
+    "C11": {
+      "name": "Локальные тесты и авторская проверка",
+      "actor": "Агент",
+      "document": "docs/workflow/pr-correction/30-implementation-and-publication.md",
+      "transitionCount": 5,
+      "next": ["B01", "C07", "C10", "D01", "G01"]
+    },
+    "G01": {
+      "name": "Граница публикации исправления",
+      "actor": "Агент",
+      "document": "docs/workflow/pr-correction/30-implementation-and-publication.md",
+      "transitionCount": 4,
+      "next": ["B01", "C12", "C13", "D02"]
+    },
+    "C12": {
+      "name": "Commit и push исправления",
+      "actor": "Агент в пределах разрешения",
+      "document": "docs/workflow/pr-correction/30-implementation-and-publication.md",
+      "transitionCount": 4,
+      "next": ["B01", "C10", "C13", "D02"]
+    },
+    "C13": {
+      "name": "Идентичность снимка PR",
+      "actor": "Агент",
+      "document": "docs/workflow/pr-correction/40-snapshot-review-and-exit.md",
+      "transitionCount": 4,
+      "next": ["B01", "C06", "C12", "P01"]
+    },
+    "P01": {
+      "name": "CI текущего commit",
+      "actor": "GitHub; результат проверяет пользователь",
+      "document": "docs/workflow/pr-correction/40-snapshot-review-and-exit.md",
+      "transitionCount": 7,
+      "next": ["B02", "C01", "D03", "P01", "P02"]
+    },
+    "B02": {
+      "name": "Отсутствует обязательный CI",
+      "actor": "Пользователь или администратор",
+      "document": "docs/workflow/pr-correction/40-snapshot-review-and-exit.md",
+      "transitionCount": 3,
+      "next": ["D01", "P01", "X03"]
+    },
+    "D03": {
+      "name": "Ready и делегация текущего снимка",
+      "actor": "Пользователь",
+      "document": "docs/workflow/pr-correction/40-snapshot-review-and-exit.md",
+      "transitionCount": 4,
+      "next": ["P02", "X03"]
+    },
+    "P02": {
+      "name": "Проверка текущего снимка",
+      "actor": "Назначенные ревьюеры",
+      "document": "docs/workflow/pr-correction/40-snapshot-review-and-exit.md",
+      "transitionCount": 5,
+      "next": ["B01", "C01", "C13", "C14", "P02"]
+    },
+    "C14": {
+      "name": "Сводный технический вердикт",
+      "actor": "Агент",
+      "document": "docs/workflow/pr-correction/40-snapshot-review-and-exit.md",
+      "transitionCount": 4,
+      "next": ["C01", "C02", "D01", "X01"]
+    },
+    "X01": {
+      "name": "Возврат в основной процесс: готово к merge",
+      "actor": "Пользователь выполняет merge",
+      "document": "docs/workflow/pr-correction/40-snapshot-review-and-exit.md",
+      "transitionCount": 3,
+      "next": ["C01", "C13"],
+      "exits": ["main_process"]
+    },
+    "X02": {
+      "name": "Возврат в полный цикл ТЗ или новый stream",
+      "actor": "Пользователь и агент",
+      "document": "docs/workflow/pr-correction/40-snapshot-review-and-exit.md",
+      "transitionCount": 3,
+      "next": ["C07", "X03"],
+      "exits": ["main_process_stage_1"]
+    },
+    "X03": {
+      "name": "Контролируемая остановка",
+      "actor": "Указанный владелец",
+      "document": "docs/workflow/pr-correction/40-snapshot-review-and-exit.md",
+      "transitionCount": 5,
+      "next": ["B01", "X03"],
+      "dynamicNext": ["return_state"],
+      "exits": ["main_process_materialized_route", "main_process_no_result_closure"]
+    }
   }
 }
