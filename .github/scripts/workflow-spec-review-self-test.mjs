@@ -409,7 +409,9 @@ async function main() {
       assert(!row.envKeys.includes("ANTHROPIC_API_KEY"));
       assert(!row.envKeys.includes("GEMINI_API_KEY"));
       assert(!row.envKeys.includes("GOOGLE_APPLICATION_CREDENTIALS"));
+      assert(!row.envKeys.includes("AWS_ACCESS_KEY_ID"));
       assert(!row.envKeys.includes("NODE_OPTIONS"));
+      assert(!row.envKeys.includes("DYLD_INSERT_LIBRARIES"));
       if (row.role === "gemini") assert(!row.envKeys.includes("CLAUDE_CODE_OAUTH_TOKEN"));
     }
     const logLengthBeforeReuse = readFileSync(logPath).length;
@@ -475,6 +477,7 @@ async function main() {
     const cancelled = await executeReviewRun({ ...common, runId: "cancel-run", hardTimeoutMs: 3_000, geminiPrintTimeout: "2s", signal: controller.signal });
     assert.equal(cancelled.status, "cancelled_by_user");
     assert.equal(cancelled.target, "X03");
+    assert.equal(cancelled.stopMode, "final_cancellation");
     assert.equal(cancelled.qualificationRequired, false);
     assert.deepEqual(readdirSync(join(cancelled.reviewRoot, "results")), []);
 
