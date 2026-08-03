@@ -79,12 +79,16 @@
 node .github/scripts/workflow-docs-check.mjs --self-test
 node .github/scripts/workflow-docs-check.mjs --check
 node .github/scripts/workflow-docs-check.mjs --mermaid
+node .github/scripts/workflow-spec-review-self-test.mjs
+node .github/scripts/workflow-spec-review-gates-self-test.mjs
 ```
 
 Проверка подтверждает существование состояний и документов, допустимость всех
 переходов, достижимость состояний, наличие заголовков состояния в нужных
-модулях и отсутствие сломанных локальных Markdown-ссылок. Последняя команда
-строит актуальную Mermaid-схему из того же реестра без отдельной ручной копии.
+модулях, обязательные шлюзы и отсутствие сломанных локальных Markdown-ссылок.
+Отдельные self-test проверяют внешний review, классификации, неизменяемые gate,
+exact-tree проверки и согласованность `activeRunId`. Mermaid-команда строит
+актуальную схему из того же реестра без отдельной ручной копии.
 
 ## Граница пилота
 

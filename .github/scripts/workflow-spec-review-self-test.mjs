@@ -22,16 +22,26 @@ import {
   ENV_ALLOWLIST,
   GEMINI_PRINT_TIMEOUT,
   HARD_TIMEOUT_MS,
+  PROCESS_POLICY,
+  assertCanonicalPrompt,
+  assertGroupSignalIdentity,
   assertNodeVersion,
+  assertSignalTargetIdentity,
   buildClaudeArgs,
   buildGeminiArgs,
+  buildQualification,
   buildReviewIdentity,
   buildReviewerEnvironment,
   canonicalJson,
   executeReviewRun,
   finalizeReviewCycle,
   materializeTree,
+  jcsIdentity,
+  parseGitTree,
+  parseReviewerResponse,
+  qualifyReviewRun,
   readStrictPrompt,
+  readSystemProcessIdentity,
   resolveSettingsPaths,
   scanSecrets,
   settingsConfigurationSha256,
@@ -39,7 +49,10 @@ import {
   startProcessGroup,
   validateGeminiInvocation,
   validateGeminiSettings,
+  validateQualification,
+  validateReviewManifest,
   validateReviewerResponse,
+  validateSafeInvocation,
   verifyFinalDirectory,
   verifySnapshot,
 } from "./workflow-spec-review.mjs";
@@ -110,14 +123,13 @@ if (mode === "hang") {
 } else {
   const emit = () => {
     const manifest = JSON.parse(fs.readFileSync(path.join(process.cwd(), "input", "manifest.json"), "utf8"));
-    console.log("technical preface");
     console.log(mode === "wrong-identity" ? manifest.identity + "-wrong" : manifest.identity);
     console.log("REVIEW_FINDINGS");
-    console.log("findings отсутствуют");
+    console.log("[]");
     console.log("REVIEW_CHECKED_SCOPE");
-    console.log("проверен весь снимок");
+    console.log('["проверен весь снимок"]');
     console.log("REVIEW_UNCHECKED_SCOPE");
-    console.log("нет");
+    console.log('["не проверялись внешние системы"]');
     console.log("REVIEW_VERDICT");
     console.log("блокеров нет");
   };
@@ -177,18 +189,49 @@ function createSettings(root) {
 
 function validResponse(identity) {
   return Buffer.from([
-    "preface",
     identity,
     "REVIEW_FINDINGS",
-    "нет",
+    "[]",
     "REVIEW_CHECKED_SCOPE",
-    "всё",
+    '["всё"]',
     "REVIEW_UNCHECKED_SCOPE",
-    "ничего",
+    '["внешние системы"]',
     "REVIEW_VERDICT",
     "блокеров нет",
     "",
   ].join("\n"));
+}
+
+function responseWithFindings(identity, findings, verdict = findings.some((finding) => ["P0", "P1", "P2"].includes(finding.priority)) ? "нужны правки" : "блокеров нет") {
+  return Buffer.from([
+    identity,
+    "REVIEW_FINDINGS",
+    JSON.stringify(findings),
+    "REVIEW_CHECKED_SCOPE",
+    '["весь снимок"]',
+    "REVIEW_UNCHECKED_SCOPE",
+    '["внешние системы"]',
+    "REVIEW_VERDICT",
+    verdict,
+    "",
+  ].join("\n"));
+}
+
+function reidentify(value) {
+  const copy = structuredClone(value);
+  copy.identity = "";
+  copy.identity = jcsIdentity(copy);
+  return copy;
+}
+
+function withoutPath(value, dottedPath) {
+  const copy = structuredClone(value);
+  const parts = dottedPath.split(".");
+  const key = parts.pop();
+  let cursor = copy;
+  for (const part of parts) cursor = cursor[part];
+  delete cursor[key];
+  return copy;
 }
 
 function secretFixture(root, value) {
@@ -226,6 +269,12 @@ async function main() {
     writeFileSync(promptBoundary, Buffer.from([0xc3, 0x28]));
     expectThrow(() => readStrictPrompt(promptBoundary), "PROMPT_UTF8");
 
+    const promptSource = resolve(process.cwd(), "docs/workflow/pr-correction/external-spec-review-prompt.md");
+    assert(assertCanonicalPrompt(readStrictPrompt(promptSource).bytes));
+    writeFileSync(promptBoundary, readFileSync(promptSource));
+    writeFileSync(promptBoundary, Buffer.concat([readFileSync(promptBoundary), Buffer.from("\n")]));
+    expectThrow(() => assertCanonicalPrompt(readStrictPrompt(promptBoundary).bytes), "PROMPT_HASH");
+
     const parentEnvironment = {
       HOME: "/safe/home",
       PATH: "/safe/bin",
@@ -247,13 +296,26 @@ async function main() {
     const identity = `TZ review snapshot: ${"x".repeat(80)}`;
     assert(validateReviewerResponse(validResponse(identity), identity));
     for (const mutate of [
-      (text) => text.replace("REVIEW_CHECKED_SCOPE\nвсё\n", ""),
-      (text) => text.replace("REVIEW_FINDINGS\nнет", "REVIEW_FINDINGS\nREVIEW_CHECKED_SCOPE\nвсё"),
+      (text) => text.replace('REVIEW_CHECKED_SCOPE\n["всё"]\n', ""),
+      (text) => text.replace("REVIEW_FINDINGS\n[]", 'REVIEW_FINDINGS\nREVIEW_CHECKED_SCOPE\n["всё"]'),
       (text) => text.replace("блокеров нет", "неизвестно"),
       (text) => text.replace("блокеров нет", " блокеров нет "),
       (text) => `${text}\n${identity}`,
       (text) => text.replace("REVIEW_VERDICT", "REVIEW_FINDINGS"),
     ]) assert(!validateReviewerResponse(Buffer.from(mutate(validResponse(identity).toString("utf8"))), identity));
+    const p1Finding = { id: "P1-01", priority: "P1", summary: "Блокирующий пробел", evidence: ["current/a.md:1"], minimalFix: "Исправить контракт" };
+    const p3Finding = { id: "P3-01", priority: "P3", summary: "Неблокирующее улучшение", evidence: ["current/b.md:2"], minimalFix: "Записать follow-up" };
+    assert.equal(parseReviewerResponse(responseWithFindings(identity, [p1Finding]), identity).verdict, "нужны правки");
+    assert.equal(parseReviewerResponse(responseWithFindings(identity, [p3Finding]), identity).verdict, "блокеров нет");
+    for (const invalid of [
+      responseWithFindings(identity, [p1Finding], "блокеров нет"),
+      responseWithFindings(identity, [], "нужны правки"),
+      responseWithFindings(identity, [p1Finding, p1Finding]),
+      responseWithFindings(identity, [{ ...p1Finding, evidence: [] }]),
+      responseWithFindings(identity, [{ ...p1Finding, extra: true }]),
+      Buffer.from(`Преамбула\n${validResponse(identity).toString("utf8")}`),
+      Buffer.from(validResponse(identity).toString("utf8").replace('["всё"]', "not-json")),
+    ]) assert(!validateReviewerResponse(invalid, identity));
 
     const geminiArgs = buildGeminiArgs("/review", "prompt");
     assert.equal(geminiArgs[geminiArgs.indexOf("--print-timeout") + 1], GEMINI_PRINT_TIMEOUT);
@@ -261,7 +323,7 @@ async function main() {
     for (const forbidden of ["--project", "--dangerously-skip-permissions", "--command", "permissions.allow=*"]) {
       expectThrow(() => validateGeminiInvocation([...geminiArgs.slice(0, -2), forbidden, "x", ...geminiArgs.slice(-2)]), "GEMINI_ARGV");
     }
-    expectThrow(() => validateGeminiInvocation(buildGeminiArgs("/review", "prompt", "25m"), HARD_TIMEOUT_MS), "TIMEOUT_ORDER");
+    expectThrow(() => validateGeminiInvocation(buildGeminiArgs("/review", "prompt", "30m"), HARD_TIMEOUT_MS), "TIMEOUT_ORDER");
     assert.equal(buildClaudeArgs("/review", "prompt").at(-1), "prompt");
 
     const secretRoot = join(temporary, "secret-root");
@@ -277,31 +339,30 @@ async function main() {
       assert.deepEqual(scanSecrets(secretRoot), []);
     }
 
-    const promptSource = resolve(process.cwd(), "docs/workflow/pr-correction/external-spec-review-prompt.md");
     const source = createRepository(temporary, promptSource);
     const snapshotRoot = join(temporary, "snapshot");
     const capture = join(temporary, "snapshot-capture");
-    const materialized = materializeTree(source.repo, source.head, snapshotRoot, capture);
+    const materialized = await materializeTree(source.repo, source.head, snapshotRoot, capture);
     assert(existsSync(join(snapshotRoot, "hidden.txt")), "export-ignore файл должен попасть в snapshot");
     assert(lstatSync(join(snapshotRoot, "internal-link")).isSymbolicLink(), "внутренний symlink должен сохраниться");
-    assert.equal(verifySnapshot(source.repo, source.head, snapshotRoot, materialized.treeBytes).entries.length, materialized.count);
+    assert.equal((await verifySnapshot(source.repo, source.head, snapshotRoot, materialized.treeBytes)).entries.length, materialized.count);
     writeFileSync(join(snapshotRoot, "head.txt"), "tampered\n");
-    expectThrow(() => verifySnapshot(source.repo, source.head, snapshotRoot, materialized.treeBytes), "SNAPSHOT_MISMATCH");
+    await expectReject(verifySnapshot(source.repo, source.head, snapshotRoot, materialized.treeBytes), "SNAPSHOT_MISMATCH");
     const modeSnapshot = join(temporary, "snapshot-mode");
-    const modeMaterialized = materializeTree(source.repo, source.head, modeSnapshot, join(temporary, "snapshot-mode-capture"));
+    const modeMaterialized = await materializeTree(source.repo, source.head, modeSnapshot, join(temporary, "snapshot-mode-capture"));
     chmodSync(join(modeSnapshot, "head.txt"), 0o755);
-    expectThrow(() => verifySnapshot(source.repo, source.head, modeSnapshot, modeMaterialized.treeBytes), "SNAPSHOT_MISMATCH");
+    await expectReject(verifySnapshot(source.repo, source.head, modeSnapshot, modeMaterialized.treeBytes), "SNAPSHOT_MISMATCH");
     const pathSnapshot = join(temporary, "snapshot-path");
-    const pathMaterialized = materializeTree(source.repo, source.head, pathSnapshot, join(temporary, "snapshot-path-capture"));
+    const pathMaterialized = await materializeTree(source.repo, source.head, pathSnapshot, join(temporary, "snapshot-path-capture"));
     renameSync(join(pathSnapshot, "head.txt"), join(pathSnapshot, "renamed.txt"));
-    expectThrow(() => verifySnapshot(source.repo, source.head, pathSnapshot, pathMaterialized.treeBytes), "SNAPSHOT_PATH");
+    await expectReject(verifySnapshot(source.repo, source.head, pathSnapshot, pathMaterialized.treeBytes), "SNAPSHOT_PATH");
     const outsideTarget = join(temporary, "outside-snapshot.txt");
     writeFileSync(outsideTarget, "outside\n");
     symlinkSync(outsideTarget, join(source.repo, "outside-link"));
     git(source.repo, ["add", "outside-link"]);
     git(source.repo, ["commit", "-qm", "unsafe symlink"]);
     const unsafeHead = git(source.repo, ["rev-parse", "HEAD"]);
-    expectThrow(() => materializeTree(source.repo, unsafeHead, join(temporary, "unsafe-snapshot"), join(temporary, "unsafe-capture")), "SNAPSHOT_SYMLINK");
+    await expectReject(materializeTree(source.repo, unsafeHead, join(temporary, "unsafe-snapshot"), join(temporary, "unsafe-capture")), "SNAPSHOT_SYMLINK");
 
     const settingsPaths = createSettings(temporary);
     assert.equal(settingsPaths.claude, join(temporary, "home", ".claude", "settings.json"));
@@ -381,10 +442,13 @@ async function main() {
     assert.equal(existsSync(logPath) ? readFileSync(logPath).length : 0, logBeforeSecret, "secret scan должен завершиться до первого client spawn");
 
     writeFileSync(modePath, "preflight-mcp\n");
-    await expectReject(executeReviewRun({ ...common, runId: "preflight-mcp-run", hardTimeoutMs: 3_000, geminiPrintTimeout: "2s" }), "CLIENT_PREFLIGHT");
+    const preflightMcp = await executeReviewRun({ ...common, runId: "preflight-mcp-run", hardTimeoutMs: 3_000, geminiPrintTimeout: "2s" });
+    assert.equal(preflightMcp.status, "blocked");
+    assert.equal(preflightMcp.target, "B01");
     assert.deepEqual(readdirSync(join(taskRoot, "runs", "preflight-mcp-run", "review-root", "results")), []);
 
     writeFileSync(modePath, "valid\n");
+    mkdirSync(join(taskRoot, "runs", "valid-run"));
     const successful = await executeReviewRun({ ...common, runId: "valid-run", hardTimeoutMs: 3_000, geminiPrintTimeout: "2s" });
     assert.equal(successful.status, "completed");
     assert.equal(successful.target, "P03");
@@ -392,7 +456,10 @@ async function main() {
     const successfulClientManifest = JSON.parse(readFileSync(join(successful.reviewRoot, "input", "manifest.json"), "utf8"));
     assert.match(successfulClientManifest.clients.claude.settingsConfigurationSha256, /^[0-9a-f]{64}$/);
     assert.match(successfulClientManifest.clients.gemini.settingsConfigurationSha256, /^[0-9a-f]{64}$/);
-    assert.deepEqual(readdirSync(join(successful.reviewRoot, "results")).sort(), ["claude.md", "gemini.md"]);
+    assert.deepEqual(readdirSync(join(successful.reviewRoot, "results")).sort(), []);
+    assert(existsSync(join(successful.runRoot, "author-review.md")));
+    assert(existsSync(join(successful.runRoot, "review-prompt.md")));
+    assert(existsSync(join(successful.runRoot, "review-manifest.json")));
     assert(!existsSync(join(successful.reviewRoot, "author-review.md")));
     assert(!existsSync(join(successful.reviewRoot, "input", "author-review.md")));
     assert(existsSync(join(taskRoot, "runs", "valid-run", "capture", "preflight-started.json")));
@@ -414,9 +481,136 @@ async function main() {
       assert(!row.envKeys.includes("DYLD_INSERT_LIBRARIES"));
       if (row.role === "gemini") assert(!row.envKeys.includes("CLAUDE_CODE_OAUTH_TOKEN"));
     }
+    const reviewManifestBytes = readFileSync(join(successful.runRoot, "review-manifest.json"));
+    const reviewManifest = validateReviewManifest(JSON.parse(reviewManifestBytes.toString("utf8")));
+    const requiredManifestPaths = [
+      ...["schemaVersion", "base", "head", "counts", "algorithms", "hashes", "clients", "processPolicy", "identity"],
+      ...["current", "base"].map((key) => `counts.${key}`),
+      ...["tree", "files", "clients"].map((key) => `algorithms.${key}`),
+      ...["current", "base_tree", "patch", "spec", "author_review", "prompt", "clients"].map((key) => `hashes.${key}`),
+      ...["authMode", "binary", "model", "mcp", "settingsPath", "settingsConfigurationSha256", "tools", "transport", "version", "preflight"].map((key) => `clients.claude.${key}`),
+      ...["auth", "readSmoke", "settingsStable"].map((key) => `clients.claude.preflight.${key}`),
+      ...["apiBilling", "binary", "model", "modelListSha256", "sandbox", "settingsPath", "settingsConfigurationSha256", "transport", "version", "preflight"].map((key) => `clients.gemini.${key}`),
+      ...["model", "readSmoke", "settingsStable"].map((key) => `clients.gemini.preflight.${key}`),
+      ...["launchMode", "mcpMode", "unknownLongLivedDescendant", "snapshotCommandSeconds", "preflightSeconds", "clientSeconds", "qualificationSeconds", "finalDrainSeconds", "overallSeconds", "terminateGraceSeconds", "killGraceSeconds", "maxOutputBytesPerProcess", "clients"].map((key) => `processPolicy.${key}`),
+      "processPolicy.clients.claude",
+      "processPolicy.clients.gemini",
+      ...["resolvedExecutable", "executableSha256", "allowedDescendantExecutables"].flatMap((key) => [`processPolicy.clients.claude.${key}`, `processPolicy.clients.gemini.${key}`]),
+    ];
+    for (const path of requiredManifestPaths) {
+      const missing = withoutPath(reviewManifest, path);
+      expectThrow(() => validateReviewManifest(path === "identity" ? missing : reidentify(missing)), "REVIEW_MANIFEST");
+    }
+    for (const mutate of [
+      (value) => { delete value.hashes.author_review; },
+      (value) => { value.algorithms.tree = "sha256(other)"; },
+      (value) => { value.clients.claude.extra = true; },
+      (value) => { delete value.clients.gemini.preflight.readSmoke; },
+      (value) => { value.clients.claude.preflight.settingsStable = false; },
+      (value) => { value.clients.gemini.model = "other-model"; },
+      (value) => { value.base = "a".repeat(41); },
+      (value) => { value.processPolicy.clients.claude.allowedDescendantExecutables = ["/bin/echo", "/bin/echo"]; },
+      (value) => { value.processPolicy.clients.gemini.resolvedExecutable = "relative"; },
+      (value) => { value.processPolicy.extra = true; },
+      (value) => { value.extra = true; },
+    ]) {
+      const invalid = structuredClone(reviewManifest);
+      mutate(invalid);
+      expectThrow(() => validateReviewManifest(reidentify(invalid)), "REVIEW_MANIFEST");
+    }
+    const wrongAuthorHash = structuredClone(reviewManifest);
+    wrongAuthorHash.hashes.author_review = "0".repeat(64);
+    expectThrow(() => validateReviewManifest(reidentify(wrongAuthorHash), {
+      authorReviewBytes: readFileSync(join(successful.runRoot, "author-review.md")),
+    }), "REVIEW_MANIFEST");
+    for (const key of [
+      "snapshotCommandSeconds", "preflightSeconds", "clientSeconds", "qualificationSeconds",
+      "finalDrainSeconds", "overallSeconds", "terminateGraceSeconds", "killGraceSeconds",
+      "maxOutputBytesPerProcess",
+    ]) {
+      const missing = structuredClone(reviewManifest);
+      delete missing.processPolicy[key];
+      expectThrow(() => validateReviewManifest(reidentify(missing)), "REVIEW_MANIFEST");
+      const changed = structuredClone(reviewManifest);
+      changed.processPolicy[key] += 1;
+      expectThrow(() => validateReviewManifest(reidentify(changed)), "REVIEW_MANIFEST");
+    }
+    const wrongIdentity = structuredClone(reviewManifest);
+    wrongIdentity.identity = "0".repeat(64);
+    expectThrow(() => validateReviewManifest(wrongIdentity), "REVIEW_MANIFEST");
+    expectThrow(() => parseGitTree(Buffer.from(`100644 blob ${"a".repeat(41)}\tbad-oid\0`)), "TREE_FORMAT");
+    const p1Response = responseWithFindings(reviewManifest.identity, [p1Finding]);
+    const p3Response = responseWithFindings(reviewManifest.identity, [p3Finding]);
+    const qualificationContext = { reviewManifestBytes, claudeBytes: p1Response, geminiBytes: p3Response };
+    const currentDisposition = { source: "claude", findingId: "P1-01", priority: "P1", decision: "confirmed_current_scope", target: "C07", evidenceRefs: ["claude.md#P1-01"], rationale: "Подтверждено кодом" };
+    const p3Disposition = { source: "gemini", findingId: "P3-01", priority: "P3", decision: "recorded_non_blocking", target: null, evidenceRefs: ["gemini.md#P3-01"], rationale: "Неблокирующий follow-up" };
+    const currentQualification = buildQualification({ ...qualificationContext, dispositions: [currentDisposition, p3Disposition] });
+    assert.equal(currentQualification.outcome.state, "C07");
+    assert(validateQualification(currentQualification, qualificationContext));
+    const requiredQualificationPaths = [
+      "schemaVersion", "reviewManifestSha256", "identity", "reviews", "dispositions", "outcome",
+      ...["sha256", "verdict", "findingIds"].flatMap((key) => [`reviews.claude.${key}`, `reviews.gemini.${key}`]),
+      ...["source", "findingId", "priority", "decision", "target", "evidenceRefs", "rationale"].map((key) => `dispositions.0.${key}`),
+      "outcome.state", "outcome.reason",
+    ];
+    for (const path of requiredQualificationPaths) {
+      const missing = withoutPath(currentQualification, path);
+      expectThrow(() => validateQualification(path === "identity" ? missing : reidentify(missing), qualificationContext), "QUALIFICATION");
+    }
+    const riskQualification = buildQualification({
+      ...qualificationContext,
+      dispositions: [currentDisposition, { ...p3Disposition, decision: "confirmed_scope_or_risk", target: "D01" }],
+    });
+    assert.equal(riskQualification.outcome.state, "D01");
+    const unresolvedQualification = buildQualification({
+      ...qualificationContext,
+      dispositions: [{ ...currentDisposition, decision: "unresolved", target: "B01" }, { ...p3Disposition, decision: "confirmed_scope_or_risk", target: "D01" }],
+    });
+    assert.equal(unresolvedQualification.outcome.state, "B01");
+    for (const mutate of [
+      (value) => { value.reviews.claude.findingIds = []; },
+      (value) => { value.reviews.claude.findingIds = ["UNKNOWN"]; },
+      (value) => { value.reviews.claude.findingIds = ["P1-01", "P1-01"]; },
+      (value) => { value.dispositions.pop(); },
+      (value) => { value.dispositions.reverse(); },
+      (value) => { value.dispositions.push(structuredClone(value.dispositions[0])); },
+      (value) => { value.dispositions[0].priority = "P2"; },
+      (value) => { value.dispositions[0].decision = "recorded_non_blocking"; value.dispositions[0].target = null; },
+      (value) => { value.dispositions[1].decision = "confirmed_current_scope"; value.dispositions[1].target = "C07"; },
+      (value) => { value.dispositions[0].target = "D01"; },
+      (value) => { value.outcome.state = "C09"; },
+      (value) => { value.outcome.reason = "Произвольный успех"; },
+      (value) => { value.extra = true; },
+    ]) {
+      const invalid = structuredClone(currentQualification);
+      mutate(invalid);
+      expectThrow(() => validateQualification(reidentify(invalid), qualificationContext), "QUALIFICATION");
+    }
+    const qualified = qualifyReviewRun({ taskRoot, runId: "valid-run", dispositions: [] });
+    assert.equal(qualified.target, "C09");
+    assert.deepEqual(readdirSync(join(successful.reviewRoot, "results")).sort(), ["claude.md", "consolidated.md", "gemini.md", "qualification.json"]);
+    const qualification = JSON.parse(readFileSync(join(successful.reviewRoot, "results", "qualification.json"), "utf8"));
+    assert.equal(qualification.outcome.state, "C09");
+    assert(validateQualification(qualification, {
+      reviewManifestBytes: readFileSync(join(successful.runRoot, "review-manifest.json")),
+      claudeBytes: readFileSync(join(successful.reviewRoot, "results", "claude.md")),
+      geminiBytes: readFileSync(join(successful.reviewRoot, "results", "gemini.md")),
+    }));
     const logLengthBeforeReuse = readFileSync(logPath).length;
     await expectReject(executeReviewRun({ ...common, runId: "valid-run", hardTimeoutMs: 3_000, geminiPrintTimeout: "2s" }), null);
     assert.equal(readFileSync(logPath).length, logLengthBeforeReuse, "повторный run-id должен блокироваться до client spawn");
+
+    const partialStart = await executeReviewRun({
+      ...common,
+      runId: "partial-start-run",
+      hardTimeoutMs: 3_000,
+      geminiPrintTimeout: "2s",
+      beforeSecondClientStart: () => rmSync(geminiPath),
+    });
+    assert.equal(partialStart.target, "B01");
+    assert.equal(partialStart.errorCode, "PARTIAL_START");
+    assert.deepEqual(readdirSync(join(partialStart.reviewRoot, "results")), []);
+    createFakeClient(geminiPath, "gemini", logPath, modePath, childPidPath);
 
     for (const [mode, runId] of [["invalid", "invalid-run"], ["empty", "empty-run"], ["error", "error-run"], ["wrong-identity", "wrong-identity-run"], ["hook-stderr", "hook-stderr-run"], ["leak-token", "leak-token-run"]]) {
       writeFileSync(modePath, `${mode}\n`);
@@ -463,6 +657,7 @@ async function main() {
     assert.deepEqual(readdirSync(join(settingsChanged.reviewRoot, "results")), []);
     writeFileSync(settingsPaths.gemini, "{}\n");
 
+    writeFileSync(childPidPath, "");
     writeFileSync(modePath, "hang\n");
     const timedOut = await executeReviewRun({ ...common, runId: "timeout-run", hardTimeoutMs: 300, geminiPrintTimeout: "200ms" });
     assert.equal(timedOut.target, "B01");
@@ -471,6 +666,10 @@ async function main() {
     for (const pid of readFileSync(childPidPath, "utf8").trim().split("\n").map(Number)) {
       assert.throws(() => process.kill(pid, 0));
     }
+
+    const overallTimedOut = await executeReviewRun({ ...common, runId: "overall-timeout-run", hardTimeoutMs: 3_000, overallTimeoutMs: 300, geminiPrintTimeout: "2s" });
+    assert.equal(overallTimedOut.status, "blocked");
+    assert.equal(overallTimedOut.target, "B01");
 
     const controller = new AbortController();
     setTimeout(() => controller.abort(), 150);
@@ -485,12 +684,15 @@ async function main() {
     assert(existsSync(join(taskRoot, "runs")), "неполная финализация не удаляет runs");
     writeFileSync(modePath, "valid\n");
     const provenance = await executeReviewRun({ ...common, runId: "provenance-run", hardTimeoutMs: 3_000, geminiPrintTimeout: "2s" });
-    const provenanceManifest = JSON.parse(readFileSync(join(provenance.reviewRoot, "input", "manifest.json"), "utf8"));
+    const provenanceManifest = validateReviewManifest(JSON.parse(readFileSync(join(provenance.runRoot, "review-manifest.json"), "utf8")));
+    qualifyReviewRun({ taskRoot, runId: "provenance-run", dispositions: [] });
+    const provenanceConsolidated = readFileSync(join(provenance.reviewRoot, "results", "consolidated.md"));
     writeFileSync(join(provenance.reviewRoot, "results", "consolidated.md"), "");
     expectThrow(() => finalizeReviewCycle({ taskRoot, revision: "01", runId: "provenance-run" }), "FINAL_QUALIFICATION");
-    writeFileSync(join(provenance.reviewRoot, "results", "consolidated.md"), `# Сводный вывод\n\n${provenanceManifest.identity}\n\nБлокеров нет.\n`);
+    writeFileSync(join(provenance.reviewRoot, "results", "consolidated.md"), provenanceConsolidated);
     writeFileSync(join(provenance.reviewRoot, "results", "claude.md"), validResponse(provenanceManifest.identity));
-    expectThrow(() => finalizeReviewCycle({ taskRoot, revision: "01", runId: "provenance-run" }), "FINAL_PROVENANCE");
+    expectThrow(() => finalizeReviewCycle({ taskRoot, revision: "01", runId: "provenance-run" }), "QUALIFICATION");
+    writeFileSync(join(provenance.reviewRoot, "results", "claude.md"), readFileSync(join(provenance.runRoot, "capture", "claude.stdout")));
     const provenanceResults = join(provenance.reviewRoot, "results");
     const escapedResults = join(temporary, "escaped-results");
     renameSync(provenanceResults, escapedResults);
@@ -499,19 +701,22 @@ async function main() {
     rmSync(provenanceResults);
     renameSync(escapedResults, provenanceResults);
     assert(!existsSync(join(taskRoot, "final")));
-    const successfulManifest = JSON.parse(readFileSync(join(successful.reviewRoot, "input", "manifest.json"), "utf8"));
-    writeFileSync(join(successful.reviewRoot, "results", "consolidated.md"), `# Сводный вывод\n\n${successfulManifest.identity}\n\nБлокеров нет.\n`);
     rmSync(modePath, { force: true });
     const final = finalizeReviewCycle({ taskRoot, revision: "01", runId: "valid-run" });
     assert.equal(final.target, "C09");
-    assert.deepEqual(readdirSync(final.finalRoot).sort(), ["author-review.md", "claude.md", "consolidated.md", "gemini.md", "manifest.json", "review-manifest.json", "tz.md"]);
-    assert(!existsSync(join(taskRoot, "runs")), "runs удаляется только после полной финализации");
+    assert.deepEqual(readdirSync(final.finalRoot).sort(), ["author-review.md", "claude.md", "consolidated.md", "gemini.md", "manifest.json", "qualification.json", "review-manifest.json", "tz.md"]);
+    assert(existsSync(join(taskRoot, "runs", "valid-run")), "run сохраняется как task-local доказательство");
     const finalManifest = JSON.parse(readFileSync(join(final.finalRoot, "manifest.json"), "utf8"));
-    assert.equal(finalManifest.artifacts.length, 6);
-    for (const artifact of finalManifest.artifacts) assert.equal(sha256Bytes(readFileSync(join(final.finalRoot, artifact.path))), artifact.sha256);
+    assert.equal(Object.keys(finalManifest.artifacts).length, 7);
+    for (const [path, hash] of Object.entries(finalManifest.artifacts)) assert.equal(sha256Bytes(readFileSync(join(final.finalRoot, path))), hash);
     assert.equal(readFileSync(join(final.finalRoot, "tz.md"), "utf8"), readFileSync(join(taskRoot, "revisions", "01", "tz.md"), "utf8"));
     assert.equal(readFileSync(join(final.finalRoot, "author-review.md"), "utf8"), readFileSync(join(taskRoot, "revisions", "01", "author-review.md"), "utf8"));
     assert.equal(verifyFinalDirectory(final.finalRoot).identity, finalManifest.identity);
+    const revisionTwo = join(taskRoot, "revisions", "02");
+    mkdirSync(revisionTwo);
+    writeFileSync(join(revisionTwo, "tz.md"), "# ТЗ\n\nДругая ревизия.\n");
+    writeFileSync(join(revisionTwo, "author-review.md"), "# Авторское ревью\n\nДругая ревизия.\n");
+    expectThrow(() => finalizeReviewCycle({ taskRoot, revision: "02", runId: "valid-run" }), "FINAL_EXISTS");
     const originalFinalTz = readFileSync(join(final.finalRoot, "tz.md"));
     writeFileSync(join(final.finalRoot, "tz.md"), Buffer.concat([originalFinalTz, Buffer.from("tampered\n")]));
     expectThrow(() => verifyFinalDirectory(final.finalRoot), "FINAL_HASH");
@@ -525,8 +730,9 @@ async function main() {
     const recovered = finalizeReviewCycle({ taskRoot, revision: "01", runId: "valid-run" });
     assert.equal(recovered.reused, true);
     assert.equal(recovered.target, "C09");
-    assert(!existsSync(join(taskRoot, "runs")), "повторная финализация должна завершить cleanup");
+    assert(existsSync(join(taskRoot, "runs")), "повторная финализация не удаляет историю запусков");
 
+    const successfulManifest = validateReviewManifest(JSON.parse(readFileSync(join(successful.runRoot, "review-manifest.json"), "utf8")));
     const identityInput = {
       base: "a".repeat(40),
       head: "b".repeat(40),
@@ -534,8 +740,10 @@ async function main() {
       baseTreeBytes: Buffer.from("base"),
       patchBytes: Buffer.from("patch"),
       specBytes: Buffer.from("spec"),
-      promptBytes: Buffer.from("prompt"),
-      clients: { model: "a" },
+      authorReviewBytes: Buffer.from("author-review"),
+      promptBytes: readFileSync(promptSource),
+      clients: structuredClone(successfulManifest.clients),
+      processPolicy: structuredClone(successfulManifest.processPolicy),
     };
     const originalIdentity = buildReviewIdentity(identityInput).identity;
     for (const [key, value] of [
@@ -545,15 +753,110 @@ async function main() {
       ["baseTreeBytes", Buffer.from("base-2")],
       ["patchBytes", Buffer.from("patch-2")],
       ["specBytes", Buffer.from("spec-2")],
-      ["promptBytes", Buffer.from("prompt-2")],
-      ["clients", { model: "b" }],
+      ["authorReviewBytes", Buffer.from("author-review-2")],
+      ["clients", { ...structuredClone(successfulManifest.clients), claude: { ...structuredClone(successfulManifest.clients.claude), version: "claude-version-2" } }],
     ]) assert.notEqual(buildReviewIdentity({ ...identityInput, [key]: value }).identity, originalIdentity, key);
+    expectThrow(() => buildReviewIdentity({ ...identityInput, promptBytes: Buffer.from("prompt-2") }), "REVIEW_MANIFEST");
+    expectThrow(() => buildReviewIdentity({ ...identityInput, processPolicy: { ...PROCESS_POLICY, launchMode: "serial", clients: successfulManifest.processPolicy.clients } }), "REVIEW_MANIFEST");
     assert.notEqual(sha256Bytes(Buffer.from(canonicalJson({ model: "a" }))), sha256Bytes(Buffer.from(canonicalJson({ model: "b" }))));
+    expectThrow(() => validateSafeInvocation("/usr/bin/env", ["-S", "sh -c true"], { shell: false, resolvedExecutable: "/usr/bin/env" }), "PROCESS_TRAMPOLINE");
+    expectThrow(() => validateSafeInvocation("/usr/bin/env", ["X=1", "/bin/sh", "-c", "true"], { shell: false, resolvedExecutable: "/usr/bin/env" }), "PROCESS_TRAMPOLINE");
+    assert.equal(validateSafeInvocation("/usr/bin/printf", ["%s", ";|$`"], { shell: false, resolvedExecutable: "/usr/bin/printf" }), "/usr/bin/printf");
+    const controllerIdentity = await readSystemProcessIdentity(process.pid);
+    assert.equal(controllerIdentity.pid, process.pid);
+    const isolatedIdentity = { pid: 777001, pgid: 777001, processStartToken: "start-a", status: "S" };
+    assert.deepEqual(assertSignalTargetIdentity(isolatedIdentity, structuredClone(isolatedIdentity), controllerIdentity.pgid), { zombie: false });
+    expectThrow(() => assertSignalTargetIdentity(
+      { ...isolatedIdentity, pgid: controllerIdentity.pgid },
+      { ...isolatedIdentity, pgid: controllerIdentity.pgid },
+      controllerIdentity.pgid,
+    ), "PROCESS_CONTROLLER_PGID");
+    expectThrow(() => assertSignalTargetIdentity(isolatedIdentity, { ...isolatedIdentity, processStartToken: "start-b" }, controllerIdentity.pgid), "PROCESS_IDENTITY");
+    assert.equal(assertGroupSignalIdentity(
+      isolatedIdentity,
+      [isolatedIdentity, { pid: 777002, pgid: 777001, processStartToken: "child-a", status: "S" }],
+      [{ pid: 777002, pgid: 777001, processStartToken: "child-a", status: "S" }],
+      controllerIdentity.pgid,
+    ).verified.length, 1);
+    expectThrow(() => assertGroupSignalIdentity(
+      isolatedIdentity,
+      [isolatedIdentity, { pid: 777002, pgid: 777001, processStartToken: "child-a", status: "S" }],
+      [{ pid: 777002, pgid: 777001, processStartToken: "child-reused", status: "S" }],
+      controllerIdentity.pgid,
+    ), "PROCESS_IDENTITY");
 
     const hangScript = join(temporary, "direct-hang");
     makeExecutable(hangScript, "setInterval(() => {}, 1000);");
     const direct = startProcessGroup(hangScript, [], { cwd: temporary, env: { PATH: process.env.PATH }, timeoutMs: 100, killGraceMs: 50 });
-    assert((await direct.done).timedOut);
+    const directResult = await direct.done;
+    assert(directResult.timedOut);
+    assert.equal(directResult.drainComplete, true);
+    assert.equal(directResult.identityMismatch, false);
+    assert.equal(directResult.processIdentity.pgid, directResult.processIdentity.pid);
+    assert.notEqual(directResult.processIdentity.pgid, directResult.controllerPgid);
+    assert.match(directResult.processFingerprint, /^[0-9a-f]{64}$/);
+    assert(directResult.knownProcessIdentities.some((identity) => identity.pid === directResult.processIdentity.pid));
+
+    const orphanPidPath = join(temporary, "direct-orphan.pid");
+    const orphanScript = join(temporary, "direct-orphan");
+    makeExecutable(orphanScript, `
+const cp = require("node:child_process");
+const fs = require("node:fs");
+const child = cp.spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "review-orphan"], { detached: false, stdio: "ignore" });
+fs.writeFileSync(${JSON.stringify(orphanPidPath)}, String(child.pid));
+child.unref();
+`);
+    const orphan = startProcessGroup(orphanScript, [], {
+      cwd: temporary,
+      env: { PATH: process.env.PATH },
+      timeoutMs: 2_000,
+      terminateGraceMs: 50,
+      killGraceAfterMs: 50,
+      finalDrainMs: 100,
+    });
+    const orphanResult = await orphan.done;
+    const orphanPid = Number.parseInt(readFileSync(orphanPidPath, "utf8"), 10);
+    assert.equal(orphanResult.code, 0);
+    assert.equal(orphanResult.residualProcessDetected, true);
+    assert.equal(orphanResult.drainComplete, true);
+    assert.equal(orphanResult.identityMismatch, false);
+    assert(orphanResult.knownProcessIdentities.some((identity) => identity.pid === orphanPid));
+    assert.throws(() => process.kill(orphanPid, 0));
+
+    const noisyScript = join(temporary, "direct-noisy");
+    makeExecutable(noisyScript, "process.stdout.write('x'.repeat(4096)); setInterval(() => {}, 1000);");
+    const noisy = startProcessGroup(noisyScript, [], {
+      cwd: temporary,
+      env: { PATH: process.env.PATH },
+      timeoutMs: 2_000,
+      maxOutputBytes: 128,
+      terminateGraceMs: 50,
+      killGraceAfterMs: 50,
+      finalDrainMs: 100,
+    });
+    const noisyResult = await noisy.done;
+    assert.equal(noisyResult.outputExceeded, true);
+    assert.equal(noisyResult.drainComplete, true);
+
+    const fakeBin = join(temporary, "fake-git-bin");
+    mkdirSync(fakeBin);
+    makeExecutable(join(fakeBin, "git"), "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);");
+    const hungGit = await expectReject(materializeTree(
+      source.repo,
+      source.head,
+      join(temporary, "hung-git-snapshot"),
+      join(temporary, "hung-git-capture"),
+      {
+        env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH}` },
+        timeoutMs: 100,
+        deadlineAt: Date.now() + 1_000,
+        overallDeadlineAt: Date.now() + 2_000,
+        terminateGraceMs: 50,
+        killGraceAfterMs: 50,
+        finalDrainMs: 100,
+      },
+    ), "PROCESS_TIMEOUT");
+    assert.equal(hungGit.processResult.drainComplete, true);
 
     console.log("workflow-spec-review self-test passed");
   } finally {
@@ -566,5 +869,6 @@ try {
   await main();
 } catch (error) {
   console.error(`Error: workflow-spec-review-self-test [${error?.code ?? "UNEXPECTED"}]: ${error instanceof Error ? error.message : "неизвестная ошибка"}`);
+  if (error instanceof Error && error.stack) console.error(error.stack);
   process.exitCode = 1;
 }

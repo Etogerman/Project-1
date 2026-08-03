@@ -18,7 +18,7 @@ const PROCESS_ONLY_FILE_PATTERNS = [
   /^\.github\/workflows\/copilot-feasibility-spike\.ya?ml$/,
   /^\.github\/scripts\/copilot-merge-readiness\.mjs$/,
   /^\.github\/scripts\/workflow-docs-check\.mjs$/,
-  /^\.github\/scripts\/workflow-spec-review(?:-self-test)?\.mjs$/,
+  /^\.github\/scripts\/workflow-spec-review(?:-self-test|-gates|-gates-self-test)?\.mjs$/,
   /^\.github\/workflows\/copilot-merge-readiness\.ya?ml$/,
   /^\.agents\/skills\//,
   /(^|\/)[^/]+\.md$/,
@@ -50,7 +50,7 @@ const STAGING_PROCESS_CI_SYNC_FILE_PATTERNS = [
   /^\.github\/scripts\/copilot-merge-readiness\.mjs$/,
   /^\.github\/scripts\/release-process-guard\.mjs$/,
   /^\.github\/scripts\/workflow-docs-check\.mjs$/,
-  /^\.github\/scripts\/workflow-spec-review(?:-self-test)?\.mjs$/,
+  /^\.github\/scripts\/workflow-spec-review(?:-self-test|-gates|-gates-self-test)?\.mjs$/,
   /^\.github\/workflows\/ab-readiness-check\.ya?ml$/,
   /^\.github\/workflows\/copilot-feasibility-spike\.ya?ml$/,
   /^\.github\/workflows\/copilot-merge-readiness\.ya?ml$/,
@@ -393,6 +393,8 @@ function runSelfTest() {
   assert.equal(isProcessOnlyFile(".github/scripts/copilot-merge-readiness.mjs"), true);
   assert.equal(isProcessOnlyFile(".github/scripts/workflow-spec-review.mjs"), true);
   assert.equal(isProcessOnlyFile(".github/scripts/workflow-spec-review-self-test.mjs"), true);
+  assert.equal(isProcessOnlyFile(".github/scripts/workflow-spec-review-gates.mjs"), true);
+  assert.equal(isProcessOnlyFile(".github/scripts/workflow-spec-review-gates-self-test.mjs"), true);
   assert.equal(isProcessOnlyFile(".github/workflows/copilot-merge-readiness.yml"), true);
   assert.equal(isProcessOnlyFile(".github/PULL_REQUEST_TEMPLATE.md"), true);
   assert.equal(isProcessOnlyFile("app/Services/Bitrix24ContactSyncService.php"), false);

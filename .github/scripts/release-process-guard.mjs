@@ -19,7 +19,7 @@ const PROCESS_ONLY_FILE_PATTERNS = [
   /^\.github\/workflows\/copilot-feasibility-spike\.ya?ml$/,
   /^\.github\/scripts\/copilot-merge-readiness\.mjs$/,
   /^\.github\/scripts\/workflow-docs-check\.mjs$/,
-  /^\.github\/scripts\/workflow-spec-review(?:-self-test)?\.mjs$/,
+  /^\.github\/scripts\/workflow-spec-review(?:-self-test|-gates|-gates-self-test)?\.mjs$/,
   /^\.github\/workflows\/copilot-merge-readiness\.ya?ml$/,
   /^phpunit\.xml$/,
   /^scripts\/ci-run-phpunit-shard\.sh$/,
@@ -762,6 +762,8 @@ function runSelfTest() {
   assert.equal(isProcessOnlyFile(".github/scripts/copilot-merge-readiness.mjs"), true);
   assert.equal(isProcessOnlyFile(".github/scripts/workflow-spec-review.mjs"), true);
   assert.equal(isProcessOnlyFile(".github/scripts/workflow-spec-review-self-test.mjs"), true);
+  assert.equal(isProcessOnlyFile(".github/scripts/workflow-spec-review-gates.mjs"), true);
+  assert.equal(isProcessOnlyFile(".github/scripts/workflow-spec-review-gates-self-test.mjs"), true);
   assert.equal(isProcessOnlyFile(".github/workflows/copilot-merge-readiness.yml"), true);
   assert.equal(isProcessOnlyFile("phpunit.xml"), true);
   assert.equal(isProcessOnlyFile("scripts/ci-run-phpunit-shard.sh"), true);

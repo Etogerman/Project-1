@@ -42,6 +42,7 @@ jobs:
           node .github/scripts/workflow-docs-check.mjs --self-test
           node .github/scripts/workflow-docs-check.mjs --check
           node .github/scripts/workflow-spec-review-self-test.mjs
+          node .github/scripts/workflow-spec-review-gates-self-test.mjs
 
       - name: Run self-test
         run: node .github/scripts/ab-readiness-check.mjs --self-test

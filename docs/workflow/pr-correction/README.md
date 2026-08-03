@@ -67,3 +67,22 @@ node .github/scripts/workflow-docs-check.mjs --state <ID>
 указанные в [маршрутизаторе](../README.md). Актуальную трассу можно получить
 командой `node .github/scripts/workflow-docs-check.mjs --mermaid`; результат
 выводится в stdout или сохраняется только как task-local артефакт.
+
+## Task-local состояние
+
+Канонический `<task-root>` содержит `active-cycle.json`, удерживаемую
+`.operation.lock`, неизменяемые `runs/<review-run-id>/`, каталоги
+`cycles/<cycle-id>/revision-<revision>/publication-runs/<publication-run-id>/`
+и проверенный `final/`. Review run и publication run имеют разные ID.
+
+`active-cycle.json` имеет строгую схему и identity канонического JSON. Поле
+`activeRunId` непусто только в `P03`, `G01` и `C12`: в `P03` оно указывает на
+review run, а в `G01/C12` — на publication run текущих cycle/revision. Во всех
+остальных состояниях значение равно `null`.
+
+Смена состояния выполняется одной compare-and-set операцией под
+`.operation.lock` с проверкой прежней identity. `P03 → P03` и `G01 → C12`
+сохраняют run ID; выход из run-состояния обнуляет его. Возврат из `D02/B01` в
+`C12` разрешён только по сохранённым и повторно проверенным ID publication run
+и publication gate. Новый вход в `P03/G01` всегда создаёт новый ID; старый или
+поздний результат не меняет активный цикл.

@@ -24,7 +24,7 @@ const CONSTITUTION_PATH = "AGENTS.md";
 const LANGUAGE_GIT_OWNER = "docs/workflow/shared/language-and-git-standards.md";
 const MAX_CONSTITUTION_LINES = 120;
 const MAX_WORKFLOW_DOCUMENT_LINES = 160;
-const CANONICAL_REVIEW_PROMPT_SHA256 = "2474004a3cdd01b77bd1fb1a7e4e30eda766cd2ffd2bf599406e94936c4a4565";
+const CANONICAL_REVIEW_PROMPT_SHA256 = "b82d29c1754d92fc0b811bea5b35c345cd4df1f2d814075f8ed2fb6847d20382";
 const STATE_ID_PATTERN = /^[BCDGXP]\d{2}$/;
 const DYNAMIC_NAME_PATTERN = /^[a-z][a-z0-9_]*$/;
 const ALLOWED_DYNAMIC_TARGETS = new Set(["return_state", "resume_state"]);
@@ -68,8 +68,23 @@ const STATE_KEYS = new Set([
   "next",
   "dynamicNext",
   "exits",
+  "requiredGate",
+  "requiredTransitionProofs",
 ]);
 const EXTERNAL_EXIT_KEYS = new Set(["document", "heading", "purpose", "resumeState"]);
+const GATE_KEYS = new Set(["kind", "issuer", "artifact"]);
+const TRANSITION_PROOF_KEYS = new Set(["kind", "issuer", "artifact"]);
+const REQUIRED_GATES = Object.freeze({
+  C10: Object.freeze({ kind: "implementation", issuer: "G00", artifact: "implementation-gate.json" }),
+  C11: Object.freeze({ kind: "implementation", issuer: "G00", artifact: "implementation-gate.json" }),
+  G01: Object.freeze({ kind: "implementation", issuer: "G00", artifact: "implementation-gate.json" }),
+  C12: Object.freeze({ kind: "publication", issuer: "G01", artifact: "publication-gate.json" }),
+});
+const REQUIRED_TRANSITION_PROOFS = Object.freeze({
+  G01: Object.freeze({
+    C13: Object.freeze({ kind: "publication_noop", issuer: "G01", artifact: "no-op-proof.json" }),
+  }),
+});
 const COMMON_CONTROLLED_FILES = [
   "AGENTS.md",
   "docs/task-delivery-workflow.md",
@@ -87,6 +102,14 @@ function formatIssue(value) {
 
 function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (isPlainObject(value)) {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 function countLines(body) {
@@ -214,6 +237,33 @@ export function validateSchemaShape(registry) {
       requireStringArray(state.next, `${path}.next`, errors);
       if (Object.hasOwn(state, "dynamicNext")) requireStringArray(state.dynamicNext, `${path}.dynamicNext`, errors);
       if (Object.hasOwn(state, "exits")) requireStringArray(state.exits, `${path}.exits`, errors);
+      if (Object.hasOwn(state, "requiredGate")) {
+        if (!isPlainObject(state.requiredGate)) {
+          errors.push(issue("SCHEMA_TYPE", `${path}.requiredGate`, "ожидался объект"));
+        } else {
+          validateExactKeys(state.requiredGate, GATE_KEYS, `${path}.requiredGate`, errors);
+          requireString(state.requiredGate.kind, `${path}.requiredGate.kind`, errors);
+          requireString(state.requiredGate.issuer, `${path}.requiredGate.issuer`, errors);
+          requireString(state.requiredGate.artifact, `${path}.requiredGate.artifact`, errors);
+        }
+      }
+      if (Object.hasOwn(state, "requiredTransitionProofs")) {
+        if (!isPlainObject(state.requiredTransitionProofs)) {
+          errors.push(issue("SCHEMA_TYPE", `${path}.requiredTransitionProofs`, "ожидался объект"));
+        } else {
+          for (const [target, proof] of Object.entries(state.requiredTransitionProofs)) {
+            const proofPath = `${path}.requiredTransitionProofs.${target}`;
+            if (!isPlainObject(proof)) {
+              errors.push(issue("SCHEMA_TYPE", proofPath, "ожидался объект"));
+              continue;
+            }
+            validateExactKeys(proof, TRANSITION_PROOF_KEYS, proofPath, errors);
+            requireString(proof.kind, `${proofPath}.kind`, errors);
+            requireString(proof.issuer, `${proofPath}.issuer`, errors);
+            requireString(proof.artifact, `${proofPath}.artifact`, errors);
+          }
+        }
+      }
     }
   }
 
@@ -281,6 +331,73 @@ export function extractStateTransitions(document, id, name = null) {
     rows.push({ line: index + 1, target });
   }
   return { found: true, rows, errors };
+}
+
+function extractStatePolicyMarkers(document, id) {
+  const rawLines = document.split(/\r?\n/);
+  const headingPattern = /^## `([BCDGXP][0-9]{2})` — .+$/;
+  const headingIndexes = rawLines.flatMap((line, index) => headingPattern.test(line) && line.startsWith(`## \`${id}\` — `) ? [index] : []);
+  if (headingIndexes.length !== 1) return { gateMarkers: [], proofMarkers: [], errors: [] };
+  const start = headingIndexes[0];
+  let end = rawLines.length;
+  for (let index = start + 1; index < rawLines.length; index += 1) {
+    if (headingPattern.test(rawLines[index])) {
+      end = index;
+      break;
+    }
+  }
+  const section = rawLines.slice(start, end);
+  const actorIndexes = section.flatMap((line, index) => line.startsWith("Исполнитель:") ? [index] : []);
+  const gateMarkers = section.flatMap((line, index) => line.startsWith("Обязательный шлюз:") ? [{ line, index }] : []);
+  const proofMarkers = section.flatMap((line, index) => line.startsWith("Обязательное доказательство перехода:") ? [{ line, index }] : []);
+  const errors = [];
+  if ((gateMarkers.length > 0 || proofMarkers.length > 0) && actorIndexes.length !== 1) {
+    errors.push(issue("STATE_POLICY_POSITION", id, "для машинного маркера нужен ровно один Исполнитель"));
+  }
+  return { gateMarkers, proofMarkers, actorIndex: actorIndexes[0], errors };
+}
+
+function sameExactObject(actual, expected) {
+  return canonicalJson(actual) === canonicalJson(expected);
+}
+
+function validateStatePolicies(registry, fileExists, readDocument, errors) {
+  for (const [id, state] of Object.entries(registry.states)) {
+    const expectedGate = REQUIRED_GATES[id] ?? null;
+    if (expectedGate === null) {
+      if (Object.hasOwn(state, "requiredGate")) errors.push(issue("GATE_ALLOWLIST", `$.states.${id}.requiredGate`, "requiredGate разрешён только защищённым состояниям"));
+    } else if (!sameExactObject(state.requiredGate, expectedGate)) {
+      errors.push(issue("GATE_ALLOWLIST", `$.states.${id}.requiredGate`, "обязательный шлюз отсутствует или изменён"));
+    }
+
+    const expectedProofs = REQUIRED_TRANSITION_PROOFS[id] ?? null;
+    if (expectedProofs === null) {
+      if (Object.hasOwn(state, "requiredTransitionProofs")) errors.push(issue("TRANSITION_PROOF_ALLOWLIST", `$.states.${id}.requiredTransitionProofs`, "requiredTransitionProofs разрешён только G01"));
+    } else if (!sameExactObject(state.requiredTransitionProofs, expectedProofs)) {
+      errors.push(issue("TRANSITION_PROOF_ALLOWLIST", `$.states.${id}.requiredTransitionProofs`, "обязательное доказательство перехода отсутствует или изменено"));
+    }
+
+    if (!isSafeRelativeDocumentPath(state.document, "docs/workflow/") || !fileExists(state.document)) continue;
+    const markers = extractStatePolicyMarkers(readDocument(state.document), id);
+    errors.push(...markers.errors.map((value) => ({ ...value, path: `${state.document}:${value.path}` })));
+    const expectedGateLine = expectedGate === null ? null : `Обязательный шлюз: \`${expectedGate.kind} / ${expectedGate.issuer} / ${expectedGate.artifact}\`.`;
+    if (expectedGateLine === null) {
+      if (markers.gateMarkers.length > 0) errors.push(issue("GATE_MARKER", `${state.document}#${id}`, "маркер шлюза запрещён у незащищённого состояния"));
+    } else if (markers.gateMarkers.length !== 1 || markers.gateMarkers[0].line !== expectedGateLine || markers.gateMarkers[0].index !== markers.actorIndex + 1) {
+      errors.push(issue("GATE_MARKER", `${state.document}#${id}`, `ожидалась следующая строка после Исполнитель: ${expectedGateLine}`));
+    }
+
+    const expectedProof = expectedProofs?.C13 ?? null;
+    const expectedProofLine = expectedProof === null ? null : `Обязательное доказательство перехода: \`G01 -> C13 / ${expectedProof.kind} / ${expectedProof.issuer} / ${expectedProof.artifact}\`.`;
+    if (expectedProofLine === null) {
+      if (markers.proofMarkers.length > 0) errors.push(issue("TRANSITION_PROOF_MARKER", `${state.document}#${id}`, "маркер доказательства перехода запрещён у этого состояния"));
+    } else {
+      if (!state.next.includes("C13")) errors.push(issue("TRANSITION_PROOF_TARGET", `$.states.${id}.next`, "защищённый переход G01 -> C13 отсутствует"));
+      if (markers.proofMarkers.length !== 1 || markers.proofMarkers[0].line !== expectedProofLine || markers.proofMarkers[0].index !== markers.actorIndex + 2) {
+        errors.push(issue("TRANSITION_PROOF_MARKER", `${state.document}#${id}`, `ожидалась строка сразу после обязательного шлюза: ${expectedProofLine}`));
+      }
+    }
+  }
 }
 
 function setDifference(left, right) {
@@ -439,6 +556,8 @@ export function validateRegistry(registry, adapters = {}) {
   if (states.C09?.next.includes("C10")) errors.push(issue("C09_BYPASS", "$.states.C09.next", "прямой переход в C10 запрещён"));
   if (states.D02?.next.includes("C10")) errors.push(issue("D02_BYPASS", "$.states.D02.next", "прямой переход в C10 запрещён"));
   if (states.X03?.exits.includes("terminal")) errors.push(issue("X03_TERMINAL", "$.states.X03.exits", "terminal-выход запрещён"));
+
+  validateStatePolicies(registry, fileExists, readDocument, errors);
 
   return errors;
 }
@@ -933,6 +1052,36 @@ function selfTest() {
   const badRootCount = structuredClone(registry);
   badRootCount.transitionCount += 1;
   assert(hasCode(validateRegistry(badRootCount, adapters), "TRANSITION_COUNT"));
+  const missingGate = structuredClone(registry);
+  delete missingGate.states.C10.requiredGate;
+  const c10WithoutMarker = adapters.readDocument("docs/workflow/pr-correction/30-implementation-and-publication.md")
+    .replace("Обязательный шлюз: `implementation / G00 / implementation-gate.json`.\n", "");
+  assert(hasCode(validateRegistry(missingGate, { ...adapters, readDocument: (path) => path.endsWith("30-implementation-and-publication.md") ? c10WithoutMarker : adapters.readDocument(path) }), "GATE_ALLOWLIST"));
+  const weakenedGate = structuredClone(registry);
+  weakenedGate.states.C11.requiredGate.issuer = "C09";
+  const c11WeakenedMarker = adapters.readDocument("docs/workflow/pr-correction/30-implementation-and-publication.md")
+    .replace("Обязательный шлюз: `implementation / G00 / implementation-gate.json`.", "Обязательный шлюз: `implementation / C09 / implementation-gate.json`.");
+  assert(hasCode(validateRegistry(weakenedGate, { ...adapters, readDocument: (path) => path.endsWith("30-implementation-and-publication.md") ? c11WeakenedMarker : adapters.readDocument(path) }), "GATE_ALLOWLIST"));
+  const markerMoved = adapters.readDocument("docs/workflow/pr-correction/30-implementation-and-publication.md")
+    .replace("Исполнитель: агент.\nОбязательный шлюз: `implementation / G00 / implementation-gate.json`.", "Исполнитель: агент.\n\nОбязательный шлюз: `implementation / G00 / implementation-gate.json`.");
+  assert(hasCode(validateRegistry(registry, { ...adapters, readDocument: (path) => path.endsWith("30-implementation-and-publication.md") ? markerMoved : adapters.readDocument(path) }), "GATE_MARKER"));
+  const foreignGate = structuredClone(registry);
+  foreignGate.states.C09.requiredGate = { kind: "implementation", issuer: "G00", artifact: "implementation-gate.json" };
+  assert(hasCode(validateRegistry(foreignGate, adapters), "GATE_ALLOWLIST"));
+  const missingProof = structuredClone(registry);
+  delete missingProof.states.G01.requiredTransitionProofs;
+  const g01WithoutProofMarker = adapters.readDocument("docs/workflow/pr-correction/30-implementation-and-publication.md")
+    .replace("Обязательное доказательство перехода: `G01 -> C13 / publication_noop / G01 / no-op-proof.json`.\n", "");
+  assert(hasCode(validateRegistry(missingProof, { ...adapters, readDocument: (path) => path.endsWith("30-implementation-and-publication.md") ? g01WithoutProofMarker : adapters.readDocument(path) }), "TRANSITION_PROOF_ALLOWLIST"));
+  const wrongProof = structuredClone(registry);
+  wrongProof.states.G01.requiredTransitionProofs.C13.artifact = "publication-gate.json";
+  assert(hasCode(validateRegistry(wrongProof, adapters), "TRANSITION_PROOF_ALLOWLIST"));
+  const proofOnWrongState = structuredClone(registry);
+  proofOnWrongState.states.C12.requiredTransitionProofs = { C13: { kind: "publication_noop", issuer: "G01", artifact: "no-op-proof.json" } };
+  assert(hasCode(validateRegistry(proofOnWrongState, adapters), "TRANSITION_PROOF_ALLOWLIST"));
+  const missingProofTarget = structuredClone(registry);
+  missingProofTarget.states.G01.next = missingProofTarget.states.G01.next.filter((target) => target !== "C13");
+  assert(hasCode(validateRegistry(missingProofTarget, adapters), "TRANSITION_PROOF_TARGET"));
   const unreachable = structuredClone(registry);
   unreachable.states.C01.next = [];
   assert(hasCode(validateRegistry(unreachable, adapters), "UNREACHABLE_STATE"));
@@ -993,6 +1142,12 @@ function printState(id) {
   console.log(`Исполнитель: ${state.actor}`);
   console.log(`Документ: ${state.document}`);
   console.log(`Следующие состояния: ${state.next.join(", ") || "нет"}`);
+  if (state.requiredGate) console.log(`Обязательный шлюз: ${state.requiredGate.kind} / ${state.requiredGate.issuer} / ${state.requiredGate.artifact}`);
+  if (state.requiredTransitionProofs) {
+    for (const [target, proof] of Object.entries(state.requiredTransitionProofs)) {
+      console.log(`Доказательство перехода ${id} -> ${target}: ${proof.kind} / ${proof.issuer} / ${proof.artifact}`);
+    }
+  }
   if (state.dynamicNext?.length) console.log(`Динамический возврат: ${state.dynamicNext.join(", ")}`);
   if (state.exits?.length) console.log(`Выходы из цикла: ${state.exits.join(", ")}`);
 }

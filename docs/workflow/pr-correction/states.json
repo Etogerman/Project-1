@@ -139,28 +139,55 @@
       "actor": "Агент",
       "document": "docs/workflow/pr-correction/30-implementation-and-publication.md",
       "transitionCount": 4,
-      "next": ["B01", "C07", "C11", "D01"]
+      "next": ["B01", "C07", "C11", "D01"],
+      "requiredGate": {
+        "kind": "implementation",
+        "issuer": "G00",
+        "artifact": "implementation-gate.json"
+      }
     },
     "C11": {
       "name": "Локальные тесты и авторская проверка",
       "actor": "Агент",
       "document": "docs/workflow/pr-correction/30-implementation-and-publication.md",
       "transitionCount": 5,
-      "next": ["B01", "C07", "C10", "D01", "G01"]
+      "next": ["B01", "C07", "C10", "D01", "G01"],
+      "requiredGate": {
+        "kind": "implementation",
+        "issuer": "G00",
+        "artifact": "implementation-gate.json"
+      }
     },
     "G01": {
       "name": "Граница публикации исправления",
       "actor": "Агент",
       "document": "docs/workflow/pr-correction/30-implementation-and-publication.md",
       "transitionCount": 4,
-      "next": ["B01", "C12", "C13", "D02"]
+      "next": ["B01", "C12", "C13", "D02"],
+      "requiredGate": {
+        "kind": "implementation",
+        "issuer": "G00",
+        "artifact": "implementation-gate.json"
+      },
+      "requiredTransitionProofs": {
+        "C13": {
+          "kind": "publication_noop",
+          "issuer": "G01",
+          "artifact": "no-op-proof.json"
+        }
+      }
     },
     "C12": {
       "name": "Commit и push исправления",
       "actor": "Агент в пределах разрешения",
       "document": "docs/workflow/pr-correction/30-implementation-and-publication.md",
       "transitionCount": 4,
-      "next": ["B01", "C10", "C13", "D02"]
+      "next": ["B01", "C10", "C13", "D02"],
+      "requiredGate": {
+        "kind": "publication",
+        "issuer": "G01",
+        "artifact": "publication-gate.json"
+      }
     },
     "C13": {
       "name": "Идентичность снимка PR",
