@@ -71,9 +71,11 @@ node .github/scripts/workflow-docs-check.mjs --state <ID>
 ## Task-local состояние
 
 Канонический `<task-root>` содержит `active-cycle.json`, удерживаемую
-`.operation.lock`, неизменяемые `runs/<review-run-id>/`, каталоги
+`.operation.lock`, неизменяемые каталоги
+`cycles/<cycle-id>/revision-<revision>/review-runs/<review-run-id>/`, каталоги
 `cycles/<cycle-id>/revision-<revision>/publication-runs/<publication-run-id>/`
-и проверенный `final/`. Review run и publication run имеют разные ID.
+и проверенный `review-final/`. Корневые `runs/` и `final/` запрещены. Review run
+и publication run имеют разные ID.
 
 `active-cycle.json` имеет строгую схему и identity канонического JSON. Поле
 `activeRunId` непусто только в `P03`, `G01` и `C12`: в `P03` оно указывает на

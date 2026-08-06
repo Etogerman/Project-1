@@ -68,7 +68,7 @@
 |---|---|---|
 | `C01`, `C02`, `B01`, `C03`, `C04`, `C05`, `C06` | [Сигнал и квалификация](pr-correction/10-signal-and-qualification.md) | Регистрация сигнала, доказательства и техническая квалификация |
 | `D01`, `C07`, `C08`, `C09`, `D02` | [ТЗ исправления и решения](pr-correction/20-correction-spec-and-decisions.md) | Контракт исправления, авторское ревью и решения пользователя |
-| `P03` | [Внешнее ревью ТЗ](pr-correction/25-external-spec-review.md) | Две независимые проверки одного task-local снимка |
+| `P03` | [Внешнее ревью ТЗ](pr-correction/25-external-spec-review.md) | Проверка Claude одного task-local снимка |
 | `G00` | [Проверка перед реализацией](pr-correction/27-implementation-entry-gate.md) | Разрешения, границы и условная проверка внешнего Spec |
 | `C10`, `C11`, `G01`, `C12` | [Реализация и публикация](pr-correction/30-implementation-and-publication.md) | Локальное исправление, проверки и разрешённая публикация |
 | `C13`, `P01`, `B02`, `D03`, `P02`, `C14`, `X01`, `X02`, `X03` | [Проверка снимка и выход](pr-correction/40-snapshot-review-and-exit.md) | CI, независимые проверки, вердикт и выход из цикла |
@@ -79,6 +79,9 @@
 node .github/scripts/workflow-docs-check.mjs --self-test
 node .github/scripts/workflow-docs-check.mjs --check
 node .github/scripts/workflow-docs-check.mjs --mermaid
+node .github/scripts/workflow-state-policy.mjs --self-test
+node .github/scripts/workflow-state-policy.mjs --check
+node .github/scripts/workflow-cycle-store.mjs --self-test
 node .github/scripts/workflow-spec-review-self-test.mjs
 node .github/scripts/workflow-spec-review-gates-self-test.mjs
 ```
@@ -86,8 +89,9 @@ node .github/scripts/workflow-spec-review-gates-self-test.mjs
 Проверка подтверждает существование состояний и документов, допустимость всех
 переходов, достижимость состояний, наличие заголовков состояния в нужных
 модулях, обязательные шлюзы и отсутствие сломанных локальных Markdown-ссылок.
-Отдельные self-test проверяют внешний review, классификации, неизменяемые gate,
-exact-tree проверки и согласованность `activeRunId`. Mermaid-команда строит
+Отдельные self-test проверяют внешний review, signal/CI/decision ledger,
+transaction recovery, классификации, неизменяемые gate, exact-tree проверки и
+согласованность `activeRunId`. Mermaid-команда строит
 актуальную схему из того же реестра без отдельной ручной копии.
 
 ## Граница пилота

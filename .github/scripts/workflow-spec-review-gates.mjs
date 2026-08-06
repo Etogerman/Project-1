@@ -11,6 +11,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
   rmdirSync,
@@ -20,6 +21,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { hostname } from "node:os";
+import { execFileSync } from "node:child_process";
 import {
   PROCESS_POLICY,
   canonicalJson,
@@ -29,6 +31,13 @@ import {
   startProcessGroup,
   validateSafeInvocation,
 } from "./workflow-spec-review.mjs";
+import {
+  HOLDING_STATES,
+  activeRunKind,
+  completedRunForTransition,
+  pushResumeFrame,
+  resumeFromTop,
+} from "./workflow-state-policy.mjs";
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const OID_PATTERN = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
@@ -41,10 +50,8 @@ const CLASSIFICATION_FACTORS = Object.freeze([
   "runtimeStagingOrDeployRequired",
   "externalMutationRequired",
 ]);
-const RUN_STATES = new Set(["P03", "G01", "C12"]);
-const REVIEW_RUN_STATE = "P03";
-const PUBLICATION_RUN_STATES = new Set(["G01", "C12"]);
 const heldOperationLocks = new WeakMap();
+const heldReclaimLocks = new WeakMap();
 
 function fail(message, code = "GATE_SCHEMA") {
   const error = new Error(message);
@@ -94,11 +101,34 @@ function exactIdentity(value, label, code = "GATE_SCHEMA") {
 }
 
 function validateOwner(owner, label = "owner", code = "ACTIVE_CYCLE") {
-  exactKeys(owner, ["host", "pid", "pgid", "processStartToken", "operationId"], label, code);
+  exactKeys(owner, ["schemaVersion", "host", "bootIdentity", "pid", "pgid", "processStartToken", "operationId", "identity"], label, code);
+  if (owner.schemaVersion !== 1) fail(`${label}.schemaVersion должен быть 1`, code);
   for (const key of ["host", "processStartToken", "operationId"]) nonempty(owner[key], `${label}.${key}`, code);
+  sha(owner.bootIdentity, `${label}.bootIdentity`, code);
   positiveInteger(owner.pid, `${label}.pid`, code);
   positiveInteger(owner.pgid, `${label}.pgid`, code);
+  exactIdentity(owner, label, code);
   return owner;
+}
+
+function bootIdentity() {
+  if (process.platform === "linux") {
+    const path = "/proc/sys/kernel/random/boot_id";
+    if (!existsSync(path)) fail("boot identity Linux недоступна", "BOOT_IDENTITY");
+    return sha256Bytes(Buffer.from(readFileSync(path, "utf8").trim()));
+  }
+  if (process.platform === "darwin") {
+    let value;
+    try {
+      value = execFileSync("/usr/sbin/sysctl", ["-n", "kern.boottime"], { encoding: "utf8", timeout: 2_000 }).trim();
+    } catch {
+      fail("boot identity macOS недоступна", "BOOT_IDENTITY");
+    }
+    const seconds = value.match(/sec\s*=\s*(\d+)/)?.[1];
+    if (!seconds) fail("boot identity macOS не распознана", "BOOT_IDENTITY");
+    return sha256Bytes(Buffer.from(`darwin-boot-${seconds}`));
+  }
+  fail("boot identity этой платформы недоступна", "BOOT_IDENTITY");
 }
 
 function canonicalTaskRoot(taskRoot, code = "ACTIVE_CYCLE_LOCK") {
@@ -108,37 +138,121 @@ function canonicalTaskRoot(taskRoot, code = "ACTIVE_CYCLE_LOCK") {
   return realpathSync(lexical);
 }
 
+function fsyncDirectory(path) {
+  const fd = openSync(path, fsConstants.O_RDONLY);
+  try { fsyncSync(fd); } finally { closeSync(fd); }
+}
+
 function ownerFingerprint(owner) {
   validateOwner(owner, "lock.owner", "ACTIVE_CYCLE_LOCK");
   return sha256Bytes(Buffer.from(canonicalJson(owner)));
 }
 
+function validateLockRecord(record, { kind, targetOperationLockIdentity = undefined } = {}) {
+  const fields = kind === "reclaim"
+    ? ["schemaVersion", "kind", "taskRootIdentity", "targetOperationLockIdentity", "owner", "createdAt", "identity"]
+    : ["schemaVersion", "kind", "taskRootIdentity", "owner", "createdAt", "identity"];
+  exactKeys(record, fields, `${kind} lock`, "ACTIVE_CYCLE_LOCK");
+  if (record.schemaVersion !== 1 || record.kind !== kind) fail(`${kind} lock schema/kind невалидны`, "ACTIVE_CYCLE_LOCK");
+  sha(record.taskRootIdentity, `${kind} lock.taskRootIdentity`, "ACTIVE_CYCLE_LOCK");
+  if (kind === "reclaim") {
+    sha(record.targetOperationLockIdentity, "reclaim lock.targetOperationLockIdentity", "ACTIVE_CYCLE_LOCK");
+    if (targetOperationLockIdentity !== undefined && record.targetOperationLockIdentity !== targetOperationLockIdentity) {
+      fail("reclaim lock относится к другому operation lock", "ACTIVE_CYCLE_LOCK");
+    }
+  }
+  validateOwner(record.owner, `${kind} lock.owner`, "ACTIVE_CYCLE_LOCK");
+  if (typeof record.createdAt !== "string" || !record.createdAt.endsWith("Z") || !Number.isFinite(Date.parse(record.createdAt))) {
+    fail(`${kind} lock.createdAt невалиден`, "ACTIVE_CYCLE_LOCK");
+  }
+  exactIdentity(record, `${kind} lock`, "ACTIVE_CYCLE_LOCK");
+  return record;
+}
+
+function readLockRecord(path, kind) {
+  const stat = existsSync(path) ? lstatSync(path) : null;
+  if (!stat?.isFile() || stat.isSymbolicLink()) fail(`${kind} lock отсутствует или небезопасен`, "ACTIVE_CYCLE_LOCK");
+  let record;
+  try { record = JSON.parse(readFileSync(path, "utf8")); }
+  catch { fail(`${kind} lock содержит невалидный JSON`, "ACTIVE_CYCLE_LOCK"); }
+  return validateLockRecord(record, { kind });
+}
+
+export function validateQuarantineRecoveryAuthorization(value) {
+  exactKeys(value, ["schemaVersion", "decisionId", "decisionKind", "requestedAction", "targetOperationLockIdentity", "authorizedObjects", "answer", "decidedBy", "evidenceIdentity", "decidedAt", "identity"], "quarantine recovery authorization", "QUARANTINE_RECOVERY");
+  if (value.schemaVersion !== 1 || value.decisionKind !== "quarantine_recovery"
+    || value.requestedAction !== "reclaim_stale_operation_lock" || value.answer !== "approved") {
+    fail("quarantine recovery authorization не разрешает reclaim", "QUARANTINE_RECOVERY");
+  }
+  safeId(value.decisionId, "decisionId", "QUARANTINE_RECOVERY");
+  sha(value.targetOperationLockIdentity, "targetOperationLockIdentity", "QUARANTINE_RECOVERY");
+  if (canonicalJson(value.authorizedObjects) !== canonicalJson([".operation.lock"])) {
+    fail("quarantine recovery authorization должна точно разрешать .operation.lock", "QUARANTINE_RECOVERY");
+  }
+  exactKeys(value.decidedBy, ["kind", "identityHint"], "decidedBy", "QUARANTINE_RECOVERY");
+  if (!new Set(["user", "admin"]).has(value.decidedBy.kind)) fail("решение должен принять user или admin", "QUARANTINE_RECOVERY");
+  sha(value.decidedBy.identityHint, "decidedBy.identityHint", "QUARANTINE_RECOVERY");
+  sha(value.evidenceIdentity, "evidenceIdentity", "QUARANTINE_RECOVERY");
+  if (typeof value.decidedAt !== "string" || !value.decidedAt.endsWith("Z") || !Number.isFinite(Date.parse(value.decidedAt))) {
+    fail("decidedAt невалиден", "QUARANTINE_RECOVERY");
+  }
+  exactIdentity(value, "quarantine recovery authorization", "QUARANTINE_RECOVERY");
+  return value;
+}
+
+export function validateQuarantineRecoveryAudit(value) {
+  exactKeys(value, ["schemaVersion", "authorizationIdentity", "targetOperationLockIdentity", "owner", "objects", "action", "result", "staleReason", "recordedAt", "identity"], "quarantine recovery audit", "QUARANTINE_RECOVERY");
+  if (value.schemaVersion !== 1 || value.action !== "reclaim_stale_operation_lock" || value.result !== "quarantined_and_reacquired") {
+    fail("quarantine recovery audit невалиден", "QUARANTINE_RECOVERY");
+  }
+  for (const key of ["authorizationIdentity", "targetOperationLockIdentity"]) sha(value[key], key, "QUARANTINE_RECOVERY");
+  validateOwner(value.owner, "owner", "QUARANTINE_RECOVERY");
+  if (!Array.isArray(value.objects) || value.objects.length !== 1) fail("audit должен содержать ровно один объект", "QUARANTINE_RECOVERY");
+  exactKeys(value.objects[0], ["source", "quarantinedPath", "oldSha256"], "objects[0]", "QUARANTINE_RECOVERY");
+  if (value.objects[0].source !== ".operation.lock" || !value.objects[0].quarantinedPath.startsWith(".quarantine/stale-operation-lock-")) {
+    fail("audit содержит неожиданный объект", "QUARANTINE_RECOVERY");
+  }
+  sha(value.objects[0].oldSha256, "objects[0].oldSha256", "QUARANTINE_RECOVERY");
+  nonempty(value.staleReason, "staleReason", "QUARANTINE_RECOVERY");
+  if (typeof value.recordedAt !== "string" || !value.recordedAt.endsWith("Z") || !Number.isFinite(Date.parse(value.recordedAt))) {
+    fail("recordedAt невалиден", "QUARANTINE_RECOVERY");
+  }
+  exactIdentity(value, "quarantine recovery audit", "QUARANTINE_RECOVERY");
+  return value;
+}
+
 export async function createOperationOwner(operationId = `operation-${randomBytes(12).toString("hex")}`) {
   nonempty(operationId, "operationId", "ACTIVE_CYCLE_LOCK");
   const identity = await readSystemProcessIdentity(process.pid);
-  return {
+  return buildIdentityArtifact({
+    schemaVersion: 1,
     host: hostname(),
+    bootIdentity: bootIdentity(),
     pid: identity.pid,
     pgid: identity.pgid,
     processStartToken: identity.processStartToken,
     operationId,
-  };
+  });
 }
 
 export function acquireOperationLock({ taskRoot, owner }) {
   const root = canonicalTaskRoot(taskRoot);
   const fingerprint = ownerFingerprint(owner);
   const path = join(root, ".operation.lock");
-  const record = {
+  const record = buildIdentityArtifact({
     schemaVersion: 1,
+    kind: "operation",
+    taskRootIdentity: sha256Bytes(Buffer.from(canonicalJson(root))),
     owner: structuredClone(owner),
-    ownerFingerprint: fingerprint,
-  };
+    createdAt: new Date().toISOString(),
+  });
+  validateLockRecord(record, { kind: "operation" });
   let fd;
   try {
     fd = openSync(path, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_RDWR | (fsConstants.O_NOFOLLOW ?? 0), 0o600);
     writeFileSync(fd, `${JSON.stringify(record, null, 2)}\n`);
     fsyncSync(fd);
+    fsyncDirectory(root);
   } catch (error) {
     if (fd !== undefined) closeSync(fd);
     if (error?.code === "EEXIST" || error?.code === "ELOOP") fail(".operation.lock уже удерживается или является symlink", "ACTIVE_CYCLE_LOCK_BUSY");
@@ -148,6 +262,140 @@ export function acquireOperationLock({ taskRoot, owner }) {
   const token = Object.freeze({ path, ownerFingerprint: fingerprint });
   heldOperationLocks.set(token, { fd, path, root, dev: stat.dev, ino: stat.ino, recordBytes: Buffer.from(`${JSON.stringify(record, null, 2)}\n`), released: false });
   return token;
+}
+
+export function acquireReclaimLock({ taskRoot, targetOperationLockIdentity, owner }) {
+  const root = canonicalTaskRoot(taskRoot);
+  sha(targetOperationLockIdentity, "targetOperationLockIdentity", "ACTIVE_CYCLE_LOCK");
+  const fingerprint = ownerFingerprint(owner);
+  const path = join(root, ".operation.reclaim.lock");
+  const record = buildIdentityArtifact({
+    schemaVersion: 1,
+    kind: "reclaim",
+    taskRootIdentity: sha256Bytes(Buffer.from(canonicalJson(root))),
+    targetOperationLockIdentity,
+    owner: structuredClone(owner),
+    createdAt: new Date().toISOString(),
+  });
+  validateLockRecord(record, { kind: "reclaim", targetOperationLockIdentity });
+  let fd;
+  try {
+    fd = openSync(path, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_RDWR | (fsConstants.O_NOFOLLOW ?? 0), 0o600);
+    const bytes = Buffer.from(`${JSON.stringify(record, null, 2)}\n`);
+    writeFileSync(fd, bytes);
+    fsyncSync(fd);
+    fsyncDirectory(root);
+    const stat = fstatSync(fd);
+    const token = Object.freeze({ path, ownerFingerprint: fingerprint });
+    heldReclaimLocks.set(token, { fd, path, root, dev: stat.dev, ino: stat.ino, recordBytes: bytes, record, released: false });
+    return token;
+  } catch (error) {
+    if (fd !== undefined) closeSync(fd);
+    if (error?.code === "EEXIST" || error?.code === "ELOOP") fail(".operation.reclaim.lock уже удерживается или является symlink", "ACTIVE_CYCLE_LOCK_BUSY");
+    throw error;
+  }
+}
+
+export function assertReclaimLockHeld(token, { taskRoot = null, owner = null, targetOperationLockIdentity = null } = {}) {
+  const held = token && heldReclaimLocks.get(token);
+  if (!held || held.released) fail("требуется реально удерживаемая .operation.reclaim.lock", "ACTIVE_CYCLE_LOCK");
+  if (taskRoot !== null && canonicalTaskRoot(taskRoot) !== held.root) fail("reclaim lock относится к другому taskRoot", "ACTIVE_CYCLE_LOCK");
+  const descriptorStat = fstatSync(held.fd);
+  const pathStat = lstatSync(held.path);
+  if (!pathStat.isFile() || pathStat.isSymbolicLink() || descriptorStat.dev !== pathStat.dev || descriptorStat.ino !== pathStat.ino
+    || !readFileSync(held.path).equals(held.recordBytes)) fail("reclaim lock подменён", "ACTIVE_CYCLE_LOCK");
+  if (owner !== null && ownerFingerprint(owner) !== token.ownerFingerprint) fail("владелец reclaim lock не совпадает", "ACTIVE_CYCLE_LOCK");
+  if (targetOperationLockIdentity !== null && held.record.targetOperationLockIdentity !== targetOperationLockIdentity) fail("reclaim lock относится к другой цели", "ACTIVE_CYCLE_LOCK");
+  return { root: held.root, record: held.record };
+}
+
+export function releaseReclaimLock(token) {
+  const held = token && heldReclaimLocks.get(token);
+  if (!held || held.released) fail("reclaim lock уже освобождён или неизвестен", "ACTIVE_CYCLE_LOCK");
+  assertReclaimLockHeld(token);
+  held.released = true;
+  closeSync(held.fd);
+  const pathStat = lstatSync(held.path);
+  if (pathStat.dev !== held.dev || pathStat.ino !== held.ino) fail("reclaim lock подменён перед освобождением", "ACTIVE_CYCLE_LOCK");
+  unlinkSync(held.path);
+  fsyncDirectory(held.root);
+  return true;
+}
+
+async function staleOperationOwner(owner) {
+  validateOwner(owner, "operation lock.owner", "ACTIVE_CYCLE_LOCK");
+  if (owner.host !== hostname()) return { stale: false, status: "unknown", reason: "foreign_host" };
+  if (owner.bootIdentity !== bootIdentity()) return { stale: true, status: "stale", reason: "different_boot" };
+  try {
+    process.kill(owner.pid, 0);
+  } catch (error) {
+    if (error?.code === "ESRCH") return { stale: true, status: "stale", reason: "pid_missing" };
+    return { stale: false, status: "unknown", reason: "pid_probe_failed" };
+  }
+  try {
+    const current = await readSystemProcessIdentity(owner.pid);
+    if (current.pgid !== owner.pgid || current.processStartToken !== owner.processStartToken) {
+      return { stale: true, status: "stale", reason: "process_identity_changed" };
+    }
+    return { stale: false, status: "alive", reason: "owner_alive" };
+  } catch {
+    return { stale: false, status: "unknown", reason: "process_identity_unknown" };
+  }
+}
+
+export async function reclaimStaleOperationLock({ taskRoot, targetOperationLockIdentity, owner, authorization }) {
+  const root = canonicalTaskRoot(taskRoot);
+  validateQuarantineRecoveryAuthorization(authorization);
+  if (authorization.targetOperationLockIdentity !== targetOperationLockIdentity) {
+    fail("решение относится к другому operation lock", "QUARANTINE_RECOVERY");
+  }
+  const operationPath = join(root, ".operation.lock");
+  const before = readLockRecord(operationPath, "operation");
+  if (before.taskRootIdentity !== sha256Bytes(Buffer.from(canonicalJson(root)))) fail("operation lock относится к другому taskRoot", "ACTIVE_CYCLE_LOCK");
+  if (before.identity !== targetOperationLockIdentity) fail("operation lock identity изменилась до reclaim", "ACTIVE_CYCLE_LOCK");
+  const reclaim = acquireReclaimLock({ taskRoot: root, targetOperationLockIdentity, owner });
+  try {
+    assertReclaimLockHeld(reclaim, { taskRoot: root, owner, targetOperationLockIdentity });
+    const repeated = readLockRecord(operationPath, "operation");
+    if (repeated.identity !== targetOperationLockIdentity) fail("operation lock identity изменилась под reclaim lock", "ACTIVE_CYCLE_LOCK");
+    const status = await staleOperationOwner(repeated.owner);
+    if (!status.stale) fail(`operation owner не доказан stale: ${status.reason}`, "ACTIVE_CYCLE_LOCK_UNKNOWN");
+    const quarantineRoot = join(root, ".quarantine");
+    mkdirSync(quarantineRoot, { recursive: true });
+    const destination = join(quarantineRoot, `stale-operation-lock-${repeated.identity}.json`);
+    const auditPath = join(quarantineRoot, `stale-operation-lock-${repeated.identity}-audit.json`);
+    if (existsSync(destination)) fail("stale operation lock уже присутствует в quarantine", "ACTIVE_CYCLE_LOCK");
+    if (existsSync(auditPath)) fail("audit stale operation lock уже существует", "QUARANTINE_RECOVERY");
+    const oldSha256 = sha256Bytes(readFileSync(operationPath));
+    renameSync(operationPath, destination);
+    fsyncDirectory(root);
+    fsyncDirectory(quarantineRoot);
+    const operationLock = acquireOperationLock({ taskRoot: root, owner });
+    const audit = buildIdentityArtifact({
+      schemaVersion: 1,
+      authorizationIdentity: authorization.identity,
+      targetOperationLockIdentity,
+      owner: structuredClone(owner),
+      objects: [{ source: ".operation.lock", quarantinedPath: `.quarantine/${basename(destination)}`, oldSha256 }],
+      action: "reclaim_stale_operation_lock",
+      result: "quarantined_and_reacquired",
+      staleReason: status.reason,
+      recordedAt: new Date().toISOString(),
+    });
+    validateQuarantineRecoveryAudit(audit);
+    try {
+      writeArtifactAtomically(auditPath, audit);
+      const auditFd = openSync(auditPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+      try { fsyncSync(auditFd); } finally { closeSync(auditFd); }
+      fsyncDirectory(quarantineRoot);
+    } catch (error) {
+      releaseOperationLock(operationLock);
+      throw error;
+    }
+    return { operationLock, quarantinedPath: destination, auditPath, auditIdentity: audit.identity, staleReason: status.reason };
+  } finally {
+    releaseReclaimLock(reclaim);
+  }
 }
 
 export function assertOperationLockHeld(token, { taskRoot = null, owner = null } = {}) {
@@ -179,6 +427,7 @@ export function releaseOperationLock(token) {
   const pathStat = lstatSync(held.path);
   if (pathStat.dev !== held.dev || pathStat.ino !== held.ino) fail("operation lock подменён перед освобождением", "ACTIVE_CYCLE_LOCK");
   unlinkSync(held.path);
+  fsyncDirectory(held.root);
   return true;
 }
 
@@ -223,6 +472,53 @@ function canonicalPublicationRunRoot({ taskRoot, cycleId, revision, publicationR
   const stat = existsSync(supplied) ? lstatSync(supplied) : null;
   if (!stat?.isDirectory() || stat.isSymbolicLink() || realpathSync(supplied) !== expected) fail("publication run root невалиден, неканоничен или проходит через symlink", "PUBLICATION_RUN_PATH");
   return supplied;
+}
+
+export function validatePublicationRunOpen(value) {
+  exactKeys(value, ["schemaVersion", "cycleId", "revision", "publicationRunId", "implementationGateIdentity", "sourceContextIdentity", "publishBase", "openedBy", "openedAt", "identity"], "publication run-open", "PUBLICATION_RUN_OPEN");
+  if (value.schemaVersion !== 1) fail("publication run-open schemaVersion должен быть 1", "PUBLICATION_RUN_OPEN");
+  safeId(value.cycleId, "cycleId", "PUBLICATION_RUN_OPEN");
+  positiveInteger(value.revision, "revision", "PUBLICATION_RUN_OPEN");
+  safeId(value.publicationRunId, "publicationRunId", "PUBLICATION_RUN_OPEN");
+  sha(value.implementationGateIdentity, "implementationGateIdentity", "PUBLICATION_RUN_OPEN");
+  sha(value.sourceContextIdentity, "sourceContextIdentity", "PUBLICATION_RUN_OPEN");
+  oid(value.publishBase, "publishBase", "PUBLICATION_RUN_OPEN");
+  validateOwner(value.openedBy, "openedBy", "PUBLICATION_RUN_OPEN");
+  if (typeof value.openedAt !== "string" || !value.openedAt.endsWith("Z") || !Number.isFinite(Date.parse(value.openedAt))) fail("openedAt невалиден", "PUBLICATION_RUN_OPEN");
+  exactIdentity(value, "publication run-open", "PUBLICATION_RUN_OPEN");
+  return value;
+}
+
+export function openPublicationRun({ taskRoot, cycleId, revision, publicationRunId, publicationRunRoot, implementationGateIdentity, sourceContextIdentity, publishBase, openedBy }) {
+  const runRoot = canonicalPublicationRunRoot({ taskRoot, cycleId, revision, publicationRunId, publicationRunRoot });
+  const entries = readdirSync(runRoot);
+  if (entries.length !== 0) fail("publication run уже содержит артефакты", "PUBLICATION_RUN_OPEN");
+  const artifact = buildIdentityArtifact({
+    schemaVersion: 1,
+    cycleId,
+    revision,
+    publicationRunId,
+    implementationGateIdentity,
+    sourceContextIdentity,
+    publishBase,
+    openedBy,
+    openedAt: new Date().toISOString(),
+  });
+  validatePublicationRunOpen(artifact);
+  writeArtifactAtomically(join(runRoot, "run-open.json"), artifact);
+  return artifact;
+}
+
+function assertPublicationRunOpen(runRoot, { cycleId, revision, publicationRunId, publishBase = null }) {
+  const path = join(runRoot, "run-open.json");
+  const stat = existsSync(path) ? lstatSync(path) : null;
+  if (!stat?.isFile() || stat.isSymbolicLink()) fail("publication run-open отсутствует", "PUBLICATION_RUN_OPEN");
+  let artifact;
+  try { artifact = JSON.parse(readFileSync(path, "utf8")); } catch { fail("publication run-open содержит невалидный JSON", "PUBLICATION_RUN_OPEN"); }
+  validatePublicationRunOpen(artifact);
+  if (artifact.cycleId !== cycleId || artifact.revision !== revision || artifact.publicationRunId !== publicationRunId
+    || (publishBase !== null && artifact.publishBase !== publishBase)) fail("publication run-open относится к другому запуску", "PUBLICATION_RUN_OPEN");
+  return artifact;
 }
 
 function validateEvidence(value, label) {
@@ -274,20 +570,21 @@ export function validateSpecClassification(value, context = {}) {
 }
 
 export function validateImplementationGate(value, context = {}) {
-  for (const key of ["finalManifestBytes", "tzBytes", "classification", "cycleId", "revision", "base", "inputHead"]) {
+  for (const key of ["finalManifestBytes", "tzBytes", "classification", "cycleId", "revision", "base", "inputHead", "implementationDecisionIdentity"]) {
     if (context[key] === undefined) fail(`implementation gate требует context.${key}`, "IMPLEMENTATION_GATE");
   }
-  exactKeys(value, ["schemaVersion", "cycleId", "revision", "reviewFinalManifestSha256", "tzSha256", "base", "inputHead", "implementationSpecClassificationIdentity", "issuedBy", "allowedStates", "identity"], "implementation gate", "IMPLEMENTATION_GATE");
+  exactKeys(value, ["schemaVersion", "cycleId", "revision", "reviewFinalManifestSha256", "tzSha256", "base", "inputHead", "implementationSpecClassificationIdentity", "implementationDecisionIdentity", "issuedBy", "allowedStates", "identity"], "implementation gate", "IMPLEMENTATION_GATE");
   if (value.schemaVersion !== 1 || value.issuedBy !== "G00" || canonicalJson(value.allowedStates) !== canonicalJson(["C10", "C11", "G01"])) fail("implementation gate policy невалидна", "IMPLEMENTATION_GATE");
   nonempty(value.cycleId, "cycleId", "IMPLEMENTATION_GATE");
   positiveInteger(value.revision, "revision", "IMPLEMENTATION_GATE");
-  for (const key of ["reviewFinalManifestSha256", "tzSha256", "implementationSpecClassificationIdentity"]) sha(value[key], key, "IMPLEMENTATION_GATE");
+  for (const key of ["reviewFinalManifestSha256", "tzSha256", "implementationSpecClassificationIdentity", "implementationDecisionIdentity"]) sha(value[key], key, "IMPLEMENTATION_GATE");
   oid(value.base, "base", "IMPLEMENTATION_GATE");
   oid(value.inputHead, "inputHead", "IMPLEMENTATION_GATE");
   if (context.finalManifestBytes && value.reviewFinalManifestSha256 !== sha256Bytes(context.finalManifestBytes)) fail("implementation gate ссылается на другой final manifest", "IMPLEMENTATION_GATE");
   if (context.tzBytes && value.tzSha256 !== sha256Bytes(context.tzBytes)) fail("implementation gate ссылается на другое ТЗ", "IMPLEMENTATION_GATE");
   if (context.classification) {
     validateSpecClassification(context.classification, { phase: "implementation" });
+    if (!['not_required', 'fixed'].includes(context.classification.decision)) fail("implementation gate запрещён до разрешения Spec classification", "IMPLEMENTATION_GATE");
     if (value.implementationSpecClassificationIdentity !== context.classification.identity) fail("implementation gate не связан с допустимой классификацией", "IMPLEMENTATION_GATE");
   }
   for (const [field, expected] of [
@@ -295,6 +592,7 @@ export function validateImplementationGate(value, context = {}) {
     ["revision", context.revision],
     ["base", context.base],
     ["inputHead", context.inputHead],
+    ["implementationDecisionIdentity", context.implementationDecisionIdentity],
   ]) if (expected !== undefined && value[field] !== expected) fail(`implementation gate: ${field} не совпадает`, "IMPLEMENTATION_GATE");
   exactIdentity(value, "implementation gate", "IMPLEMENTATION_GATE");
   return value;
@@ -354,15 +652,15 @@ export function validatePublicationGate(value, context = {}) {
   for (const key of [
     "implementationGate", "implementationGateContext", "publicationClassification", "checksManifest",
     "checksManifestBytes", "cycleId", "revision", "publishBase", "expectedTreeOid",
-    "tzBytes", "validatedDiffBytes", "publishedFiles",
+    "tzBytes", "validatedDiffBytes", "publishedFiles", "executionCeilingIdentity",
   ]) {
     if (context[key] === undefined) fail(`publication gate требует context.${key}`, "PUBLICATION_GATE");
   }
-  exactKeys(value, ["schemaVersion", "cycleId", "revision", "implementationGateIdentity", "tzSha256", "publishBase", "expectedTreeOid", "validatedDiffSha256", "publishedFiles", "implementationSpecClassificationIdentity", "publicationSpecClassificationIdentity", "specStatus", "specRevision", "checksSha256", "issuedBy", "allowedStates", "identity"], "publication gate", "PUBLICATION_GATE");
+  exactKeys(value, ["schemaVersion", "cycleId", "revision", "implementationGateIdentity", "tzSha256", "publishBase", "expectedTreeOid", "validatedDiffSha256", "publishedFiles", "implementationSpecClassificationIdentity", "publicationSpecClassificationIdentity", "specStatus", "specRevision", "checksSha256", "executionCeilingIdentity", "issuedBy", "allowedStates", "identity"], "publication gate", "PUBLICATION_GATE");
   if (value.schemaVersion !== 1 || value.issuedBy !== "G01" || canonicalJson(value.allowedStates) !== canonicalJson(["C12"])) fail("publication gate policy невалидна", "PUBLICATION_GATE");
   nonempty(value.cycleId, "cycleId", "PUBLICATION_GATE");
   positiveInteger(value.revision, "revision", "PUBLICATION_GATE");
-  for (const key of ["implementationGateIdentity", "tzSha256", "validatedDiffSha256", "implementationSpecClassificationIdentity", "publicationSpecClassificationIdentity", "checksSha256"]) sha(value[key], key, "PUBLICATION_GATE");
+  for (const key of ["implementationGateIdentity", "tzSha256", "validatedDiffSha256", "implementationSpecClassificationIdentity", "publicationSpecClassificationIdentity", "checksSha256", "executionCeilingIdentity"]) sha(value[key], key, "PUBLICATION_GATE");
   oid(value.publishBase, "publishBase", "PUBLICATION_GATE");
   oid(value.expectedTreeOid, "expectedTreeOid", "PUBLICATION_GATE");
   nonemptyStringArray(value.publishedFiles, "publishedFiles", { sorted: true }, "PUBLICATION_GATE");
@@ -393,6 +691,7 @@ export function validatePublicationGate(value, context = {}) {
     ["publishBase", context.publishBase],
     ["expectedTreeOid", context.expectedTreeOid],
     ["validatedDiffSha256", context.validatedDiffBytes ? sha256Bytes(context.validatedDiffBytes) : undefined],
+    ["executionCeilingIdentity", context.executionCeilingIdentity],
   ]) if (expected !== undefined && value[field] !== expected) fail(`publication gate: ${field} не совпадает`, "PUBLICATION_GATE");
   if (context.publishedFiles && canonicalJson(value.publishedFiles) !== canonicalJson(context.publishedFiles)) fail("publication gate: publishedFiles не совпадает", "PUBLICATION_GATE");
   exactIdentity(value, "publication gate", "PUBLICATION_GATE");
@@ -454,27 +753,59 @@ export function validatePendingPublicationBlock(value) {
 }
 
 export function validateActiveCycle(value, { states, taskRoot = null } = {}) {
-  exactKeys(value, ["schemaVersion", "cycleId", "revision", "state", "activeRunId", "owner", "lockPath", "identity"], "active cycle", "ACTIVE_CYCLE");
+  exactKeys(value, ["schemaVersion", "cycleId", "revision", "state", "activeRunId", "lastCompletedRun", "owner", "sourceContext", "signalContext", "resumeContexts", "lockPath", "identity"], "active cycle", "ACTIVE_CYCLE");
   if (value.schemaVersion !== 1) fail("active cycle schemaVersion должен быть 1", "ACTIVE_CYCLE");
   safeId(value.cycleId, "cycleId", "ACTIVE_CYCLE");
-  positiveInteger(value.revision, "revision", "ACTIVE_CYCLE");
   nonempty(value.state, "state", "ACTIVE_CYCLE");
+  if (!Number.isInteger(value.revision) || value.revision < 0) fail("revision должен быть неотрицательным целым", "ACTIVE_CYCLE");
+  const preRevisionStates = new Set(["C01", "C02", "C03", "C04", "C05", "C06", "D01", "X02", "X03", "B01"]);
+  if (value.revision === 0 && !preRevisionStates.has(value.state)) fail("revision=0 допустим только до первого C07", "ACTIVE_CYCLE");
+  if (value.revision > 0 && value.state === "C01" && value.sourceContext === null) fail("повторный C01 требует sourceContext", "ACTIVE_CYCLE");
   if (states && !Object.hasOwn(states, value.state)) fail("active cycle содержит неизвестное состояние", "ACTIVE_CYCLE");
   if (value.activeRunId !== null) safeId(value.activeRunId, "activeRunId", "ACTIVE_CYCLE");
-  const requiresRun = RUN_STATES.has(value.state);
+  const runKind = activeRunKind(value.state);
+  const requiresRun = runKind !== null;
   if (requiresRun !== (typeof value.activeRunId === "string" && value.activeRunId !== "")) fail("state/activeRunId не согласованы", "ACTIVE_CYCLE");
+  if (value.lastCompletedRun !== null) {
+    exactKeys(value.lastCompletedRun, ["kind", "runId", "entryGateIdentity", "terminalEvidenceIdentity"], "lastCompletedRun", "ACTIVE_CYCLE");
+    if (value.state !== "C13" || !["publication", "publication_noop"].includes(value.lastCompletedRun.kind)) fail("lastCompletedRun допустим только в C13", "ACTIVE_CYCLE");
+    safeId(value.lastCompletedRun.runId, "lastCompletedRun.runId", "ACTIVE_CYCLE");
+    sha(value.lastCompletedRun.entryGateIdentity, "lastCompletedRun.entryGateIdentity", "ACTIVE_CYCLE");
+    sha(value.lastCompletedRun.terminalEvidenceIdentity, "lastCompletedRun.terminalEvidenceIdentity", "ACTIVE_CYCLE");
+  } else if (value.state === "C13" && value.activeRunId !== null) fail("C13 не может удерживать active run", "ACTIVE_CYCLE");
+  for (const [label, context] of [["sourceContext", value.sourceContext], ["signalContext", value.signalContext]]) {
+    if (context !== null) {
+      if (!isObject(context)) fail(`${label} должен быть объектом или null`, "ACTIVE_CYCLE");
+      exactIdentity(context, label, "ACTIVE_CYCLE");
+    }
+  }
+  if (!Array.isArray(value.resumeContexts) || value.resumeContexts.length > 8) fail("resumeContexts должен быть массивом глубиной не более 8", "ACTIVE_CYCLE");
+  for (const [index, frame] of value.resumeContexts.entries()) validateResumeFrame(frame, `resumeContexts[${index}]`);
   validateOwner(value.owner, "active cycle.owner", "ACTIVE_CYCLE");
   if (value.lockPath !== ".operation.lock") fail("lockPath должен быть .operation.lock", "ACTIVE_CYCLE");
   if (taskRoot && requiresRun) {
     const physicalTaskRoot = realpathSync(resolve(taskRoot));
-    const runPath = value.state === REVIEW_RUN_STATE
-      ? join(physicalTaskRoot, "runs", value.activeRunId)
+    const runPath = runKind === "review"
+      ? join(physicalTaskRoot, "cycles", value.cycleId, `revision-${value.revision}`, "review-runs", value.activeRunId)
       : join(physicalTaskRoot, "cycles", value.cycleId, `revision-${value.revision}`, "publication-runs", value.activeRunId);
     const stat = existsSync(runPath) ? lstatSync(runPath) : null;
     if (!stat?.isDirectory() || stat.isSymbolicLink() || realpathSync(runPath) !== runPath) fail("activeRunId не указывает на канонический каталог", "ACTIVE_CYCLE");
   }
   exactIdentity(value, "active cycle", "ACTIVE_CYCLE");
   return value;
+}
+
+export function validateResumeFrame(frame, label = "resume frame") {
+  exactKeys(frame, ["schemaVersion", "frameId", "cycleId", "revision", "register", "sourceState", "holdingState", "targetState", "runPolicy", "savedRunId", "gateIdentity", "requestedAction", "executor", "owner", "unblockEvent", "stopMode", "signalIdentity", "sourceContextIdentity", "identity"], label, "RESUME_FRAME");
+  if (frame.schemaVersion !== 1) fail(`${label}.schemaVersion должен быть 1`, "RESUME_FRAME");
+  for (const key of ["frameId", "cycleId", "register", "sourceState", "holdingState", "targetState", "runPolicy", "executor", "owner", "unblockEvent", "stopMode"]) nonempty(frame[key], `${label}.${key}`, "RESUME_FRAME");
+  if (!Number.isInteger(frame.revision) || frame.revision < 0) fail(`${label}.revision должен быть неотрицательным целым`, "RESUME_FRAME");
+  if (frame.savedRunId !== null) safeId(frame.savedRunId, `${label}.savedRunId`, "RESUME_FRAME");
+  if (frame.gateIdentity !== null) sha(frame.gateIdentity, `${label}.gateIdentity`, "RESUME_FRAME");
+  if (frame.requestedAction !== null) nonempty(frame.requestedAction, `${label}.requestedAction`, "RESUME_FRAME");
+  for (const key of ["signalIdentity", "sourceContextIdentity"]) sha(frame[key], `${label}.${key}`, "RESUME_FRAME");
+  exactIdentity(frame, label, "RESUME_FRAME");
+  return frame;
 }
 
 function validatePolicyEvidence(value, expected, label, code) {
@@ -520,17 +851,17 @@ function readStoredPolicyArtifact({ root, current, nextState, nextRunId, policy,
     exactIdentity(artifact, label, code);
   };
   if (policy.kind === "implementation") {
-    exactKeys(artifact, ["schemaVersion", "cycleId", "revision", "reviewFinalManifestSha256", "tzSha256", "base", "inputHead", "implementationSpecClassificationIdentity", "issuedBy", "allowedStates", "identity"], label, code);
+    exactKeys(artifact, ["schemaVersion", "cycleId", "revision", "reviewFinalManifestSha256", "tzSha256", "base", "inputHead", "implementationSpecClassificationIdentity", "implementationDecisionIdentity", "issuedBy", "allowedStates", "identity"], label, code);
     common();
     if (canonicalJson(artifact.allowedStates) !== canonicalJson(["C10", "C11", "G01"]) || !artifact.allowedStates.includes(nextState)) fail(`${label}: implementation gate не разрешает состояние`, code);
-    for (const key of ["reviewFinalManifestSha256", "tzSha256", "implementationSpecClassificationIdentity"]) sha(artifact[key], `${label}.${key}`, code);
+    for (const key of ["reviewFinalManifestSha256", "tzSha256", "implementationSpecClassificationIdentity", "implementationDecisionIdentity"]) sha(artifact[key], `${label}.${key}`, code);
     oid(artifact.base, `${label}.base`, code);
     oid(artifact.inputHead, `${label}.inputHead`, code);
   } else if (policy.kind === "publication") {
-    exactKeys(artifact, ["schemaVersion", "cycleId", "revision", "implementationGateIdentity", "tzSha256", "publishBase", "expectedTreeOid", "validatedDiffSha256", "publishedFiles", "implementationSpecClassificationIdentity", "publicationSpecClassificationIdentity", "specStatus", "specRevision", "checksSha256", "issuedBy", "allowedStates", "identity"], label, code);
+    exactKeys(artifact, ["schemaVersion", "cycleId", "revision", "implementationGateIdentity", "tzSha256", "publishBase", "expectedTreeOid", "validatedDiffSha256", "publishedFiles", "implementationSpecClassificationIdentity", "publicationSpecClassificationIdentity", "specStatus", "specRevision", "checksSha256", "executionCeilingIdentity", "issuedBy", "allowedStates", "identity"], label, code);
     common();
     if (canonicalJson(artifact.allowedStates) !== canonicalJson(["C12"]) || nextState !== "C12") fail(`${label}: publication gate не разрешает состояние`, code);
-    for (const key of ["implementationGateIdentity", "tzSha256", "validatedDiffSha256", "implementationSpecClassificationIdentity", "publicationSpecClassificationIdentity", "checksSha256"]) sha(artifact[key], `${label}.${key}`, code);
+    for (const key of ["implementationGateIdentity", "tzSha256", "validatedDiffSha256", "implementationSpecClassificationIdentity", "publicationSpecClassificationIdentity", "checksSha256", "executionCeilingIdentity"]) sha(artifact[key], `${label}.${key}`, code);
     oid(artifact.publishBase, `${label}.publishBase`, code);
     oid(artifact.expectedTreeOid, `${label}.expectedTreeOid`, code);
     nonemptyStringArray(artifact.publishedFiles, `${label}.publishedFiles`, { sorted: true }, code);
@@ -568,10 +899,12 @@ export function transitionActiveCycle({
   operationLock,
   taskRoot = null,
   owner = null,
-  resumeEvidence = null,
-  expectedResumeEvidence = null,
+  holdingFrame = null,
+  resumeFrameIdentity = null,
   gateEvidence = null,
   transitionProof = null,
+  completionEvidence = null,
+  deferRunPath = false,
 }) {
   const held = assertOperationLockHeld(operationLock, { taskRoot, owner });
   const effectiveTaskRoot = held.root;
@@ -580,10 +913,12 @@ export function transitionActiveCycle({
   if (!states || !Object.hasOwn(states, nextState)) fail("целевое состояние неизвестно", "ACTIVE_CYCLE_CAS");
   const direct = Array.isArray(states[current.state].next) && states[current.state].next.includes(nextState);
   const dynamicNames = new Set(states[current.state].dynamicNext ?? []);
-  const dynamic = isObject(resumeEvidence)
-    && ((dynamicNames.has("return_state") && resumeEvidence.returnState === nextState)
-      || (dynamicNames.has("resume_state") && resumeEvidence.resumeState === nextState));
+  const topFrame = current.resumeContexts.at(-1) ?? null;
+  const frameTargetsNext = topFrame !== null && topFrame.holdingState === current.state && topFrame.targetState === nextState;
+  const dynamic = frameTargetsNext && dynamicNames.has(topFrame.register);
   if (!direct && !dynamic) fail(`переход ${current.state} -> ${nextState} не разрешён`, "ACTIVE_CYCLE_CAS");
+  if (dynamic && (resumeFrameIdentity === null || resumeFrameIdentity !== topFrame.identity)) fail("динамический возврат требует identity верхнего resume frame", "ACTIVE_CYCLE_RESUME");
+  if (resumeFrameIdentity !== null && !frameTargetsNext) fail("resume frame не соответствует переходу", "ACTIVE_CYCLE_RESUME");
   const requiredGate = states[nextState].requiredGate;
   let storedRequiredGate = null;
   if (requiredGate) {
@@ -599,8 +934,9 @@ export function transitionActiveCycle({
     });
   } else if (gateEvidence !== null) fail("gate передан для незащищённого перехода", "ACTIVE_CYCLE_GATE");
   const requiredProof = states[current.state].requiredTransitionProofs?.[nextState];
+  let storedRequiredProof = null;
   if (requiredProof) {
-    readStoredPolicyArtifact({
+    storedRequiredProof = readStoredPolicyArtifact({
       root: effectiveTaskRoot,
       current,
       nextState,
@@ -617,31 +953,68 @@ export function transitionActiveCycle({
   const preservingReview = current.state === "P03" && nextState === "P03";
   const preservingPublication = current.state === "G01" && nextState === "C12";
   const restoringC12 = ["D02", "B01"].includes(current.state) && nextState === "C12";
+  let resumed = null;
+  if (frameTargetsNext) {
+    if (resumeFrameIdentity === null || resumeFrameIdentity !== topFrame.identity) fail("возврат требует identity верхнего resume frame", "ACTIVE_CYCLE_RESUME");
+    resumed = resumeFromTop(current.resumeContexts, {
+      targetState: nextState,
+      sourceContextIdentity: current.sourceContext.identity,
+      gateIdentity: storedRequiredGate?.identity ?? null,
+    });
+    if (!resumed.ok) fail(`resume frame отклонён: ${resumed.reason}`, "ACTIVE_CYCLE_RESUME");
+  }
   let activeRunId = null;
   if (preservingReview || preservingPublication) activeRunId = current.activeRunId;
   else if (enteringReview || enteringPublication) {
     nonempty(nextRunId, "nextRunId", "ACTIVE_CYCLE_CAS");
+    if (resumed?.policy === "new" && nextRunId === topFrame.savedRunId) fail("возврат в P03/G01 требует новый run ID", "ACTIVE_CYCLE_RESUME");
     activeRunId = nextRunId;
   } else if (restoringC12) {
-    if (!isObject(resumeEvidence) || !isObject(expectedResumeEvidence)
-      || canonicalJson(resumeEvidence) !== canonicalJson(expectedResumeEvidence)
-      || resumeEvidence.publicationRunId !== nextRunId
-      || resumeEvidence.resumeState !== "C12"
-      || typeof resumeEvidence.gateIdentity !== "string" || !SHA256_PATTERN.test(resumeEvidence.gateIdentity)
-      || resumeEvidence.gateIdentity !== storedRequiredGate?.identity) {
-      fail("возврат в C12 требует точные сохранённые run/gate evidence", "ACTIVE_CYCLE_CAS");
-    }
+    if (!resumed?.ok || resumed.policy !== "restore_exact" || resumed.restoredRunId !== nextRunId) fail("возврат в C12 требует точные сохранённые run/gate evidence", "ACTIVE_CYCLE_RESUME");
     activeRunId = nextRunId;
   }
+  let resumeContexts = resumed?.stack ?? structuredClone(current.resumeContexts);
+  if (HOLDING_STATES.has(nextState) && nextState !== current.state) {
+    validateResumeFrame(holdingFrame, "holdingFrame");
+    if (holdingFrame.cycleId !== current.cycleId || holdingFrame.revision !== current.revision
+      || holdingFrame.sourceState !== current.state || holdingFrame.holdingState !== nextState
+      || holdingFrame.signalIdentity !== current.signalContext.identity
+      || holdingFrame.sourceContextIdentity !== current.sourceContext.identity) {
+      fail("holdingFrame относится к другому переходу", "ACTIVE_CYCLE_RESUME");
+    }
+    const pushed = pushResumeFrame(resumeContexts, holdingFrame);
+    if (!pushed.ok && nextState !== "B01") fail("resume stack переполнен", "ACTIVE_CYCLE_RESUME_OVERFLOW");
+    resumeContexts = pushed.ok ? pushed.stack : resumeContexts;
+  } else if (holdingFrame !== null) fail("holdingFrame передан вне входа в holding state", "ACTIVE_CYCLE_RESUME");
+  if (HOLDING_STATES.has(current.state) && !frameTargetsNext && direct && topFrame?.holdingState === current.state) resumeContexts = current.resumeContexts.slice(0, -1);
   const next = {
     ...structuredClone(current),
     state: nextState,
     activeRunId,
+    lastCompletedRun: null,
+    resumeContexts,
     owner: structuredClone(owner ?? current.owner),
     identity: "",
   };
+  if (nextState === "C13" && current.state === "G01") {
+    if (!requiredProof || transitionProof === null) fail("G01→C13 требует no-op proof", "ACTIVE_CYCLE_PROOF");
+    next.lastCompletedRun = completedRunForTransition({
+      sourceState: current.state,
+      targetState: nextState,
+      runId: current.activeRunId,
+      entryGateIdentity: storedRequiredProof.implementationGateIdentity,
+      terminalEvidenceIdentity: storedRequiredProof.identity,
+      noOp: true,
+    });
+  } else if (nextState === "C13" && current.state === "C12") {
+    if (!isObject(completionEvidence)) fail("C12→C13 требует completed-run evidence", "ACTIVE_CYCLE_COMPLETION");
+    exactKeys(completionEvidence, ["kind", "runId", "entryGateIdentity", "terminalEvidenceIdentity"], "completionEvidence", "ACTIVE_CYCLE_COMPLETION");
+    if (completionEvidence.kind !== "publication" || completionEvidence.runId !== current.activeRunId) fail("completionEvidence относится к другому run", "ACTIVE_CYCLE_COMPLETION");
+    for (const key of ["entryGateIdentity", "terminalEvidenceIdentity"]) sha(completionEvidence[key], `completionEvidence.${key}`, "ACTIVE_CYCLE_COMPLETION");
+    next.lastCompletedRun = structuredClone(completionEvidence);
+  }
   next.identity = jcsIdentity(next);
-  validateActiveCycle(next, { states, taskRoot: effectiveTaskRoot });
+  validateActiveCycle(next, { states, taskRoot: deferRunPath ? null : effectiveTaskRoot });
   return next;
 }
 
@@ -662,7 +1035,7 @@ function ensurePlainDirectoryChain(root, segments) {
 function prepareTransitionRunDirectory({ root, current, nextState, nextRunId }) {
   if (nextState === "P03" && current.state !== "P03") {
     safeId(nextRunId, "nextRunId", "ACTIVE_CYCLE_PATH");
-    const parent = ensurePlainDirectoryChain(root, ["runs"]);
+    const parent = ensurePlainDirectoryChain(root, ["cycles", current.cycleId, `revision-${current.revision}`, "review-runs"]);
     const destination = join(parent, nextRunId);
     if (existsSync(destination)) fail("review run ID уже использован", "ACTIVE_CYCLE_PATH");
     mkdirSync(destination, { recursive: false });
@@ -711,10 +1084,11 @@ export async function compareAndSetActiveCycle({
   nextState,
   nextRunId,
   states,
-  resumeEvidence = null,
-  expectedResumeEvidence = null,
+  holdingFrame = null,
+  resumeFrameIdentity = null,
   gateEvidence = null,
   transitionProof = null,
+  completionEvidence = null,
 }) {
   const root = canonicalTaskRoot(taskRoot);
   return withOperationLock({ taskRoot: root, owner }, async (operationLock) => {
@@ -741,10 +1115,11 @@ export async function compareAndSetActiveCycle({
         operationLock,
         taskRoot: root,
         owner,
-        resumeEvidence,
-        expectedResumeEvidence,
+        holdingFrame,
+        resumeFrameIdentity,
         gateEvidence,
         transitionProof,
+        completionEvidence,
       });
       const latest = JSON.parse(readFileSync(activeCyclePath, "utf8"));
       if (latest.identity !== expectedIdentity || jcsIdentity(latest) !== latest.identity) fail("active-cycle.json изменён до compare-and-set", "ACTIVE_CYCLE_CAS");
@@ -805,6 +1180,7 @@ export async function sealExpectedTree({ repo, publishBase, publishedFiles, task
   publishedFiles.forEach((path, index) => safeRelativePath(path, `publishedFiles[${index}]`, "TREE_SEAL"));
   const repository = resolve(repo);
   const runRoot = canonicalPublicationRunRoot({ taskRoot, cycleId, revision, publicationRunId, publicationRunRoot });
+  assertPublicationRunOpen(runRoot, { cycleId, revision, publicationRunId, publishBase });
   const phaseDeadlineAt = Date.now() + PROCESS_POLICY.snapshotCommandSeconds * 1_000;
   const budget = () => remainingPhaseBudget(phaseDeadlineAt, "запечатывание tree", "TREE_SEAL");
   const status = await runBounded("git", ["-C", repository, "status", "--porcelain=v1", "-z", "--untracked-files=all"], { cwd: repository, env: process.env, timeoutMs: budget() });
@@ -828,6 +1204,7 @@ export async function runExactTreeChecks({ repo, expectedTreeOid, taskRoot, cycl
   oid(expectedTreeOid, "expectedTreeOid", "EXACT_TREE_CHECK");
   if (!Array.isArray(checks) || checks.length === 0) fail("список checks пуст", "EXACT_TREE_CHECK");
   const runRoot = canonicalPublicationRunRoot({ taskRoot, cycleId, revision, publicationRunId, publicationRunRoot });
+  assertPublicationRunOpen(runRoot, { cycleId, revision, publicationRunId });
   const checkout = join(runRoot, `validation-${randomBytes(6).toString("hex")}`);
   mkdirSync(checkout, { recursive: false });
   const indexPath = join(runRoot, `validation-index-${randomBytes(6).toString("hex")}`);

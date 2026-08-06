@@ -106,7 +106,7 @@
     },
     "P03": {
       "name": "Внешнее ревью ТЗ исправления",
-      "actor": "Claude и Gemini; запуск и квалификация — агент",
+      "actor": "Claude; запуск и квалификация — агент",
       "document": "docs/workflow/pr-correction/25-external-spec-review.md",
       "transitionCount": 6,
       "next": ["P03", "C07", "D01", "B01", "X03", "C09"]
@@ -194,7 +194,7 @@
       "actor": "Агент",
       "document": "docs/workflow/pr-correction/40-snapshot-review-and-exit.md",
       "transitionCount": 4,
-      "next": ["B01", "C06", "C12", "P01"]
+      "next": ["B01", "C01", "C06", "P01"]
     },
     "P01": {
       "name": "CI текущего commit",

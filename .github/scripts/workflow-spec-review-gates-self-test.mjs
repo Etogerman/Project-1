@@ -2,8 +2,8 @@
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
 import {
@@ -12,6 +12,8 @@ import {
   compareAndSetActiveCycle,
   createOperationOwner,
   gateConstants,
+  openPublicationRun,
+  reclaimStaleOperationLock,
   releaseOperationLock,
   runExactTreeChecks,
   sealExpectedTree,
@@ -22,6 +24,9 @@ import {
   validateNoOpProof,
   validatePendingPublicationBlock,
   validatePublicationGate,
+  validatePublicationRunOpen,
+  validateQuarantineRecoveryAuthorization,
+  validateQuarantineRecoveryAudit,
   validateSpecClassification,
   writeArtifactAtomically,
 } from "./workflow-spec-review-gates.mjs";
@@ -130,6 +135,7 @@ function implementationGate(specClassification) {
     base: O("a"),
     inputHead: O("b"),
     implementationSpecClassificationIdentity: specClassification.identity,
+    implementationDecisionIdentity: H("8"),
     issuedBy: "G00",
     allowedStates: ["C10", "C11", "G01"],
   });
@@ -152,6 +158,7 @@ function publicationGate({ implementation, publication, checks }) {
     specStatus: publication.decision,
     specRevision: publication.specRevision,
     checksSha256: sha256Bytes(checksBytes),
+    executionCeilingIdentity: H("9"),
     issuedBy: "G01",
     allowedStates: ["C12"],
   });
@@ -180,14 +187,42 @@ function noOpProof({ implementation, publication, checks }) {
 }
 
 function cycle(state, activeRunId = ["P03", "G01", "C12"].includes(state) ? "run-1" : null) {
+  const owner = resign({ schemaVersion: 1, host: "host", bootIdentity: H("b"), pid: 100, pgid: 100, processStartToken: "token", operationId: "op-1" });
   return resign({
     schemaVersion: 1,
     cycleId: "cycle-1",
     revision: 11,
     state,
     activeRunId,
-    owner: { host: "host", pid: 100, pgid: 100, processStartToken: "token", operationId: "op-1" },
+    lastCompletedRun: null,
+    owner,
+    sourceContext: resign({ kind: "source", stableSubject: "self-test" }),
+    signalContext: resign({ kind: "signal", stableSubject: "self-test" }),
+    resumeContexts: [],
     lockPath: ".operation.lock",
+  });
+}
+
+function resumeFrame(current, { holdingState, targetState, savedRunId = current.activeRunId, gateIdentity = null, register = "resume_state" }) {
+  return resign({
+    schemaVersion: 1,
+    frameId: `frame-${holdingState.toLowerCase()}-${targetState.toLowerCase()}`,
+    cycleId: current.cycleId,
+    revision: current.revision,
+    register,
+    sourceState: current.state,
+    holdingState,
+    targetState,
+    runPolicy: targetState === "C12" ? "restore_exact" : ["P03", "G01"].includes(targetState) ? "new" : "none",
+    savedRunId,
+    gateIdentity,
+    requestedAction: null,
+    executor: "agent",
+    owner: "user/operator",
+    unblockEvent: "self_test_unblocked",
+    stopMode: "blocked",
+    signalIdentity: current.signalContext.identity,
+    sourceContextIdentity: current.sourceContext.identity,
   });
 }
 
@@ -244,7 +279,7 @@ async function main() {
   gate.reviewFinalManifestSha256 = sha256Bytes(finalBytes);
   gate.tzSha256 = sha256Bytes(tzBytes);
   const validGate = resign(gate);
-  const gateContext = { finalManifestBytes: finalBytes, tzBytes, classification: implementationClassification, cycleId: "cycle-1", revision: 11, base: O("a"), inputHead: O("b") };
+  const gateContext = { finalManifestBytes: finalBytes, tzBytes, classification: implementationClassification, cycleId: "cycle-1", revision: 11, base: O("a"), inputHead: O("b"), implementationDecisionIdentity: H("8") };
   assert(validateImplementationGate(validGate, gateContext));
   expectEveryRequiredField(validGate, Object.keys(validGate), (value) => validateImplementationGate(value, gateContext), "IMPLEMENTATION_GATE");
   for (const [field, value] of [["issuedBy", "C09"], ["cycleId", "cycle-2"], ["revision", 12], ["base", O("d")]]) {
@@ -256,7 +291,7 @@ async function main() {
   const pendingGate = implementationGate(pending);
   pendingGate.reviewFinalManifestSha256 = sha256Bytes(finalBytes);
   pendingGate.tzSha256 = sha256Bytes(tzBytes);
-  assert(validateImplementationGate(resign(pendingGate), { ...gateContext, classification: pending }));
+  expectThrow(() => validateImplementationGate(resign(pendingGate), { ...gateContext, classification: pending }), "IMPLEMENTATION_GATE");
 
   const publication = publicationGate({ implementation: validGate, publication: publicationClassification, checks: publicationChecks });
   const checksBytes = jsonBytes(publicationChecks);
@@ -273,6 +308,7 @@ async function main() {
     expectedTreeOid: O("c"),
     validatedDiffBytes: Buffer.from("validated-diff"),
     publishedFiles: ["a.md", "z.md"],
+    executionCeilingIdentity: H("9"),
   };
   assert(validatePublicationGate(publication, publicationContext));
   expectEveryRequiredField(publication, Object.keys(publication), (value) => validatePublicationGate(value, publicationContext), "PUBLICATION_GATE");
@@ -354,8 +390,9 @@ async function main() {
   for (const state of Object.keys(states)) assert(validateActiveCycle(cycle(state)));
   const activeCycleFixture = cycle("C08");
   expectEveryRequiredField(activeCycleFixture, [
-    "schemaVersion", "cycleId", "revision", "state", "activeRunId", "owner", "lockPath", "identity",
-    ...["host", "pid", "pgid", "processStartToken", "operationId"].map((key) => `owner.${key}`),
+    "schemaVersion", "cycleId", "revision", "state", "activeRunId", "lastCompletedRun", "owner",
+    "sourceContext", "signalContext", "resumeContexts", "lockPath", "identity",
+    ...["schemaVersion", "host", "bootIdentity", "pid", "pgid", "processStartToken", "operationId", "identity"].map((key) => `owner.${key}`),
   ], (value) => validateActiveCycle(value, { states }), "ACTIVE_CYCLE");
   expectThrow(() => validateActiveCycle(cycle("P03", null), { states }), "ACTIVE_CYCLE");
   expectThrow(() => validateActiveCycle(cycle("C09", "run-1"), { states }), "ACTIVE_CYCLE");
@@ -364,9 +401,10 @@ async function main() {
   expectThrow(() => validateActiveCycle(resign(unsafeCycle), { states }), "ACTIVE_CYCLE");
   const cycleTemporary = mkdtempSync(join(tmpdir(), "workflow-cycle-self-test-"));
   try {
-    const owner = { host: "host", pid: process.pid, pgid: process.pid, processStartToken: "test-start-token", operationId: "op-cycle" };
-    mkdirSync(join(cycleTemporary, "runs", "review-1"), { recursive: true });
+    const owner = await createOperationOwner("op-cycle");
     const cycleRoot = join(cycleTemporary, "cycles", "cycle-1", "revision-11");
+    mkdirSync(join(cycleRoot, "review-runs", "review-1"), { recursive: true });
+    mkdirSync(join(cycleRoot, "review-runs", "review-2"), { recursive: true });
     const publicationRoot = join(cycleRoot, "publication-runs", "publish-1");
     const otherPublicationRoot = join(cycleRoot, "publication-runs", "other");
     const noOpRoot = join(cycleRoot, "publication-runs", "publish-noop");
@@ -379,6 +417,22 @@ async function main() {
     writeFileSync(join(noOpRoot, "no-op-proof.json"), jsonBytes(correctedProof));
     const operationLock = acquireOperationLock({ taskRoot: cycleTemporary, owner });
     expectThrow(() => acquireOperationLock({ taskRoot: cycleTemporary, owner }), "ACTIVE_CYCLE_LOCK_BUSY");
+    const liveLockRecord = JSON.parse(readFileSync(join(cycleTemporary, ".operation.lock"), "utf8"));
+    const liveAuthorization = resign({
+      schemaVersion: 1,
+      decisionId: "reclaim-live-lock",
+      decisionKind: "quarantine_recovery",
+      requestedAction: "reclaim_stale_operation_lock",
+      targetOperationLockIdentity: liveLockRecord.identity,
+      authorizedObjects: [".operation.lock"],
+      answer: "approved",
+      decidedBy: { kind: "user", identityHint: H("7") },
+      evidenceIdentity: H("8"),
+      decidedAt: "2026-08-03T00:00:00.000Z",
+    });
+    assert(validateQuarantineRecoveryAuthorization(liveAuthorization));
+    expectEveryRequiredField(liveAuthorization, Object.keys(liveAuthorization), validateQuarantineRecoveryAuthorization, "QUARANTINE_RECOVERY");
+    await expectReject(reclaimStaleOperationLock({ taskRoot: cycleTemporary, targetOperationLockIdentity: liveLockRecord.identity, owner, authorization: liveAuthorization }), "ACTIVE_CYCLE_LOCK_UNKNOWN");
     const c08 = cycle("C08");
     const transition = (input) => transitionActiveCycle({ ...input, states, operationLock, taskRoot: cycleTemporary, owner });
     const p03 = transition({ current: c08, expectedIdentity: c08.identity, nextState: "P03", nextRunId: "review-1" });
@@ -399,20 +453,66 @@ async function main() {
     const g01NoOp = cycle("G01", "publish-noop");
     expectThrow(() => transition({ current: g01NoOp, expectedIdentity: g01NoOp.identity, nextState: "C13" }), "ACTIVE_CYCLE_PROOF");
     expectThrow(() => transition({ current: g01NoOp, expectedIdentity: g01NoOp.identity, nextState: "C13", transitionProof: { ...noOpEvidence, identity: H("d") } }), "ACTIVE_CYCLE_PROOF");
-    assert.equal(transition({ current: g01NoOp, expectedIdentity: g01NoOp.identity, nextState: "C13", transitionProof: noOpEvidence }).activeRunId, null);
-    const d02 = transition({ current: c12, expectedIdentity: c12.identity, nextState: "D02" });
+    const noOpCompleted = transition({ current: g01NoOp, expectedIdentity: g01NoOp.identity, nextState: "C13", transitionProof: noOpEvidence });
+    assert.equal(noOpCompleted.activeRunId, null);
+    assert.equal(noOpCompleted.lastCompletedRun.entryGateIdentity, correctedProof.implementationGateIdentity);
+    expectThrow(() => transition({ current: c12, expectedIdentity: c12.identity, nextState: "C13" }), "ACTIVE_CYCLE_COMPLETION");
+    const completed = transition({
+      current: c12,
+      expectedIdentity: c12.identity,
+      nextState: "C13",
+      completionEvidence: { kind: "publication", runId: "publish-1", entryGateIdentity: publication.identity, terminalEvidenceIdentity: H("e") },
+    });
+    assert.equal(completed.lastCompletedRun.runId, "publish-1");
+    const d02Frame = resumeFrame(c12, { holdingState: "D02", targetState: "C12", savedRunId: "publish-1", gateIdentity: publication.identity });
+    const d02 = transition({ current: c12, expectedIdentity: c12.identity, nextState: "D02", holdingFrame: d02Frame });
     assert.equal(d02.activeRunId, null);
-    const resumeEvidence = { resumeState: "C12", publicationRunId: "publish-1", gateIdentity: publication.identity };
-    const restored = transition({ current: d02, expectedIdentity: d02.identity, nextState: "C12", nextRunId: "publish-1", resumeEvidence, expectedResumeEvidence: clone(resumeEvidence), gateEvidence: publicationEvidence });
+    assert.equal(d02.resumeContexts.at(-1).identity, d02Frame.identity);
+    const restored = transition({ current: d02, expectedIdentity: d02.identity, nextState: "C12", nextRunId: "publish-1", resumeFrameIdentity: d02Frame.identity, gateEvidence: publicationEvidence });
     assert.equal(restored.activeRunId, "publish-1");
-    const wrongGateResume = { ...resumeEvidence, gateIdentity: H("a") };
-    expectThrow(() => transition({ current: d02, expectedIdentity: d02.identity, nextState: "C12", nextRunId: "publish-1", resumeEvidence: wrongGateResume, expectedResumeEvidence: clone(wrongGateResume), gateEvidence: publicationEvidence }), "ACTIVE_CYCLE_CAS");
-    expectThrow(() => transition({ current: d02, expectedIdentity: d02.identity, nextState: "C12", nextRunId: "other", resumeEvidence, expectedResumeEvidence: clone(resumeEvidence), gateEvidence: publicationEvidence }), "ACTIVE_CYCLE_CAS");
+    assert.equal(restored.resumeContexts.length, 0);
+    const wrongGateFrame = resign({ ...d02Frame, gateIdentity: H("a") });
+    const wrongGateCycle = resign({ ...d02, resumeContexts: [wrongGateFrame] });
+    expectThrow(() => transition({ current: wrongGateCycle, expectedIdentity: wrongGateCycle.identity, nextState: "C12", nextRunId: "publish-1", resumeFrameIdentity: wrongGateFrame.identity, gateEvidence: publicationEvidence }), "ACTIVE_CYCLE_RESUME");
+    expectThrow(() => transition({ current: d02, expectedIdentity: d02.identity, nextState: "C12", nextRunId: "other", resumeFrameIdentity: d02Frame.identity, gateEvidence: publicationEvidence }), "ACTIVE_CYCLE_RESUME");
+    const reviewBlockFrame = resumeFrame(p03, { holdingState: "B01", targetState: "P03", register: "return_state" });
+    const reviewBlocked = transition({ current: p03, expectedIdentity: p03.identity, nextState: "B01", holdingFrame: reviewBlockFrame });
+    expectThrow(() => transition({ current: reviewBlocked, expectedIdentity: reviewBlocked.identity, nextState: "P03", nextRunId: "review-1", resumeFrameIdentity: reviewBlockFrame.identity }), "ACTIVE_CYCLE_RESUME");
+    const resumedReview = transition({ current: reviewBlocked, expectedIdentity: reviewBlocked.identity, nextState: "P03", nextRunId: "review-2", resumeFrameIdentity: reviewBlockFrame.identity });
+    assert.equal(resumedReview.activeRunId, "review-2");
+    assert.equal(resumedReview.resumeContexts.length, 0);
     expectThrow(() => transition({ current: c08, expectedIdentity: c08.identity, nextState: "C10" }), "ACTIVE_CYCLE_CAS");
     expectThrow(() => transition({ current: c08, expectedIdentity: H("f"), nextState: "P03", nextRunId: "review-2" }), "ACTIVE_CYCLE_CAS");
     expectThrow(() => transitionActiveCycle({ current: c08, expectedIdentity: c08.identity, nextState: "P03", nextRunId: "review-2", states, operationLock: null, taskRoot: cycleTemporary, owner }), "ACTIVE_CYCLE_LOCK");
     releaseOperationLock(operationLock);
     expectThrow(() => releaseOperationLock(operationLock), "ACTIVE_CYCLE_LOCK");
+
+    const staleOwner = resign({
+      ...owner,
+      host: hostname(),
+      pid: 999_999,
+      pgid: 999_999,
+      processStartToken: "missing-process",
+      operationId: "stale-owner",
+    });
+    const staleRecord = resign({
+      schemaVersion: 1,
+      kind: "operation",
+      taskRootIdentity: sha256Bytes(Buffer.from(canonicalJson(realpathSync(cycleTemporary)))),
+      owner: staleOwner,
+      createdAt: "2026-08-03T00:00:00.000Z",
+    });
+    writeFileSync(join(cycleTemporary, ".operation.lock"), `${JSON.stringify(staleRecord, null, 2)}\n`, { mode: 0o600 });
+    const staleAuthorization = resign({ ...liveAuthorization, decisionId: "reclaim-stale-lock", targetOperationLockIdentity: staleRecord.identity });
+    await expectReject(reclaimStaleOperationLock({ taskRoot: cycleTemporary, targetOperationLockIdentity: staleRecord.identity, owner }), "QUARANTINE_RECOVERY");
+    const reclaimed = await reclaimStaleOperationLock({ taskRoot: cycleTemporary, targetOperationLockIdentity: staleRecord.identity, owner, authorization: staleAuthorization });
+    assert(existsSync(reclaimed.quarantinedPath));
+    assert(existsSync(reclaimed.auditPath));
+    const reclaimAudit = JSON.parse(readFileSync(reclaimed.auditPath, "utf8"));
+    assert(validateQuarantineRecoveryAudit(reclaimAudit));
+    expectEveryRequiredField(reclaimAudit, Object.keys(reclaimAudit), validateQuarantineRecoveryAudit, "QUARANTINE_RECOVERY");
+    assert.equal(reclaimAudit.authorizationIdentity, staleAuthorization.identity);
+    releaseOperationLock(reclaimed.operationLock);
 
     const casRoot = join(cycleTemporary, "cas");
     mkdirSync(casRoot);
@@ -451,6 +551,15 @@ async function main() {
     const base = git(repo, ["rev-parse", "HEAD"]);
     writeFileSync(join(repo, "a.txt"), "changed\n");
     writeFileSync(join(repo, "b.txt"), "new\n");
+    await expectReject(sealExpectedTree({ repo, publishBase: base, publishedFiles: ["a.txt", "b.txt"], ...publicationPath }), "PUBLICATION_RUN_OPEN");
+    const runOpen = openPublicationRun({
+      ...publicationPath,
+      implementationGateIdentity: validGate.identity,
+      sourceContextIdentity: cycle("C11").sourceContext.identity,
+      publishBase: base,
+      openedBy: runtimeOwner,
+    });
+    assert(validatePublicationRunOpen(runOpen));
     const sealed = await sealExpectedTree({ repo, publishBase: base, publishedFiles: ["a.txt", "b.txt"], ...publicationPath });
     assert.equal(sealed.validatedDiffSha256, sha256Bytes(sealed.diffBytes));
     const manifest = await runExactTreeChecks({
@@ -475,6 +584,17 @@ async function main() {
     git(noOpRepo, ["add", "."]);
     git(noOpRepo, ["commit", "-qm", "base"]);
     const noOpBase = git(noOpRepo, ["rev-parse", "HEAD"]);
+    openPublicationRun({
+      taskRoot,
+      cycleId: "cycle-1",
+      revision: 11,
+      publicationRunId: "publish-2",
+      publicationRunRoot: noOpRunRoot,
+      implementationGateIdentity: validGate.identity,
+      sourceContextIdentity: cycle("C11").sourceContext.identity,
+      publishBase: noOpBase,
+      openedBy: runtimeOwner,
+    });
     const noOpSealed = await sealExpectedTree({
       repo: noOpRepo,
       publishBase: noOpBase,

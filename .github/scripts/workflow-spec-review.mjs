@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
   accessSync,
@@ -25,7 +25,6 @@ import { fileURLToPath } from "node:url";
 
 export const NODE_MINIMUM_MAJOR = 22;
 export const HARD_TIMEOUT_MS = 30 * 60_000;
-export const GEMINI_PRINT_TIMEOUT = "24m";
 export const PROMPT_MAX_BYTES = 65_536;
 export const PROMPT_PATH = "docs/workflow/pr-correction/external-spec-review-prompt.md";
 export const ENV_ALLOWLIST = Object.freeze([
@@ -40,7 +39,8 @@ export const RESPONSE_MARKERS = Object.freeze([
 ]);
 export const RESPONSE_VERDICTS = new Set(["блокеров нет", "нужны правки"]);
 export const PROCESS_POLICY = Object.freeze({
-  launchMode: "parallel",
+  launchMode: "single",
+  maxParallel: 1,
   mcpMode: "disabled",
   unknownLongLivedDescendant: "fail",
   snapshotCommandSeconds: 120,
@@ -61,7 +61,6 @@ const FINAL_FILES = Object.freeze([
   "author-review.md",
   "claude.md",
   "consolidated.md",
-  "gemini.md",
   "manifest.json",
   "qualification.json",
   "review-manifest.json",
@@ -134,6 +133,94 @@ function assertStringArray(value, label, { nonempty = false, unique = false, all
 function assertCanonicalIdentity(value, label, code = "SCHEMA") {
   assertSha256(value.identity, `${label}.identity`, code);
   if (value.identity !== jcsIdentity(value)) fail(`${label}.identity не совпадает с RFC 8785 JCS`, code);
+}
+
+function identityArtifact(value) {
+  const artifact = { ...structuredClone(value), identity: "" };
+  artifact.identity = jcsIdentity(artifact);
+  return artifact;
+}
+
+function assertIsoUtc(value, label, code = "SCHEMA") {
+  if (typeof value !== "string" || !value.endsWith("Z") || !Number.isFinite(Date.parse(value))) fail(`${label}: ожидалось ISO UTC время`, code);
+}
+
+function assertExactOwner(value, label, code = "REVIEW_RUN_OPEN") {
+  exactKeys(value, ["schemaVersion", "host", "bootIdentity", "pid", "pgid", "processStartToken", "operationId", "identity"], label, code);
+  if (value.schemaVersion !== 1 || !Number.isInteger(value.pid) || value.pid <= 0 || !Number.isInteger(value.pgid) || value.pgid <= 0) fail(`${label}: owner невалиден`, code);
+  for (const key of ["host", "processStartToken", "operationId"]) nonemptyString(value[key], `${label}.${key}`, code);
+  assertSha256(value.bootIdentity, `${label}.bootIdentity`, code);
+  assertCanonicalIdentity(value, label, code);
+}
+
+export function validateReviewRunOpen(value) {
+  exactKeys(value, ["schemaVersion", "cycleId", "revision", "reviewRunId", "revisionSealIdentity", "sourceContextIdentity", "reviewSnapshotIdentity", "openedBy", "openedAt", "identity"], "review run-open", "REVIEW_RUN_OPEN");
+  if (value.schemaVersion !== 1 || !Number.isInteger(value.revision) || value.revision <= 0) fail("review run-open revision невалидна", "REVIEW_RUN_OPEN");
+  validatePathSegment(value.cycleId, "cycleId", /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/);
+  validatePathSegment(value.reviewRunId, "reviewRunId", /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/);
+  for (const key of ["revisionSealIdentity", "sourceContextIdentity", "reviewSnapshotIdentity"]) assertSha256(value[key], `review run-open.${key}`, "REVIEW_RUN_OPEN");
+  assertExactOwner(value.openedBy, "review run-open.openedBy", "REVIEW_RUN_OPEN");
+  assertIsoUtc(value.openedAt, "review run-open.openedAt", "REVIEW_RUN_OPEN");
+  assertCanonicalIdentity(value, "review run-open", "REVIEW_RUN_OPEN");
+  return value;
+}
+
+export function validateLaunchIntent(value) {
+  exactKeys(value, ["schemaVersion", "cycleId", "revision", "reviewRunId", "reviewManifestIdentity", "client", "executableRealPath", "executableSha256", "argv", "cwd", "scratchIdentity", "settingsCheckpointSha256", "processPolicyIdentity", "createdAt", "identity"], "launch intent", "LAUNCH_INTENT");
+  if (value.schemaVersion !== 1 || value.client !== "claude" || !Number.isInteger(value.revision) || value.revision <= 0) fail("launch intent policy невалидна", "LAUNCH_INTENT");
+  validatePathSegment(value.cycleId, "cycleId", /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/);
+  validatePathSegment(value.reviewRunId, "reviewRunId", /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/);
+  for (const key of ["reviewManifestIdentity", "executableSha256", "scratchIdentity", "settingsCheckpointSha256", "processPolicyIdentity"]) assertSha256(value[key], `launch intent.${key}`, "LAUNCH_INTENT");
+  if (!value.executableRealPath.startsWith("/") || resolve(value.executableRealPath) !== value.executableRealPath) fail("launch intent executableRealPath невалиден", "LAUNCH_INTENT");
+  if (!Array.isArray(value.argv) || value.argv.length === 0 || value.argv.some((item) => typeof item !== "string")) fail("launch intent argv невалиден", "LAUNCH_INTENT");
+  if (!value.cwd.startsWith("/") || resolve(value.cwd) !== value.cwd) fail("launch intent cwd невалиден", "LAUNCH_INTENT");
+  assertIsoUtc(value.createdAt, "launch intent.createdAt", "LAUNCH_INTENT");
+  assertCanonicalIdentity(value, "launch intent", "LAUNCH_INTENT");
+  return value;
+}
+
+export function validateStartedArtifact(value) {
+  exactKeys(value, ["schemaVersion", "reviewRunId", "reviewManifestIdentity", "pid", "pgid", "processStartToken", "bootIdentity", "executableSha256", "settingsCheckpointSha256", "scratchIdentity", "secretScanResultIdentity", "startedAt", "overallDeadlineAt", "identity"], "started", "REVIEW_STARTED");
+  if (value.schemaVersion !== 1 || !Number.isInteger(value.pid) || value.pid <= 0 || !Number.isInteger(value.pgid) || value.pgid <= 0) fail("started process identity невалидна", "REVIEW_STARTED");
+  validatePathSegment(value.reviewRunId, "reviewRunId", /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/);
+  nonemptyString(value.processStartToken, "started.processStartToken", "REVIEW_STARTED");
+  for (const key of ["reviewManifestIdentity", "bootIdentity", "executableSha256", "settingsCheckpointSha256", "scratchIdentity", "secretScanResultIdentity"]) assertSha256(value[key], `started.${key}`, "REVIEW_STARTED");
+  assertIsoUtc(value.startedAt, "started.startedAt", "REVIEW_STARTED");
+  assertIsoUtc(value.overallDeadlineAt, "started.overallDeadlineAt", "REVIEW_STARTED");
+  if (Date.parse(value.overallDeadlineAt) <= Date.parse(value.startedAt)) fail("started deadline невалиден", "REVIEW_STARTED");
+  assertCanonicalIdentity(value, "started", "REVIEW_STARTED");
+  return value;
+}
+
+export function validateProcessResult(value) {
+  exactKeys(value, ["schemaVersion", "reviewRunId", "reviewManifestIdentity", "pid", "pgid", "processStartToken", "exitCode", "signal", "timedOut", "outputExceeded", "unknownDescendantDetected", "mcpDescendantDetected", "stdoutSha256", "stderrSha256", "startedAt", "finishedAt", "identity"], "process result", "PROCESS_RESULT");
+  if (value.schemaVersion !== 1 || !Number.isInteger(value.pid) || value.pid <= 0 || !Number.isInteger(value.pgid) || value.pgid <= 0) fail("process result identity невалидна", "PROCESS_RESULT");
+  validatePathSegment(value.reviewRunId, "reviewRunId", /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/);
+  nonemptyString(value.processStartToken, "processResult.processStartToken", "PROCESS_RESULT");
+  assertSha256(value.reviewManifestIdentity, "processResult.reviewManifestIdentity", "PROCESS_RESULT");
+  if (value.exitCode !== null && !Number.isInteger(value.exitCode)) fail("processResult.exitCode невалиден", "PROCESS_RESULT");
+  if (value.signal !== null && typeof value.signal !== "string") fail("processResult.signal невалиден", "PROCESS_RESULT");
+  for (const key of ["timedOut", "outputExceeded", "unknownDescendantDetected", "mcpDescendantDetected"]) if (typeof value[key] !== "boolean") fail(`processResult.${key} должен быть boolean`, "PROCESS_RESULT");
+  for (const key of ["stdoutSha256", "stderrSha256"]) assertSha256(value[key], `processResult.${key}`, "PROCESS_RESULT");
+  assertIsoUtc(value.startedAt, "processResult.startedAt", "PROCESS_RESULT");
+  assertIsoUtc(value.finishedAt, "processResult.finishedAt", "PROCESS_RESULT");
+  if (Date.parse(value.finishedAt) < Date.parse(value.startedAt)) fail("process result время невалидно", "PROCESS_RESULT");
+  assertCanonicalIdentity(value, "process result", "PROCESS_RESULT");
+  return value;
+}
+
+export function validateReviewSummary(value) {
+  exactKeys(value, ["schemaVersion", "reviewRunId", "reviewManifestIdentity", "client", "status", "processResultIdentity", "responseSha256", "responseValid", "qualificationRequired", "finishedAt", "identity"], "review summary", "REVIEW_SUMMARY");
+  if (value.schemaVersion !== 1 || value.client !== "claude" || !["completed", "blocked", "cancelled_by_user"].includes(value.status)) fail("review summary policy невалидна", "REVIEW_SUMMARY");
+  validatePathSegment(value.reviewRunId, "reviewRunId", /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/);
+  assertSha256(value.reviewManifestIdentity, "reviewSummary.reviewManifestIdentity", "REVIEW_SUMMARY");
+  assertSha256(value.processResultIdentity, "reviewSummary.processResultIdentity", "REVIEW_SUMMARY");
+  assertSha256(value.responseSha256, "reviewSummary.responseSha256", "REVIEW_SUMMARY");
+  if (typeof value.responseValid !== "boolean" || typeof value.qualificationRequired !== "boolean") fail("review summary boolean-поля невалидны", "REVIEW_SUMMARY");
+  if ((value.status === "completed") !== (value.responseValid && value.qualificationRequired)) fail("review summary status не согласован", "REVIEW_SUMMARY");
+  assertIsoUtc(value.finishedAt, "reviewSummary.finishedAt", "REVIEW_SUMMARY");
+  assertCanonicalIdentity(value, "review summary", "REVIEW_SUMMARY");
+  return value;
 }
 
 export function readStrictPrompt(path) {
@@ -209,17 +296,15 @@ function assertRegularFile(path, code = "FILE_TYPE") {
   return stat;
 }
 
-function publishQualifiedResults(reviewRoot, claudeBytes, geminiBytes, qualificationBytes, consolidatedBytes) {
-  const results = join(reviewRoot, "results");
+function publishQualifiedResults(results, claudeBytes, qualificationBytes, consolidatedBytes) {
   exactFileSet(results, []);
-  const pending = join(reviewRoot, `.results-pending-${process.pid}-${randomBytes(6).toString("hex")}`);
+  const pending = join(dirname(results), `.results-pending-${process.pid}-${randomBytes(6).toString("hex")}`);
   mkdirSync(pending, { recursive: false });
   try {
     writeFileSync(join(pending, "claude.md"), claudeBytes, { flag: "wx" });
-    writeFileSync(join(pending, "gemini.md"), geminiBytes, { flag: "wx" });
     writeFileSync(join(pending, "qualification.json"), qualificationBytes, { flag: "wx" });
     writeFileSync(join(pending, "consolidated.md"), consolidatedBytes, { flag: "wx" });
-    exactFileSet(pending, ["claude.md", "gemini.md", "qualification.json", "consolidated.md"]);
+    exactFileSet(pending, ["claude.md", "qualification.json", "consolidated.md"]);
     renameSync(pending, results);
   } catch (error) {
     rmSync(pending, { recursive: true, force: true });
@@ -441,7 +526,6 @@ export function scanSecrets(reviewRoot) {
 export function resolveSettingsPaths(home = homedir()) {
   return {
     claude: join(home, ".claude", "settings.json"),
-    gemini: join(home, ".gemini", "antigravity-cli", "settings.json"),
   };
 }
 
@@ -468,24 +552,69 @@ function redactSettingsStrings(value, secretValues) {
 }
 
 function captureSettingsCheckpoint(path, client) {
+  if (client !== "claude") fail("контур внешнего ревью поддерживает только Claude", "REVIEW_CLIENT");
   const bytes = readRegularSettings(path);
   let settings;
   try {
     settings = JSON.parse(bytes.toString("utf8"));
   } catch {
-    fail(`${client} settings содержит невалидный JSON`, client === "claude" ? "CLAUDE_SETTINGS" : "GEMINI_SETTINGS");
+    fail("Claude settings содержит невалидный JSON", "CLAUDE_SETTINGS");
   }
-  let oauthToken = null;
-  if (client === "claude") {
-    oauthToken = settings?.env?.CLAUDE_CODE_OAUTH_TOKEN;
-    if (typeof oauthToken !== "string" || oauthToken.length < 16) fail("Claude OAuth token недоступен", "CLAUDE_OAUTH");
-  }
-  const redacted = redactSettingsStrings(settings, oauthToken === null ? [] : [oauthToken]);
+  const oauthToken = settings?.env?.CLAUDE_CODE_OAUTH_TOKEN;
+  if (typeof oauthToken !== "string" || oauthToken.length < 16) fail("Claude OAuth token недоступен", "CLAUDE_OAUTH");
+  const redacted = redactSettingsStrings(settings, [oauthToken]);
   return {
     bytes,
+    realPath: realpathSync(path),
+    mode: lstatSync(path).mode & 0o777,
+    exactSha256: sha256Bytes(bytes),
     configurationSha256: sha256Bytes(Buffer.from(canonicalJson(redacted))),
     oauthToken,
   };
+}
+
+function settingsCheckpointIdentity(checkpoint) {
+  return sha256Bytes(Buffer.from(canonicalJson([{
+    client: "claude",
+    realPath: checkpoint.realPath,
+    exists: true,
+    mode: checkpoint.mode,
+    sha256: checkpoint.exactSha256,
+  }])));
+}
+
+function currentBootIdentity() {
+  const linux = "/proc/sys/kernel/random/boot_id";
+  if (existsSync(linux)) {
+    const value = readFileSync(linux, "utf8").trim();
+    if (value === "") fail("boot identity Linux недоступна", "BOOT_IDENTITY");
+    return sha256Bytes(Buffer.from(`linux-boot-${value}`));
+  }
+  if (process.platform === "darwin") {
+    let value;
+    try { value = execFileSync("/usr/sbin/sysctl", ["-n", "kern.boottime"], { encoding: "utf8", timeout: 2_000 }).trim(); }
+    catch { fail("boot identity macOS недоступна", "BOOT_IDENTITY"); }
+    const seconds = value.match(/sec\s*=\s*(\d+)/)?.[1];
+    if (!seconds) fail("boot identity macOS не распознана", "BOOT_IDENTITY");
+    return sha256Bytes(Buffer.from(`darwin-boot-${seconds}`));
+  }
+  fail("boot identity этой платформы недоступна", "BOOT_IDENTITY");
+}
+
+function createCaptureFiles(capture) {
+  const stdoutPath = join(capture, "stdout.bin");
+  const stderrPath = join(capture, "stderr.bin");
+  for (const path of [stdoutPath, stderrPath]) writeFileSync(path, Buffer.alloc(0), { flag: "wx", mode: 0o600 });
+  const stdout = lstatSync(stdoutPath);
+  const stderr = lstatSync(stderrPath);
+  const value = {
+    realPath: realpathSync(capture),
+    stdoutMode: stdout.mode & 0o777,
+    stderrMode: stderr.mode & 0o777,
+    stdoutDeviceInode: `${stdout.dev}:${stdout.ino}`,
+    stderrDeviceInode: `${stderr.dev}:${stderr.ino}`,
+  };
+  return { stdoutPath, stderrPath, identity: sha256Bytes(Buffer.from(canonicalJson(value))) };
 }
 
 export function settingsConfigurationSha256(path, client) {
@@ -498,43 +627,15 @@ function settingsCheckpointUnchanged(before, path, client) {
 }
 
 export function buildReviewerEnvironment(parentEnvironment, client, oauthToken = null) {
+  if (client !== "claude") fail("контур внешнего ревью поддерживает только Claude", "REVIEW_CLIENT");
   const environment = {};
   for (const key of ENV_ALLOWLIST) {
     const value = parentEnvironment[key];
     if (typeof value === "string" && value !== "") environment[key] = value;
   }
-  if (client === "claude") {
-    if (typeof oauthToken !== "string" || oauthToken.length < 16) fail("Claude OAuth token недоступен", "CLAUDE_OAUTH");
-    environment.CLAUDE_CODE_OAUTH_TOKEN = oauthToken;
-  }
+  if (typeof oauthToken !== "string" || oauthToken.length < 16) fail("Claude OAuth token недоступен", "CLAUDE_OAUTH");
+  environment.CLAUDE_CODE_OAUTH_TOKEN = oauthToken;
   return environment;
-}
-
-export function validateGeminiSettings(settingsPath) {
-  let settings;
-  try {
-    settings = JSON.parse(readFileSync(settingsPath, "utf8"));
-  } catch {
-    fail("Gemini settings содержит невалидный JSON", "GEMINI_SETTINGS");
-  }
-  const visit = (value, path = "$") => {
-    if (Array.isArray(value)) {
-      value.forEach((item, index) => visit(item, `${path}[${index}]`));
-      return;
-    }
-    if (value === null || typeof value !== "object") return;
-    if (value.permissions && typeof value.permissions === "object" && Object.hasOwn(value.permissions, "allow")) {
-      fail(`${path}.permissions.allow запрещён для reviewer-а`, "GEMINI_SETTINGS_PERMISSION");
-    }
-    for (const [key, child] of Object.entries(value)) {
-      if (/^(?:command|commands|mcp|mcpServers)$/i.test(key) && child && (typeof child !== "object" || Object.keys(child).length > 0)) {
-        fail(`${path}.${key} запрещён для reviewer-а`, "GEMINI_SETTINGS_TOOL");
-      }
-      visit(child, `${path}.${key}`);
-    }
-  };
-  visit(settings);
-  return true;
 }
 
 export function buildClaudeArgs(reviewRoot, prompt, model = "claude-opus-4-6") {
@@ -556,37 +657,6 @@ export function buildClaudeArgs(reviewRoot, prompt, model = "claude-opus-4-6") {
   ];
 }
 
-function parseDuration(value) {
-  const match = String(value).match(/^(\d+)(ms|s|m)$/);
-  if (!match) fail(`неверный timeout ${value}`, "TIMEOUT_VALUE");
-  const factor = { ms: 1, s: 1_000, m: 60_000 }[match[2]];
-  return Number(match[1]) * factor;
-}
-
-export function buildGeminiArgs(reviewRoot, prompt, printTimeout = GEMINI_PRINT_TIMEOUT) {
-  return [
-    "--add-dir", reviewRoot,
-    "--output-format", "text",
-    "--mode", "plan",
-    "--sandbox",
-    "--disable-slash-commands",
-    "--effort", "high",
-    "--model", "gemini-3.1-pro-high",
-    "--print-timeout", printTimeout,
-    "--print", prompt,
-  ];
-}
-
-export function validateGeminiInvocation(args, hardTimeoutMs = HARD_TIMEOUT_MS) {
-  const forbidden = new Set(["--project", "--dangerously-skip-permissions", "--command"]);
-  if (args.some((value) => forbidden.has(value) || /permissions\.allow/i.test(value))) fail("Gemini argv содержит запрещённый флаг", "GEMINI_ARGV");
-  const addDir = args.indexOf("--add-dir");
-  const print = args.lastIndexOf("--print");
-  const timeout = args.indexOf("--print-timeout");
-  if (addDir === -1 || print === -1 || print !== args.length - 2 || timeout === -1) fail("Gemini argv не соответствует контракту", "GEMINI_ARGV");
-  if (parseDuration(args[timeout + 1]) >= hardTimeoutMs) fail("внутренний timeout Gemini должен быть меньше hard-timeout", "TIMEOUT_ORDER");
-  return true;
-}
 
 const FORBIDDEN_INTERPRETERS = new Set([
   "sh", "bash", "zsh", "dash", "csh", "tcsh", "fish",
@@ -1213,25 +1283,15 @@ async function clientPreflight({ commands, reviewRoot, environments, selfTest, s
   const claudeVersion = await runShort(commands.claude, ["--version"], { ...claudeOptions, timeoutMs: budget() });
   const auth = await runShort(commands.claude, ["auth", "status"], { ...claudeOptions, timeoutMs: budget() });
   if (!/oauth_token/i.test(auth)) fail("Claude auth status не подтверждает oauth_token", "CLAUDE_AUTH_MODE");
-  const geminiVersion = await runShort(commands.gemini, ["--version"], { ...preflightOptions, env: environments.gemini, timeoutMs: budget() });
-  const models = await runShort(commands.gemini, ["models"], { ...preflightOptions, env: environments.gemini, timeoutMs: budget() });
-  if (!/gemini-3\.1-pro-high/i.test(models)) fail("модель gemini-3.1-pro-high недоступна", "GEMINI_MODEL");
   const marker = "WORKFLOW_SPEC_REVIEW_READ_SMOKE_OK";
   const smokePrompt = `Прочитай input/prompt.md и верни только ${marker}`;
   const claudeSmoke = await runShort(commands.claude, buildClaudeArgs(reviewRoot, smokePrompt), { ...claudeOptions, timeoutMs: budget() });
-  const geminiSmokeArgs = buildGeminiArgs(reviewRoot, smokePrompt, selfTest ? "2s" : "2m");
-  validateGeminiInvocation(geminiSmokeArgs, selfTest ? 3_000 : 3 * 60_000);
-  const geminiSmoke = await runShort(commands.gemini, geminiSmokeArgs, { ...preflightOptions, env: environments.gemini, timeoutMs: Math.min(budget(), selfTest ? 3_000 : 3 * 60_000) });
-  if (claudeSmoke.trim() !== marker || geminiSmoke.trim() !== marker) fail("task-local read-smoke не подтверждён", "READ_SMOKE");
+  if (claudeSmoke.trim() !== marker) fail("task-local read-smoke не подтверждён", "READ_SMOKE");
   return {
     claudeVersion,
-    geminiVersion,
-    modelListSha256: sha256Bytes(Buffer.from(models)),
     checks: {
       claudeAuth: "oauth_token-confirmed",
       claudeReadSmoke: true,
-      geminiModel: "gemini-3.1-pro-high-confirmed",
-      geminiReadSmoke: true,
     },
   };
 }
@@ -1373,77 +1433,150 @@ function clientMetadata(preflight, settingsPaths, settingsCheckpoints) {
         settingsStable: true,
       },
     },
-    gemini: {
-      apiBilling: false,
-      binary: "agy",
-      model: "gemini-3.1-pro-high",
-      modelListSha256: preflight.modelListSha256,
-      sandbox: true,
-      settingsPath: settingsPaths.gemini,
-      settingsConfigurationSha256: settingsCheckpoints.gemini.configurationSha256,
-      transport: "official-cli",
-      version: preflight.geminiVersion,
-      preflight: {
-        model: preflight.checks.geminiModel,
-        readSmoke: preflight.checks.geminiReadSmoke,
-        settingsStable: true,
-      },
-    },
   };
 }
 
-function createRunId() {
-  return `${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}-${process.pid}-${randomBytes(4).toString("hex")}`;
-}
-
-function ensureRevision(taskRoot, revision) {
-  validatePathSegment(String(revision), "revision", /^\d{2,6}$/);
-  const revisionsRoot = join(taskRoot, "revisions");
-  ensureContainedDirectory(taskRoot, revisionsRoot, "revisions");
-  const directory = join(revisionsRoot, String(revision));
+function ensureRevision(taskRoot, cycleId, revision) {
+  validatePathSegment(cycleId, "cycleId", /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/);
+  if (!Number.isInteger(revision) || revision <= 0) fail("revision должна быть положительным целым", "REVISION_MISSING");
+  const cyclesRoot = join(taskRoot, "cycles");
+  ensureContainedDirectory(taskRoot, cyclesRoot, "cycles");
+  const cycleRoot = join(cyclesRoot, cycleId);
+  ensureContainedDirectory(taskRoot, cycleRoot, "cycle");
+  const directory = join(cycleRoot, `revision-${revision}`);
   const directoryStat = lstatSafe(directory);
   if (directoryStat === null || !directoryStat.isDirectory() || directoryStat.isSymbolicLink()) fail(`ревизия ${revision} не найдена как обычный каталог`, "REVISION_MISSING");
   ensureContainedDirectory(taskRoot, directory, `ревизия ${revision}`);
-  exactFileSet(directory, ["author-review.md", "tz.md"]);
   assertRegularFile(join(directory, "author-review.md"), "REVISION_FILE");
   assertRegularFile(join(directory, "tz.md"), "REVISION_FILE");
   return directory;
 }
 
-async function buildSnapshot({ repo, base, head, taskRoot, revision, runId, deadlineAt, overallDeadlineAt }) {
-  const revisionRoot = ensureRevision(taskRoot, revision);
+function activeReviewInvocation(taskRoot) {
+  const root = ensureTaskLocalPath(taskRoot);
+  const activePath = join(root, "active-cycle.json");
+  assertRegularFile(activePath, "ACTIVE_REVIEW_CYCLE");
+  let active;
+  try {
+    active = JSON.parse(readFileSync(activePath, "utf8"));
+  } catch {
+    fail("active-cycle.json содержит невалидный JSON", "ACTIVE_REVIEW_CYCLE");
+  }
+  exactKeys(active, ["schemaVersion", "cycleId", "revision", "state", "activeRunId", "lastCompletedRun", "owner", "sourceContext", "signalContext", "resumeContexts", "lockPath", "identity"], "active review cycle", "ACTIVE_REVIEW_CYCLE");
+  if (active.schemaVersion !== 1 || active.state !== "P03" || !Number.isInteger(active.revision) || active.revision <= 0) fail("активный цикл не находится в P03", "ACTIVE_REVIEW_CYCLE");
+  validatePathSegment(active.cycleId, "cycleId", /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/);
+  validatePathSegment(active.activeRunId, "activeRunId", /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/);
+  assertCanonicalIdentity(active, "active review cycle", "ACTIVE_REVIEW_CYCLE");
+  const source = active.sourceContext;
+  exactKeys(source, ["schemaVersion", "sourceKind", "repositoryFullName", "repositoryIdentity", "repositoryRealPath", "pullRequestNumber", "baseOid", "inputHeadOid", "inputTreeOid", "reviewSnapshotIdentity", "identity"], "active source context", "ACTIVE_REVIEW_CYCLE");
+  for (const key of ["baseOid", "inputHeadOid", "inputTreeOid"]) assertOid(source[key], `sourceContext.${key}`, "ACTIVE_REVIEW_CYCLE");
+  for (const key of ["repositoryIdentity", "reviewSnapshotIdentity"]) assertSha256(source[key], `sourceContext.${key}`, "ACTIVE_REVIEW_CYCLE");
+  assertCanonicalIdentity(source, "active source context", "ACTIVE_REVIEW_CYCLE");
+  if (typeof source.repositoryRealPath !== "string" || !source.repositoryRealPath.startsWith("/") || resolve(source.repositoryRealPath) !== source.repositoryRealPath) fail("sourceContext.repositoryRealPath невалиден", "ACTIVE_REVIEW_CYCLE");
+  const repo = realpathSync(source.repositoryRealPath);
+  if (repo !== source.repositoryRealPath) fail("sourceContext.repositoryRealPath не каноничен", "ACTIVE_REVIEW_CYCLE");
+  const expectedRepositoryIdentity = sha256Bytes(Buffer.from(canonicalJson({
+    repositoryFullName: source.repositoryFullName,
+    repositoryRealPath: repo,
+  })));
+  if (source.repositoryIdentity !== expectedRepositoryIdentity) fail("sourceContext.repositoryIdentity не выведена из repositoryFullName/realpath", "ACTIVE_REVIEW_CYCLE");
+  const runRoot = join(root, "cycles", active.cycleId, `revision-${active.revision}`, "review-runs", active.activeRunId);
+  ensureContainedDirectory(root, runRoot, "active review run");
+  const runOpenPath = join(runRoot, "run-open.json");
+  assertRegularFile(runOpenPath, "ACTIVE_REVIEW_CYCLE");
+  const runOpen = validateReviewRunOpen(JSON.parse(readFileSync(runOpenPath, "utf8")));
+  if (runOpen.cycleId !== active.cycleId || runOpen.revision !== active.revision || runOpen.reviewRunId !== active.activeRunId
+    || runOpen.sourceContextIdentity !== source.identity || runOpen.reviewSnapshotIdentity !== source.reviewSnapshotIdentity) {
+    fail("active review run не связан с source context", "ACTIVE_REVIEW_CYCLE");
+  }
+  return {
+    taskRoot: root,
+    cycleId: active.cycleId,
+    revision: active.revision,
+    runId: active.activeRunId,
+    repo,
+    base: source.baseOid,
+    head: source.inputHeadOid,
+    sourceContextIdentity: source.identity,
+    reviewSnapshotIdentity: source.reviewSnapshotIdentity,
+  };
+}
+
+export function openReviewRun({ taskRoot, cycleId, revision, runId, revisionSealIdentity, sourceContextIdentity, reviewSnapshotIdentity, openedBy }) {
+  const root = ensureTaskLocalPath(taskRoot);
+  const revisionRoot = ensureRevision(root, cycleId, revision);
   validatePathSegment(runId, "run-id", /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/);
-  const runsRoot = join(taskRoot, "runs");
+  for (const [label, value] of [["revisionSealIdentity", revisionSealIdentity], ["sourceContextIdentity", sourceContextIdentity], ["reviewSnapshotIdentity", reviewSnapshotIdentity]]) assertSha256(value, label, "REVIEW_RUN_OPEN");
+  assertExactOwner(openedBy, "openedBy", "REVIEW_RUN_OPEN");
+  const runsRoot = join(revisionRoot, "review-runs");
+  if (!existsSync(runsRoot)) mkdirSync(runsRoot, { recursive: false });
+  ensureContainedDirectory(root, runsRoot, "review-runs");
+  const runRoot = join(runsRoot, runId);
+  if (!existsSync(runRoot)) mkdirSync(runRoot, { recursive: false });
+  else exactFileSet(runRoot, []);
+  const runOpen = identityArtifact({
+    schemaVersion: 1,
+    cycleId,
+    revision,
+    reviewRunId: runId,
+    revisionSealIdentity,
+    sourceContextIdentity,
+    reviewSnapshotIdentity,
+    openedBy,
+    openedAt: new Date().toISOString(),
+  });
+  validateReviewRunOpen(runOpen);
+  writeFileSync(join(runRoot, "run-open.json"), `${JSON.stringify(runOpen, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+  return { runRoot, runOpen };
+}
+
+async function buildSnapshot({ repo, base, head, taskRoot, cycleId, revision, runId, sourceContextIdentity, reviewSnapshotIdentity, deadlineAt, overallDeadlineAt }) {
+  const revisionRoot = ensureRevision(taskRoot, cycleId, revision);
+  validatePathSegment(runId, "run-id", /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/);
+  const runsRoot = join(revisionRoot, "review-runs");
   mkdirSync(runsRoot, { recursive: true });
   ensureContainedDirectory(taskRoot, runsRoot, "runs");
   const runRoot = join(runsRoot, runId);
   const capture = join(runRoot, "capture");
-  const reviewRoot = join(runRoot, "review-root");
-  if (!existsSync(runRoot)) mkdirSync(runRoot, { recursive: false });
-  else {
-    ensureContainedDirectory(taskRoot, runRoot, "run");
-    exactFileSet(runRoot, []);
+  const reviewRoot = join(runRoot, "scratch");
+  const results = join(runRoot, "results");
+  ensureContainedDirectory(taskRoot, runRoot, "run");
+  exactFileSet(runRoot, ["run-open.json"]);
+  const runOpen = validateReviewRunOpen(JSON.parse(readFileSync(join(runRoot, "run-open.json"), "utf8")));
+  if (runOpen.cycleId !== cycleId || runOpen.revision !== revision || runOpen.reviewRunId !== runId
+    || runOpen.sourceContextIdentity !== sourceContextIdentity || runOpen.reviewSnapshotIdentity !== reviewSnapshotIdentity) {
+    fail("run-open относится к другому запуску или снимку", "REVIEW_RUN_OPEN");
+  }
+  const revisionSealPath = join(revisionRoot, "revision-seal.json");
+  assertRegularFile(revisionSealPath, "REVISION_FILE");
+  let revisionSeal;
+  try {
+    revisionSeal = JSON.parse(readFileSync(revisionSealPath, "utf8"));
+  } catch {
+    fail("revision-seal.json содержит невалидный JSON", "REVISION_FILE");
+  }
+  if (revisionSeal === null || typeof revisionSeal !== "object" || Array.isArray(revisionSeal)
+    || revisionSeal.identity !== runOpen.revisionSealIdentity || revisionSeal.identity !== jcsIdentity(revisionSeal)) {
+    fail("run-open не связан с revision seal", "REVIEW_RUN_OPEN");
   }
   mkdirSync(capture);
   mkdirSync(reviewRoot);
+  mkdirSync(results);
   mkdirSync(join(reviewRoot, "input"));
-  mkdirSync(join(reviewRoot, "results"));
-  copyFileSync(join(revisionRoot, "tz.md"), join(runRoot, "tz.md"));
-  copyFileSync(join(revisionRoot, "author-review.md"), join(runRoot, "author-review.md"));
-  copyFileSync(join(repo, PROMPT_PATH), join(runRoot, "review-prompt.md"));
   const commandBudget = { deadlineAt, overallDeadlineAt };
   const current = await materializeTree(repo, head, join(reviewRoot, "current"), capture, commandBudget);
   const baseTree = await materializeTree(repo, base, join(reviewRoot, "base"), capture, commandBudget);
   const patch = await git(repo, ["diff", "--binary", "--full-index", "--no-ext-diff", base, head, "--"], commandBudget);
   writeFileSync(join(reviewRoot, "input", "changes.patch"), patch, { flag: "wx" });
-  copyFileSync(join(runRoot, "tz.md"), join(reviewRoot, "input", "tz.md"));
-  copyFileSync(join(runRoot, "review-prompt.md"), join(reviewRoot, "input", "prompt.md"));
-  return { runRoot, capture, reviewRoot, current, baseTree, patch, revisionRoot };
+  copyFileSync(join(revisionRoot, "tz.md"), join(reviewRoot, "input", "tz.md"));
+  copyFileSync(join(revisionRoot, "author-review.md"), join(reviewRoot, "input", "author-review.md"));
+  copyFileSync(join(repo, PROMPT_PATH), join(reviewRoot, "input", "prompt.md"));
+  return { runRoot, runOpen, capture, reviewRoot, results, current, baseTree, patch, revisionRoot };
 }
 
 function processPolicyFor(commands, environments) {
   const clients = {};
-  for (const name of ["claude", "gemini"]) {
+  for (const name of ["claude"]) {
     const resolvedExecutable = resolveExecutable(commands[name], environments[name]);
     clients[name] = {
       resolvedExecutable,
@@ -1455,7 +1588,7 @@ function processPolicyFor(commands, environments) {
 }
 
 export function validateReviewManifest(manifest, context = {}) {
-  exactKeys(manifest, ["schemaVersion", "base", "head", "counts", "algorithms", "hashes", "clients", "processPolicy", "identity"], "review-manifest", "REVIEW_MANIFEST");
+  exactKeys(manifest, ["schemaVersion", "base", "head", "counts", "algorithms", "hashes", "clients", "processPolicy", "environmentEvidence", "identity"], "review-manifest", "REVIEW_MANIFEST");
   if (manifest.schemaVersion !== 1) fail("review-manifest.schemaVersion должен быть 1", "REVIEW_MANIFEST");
   assertOid(manifest.base, "review-manifest.base", "REVIEW_MANIFEST");
   assertOid(manifest.head, "review-manifest.head", "REVIEW_MANIFEST");
@@ -1478,38 +1611,27 @@ export function validateReviewManifest(manifest, context = {}) {
     if (bytes !== undefined && manifest.hashes[hashKey] !== sha256Bytes(bytes)) fail(`review-manifest.hashes.${hashKey} не совпадает с точными байтами`, "REVIEW_MANIFEST");
   }
 
-  exactKeys(manifest.clients, ["claude", "gemini"], "review-manifest.clients", "REVIEW_MANIFEST");
+  exactKeys(manifest.clients, ["claude"], "review-manifest.clients", "REVIEW_MANIFEST");
   const claude = manifest.clients.claude;
-  const gemini = manifest.clients.gemini;
   exactKeys(claude, ["authMode", "binary", "model", "mcp", "settingsPath", "settingsConfigurationSha256", "tools", "transport", "version", "preflight"], "clients.claude", "REVIEW_MANIFEST");
-  exactKeys(gemini, ["apiBilling", "binary", "model", "modelListSha256", "sandbox", "settingsPath", "settingsConfigurationSha256", "transport", "version", "preflight"], "clients.gemini", "REVIEW_MANIFEST");
   exactKeys(claude.preflight, ["auth", "readSmoke", "settingsStable"], "clients.claude.preflight", "REVIEW_MANIFEST");
-  exactKeys(gemini.preflight, ["model", "readSmoke", "settingsStable"], "clients.gemini.preflight", "REVIEW_MANIFEST");
   if (claude.authMode !== "oauth_token" || claude.binary !== "claude" || claude.model !== "claude-opus-4-6" || claude.mcp !== "disabled"
     || claude.transport !== "official-cli" || canonicalJson(claude.tools) !== canonicalJson(["Read", "Glob", "Grep"])
     || claude.preflight.auth !== "oauth_token-confirmed" || claude.preflight.readSmoke !== true || claude.preflight.settingsStable !== true) {
     fail("clients.claude содержит неверный контракт", "REVIEW_MANIFEST");
   }
-  if (gemini.apiBilling !== false || gemini.binary !== "agy" || gemini.model !== "gemini-3.1-pro-high" || gemini.sandbox !== true
-    || gemini.transport !== "official-cli" || gemini.preflight.model !== "gemini-3.1-pro-high-confirmed"
-    || gemini.preflight.readSmoke !== true || gemini.preflight.settingsStable !== true) {
-    fail("clients.gemini содержит неверный контракт", "REVIEW_MANIFEST");
-  }
   for (const [label, value] of [
     ["claude.settingsConfigurationSha256", claude.settingsConfigurationSha256],
-    ["gemini.settingsConfigurationSha256", gemini.settingsConfigurationSha256],
-    ["gemini.modelListSha256", gemini.modelListSha256],
   ]) assertSha256(value, label, "REVIEW_MANIFEST");
-  for (const [label, value] of [["claude.settingsPath", claude.settingsPath], ["gemini.settingsPath", gemini.settingsPath]]) {
+  for (const [label, value] of [["claude.settingsPath", claude.settingsPath]]) {
     if (typeof value !== "string" || !value.startsWith("/") || resolve(value) !== value) fail(`${label} должен быть нормализованным абсолютным путём`, "REVIEW_MANIFEST");
   }
   nonemptyString(claude.version, "claude.version", "REVIEW_MANIFEST");
-  nonemptyString(gemini.version, "gemini.version", "REVIEW_MANIFEST");
   if (manifest.hashes.clients !== sha256Bytes(Buffer.from(canonicalJson(manifest.clients)))) fail("hash clients не совпадает", "REVIEW_MANIFEST");
 
-  const policyKeys = ["launchMode", "mcpMode", "unknownLongLivedDescendant", "snapshotCommandSeconds", "preflightSeconds", "clientSeconds", "qualificationSeconds", "finalDrainSeconds", "overallSeconds", "terminateGraceSeconds", "killGraceSeconds", "maxOutputBytesPerProcess", "clients"];
+  const policyKeys = ["launchMode", "maxParallel", "mcpMode", "unknownLongLivedDescendant", "snapshotCommandSeconds", "preflightSeconds", "clientSeconds", "qualificationSeconds", "finalDrainSeconds", "overallSeconds", "terminateGraceSeconds", "killGraceSeconds", "maxOutputBytesPerProcess", "clients"];
   exactKeys(manifest.processPolicy, policyKeys, "review-manifest.processPolicy", "REVIEW_MANIFEST");
-  if (manifest.processPolicy.launchMode !== PROCESS_POLICY.launchMode || manifest.processPolicy.mcpMode !== PROCESS_POLICY.mcpMode
+  if (manifest.processPolicy.launchMode !== PROCESS_POLICY.launchMode || manifest.processPolicy.maxParallel !== 1 || manifest.processPolicy.mcpMode !== PROCESS_POLICY.mcpMode
     || manifest.processPolicy.unknownLongLivedDescendant !== PROCESS_POLICY.unknownLongLivedDescendant) fail("processPolicy mode невалиден", "REVIEW_MANIFEST");
   for (const key of ["snapshotCommandSeconds", "preflightSeconds", "clientSeconds", "qualificationSeconds", "finalDrainSeconds", "overallSeconds", "terminateGraceSeconds", "killGraceSeconds", "maxOutputBytesPerProcess"]) {
     if (!Number.isInteger(manifest.processPolicy[key]) || manifest.processPolicy[key] !== PROCESS_POLICY[key]) fail(`processPolicy.${key} изменён`, "REVIEW_MANIFEST");
@@ -1517,8 +1639,8 @@ export function validateReviewManifest(manifest, context = {}) {
   const serialBudget = PROCESS_POLICY.snapshotCommandSeconds + PROCESS_POLICY.preflightSeconds + PROCESS_POLICY.clientSeconds
     + PROCESS_POLICY.qualificationSeconds + PROCESS_POLICY.finalDrainSeconds + PROCESS_POLICY.terminateGraceSeconds + PROCESS_POLICY.killGraceSeconds;
   if (serialBudget !== 2445 || serialBudget >= PROCESS_POLICY.overallSeconds) fail("processPolicy budget невалиден", "REVIEW_MANIFEST");
-  exactKeys(manifest.processPolicy.clients, ["claude", "gemini"], "processPolicy.clients", "REVIEW_MANIFEST");
-  for (const name of ["claude", "gemini"]) {
+  exactKeys(manifest.processPolicy.clients, ["claude"], "processPolicy.clients", "REVIEW_MANIFEST");
+  for (const name of ["claude"]) {
     const policy = manifest.processPolicy.clients[name];
     exactKeys(policy, ["resolvedExecutable", "executableSha256", "allowedDescendantExecutables"], `processPolicy.clients.${name}`, "REVIEW_MANIFEST");
     if (typeof policy.resolvedExecutable !== "string" || !policy.resolvedExecutable.startsWith("/") || resolve(policy.resolvedExecutable) !== policy.resolvedExecutable) fail("resolvedExecutable невалиден", "REVIEW_MANIFEST");
@@ -1527,11 +1649,15 @@ export function validateReviewManifest(manifest, context = {}) {
     if (policy.allowedDescendantExecutables.some((path) => !path.startsWith("/") || resolve(path) !== path)) fail("allowlist должен содержать абсолютные нормализованные пути", "REVIEW_MANIFEST");
     validateSafeInvocation(policy.resolvedExecutable, [], { shell: false, resolvedExecutable: policy.resolvedExecutable });
   }
+  exactKeys(manifest.environmentEvidence, ["settingsCheckpointSha256", "executableRealPath", "executableSha256", "secretScanPolicyIdentity", "mcpPolicyIdentity", "outputRedactionPolicyIdentity"], "environmentEvidence", "REVIEW_MANIFEST");
+  for (const key of ["settingsCheckpointSha256", "executableSha256", "secretScanPolicyIdentity", "mcpPolicyIdentity", "outputRedactionPolicyIdentity"]) assertSha256(manifest.environmentEvidence[key], `environmentEvidence.${key}`, "REVIEW_MANIFEST");
+  if (manifest.environmentEvidence.executableRealPath !== manifest.processPolicy.clients.claude.resolvedExecutable
+    || manifest.environmentEvidence.executableSha256 !== manifest.processPolicy.clients.claude.executableSha256) fail("environmentEvidence относится к другому executable", "REVIEW_MANIFEST");
   assertCanonicalIdentity(manifest, "review-manifest", "REVIEW_MANIFEST");
   return manifest;
 }
 
-export function buildReviewIdentity({ base, head, currentTreeBytes, baseTreeBytes, patchBytes, specBytes, authorReviewBytes, promptBytes, clients, counts = { current: 0, base: 0 }, processPolicy }) {
+export function buildReviewIdentity({ base, head, currentTreeBytes, baseTreeBytes, patchBytes, specBytes, authorReviewBytes, promptBytes, clients, counts = { current: 0, base: 0 }, processPolicy, environmentEvidence = null }) {
   const hashes = {
     current: sha256Bytes(currentTreeBytes),
     base_tree: sha256Bytes(baseTreeBytes),
@@ -1540,6 +1666,14 @@ export function buildReviewIdentity({ base, head, currentTreeBytes, baseTreeByte
     author_review: sha256Bytes(authorReviewBytes),
     prompt: sha256Bytes(promptBytes),
     clients: sha256Bytes(Buffer.from(canonicalJson(clients))),
+  };
+  const evidence = environmentEvidence ?? {
+    settingsCheckpointSha256: sha256Bytes(Buffer.from(canonicalJson([{ client: "claude", realPath: clients.claude.settingsPath, exists: true, mode: 384, sha256: clients.claude.settingsConfigurationSha256 }]))),
+    executableRealPath: processPolicy.clients.claude.resolvedExecutable,
+    executableSha256: processPolicy.clients.claude.executableSha256,
+    secretScanPolicyIdentity: sha256Bytes(Buffer.from("workflow-spec-review-secret-scan-v1")),
+    mcpPolicyIdentity: sha256Bytes(Buffer.from("workflow-spec-review-mcp-disabled-v1")),
+    outputRedactionPolicyIdentity: sha256Bytes(Buffer.from("workflow-spec-review-oauth-redaction-v1")),
   };
   const manifest = {
     schemaVersion: 1,
@@ -1550,6 +1684,7 @@ export function buildReviewIdentity({ base, head, currentTreeBytes, baseTreeByte
     hashes,
     clients,
     processPolicy,
+    environmentEvidence: evidence,
     identity: "",
   };
   manifest.identity = jcsIdentity(manifest);
@@ -1557,36 +1692,39 @@ export function buildReviewIdentity({ base, head, currentTreeBytes, baseTreeByte
   return { hashes, identity: manifest.identity, manifest };
 }
 
-function manifestFor({ base, head, snapshot, prompt, clients, processPolicy }) {
+function manifestFor({ base, head, snapshot, prompt, clients, processPolicy, environmentEvidence }) {
   return buildReviewIdentity({
     base,
     head,
     currentTreeBytes: snapshot.current.treeBytes,
     baseTreeBytes: snapshot.baseTree.treeBytes,
     patchBytes: snapshot.patch,
-    specBytes: readFileSync(join(snapshot.runRoot, "tz.md")),
-    authorReviewBytes: readFileSync(join(snapshot.runRoot, "author-review.md")),
+    specBytes: readFileSync(join(snapshot.revisionRoot, "tz.md")),
+    authorReviewBytes: readFileSync(join(snapshot.revisionRoot, "author-review.md")),
     promptBytes: prompt.bytes,
     clients,
     counts: { current: snapshot.current.count, base: snapshot.baseTree.count },
     processPolicy,
+    environmentEvidence,
   }).manifest;
 }
 
-function recordPreparationBlock({ taskRoot, runId, error }) {
+function recordPreparationBlock({ taskRoot, cycleId, revision, runId, error }) {
   validatePathSegment(runId, "run-id", /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/);
-  const runsRoot = join(taskRoot, "runs");
-  if (!existsSync(runsRoot)) mkdirSync(runsRoot, { recursive: false });
+  const revisionRoot = ensureRevision(taskRoot, cycleId, revision);
+  const runsRoot = join(revisionRoot, "review-runs");
   ensureContainedDirectory(taskRoot, runsRoot, "runs");
   const runRoot = join(runsRoot, runId);
-  if (!existsSync(runRoot)) mkdirSync(runRoot, { recursive: false });
   ensureContainedDirectory(taskRoot, runRoot, "run");
+  validateReviewRunOpen(JSON.parse(readFileSync(join(runRoot, "run-open.json"), "utf8")));
   const capture = join(runRoot, "capture");
-  const reviewRoot = join(runRoot, "review-root");
-  for (const directory of [capture, reviewRoot]) if (!existsSync(directory)) mkdirSync(directory, { recursive: false });
+  const reviewRoot = join(runRoot, "scratch");
+  const results = join(runRoot, "results");
+  for (const directory of [capture, reviewRoot, results]) if (!existsSync(directory)) mkdirSync(directory, { recursive: false });
   ensureContainedDirectory(taskRoot, capture, "capture");
   ensureContainedDirectory(taskRoot, reviewRoot, "review-root");
-  for (const name of ["input", "results"]) {
+  ensureContainedDirectory(taskRoot, results, "results");
+  for (const name of ["input"]) {
     const directory = join(reviewRoot, name);
     if (!existsSync(directory)) mkdirSync(directory, { recursive: false });
     ensureContainedDirectory(taskRoot, directory, `review-root/${name}`);
@@ -1618,25 +1756,46 @@ function recordPreparationBlock({ taskRoot, runId, error }) {
 
 export async function executeReviewRun(options) {
   const selfTest = options.selfTest === true;
-  const selfTestOnlyOptions = ["commands", "environment", "settingsPaths", "nodeVersion", "hardTimeoutMs", "geminiPrintTimeout", "overallTimeoutMs", "snapshotTimeoutMs", "preflightTimeoutMs", "beforeSecondClientStart"];
+  const selfTestOnlyOptions = ["commands", "environment", "settingsPaths", "nodeVersion", "hardTimeoutMs", "overallTimeoutMs", "snapshotTimeoutMs", "preflightTimeoutMs", "beforeClientStart"];
   if (!selfTest && selfTestOnlyOptions.some((key) => Object.hasOwn(options, key))) {
     fail("подмена reviewer runtime разрешена только в offline self-test", "SELF_TEST_OVERRIDE");
   }
-  assertNodeVersion(selfTest ? options.nodeVersion : undefined);
+  const callerControlledIdentity = ["repo", "base", "head", "cycleId", "revision", "runId", "sourceContextIdentity", "reviewSnapshotIdentity"];
+  if (!selfTest && callerControlledIdentity.some((key) => Object.hasOwn(options, key))) {
+    fail("production review identity выводится только из active-cycle.json", "CALLER_IDENTITY");
+  }
+  const invocation = selfTest ? options : { ...options, ...activeReviewInvocation(options.taskRoot) };
+  assertNodeVersion(selfTest ? invocation.nodeVersion : undefined);
+  validatePathSegment(invocation.cycleId, "cycleId", /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/);
+  assertSha256(invocation.sourceContextIdentity, "sourceContextIdentity", "REVIEW_RUN_OPEN");
+  assertSha256(invocation.reviewSnapshotIdentity, "reviewSnapshotIdentity", "REVIEW_RUN_OPEN");
   const operationStartedAt = Date.now();
   const overallDeadlineAt = operationStartedAt + (selfTest && options.overallTimeoutMs ? options.overallTimeoutMs : PROCESS_POLICY.overallSeconds * 1_000);
   const snapshotDeadlineAt = Math.min(overallDeadlineAt, Date.now() + (selfTest && options.snapshotTimeoutMs ? options.snapshotTimeoutMs : PROCESS_POLICY.snapshotCommandSeconds * 1_000));
-  const repo = realpathSync(resolve(options.repo));
-  const taskRoot = ensureTaskLocalPath(options.taskRoot);
+  const repo = realpathSync(resolve(invocation.repo));
+  const taskRoot = ensureTaskLocalPath(invocation.taskRoot);
   if (pathsOverlap(repo, taskRoot)) fail("task-root и source repo не должны совпадать или быть вложены друг в друга", "PATH_SCOPE");
-  const runId = options.runId ?? createRunId();
+  const runId = invocation.runId;
+  validatePathSegment(runId, "run-id", /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/);
   let snapshot;
   try {
-    await assertSourceRepository(repo, options.base, options.head, { deadlineAt: snapshotDeadlineAt, overallDeadlineAt });
-    snapshot = await buildSnapshot({ repo, base: options.base, head: options.head, taskRoot, revision: options.revision, runId, deadlineAt: snapshotDeadlineAt, overallDeadlineAt });
+    await assertSourceRepository(repo, invocation.base, invocation.head, { deadlineAt: snapshotDeadlineAt, overallDeadlineAt });
+    snapshot = await buildSnapshot({
+      repo,
+      base: invocation.base,
+      head: invocation.head,
+      taskRoot,
+      cycleId: invocation.cycleId,
+      revision: invocation.revision,
+      runId,
+      sourceContextIdentity: invocation.sourceContextIdentity,
+      reviewSnapshotIdentity: invocation.reviewSnapshotIdentity,
+      deadlineAt: snapshotDeadlineAt,
+      overallDeadlineAt,
+    });
   } catch (error) {
     if (["PROCESS_TIMEOUT", "PROCESS_OUTPUT_LIMIT", "PROCESS_FAILED", "PHASE_TIMEOUT"].includes(error?.code)) {
-      return recordPreparationBlock({ taskRoot, runId, error });
+      return recordPreparationBlock({ taskRoot, cycleId: invocation.cycleId, revision: invocation.revision, runId, error });
     }
     throw error;
   }
@@ -1645,15 +1804,12 @@ export async function executeReviewRun(options) {
   const settingsPaths = selfTest && options.settingsPaths ? options.settingsPaths : resolveSettingsPaths();
   const settingsBefore = {
     claude: captureSettingsCheckpoint(settingsPaths.claude, "claude"),
-    gemini: captureSettingsCheckpoint(settingsPaths.gemini, "gemini"),
   };
   const oauth = settingsBefore.claude.oauthToken;
-  validateGeminiSettings(settingsPaths.gemini);
   const environments = {
     claude: buildReviewerEnvironment(selfTest ? (options.environment ?? process.env) : process.env, "claude", oauth),
-    gemini: buildReviewerEnvironment(selfTest ? (options.environment ?? process.env) : process.env, "gemini"),
   };
-  const commands = selfTest && options.commands ? options.commands : { claude: "claude", gemini: "agy" };
+  const commands = selfTest && options.commands ? options.commands : { claude: "claude" };
   const controller = new AbortController();
   const externalSignal = options.signal;
   const abort = () => controller.abort();
@@ -1665,148 +1821,137 @@ export async function executeReviewRun(options) {
   if (externalSignal?.aborted) controller.abort();
   else if (externalSignal) externalSignal.addEventListener("abort", abort, { once: true });
   try {
-    verifySnapshotBytes(options.head, join(snapshot.reviewRoot, "current"), snapshot.current.treeBytes, snapshot.current.objectFormat);
-    verifySnapshotBytes(options.base, join(snapshot.reviewRoot, "base"), snapshot.baseTree.treeBytes, snapshot.baseTree.objectFormat);
-    scanSecrets(snapshot.reviewRoot);
-    writeFileSync(join(snapshot.capture, "preflight-started.json"), `${JSON.stringify({
-      schemaVersion: 1,
-      runId,
-      base: options.base,
-      head: options.head,
-      startedAt: new Date(operationStartedAt).toISOString(),
-      overallDeadlineAt: new Date(overallDeadlineAt).toISOString(),
-    }, null, 2)}\n`, { flag: "wx" });
+    verifySnapshotBytes(invocation.head, join(snapshot.reviewRoot, "current"), snapshot.current.treeBytes, snapshot.current.objectFormat);
+    verifySnapshotBytes(invocation.base, join(snapshot.reviewRoot, "base"), snapshot.baseTree.treeBytes, snapshot.baseTree.objectFormat);
+    const initialSecretScan = scanSecrets(snapshot.reviewRoot);
     let preflight;
     try {
       preflight = await clientPreflight({ commands, reviewRoot: snapshot.reviewRoot, environments, selfTest, signal: controller.signal, overallDeadlineAt, preflightTimeoutMs: selfTest ? options.preflightTimeoutMs : null });
     } catch (error) {
-      const cancelledByUser = !overallTimedOut && externalSignal?.aborted === true;
-      const cancelledSummary = {
-        schemaVersion: 1,
-        runId,
-        identity: null,
-        status: cancelledByUser ? "cancelled_by_user" : "blocked",
-        target: cancelledByUser ? "X03" : "B01",
-        returnState: cancelledByUser ? null : "P03",
-        stopMode: cancelledByUser ? "final_cancellation" : null,
-        settingsUnchanged: settingsCheckpointUnchanged(settingsBefore.claude, settingsPaths.claude, "claude")
-          && settingsCheckpointUnchanged(settingsBefore.gemini, settingsPaths.gemini, "gemini"),
-        mcpDetected: false,
-        hookDetected: false,
-        secretOutputDetected: false,
-        responsesValid: false,
-        clientsPassed: false,
-        qualificationRequired: false,
-        errorCode: error?.code ?? "CLIENT_PREFLIGHT",
-      };
-      writeFileSync(join(snapshot.capture, "summary.json"), `${JSON.stringify(cancelledSummary, null, 2)}\n`, { flag: "wx" });
-      return { ...cancelledSummary, runRoot: snapshot.runRoot, reviewRoot: snapshot.reviewRoot };
+      const status = !overallTimedOut && externalSignal?.aborted === true ? "cancelled_by_user" : "blocked";
+      writeFileSync(join(snapshot.capture, "preparation-error.json"), `${JSON.stringify({ schemaVersion: 1, reviewRunId: runId, phase: "preflight", status, errorCode: error?.code ?? "CLIENT_PREFLIGHT" }, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+      return { status, target: status === "cancelled_by_user" ? "X03" : "B01", qualificationRequired: false, runRoot: snapshot.runRoot, reviewRoot: snapshot.reviewRoot };
     }
-    if (!settingsCheckpointUnchanged(settingsBefore.claude, settingsPaths.claude, "claude")
-      || !settingsCheckpointUnchanged(settingsBefore.gemini, settingsPaths.gemini, "gemini")) fail("settings изменились во время preflight", "SETTINGS_CHANGED");
+    if (!settingsCheckpointUnchanged(settingsBefore.claude, settingsPaths.claude, "claude")) fail("settings изменились во время preflight", "SETTINGS_CHANGED");
     const clients = clientMetadata(preflight, settingsPaths, settingsBefore);
     const processPolicy = processPolicyFor(commands, environments);
-    const manifest = manifestFor({ base: options.base, head: options.head, snapshot, prompt, clients, processPolicy });
+    const captureFiles = createCaptureFiles(snapshot.capture);
+    const settingsCheckpointSha256 = settingsCheckpointIdentity(settingsBefore.claude);
+    const environmentEvidence = {
+      settingsCheckpointSha256,
+      executableRealPath: processPolicy.clients.claude.resolvedExecutable,
+      executableSha256: processPolicy.clients.claude.executableSha256,
+      secretScanPolicyIdentity: sha256Bytes(Buffer.from("workflow-spec-review-secret-scan-v1")),
+      mcpPolicyIdentity: sha256Bytes(Buffer.from("workflow-spec-review-mcp-disabled-v1")),
+      outputRedactionPolicyIdentity: sha256Bytes(Buffer.from("workflow-spec-review-oauth-redaction-v1")),
+    };
+    const manifest = manifestFor({ base: invocation.base, head: invocation.head, snapshot, prompt, clients, processPolicy, environmentEvidence });
     writeFileSync(join(snapshot.runRoot, "review-manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, { flag: "wx" });
     copyFileSync(join(snapshot.runRoot, "review-manifest.json"), join(snapshot.reviewRoot, "input", "manifest.json"));
-    verifySnapshotBytes(options.head, join(snapshot.reviewRoot, "current"), snapshot.current.treeBytes, snapshot.current.objectFormat);
-    verifySnapshotBytes(options.base, join(snapshot.reviewRoot, "base"), snapshot.baseTree.treeBytes, snapshot.baseTree.objectFormat);
-    scanSecrets(snapshot.reviewRoot);
-    for (const path of [join(snapshot.reviewRoot, "current"), join(snapshot.reviewRoot, "base"), join(snapshot.reviewRoot, "input")]) makeReadOnly(path);
-    if (readdirSync(join(snapshot.reviewRoot, "results")).length !== 0) fail("results должен быть пустым", "RESULTS_NOT_EMPTY");
-    if (!settingsCheckpointUnchanged(settingsBefore.claude, settingsPaths.claude, "claude")
-      || !settingsCheckpointUnchanged(settingsBefore.gemini, settingsPaths.gemini, "gemini")) fail("settings изменились перед review", "SETTINGS_CHANGED");
-    writeFileSync(join(snapshot.capture, "started.json"), `${JSON.stringify({
-      identity: manifest.identity,
-      runId,
-      startedAt: new Date(operationStartedAt).toISOString(),
-      overallDeadlineAt: new Date(overallDeadlineAt).toISOString(),
-    }, null, 2)}\n`, { flag: "wx" });
-
     const claudeArgs = buildClaudeArgs(snapshot.reviewRoot, prompt.text);
-    const geminiTimeout = selfTest && options.geminiPrintTimeout ? options.geminiPrintTimeout : GEMINI_PRINT_TIMEOUT;
-    const geminiArgs = buildGeminiArgs(snapshot.reviewRoot, prompt.text, geminiTimeout);
+    const launchIntent = identityArtifact({
+      schemaVersion: 1,
+      cycleId: invocation.cycleId,
+      revision: invocation.revision,
+      reviewRunId: runId,
+      reviewManifestIdentity: manifest.identity,
+      client: "claude",
+      executableRealPath: processPolicy.clients.claude.resolvedExecutable,
+      executableSha256: processPolicy.clients.claude.executableSha256,
+      argv: claudeArgs,
+      cwd: realpathSync(snapshot.reviewRoot),
+      scratchIdentity: captureFiles.identity,
+      settingsCheckpointSha256,
+      processPolicyIdentity: sha256Bytes(Buffer.from(canonicalJson(processPolicy))),
+      createdAt: new Date().toISOString(),
+    });
+    validateLaunchIntent(launchIntent);
+    writeFileSync(join(snapshot.runRoot, "launch-intent.json"), `${JSON.stringify(launchIntent, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+    verifySnapshotBytes(invocation.head, join(snapshot.reviewRoot, "current"), snapshot.current.treeBytes, snapshot.current.objectFormat);
+    verifySnapshotBytes(invocation.base, join(snapshot.reviewRoot, "base"), snapshot.baseTree.treeBytes, snapshot.baseTree.objectFormat);
+    const finalSecretScan = scanSecrets(snapshot.reviewRoot);
+    for (const path of [join(snapshot.reviewRoot, "current"), join(snapshot.reviewRoot, "base"), join(snapshot.reviewRoot, "input")]) makeReadOnly(path);
+    if (readdirSync(snapshot.results).length !== 0) fail("results должен быть пустым", "RESULTS_NOT_EMPTY");
     const hardTimeoutMs = Math.max(1, Math.min(
       selfTest && options.hardTimeoutMs ? options.hardTimeoutMs : PROCESS_POLICY.clientSeconds * 1_000,
       remainingBudget(overallDeadlineAt, "общий запуск"),
     ));
-    validateGeminiInvocation(geminiArgs, hardTimeoutMs);
-    for (const name of ["claude", "gemini"]) {
-      if (fileHash(processPolicy.clients[name].resolvedExecutable) !== processPolicy.clients[name].executableSha256) fail(`${name}: исполняемый файл изменился после manifest`, "PROCESS_EXECUTABLE_CHANGED");
-    }
+    if (selfTest && typeof options.beforeClientStart === "function") options.beforeClientStart();
+    if (fileHash(processPolicy.clients.claude.resolvedExecutable) !== processPolicy.clients.claude.executableSha256) fail("claude: исполняемый файл изменился после manifest", "PROCESS_EXECUTABLE_CHANGED");
+    if (!settingsCheckpointUnchanged(settingsBefore.claude, settingsPaths.claude, "claude")) fail("settings изменились непосредственно перед spawn", "SETTINGS_CHANGED");
+    scanSecrets(snapshot.reviewRoot);
     let claude = null;
-    let gemini = null;
+    let startedEvidence = null;
     try {
       claude = startProcessGroup(commands.claude, claudeArgs, { cwd: snapshot.reviewRoot, env: environments.claude, resolvedExecutable: processPolicy.clients.claude.resolvedExecutable, timeoutMs: hardTimeoutMs, killGraceMs: selfTest ? 100 : PROCESS_POLICY.terminateGraceSeconds * 1_000, finalDrainMs: selfTest ? 200 : PROCESS_POLICY.finalDrainSeconds * 1_000, maxOutputBytes: PROCESS_POLICY.maxOutputBytesPerProcess, signal: controller.signal });
-      if (selfTest && typeof options.beforeSecondClientStart === "function") options.beforeSecondClientStart();
-      gemini = startProcessGroup(commands.gemini, geminiArgs, { cwd: snapshot.reviewRoot, env: environments.gemini, resolvedExecutable: processPolicy.clients.gemini.resolvedExecutable, timeoutMs: hardTimeoutMs, killGraceMs: selfTest ? 100 : PROCESS_POLICY.terminateGraceSeconds * 1_000, finalDrainMs: selfTest ? 200 : PROCESS_POLICY.finalDrainSeconds * 1_000, maxOutputBytes: PROCESS_POLICY.maxOutputBytesPerProcess, signal: controller.signal });
-      const starts = await Promise.all([claude.started, gemini.started]);
-      if (starts.some((result) => !result.ok)) fail("не оба reviewer-процесса успешно запущены", "PARTIAL_START");
+      const started = await claude.started;
+      if (!started.ok) fail("reviewer-процесс не запущен", "PARTIAL_START");
+      const processIdentity = started.processIdentity;
+      startedEvidence = identityArtifact({
+        schemaVersion: 1,
+        reviewRunId: runId,
+        reviewManifestIdentity: manifest.identity,
+        pid: processIdentity.pid,
+        pgid: processIdentity.pgid,
+        processStartToken: processIdentity.processStartToken,
+        bootIdentity: currentBootIdentity(),
+        executableSha256: processPolicy.clients.claude.executableSha256,
+        settingsCheckpointSha256,
+        scratchIdentity: captureFiles.identity,
+        secretScanResultIdentity: sha256Bytes(Buffer.from(canonicalJson([...initialSecretScan, ...finalSecretScan]))),
+        startedAt: new Date().toISOString(),
+        overallDeadlineAt: new Date(overallDeadlineAt).toISOString(),
+      });
+      validateStartedArtifact(startedEvidence);
+      writeFileSync(join(snapshot.runRoot, "started.json"), `${JSON.stringify(startedEvidence, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+      claude.expectedTargetPid = started.targetPid;
     } catch (error) {
       claude?.terminate("partial_start");
-      gemini?.terminate("partial_start");
-      await Promise.all([claude?.done, gemini?.done].filter(Boolean));
-      for (const path of ["claude.stdout", "claude.stderr", "gemini.stdout", "gemini.stderr"]) {
-        if (!existsSync(join(snapshot.capture, path))) writeFileSync(join(snapshot.capture, path), "");
-      }
-      const summary = {
-        schemaVersion: 1,
-        runId,
-        identity: manifest.identity,
-        status: "blocked",
-        target: "B01",
-        returnState: "P03",
-        stopMode: null,
-        settingsUnchanged: settingsCheckpointUnchanged(settingsBefore.claude, settingsPaths.claude, "claude")
-          && settingsCheckpointUnchanged(settingsBefore.gemini, settingsPaths.gemini, "gemini"),
-        mcpDetected: false,
-        hookDetected: false,
-        secretOutputDetected: false,
-        responsesValid: false,
-        clientsPassed: false,
-        qualificationRequired: false,
-        errorCode: error?.code ?? "PARTIAL_START",
-      };
-      writeFileSync(join(snapshot.capture, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`, { flag: "wx" });
-      return { ...summary, runRoot: snapshot.runRoot, reviewRoot: snapshot.reviewRoot };
+      await Promise.all([claude?.done].filter(Boolean));
+      writeFileSync(join(snapshot.capture, "launch-error.json"), `${JSON.stringify({ schemaVersion: 1, reviewRunId: runId, reviewManifestIdentity: manifest.identity, errorCode: error?.code ?? "PARTIAL_START" }, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+      return { status: "blocked", target: "B01", qualificationRequired: false, runRoot: snapshot.runRoot, reviewRoot: snapshot.reviewRoot };
     }
     let mcpDetected = false;
+    let unknownDescendantDetected = false;
     let monitorRunning = false;
     const monitor = setInterval(async () => {
       if (monitorRunning) return;
       monitorRunning = true;
-      if (await descendantsContainMcp(new Set([claude.child.pid, gemini.child.pid]))) {
-        mcpDetected = true;
+      try {
+        const members = await readSystemProcessGroupIdentities(claude.child.pid);
+        const allowedPids = new Set([claude.child.pid, claude.expectedTargetPid]);
+        if (members.some((member) => !allowedPids.has(member.pid))) unknownDescendantDetected = true;
+        if (await descendantsContainMcp(new Set([claude.child.pid]))) mcpDetected = true;
+      } catch {
+        unknownDescendantDetected = true;
+      }
+      if (mcpDetected || unknownDescendantDetected) {
         claude.terminate("policy");
-        gemini.terminate("policy");
       }
       monitorRunning = false;
     }, selfTest ? 50 : 250);
-    const [claudeResult, geminiResult] = await Promise.all([claude.done, gemini.done]);
+    const claudeResult = await claude.done;
     clearInterval(monitor);
     const secretOutputDetected = containsExactValue(
       oauth,
       claudeResult.stdout,
       claudeResult.stderr,
-      geminiResult.stdout,
-      geminiResult.stderr,
     );
     const redactedOutput = Buffer.from("[reviewer output removed: credential exposure detected]\n");
-    writeFileSync(join(snapshot.capture, "claude.stdout"), secretOutputDetected ? redactedOutput : claudeResult.stdout);
-    writeFileSync(join(snapshot.capture, "claude.stderr"), secretOutputDetected ? redactedOutput : claudeResult.stderr);
-    writeFileSync(join(snapshot.capture, "gemini.stdout"), secretOutputDetected ? redactedOutput : geminiResult.stdout);
-    writeFileSync(join(snapshot.capture, "gemini.stderr"), secretOutputDetected ? redactedOutput : geminiResult.stderr);
-    const settingsUnchanged = settingsCheckpointUnchanged(settingsBefore.claude, settingsPaths.claude, "claude")
-      && settingsCheckpointUnchanged(settingsBefore.gemini, settingsPaths.gemini, "gemini");
-    const cancelled = !overallTimedOut && (claudeResult.cancelled || geminiResult.cancelled || externalSignal?.aborted === true);
-    const clientsPassed = [claudeResult, geminiResult].every((result) => result.code === 0 && !result.timedOut && !result.cancelled
-      && !result.outputExceeded && !result.identityMismatch && !result.residualProcessDetected && result.drainComplete && result.error === null);
-    const hookDetected = containsHookEvidence(claudeResult.stdout, claudeResult.stderr, geminiResult.stdout, geminiResult.stderr);
+    const stdoutBytes = secretOutputDetected ? redactedOutput : claudeResult.stdout;
+    const stderrBytes = secretOutputDetected ? redactedOutput : claudeResult.stderr;
+    writeFileSync(captureFiles.stdoutPath, stdoutBytes);
+    writeFileSync(captureFiles.stderrPath, stderrBytes);
+    const settingsUnchanged = settingsCheckpointUnchanged(settingsBefore.claude, settingsPaths.claude, "claude");
+    const cancelled = !overallTimedOut && (claudeResult.cancelled || externalSignal?.aborted === true);
+    const clientsPassed = claudeResult.code === 0 && !claudeResult.timedOut && !claudeResult.cancelled
+      && !claudeResult.outputExceeded && !claudeResult.identityMismatch && !claudeResult.residualProcessDetected
+      && !unknownDescendantDetected && !mcpDetected && claudeResult.drainComplete && claudeResult.error === null;
+    const hookDetected = containsHookEvidence(claudeResult.stdout, claudeResult.stderr);
     let parsedResponses = null;
     try {
       parsedResponses = {
         claude: parseReviewerResponse(claudeResult.stdout, manifest.identity),
-        gemini: parseReviewerResponse(geminiResult.stdout, manifest.identity),
       };
     } catch {
       parsedResponses = null;
@@ -1817,35 +1962,49 @@ export async function executeReviewRun(options) {
     if (cancelled) {
       status = "cancelled_by_user";
       target = "X03";
-    } else if (overallTimedOut || !clientsPassed || !responsesValid || mcpDetected || !settingsUnchanged) {
+    } else if (overallTimedOut || !clientsPassed || !responsesValid || !settingsUnchanged) {
       status = "blocked";
       target = "B01";
     }
-    if (status !== "completed" && readdirSync(join(snapshot.reviewRoot, "results")).length !== 0) {
+    if (status !== "completed" && readdirSync(snapshot.results).length !== 0) {
       fail("невалидный запуск оставил accepted results", "RESULT_ATOMICITY");
     }
-    const summary = {
+    const finishedAt = new Date().toISOString();
+    const processResult = identityArtifact({
       schemaVersion: 1,
-      runId,
-      identity: manifest.identity,
+      reviewRunId: runId,
+      reviewManifestIdentity: manifest.identity,
+      pid: startedEvidence.pid,
+      pgid: startedEvidence.pgid,
+      processStartToken: startedEvidence.processStartToken,
+      exitCode: claudeResult.code,
+      signal: claudeResult.signal,
+      timedOut: claudeResult.timedOut || overallTimedOut,
+      outputExceeded: claudeResult.outputExceeded,
+      unknownDescendantDetected,
+      mcpDescendantDetected: mcpDetected,
+      stdoutSha256: sha256Bytes(stdoutBytes),
+      stderrSha256: sha256Bytes(stderrBytes),
+      startedAt: startedEvidence.startedAt,
+      finishedAt,
+    });
+    validateProcessResult(processResult);
+    writeFileSync(join(snapshot.capture, "process-result.json"), `${JSON.stringify(processResult, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+    const summary = identityArtifact({
+      schemaVersion: 1,
+      reviewRunId: runId,
+      reviewManifestIdentity: manifest.identity,
+      client: "claude",
       status,
-      target,
-      returnState: target === "B01" ? "P03" : null,
-      stopMode: target === "X03" ? "final_cancellation" : null,
-      settingsUnchanged,
-      mcpDetected,
-      hookDetected,
-      secretOutputDetected,
-      responsesValid,
-      clientsPassed,
+      processResultIdentity: processResult.identity,
+      responseSha256: sha256Bytes(stdoutBytes),
+      responseValid: status === "completed" && responsesValid,
       qualificationRequired: status === "completed",
-      parsed: status === "completed" ? {
-        claude: { verdict: parsedResponses.claude.verdict, findingIds: parsedResponses.claude.findings.map((finding) => finding.id) },
-        gemini: { verdict: parsedResponses.gemini.verdict, findingIds: parsedResponses.gemini.findings.map((finding) => finding.id) },
-      } : null,
-    };
-    writeFileSync(join(snapshot.capture, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`, { flag: "wx" });
-    return { ...summary, runRoot: snapshot.runRoot, reviewRoot: snapshot.reviewRoot };
+      finishedAt,
+    });
+    validateReviewSummary(summary);
+    writeFileSync(join(snapshot.capture, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+    return { status, target, qualificationRequired: summary.qualificationRequired, reviewManifestIdentity: manifest.identity, processResultIdentity: processResult.identity, runRoot: snapshot.runRoot, reviewRoot: snapshot.reviewRoot };
   } finally {
     clearTimeout(overallTimer);
     if (externalSignal) externalSignal.removeEventListener("abort", abort);
@@ -1879,10 +2038,9 @@ export function validateQualification(qualification, context) {
   const manifest = validateReviewManifest(JSON.parse(context.reviewManifestBytes.toString("utf8")));
   const parsed = {
     claude: parseReviewerResponse(context.claudeBytes, manifest.identity),
-    gemini: parseReviewerResponse(context.geminiBytes, manifest.identity),
   };
-  exactKeys(qualification.reviews, ["claude", "gemini"], "qualification.reviews", "QUALIFICATION");
-  for (const source of ["claude", "gemini"]) {
+  exactKeys(qualification.reviews, ["claude"], "qualification.reviews", "QUALIFICATION");
+  for (const source of ["claude"]) {
     const review = qualification.reviews[source];
     exactKeys(review, ["sha256", "verdict", "findingIds"], `qualification.reviews.${source}`, "QUALIFICATION");
     assertSha256(review.sha256, `qualification.reviews.${source}.sha256`, "QUALIFICATION");
@@ -1894,7 +2052,6 @@ export function validateQualification(qualification, context) {
   if (!Array.isArray(qualification.dispositions)) fail("qualification.dispositions должен быть массивом", "QUALIFICATION");
   const expected = [
     ...parsed.claude.findings.map((finding) => ({ source: "claude", finding })),
-    ...parsed.gemini.findings.map((finding) => ({ source: "gemini", finding })),
   ];
   if (qualification.dispositions.length !== expected.length) fail("каждое замечание должно иметь ровно одну disposition", "QUALIFICATION");
   const globalIds = new Set();
@@ -1920,11 +2077,10 @@ export function validateQualification(qualification, context) {
   return { qualification, manifest, parsed };
 }
 
-export function buildQualification({ reviewManifestBytes, claudeBytes, geminiBytes, dispositions }) {
+export function buildQualification({ reviewManifestBytes, claudeBytes, dispositions }) {
   const manifest = validateReviewManifest(JSON.parse(reviewManifestBytes.toString("utf8")));
   const parsed = {
     claude: parseReviewerResponse(claudeBytes, manifest.identity),
-    gemini: parseReviewerResponse(geminiBytes, manifest.identity),
   };
   const qualification = {
     schemaVersion: 1,
@@ -1932,13 +2088,12 @@ export function buildQualification({ reviewManifestBytes, claudeBytes, geminiByt
     identity: "",
     reviews: {
       claude: { sha256: sha256Bytes(claudeBytes), verdict: parsed.claude.verdict, findingIds: parsed.claude.findings.map((finding) => finding.id) },
-      gemini: { sha256: sha256Bytes(geminiBytes), verdict: parsed.gemini.verdict, findingIds: parsed.gemini.findings.map((finding) => finding.id) },
     },
     dispositions: structuredClone(dispositions),
     outcome: qualificationOutcome(dispositions),
   };
   qualification.identity = jcsIdentity(qualification);
-  validateQualification(qualification, { reviewManifestBytes, claudeBytes, geminiBytes });
+  validateQualification(qualification, { reviewManifestBytes, claudeBytes });
   return qualification;
 }
 
@@ -1947,7 +2102,6 @@ function consolidatedFor(manifest, qualification, parsed, author) {
   const lines = ["# Сводный вывод внешнего ревью ТЗ", "", manifest.identity, "", "## Замечания и решения", ""];
   const findings = [
     ...parsed.claude.findings.map((finding) => ({ source: "claude", finding })),
-    ...parsed.gemini.findings.map((finding) => ({ source: "gemini", finding })),
   ];
   if (findings.length === 0) lines.push("Замечаний нет.");
   else for (const [index, item] of findings.entries()) {
@@ -1958,59 +2112,94 @@ function consolidatedFor(manifest, qualification, parsed, author) {
   return Buffer.from(lines.join("\n"));
 }
 
-function validateRunDeadlineMarker(marker, runId, identity = null, code = "RUN_DEADLINE") {
-  const expected = identity === null
-    ? ["schemaVersion", "runId", "base", "head", "startedAt", "overallDeadlineAt"]
-    : ["identity", "runId", "startedAt", "overallDeadlineAt"];
-  exactKeys(marker, expected, "run deadline marker", code);
-  if ((identity === null && marker.schemaVersion !== 1) || marker.runId !== runId || (identity !== null && marker.identity !== identity)) {
-    fail("run deadline marker относится к другому запуску", code);
-  }
-  const startedAt = Date.parse(marker.startedAt);
-  const overallDeadlineAt = Date.parse(marker.overallDeadlineAt);
-  if (!Number.isFinite(startedAt) || !Number.isFinite(overallDeadlineAt) || overallDeadlineAt <= startedAt
-    || !marker.startedAt.endsWith("Z") || !marker.overallDeadlineAt.endsWith("Z")) {
-    fail("run deadline marker содержит невалидные временные границы", code);
-  }
-  if (Date.now() > overallDeadlineAt) fail("общий временной бюджет review run исчерпан", code);
-  return { startedAt, overallDeadlineAt };
-}
-
-export function qualifyReviewRun({ taskRoot, runId, dispositions, author = "Codex" }) {
+export function prepareQualificationArtifacts({ taskRoot, cycleId, revision, runId, dispositions, author = "Codex" }) {
   const qualificationStartedAt = Date.now();
   const root = ensureTaskLocalPath(taskRoot);
   validatePathSegment(runId, "run-id", /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/);
-  const runRoot = join(root, "runs", runId);
+  const revisionRoot = ensureRevision(root, cycleId, revision);
+  const runRoot = join(revisionRoot, "review-runs", runId);
   ensureContainedDirectory(root, runRoot, "run");
-  const reviewRoot = join(runRoot, "review-root");
+  const reviewRoot = join(runRoot, "scratch");
   ensureContainedDirectory(root, reviewRoot, "review-root");
   const capture = join(runRoot, "capture");
   ensureContainedDirectory(root, capture, "capture");
-  const reviewManifestBytes = readFileSync(join(runRoot, "review-manifest.json"));
+  const reviewManifestPath = join(runRoot, "review-manifest.json");
+  const startedPath = join(runRoot, "started.json");
+  const claudePath = join(capture, "stdout.bin");
+  const summaryPath = join(capture, "summary.json");
+  for (const path of [reviewManifestPath, startedPath, claudePath, summaryPath]) assertRegularFile(path, "QUALIFICATION_FILE_TYPE");
+  const reviewManifestBytes = readFileSync(reviewManifestPath);
   const reviewManifest = validateReviewManifest(JSON.parse(reviewManifestBytes.toString("utf8")));
-  const preflightMarker = JSON.parse(readFileSync(join(capture, "preflight-started.json"), "utf8"));
-  const startedMarker = JSON.parse(readFileSync(join(capture, "started.json"), "utf8"));
-  const preflightDeadline = validateRunDeadlineMarker(preflightMarker, runId, null, "QUALIFICATION_TIMEOUT");
-  const startedDeadline = validateRunDeadlineMarker(startedMarker, runId, reviewManifest.identity, "QUALIFICATION_TIMEOUT");
-  if (preflightMarker.base !== reviewManifest.base || preflightMarker.head !== reviewManifest.head
-    || preflightDeadline.startedAt !== startedDeadline.startedAt || preflightDeadline.overallDeadlineAt !== startedDeadline.overallDeadlineAt) {
-    fail("deadline markers review run рассогласованы", "QUALIFICATION_TIMEOUT");
-  }
-  const claudeBytes = readFileSync(join(capture, "claude.stdout"));
-  const geminiBytes = readFileSync(join(capture, "gemini.stdout"));
-  const summary = JSON.parse(readFileSync(join(capture, "summary.json"), "utf8"));
-  if (summary.runId !== runId || summary.status !== "completed" || summary.qualificationRequired !== true || summary.responsesValid !== true || summary.clientsPassed !== true) {
+  const started = validateStartedArtifact(JSON.parse(readFileSync(startedPath, "utf8")));
+  if (started.reviewRunId !== runId || started.reviewManifestIdentity !== reviewManifest.identity || Date.now() > Date.parse(started.overallDeadlineAt)) fail("started artifact не разрешает qualification", "QUALIFICATION_TIMEOUT");
+  const claudeBytes = readFileSync(claudePath);
+  const summary = validateReviewSummary(JSON.parse(readFileSync(summaryPath, "utf8")));
+  if (summary.reviewRunId !== runId || summary.reviewManifestIdentity !== reviewManifest.identity || summary.status !== "completed" || summary.qualificationRequired !== true || summary.responseValid !== true) {
     fail("run не готов к qualification", "QUALIFICATION_RUN");
   }
-  const qualification = buildQualification({ reviewManifestBytes, claudeBytes, geminiBytes, dispositions });
-  const validated = validateQualification(qualification, { reviewManifestBytes, claudeBytes, geminiBytes });
+  const qualification = buildQualification({ reviewManifestBytes, claudeBytes, dispositions });
+  const validated = validateQualification(qualification, { reviewManifestBytes, claudeBytes });
   const qualificationBytes = Buffer.from(`${JSON.stringify(qualification, null, 2)}\n`);
   const consolidatedBytes = consolidatedFor(validated.manifest, qualification, validated.parsed, author);
-  if (Date.now() - qualificationStartedAt > PROCESS_POLICY.qualificationSeconds * 1_000 || Date.now() > startedDeadline.overallDeadlineAt) {
+  if (Date.now() - qualificationStartedAt > PROCESS_POLICY.qualificationSeconds * 1_000 || Date.now() > Date.parse(started.overallDeadlineAt)) {
     fail("qualification превысила фазовый или общий deadline", "QUALIFICATION_TIMEOUT");
   }
-  publishQualifiedResults(reviewRoot, claudeBytes, geminiBytes, qualificationBytes, consolidatedBytes);
-  return { runRoot, reviewRoot, target: qualification.outcome.state, qualificationIdentity: qualification.identity };
+  return {
+    root,
+    revisionRoot,
+    runRoot,
+    reviewRoot,
+    target: qualification.outcome.state,
+    qualification,
+    qualificationIdentity: qualification.identity,
+    reviewManifest,
+    reviewManifestBytes,
+    claudeBytes,
+    qualificationBytes,
+    consolidatedBytes,
+    resultArtifacts: {
+      "claude.md": claudeBytes,
+      "qualification.json": qualificationBytes,
+      "consolidated.md": consolidatedBytes,
+    },
+  };
+}
+
+export function buildReviewFinalArtifacts({ revisionRoot, reviewManifestBytes, claudeBytes, qualificationBytes, consolidatedBytes }) {
+  const reviewManifest = validateReviewManifest(JSON.parse(reviewManifestBytes.toString("utf8")));
+  const qualification = JSON.parse(qualificationBytes.toString("utf8"));
+  validateQualification(qualification, { reviewManifestBytes, claudeBytes });
+  if (qualification.outcome.state !== "C09") fail("review-final разрешён только для исхода C09", "FINAL_QUALIFICATION");
+  const tzPath = join(revisionRoot, "tz.md");
+  const authorReviewPath = join(revisionRoot, "author-review.md");
+  assertRegularFile(tzPath, "FINAL_PROVENANCE");
+  assertRegularFile(authorReviewPath, "FINAL_PROVENANCE");
+  const files = {
+    "tz.md": readFileSync(tzPath),
+    "author-review.md": readFileSync(authorReviewPath),
+    "review-manifest.json": reviewManifestBytes,
+    "claude.md": claudeBytes,
+    "qualification.json": qualificationBytes,
+    "consolidated.md": consolidatedBytes,
+  };
+  if (sha256Bytes(files["tz.md"]) !== reviewManifest.hashes.spec
+    || sha256Bytes(files["author-review.md"]) !== reviewManifest.hashes.author_review) {
+    fail("review-final относится к другой редакции ТЗ", "FINAL_PROVENANCE");
+  }
+  const artifacts = Object.fromEntries(Object.keys(files).sort().map((path) => [path, sha256Bytes(files[path])]));
+  const manifest = identityArtifact({ schemaVersion: 1, reviewIdentity: reviewManifest.identity, artifacts });
+  return { ...files, "manifest.json": Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`) };
+}
+
+export function qualifyReviewRun({ taskRoot, cycleId, revision, runId, dispositions, author = "Codex" }) {
+  const prepared = prepareQualificationArtifacts({ taskRoot, cycleId, revision, runId, dispositions, author });
+  publishQualifiedResults(join(prepared.runRoot, "results"), prepared.claudeBytes, prepared.qualificationBytes, prepared.consolidatedBytes);
+  return {
+    runRoot: prepared.runRoot,
+    reviewRoot: prepared.reviewRoot,
+    target: prepared.target,
+    qualificationIdentity: prepared.qualificationIdentity,
+  };
 }
 
 export function verifyFinalDirectory(finalRoot) {
@@ -2045,7 +2234,6 @@ export function verifyFinalDirectory(finalRoot) {
   validateQualification(JSON.parse(readFileSync(join(finalRoot, "qualification.json"), "utf8")), {
     reviewManifestBytes: readFileSync(join(finalRoot, "review-manifest.json")),
     claudeBytes: readFileSync(join(finalRoot, "claude.md")),
-    geminiBytes: readFileSync(join(finalRoot, "gemini.md")),
   });
   validateConsolidated(join(finalRoot, "consolidated.md"), manifest.reviewIdentity);
   return manifest;
@@ -2066,15 +2254,15 @@ function validateConsolidated(path, identity) {
   return true;
 }
 
-export function finalizeReviewCycle({ taskRoot, revision, runId }) {
+export function finalizeReviewCycle({ taskRoot, cycleId, revision, runId }) {
   const root = ensureTaskLocalPath(taskRoot);
   validatePathSegment(runId, "run-id", /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/);
-  const revisionRoot = ensureRevision(root, revision);
-  const finalRoot = join(root, "final");
+  const revisionRoot = ensureRevision(root, cycleId, revision);
+  const finalRoot = join(revisionRoot, "review-final");
   if (lstatSafe(finalRoot) !== null) {
     ensureContainedDirectory(root, finalRoot, "final");
     const manifest = verifyFinalDirectory(finalRoot);
-    const runRoot = join(root, "runs", runId);
+    const runRoot = join(revisionRoot, "review-runs", runId);
     ensureContainedDirectory(root, runRoot, "run");
     const reviewManifestPath = join(runRoot, "review-manifest.json");
     assertRegularFile(reviewManifestPath, "FINAL_EXISTS");
@@ -2092,65 +2280,58 @@ export function finalizeReviewCycle({ taskRoot, revision, runId }) {
       reused: true,
     };
   }
-  const runsRoot = join(root, "runs");
+  const runsRoot = join(revisionRoot, "review-runs");
   ensureContainedDirectory(root, runsRoot, "runs");
   const runRoot = join(runsRoot, runId);
   ensureContainedDirectory(root, runRoot, "run");
-  const reviewRoot = join(runRoot, "review-root");
+  const reviewRoot = join(runRoot, "scratch");
   ensureContainedDirectory(root, reviewRoot, "review-root");
   const input = join(reviewRoot, "input");
   ensureContainedDirectory(root, input, "input");
-  const results = join(reviewRoot, "results");
+  const results = join(runRoot, "results");
   ensureContainedDirectory(root, results, "results");
   const capture = join(runRoot, "capture");
   ensureContainedDirectory(root, capture, "capture");
-  exactFileSet(results, ["claude.md", "consolidated.md", "gemini.md", "qualification.json"]);
-  for (const path of ["claude.md", "consolidated.md", "gemini.md", "qualification.json"]) assertRegularFile(join(results, path), "FINAL_PROVENANCE");
+  exactFileSet(results, ["claude.md", "consolidated.md", "qualification.json"]);
+  for (const path of ["claude.md", "consolidated.md", "qualification.json"]) assertRegularFile(join(results, path), "FINAL_PROVENANCE");
   const reviewManifestPath = join(runRoot, "review-manifest.json");
   assertRegularFile(reviewManifestPath, "FINAL_PROVENANCE");
-  for (const path of ["started.json", "summary.json", "claude.stdout", "gemini.stdout"]) assertRegularFile(join(capture, path), "FINAL_PROVENANCE");
+  for (const path of ["process-result.json", "summary.json", "stdout.bin", "stderr.bin"]) assertRegularFile(join(capture, path), "FINAL_PROVENANCE");
   const reviewManifestBytes = readFileSync(reviewManifestPath);
   const reviewManifest = validateReviewManifest(JSON.parse(reviewManifestBytes.toString("utf8")));
-  const started = JSON.parse(readFileSync(join(capture, "started.json"), "utf8"));
-  const runDeadline = validateRunDeadlineMarker(started, runId, reviewManifest.identity, "FINAL_TIMEOUT");
-  const summary = JSON.parse(readFileSync(join(capture, "summary.json"), "utf8"));
-  if (started.runId !== runId || started.identity !== reviewManifest.identity) fail("marker запуска не совпадает с review manifest", "FINAL_PROVENANCE");
-  if (summary.runId !== runId || summary.identity !== reviewManifest.identity
-    || summary.status !== "completed" || summary.target !== "P03"
-    || summary.clientsPassed !== true || summary.responsesValid !== true
-    || summary.settingsUnchanged !== true || summary.mcpDetected !== false
-    || summary.hookDetected !== false
-    || summary.secretOutputDetected !== false
-    || summary.qualificationRequired !== true) {
+  const started = validateStartedArtifact(JSON.parse(readFileSync(join(runRoot, "started.json"), "utf8")));
+  const summary = validateReviewSummary(JSON.parse(readFileSync(join(capture, "summary.json"), "utf8")));
+  const processResult = validateProcessResult(JSON.parse(readFileSync(join(capture, "process-result.json"), "utf8")));
+  if (started.reviewRunId !== runId || started.reviewManifestIdentity !== reviewManifest.identity) fail("marker запуска не совпадает с review manifest", "FINAL_PROVENANCE");
+  if (summary.reviewRunId !== runId || summary.reviewManifestIdentity !== reviewManifest.identity
+    || summary.processResultIdentity !== processResult.identity || summary.status !== "completed"
+    || summary.responseValid !== true || summary.qualificationRequired !== true
+    || processResult.exitCode !== 0 || processResult.timedOut || processResult.outputExceeded
+    || processResult.unknownDescendantDetected || processResult.mcpDescendantDetected) {
     fail("запуск не подтверждает валидный P03", "FINAL_PROVENANCE");
   }
-  if (fileHash(join(runRoot, "tz.md")) !== reviewManifest.hashes.spec
-    || fileHash(join(runRoot, "author-review.md")) !== reviewManifest.hashes.author_review
-    || !readFileSync(join(runRoot, "tz.md")).equals(readFileSync(join(revisionRoot, "tz.md")))
-    || !readFileSync(join(runRoot, "author-review.md")).equals(readFileSync(join(revisionRoot, "author-review.md")))) {
+  if (fileHash(join(revisionRoot, "tz.md")) !== reviewManifest.hashes.spec
+    || fileHash(join(revisionRoot, "author-review.md")) !== reviewManifest.hashes.author_review) {
     fail("review относится к другой ревизии ТЗ или авторского ревью", "FINAL_PROVENANCE");
   }
   const qualification = JSON.parse(readFileSync(join(results, "qualification.json"), "utf8"));
   validateQualification(qualification, {
     reviewManifestBytes,
     claudeBytes: readFileSync(join(results, "claude.md")),
-    geminiBytes: readFileSync(join(results, "gemini.md")),
   });
   if (qualification.outcome.state !== "C09") fail("финализация разрешена только для исхода C09", "FINAL_QUALIFICATION");
   validateConsolidated(join(results, "consolidated.md"), reviewManifest.identity);
-  if (!readFileSync(join(results, "claude.md")).equals(readFileSync(join(capture, "claude.stdout")))
-    || !readFileSync(join(results, "gemini.md")).equals(readFileSync(join(capture, "gemini.stdout")))) {
+  if (!readFileSync(join(results, "claude.md")).equals(readFileSync(join(capture, "stdout.bin")))) {
     fail("accepted results не совпадают с захваченным stdout", "FINAL_PROVENANCE");
   }
-  const pendingFinal = join(root, `.final-pending-${process.pid}-${randomBytes(6).toString("hex")}`);
+  const pendingFinal = join(revisionRoot, `.review-final-pending-${process.pid}-${randomBytes(6).toString("hex")}`);
   mkdirSync(pendingFinal, { recursive: false });
   try {
     const copies = [
-      [join(runRoot, "tz.md"), "tz.md"],
-      [join(runRoot, "author-review.md"), "author-review.md"],
+      [join(revisionRoot, "tz.md"), "tz.md"],
+      [join(revisionRoot, "author-review.md"), "author-review.md"],
       [reviewManifestPath, "review-manifest.json"],
       [join(results, "claude.md"), "claude.md"],
-      [join(results, "gemini.md"), "gemini.md"],
       [join(results, "qualification.json"), "qualification.json"],
       [join(results, "consolidated.md"), "consolidated.md"],
     ];
@@ -2162,7 +2343,7 @@ export function finalizeReviewCycle({ taskRoot, revision, runId }) {
     exactFileSet(pendingFinal, FINAL_FILES);
     for (const [path, hash] of Object.entries(artifacts)) if (fileHash(join(pendingFinal, path)) !== hash) fail(`${path}: hash итогового файла не совпадает`, "FINAL_HASH");
     const finalManifestHash = fileHash(join(pendingFinal, "manifest.json"));
-    if (Date.now() > runDeadline.overallDeadlineAt) fail("финализация превысила общий deadline", "FINAL_TIMEOUT");
+    if (Date.now() > Date.parse(started.overallDeadlineAt)) fail("финализация превысила общий deadline", "FINAL_TIMEOUT");
     renameSync(pendingFinal, finalRoot);
     verifyFinalDirectory(finalRoot);
     return { finalRoot, finalManifestHash, artifacts, target: "C09", reused: false };
@@ -2240,11 +2421,13 @@ async function superviseProcess(argv) {
 }
 
 function parseArguments(argv) {
+  const allowed = new Set(["--self-test", "--qualify", "--task-root", "--dispositions", "--author"]);
   const flags = new Map();
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (!value.startsWith("--")) fail(`неожиданный аргумент ${value}`, "CLI_ARGS");
-    if (["--self-test", "--finalize", "--qualify"].includes(value)) flags.set(value, true);
+    if (!allowed.has(value)) fail(`неподдерживаемый аргумент ${value}`, "CLI_ARGS");
+    if (["--self-test", "--qualify"].includes(value)) flags.set(value, true);
     else {
       const next = argv[index + 1];
       if (!next || next.startsWith("--")) fail(`после ${value} требуется значение`, "CLI_ARGS");
@@ -2259,37 +2442,30 @@ async function main(argv) {
   const flags = parseArguments(argv);
   if (flags.has("--self-test")) fail("offline self-test запускается отдельным workflow-spec-review-self-test.mjs", "CLI_ARGS");
   const taskRoot = flags.get("--task-root");
-  const revision = flags.get("--revision");
-  if (!taskRoot || !revision) fail("обязательны --task-root и --revision", "CLI_ARGS");
+  if (!taskRoot) fail("обязателен --task-root", "CLI_ARGS");
+  for (const forbidden of ["--repo", "--base", "--head", "--cycle-id", "--revision", "--run-id", "--target"]) {
+    if (flags.has(forbidden)) fail(`${forbidden} выводится из active-cycle.json и не принимается от caller-а`, "CLI_ARGS");
+  }
+  const invocation = activeReviewInvocation(taskRoot);
   if (flags.has("--qualify")) {
-    const runId = flags.get("--run-id");
     const dispositionsPath = flags.get("--dispositions");
-    if (!runId || !dispositionsPath) fail("для --qualify обязательны --run-id и --dispositions", "CLI_ARGS");
+    if (!dispositionsPath) fail("для --qualify обязателен --dispositions", "CLI_ARGS");
     let dispositions;
     try {
       dispositions = JSON.parse(readFileSync(resolve(dispositionsPath), "utf8"));
     } catch {
       fail("dispositions должен быть JSON-файлом", "CLI_ARGS");
     }
-    console.log(JSON.stringify(qualifyReviewRun({ taskRoot, runId, dispositions, author: flags.get("--author") ?? "Codex" })));
+    const { qualifyReviewTransaction } = await import("./workflow-cycle-store.mjs");
+    console.log(JSON.stringify(await qualifyReviewTransaction({ taskRoot, dispositions, author: flags.get("--author") ?? "Codex" })));
     return;
   }
-  if (flags.has("--finalize")) {
-    const runId = flags.get("--run-id");
-    if (!runId) fail("для --finalize обязателен --run-id", "CLI_ARGS");
-    console.log(JSON.stringify(finalizeReviewCycle({ taskRoot, revision, runId })));
-    return;
-  }
-  const repo = flags.get("--repo");
-  const base = flags.get("--base");
-  const head = flags.get("--head");
-  if (!repo || !base || !head) fail("обязательны --repo, --base и --head", "CLI_ARGS");
   const controller = new AbortController();
   const cancel = () => controller.abort();
   process.once("SIGINT", cancel);
   process.once("SIGTERM", cancel);
   try {
-    console.log(JSON.stringify(await executeReviewRun({ repo, base, head, taskRoot, revision, signal: controller.signal })));
+    console.log(JSON.stringify(await executeReviewRun({ taskRoot, signal: controller.signal })));
   } finally {
     process.removeListener("SIGINT", cancel);
     process.removeListener("SIGTERM", cancel);

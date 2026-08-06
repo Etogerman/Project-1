@@ -41,6 +41,9 @@ jobs:
         run: |
           node .github/scripts/workflow-docs-check.mjs --self-test
           node .github/scripts/workflow-docs-check.mjs --check
+          node .github/scripts/workflow-state-policy.mjs --self-test
+          node .github/scripts/workflow-state-policy.mjs --check
+          node .github/scripts/workflow-cycle-store.mjs --self-test
           node .github/scripts/workflow-spec-review-self-test.mjs
           node .github/scripts/workflow-spec-review-gates-self-test.mjs
 

@@ -46,6 +46,13 @@
 Spec repo / Spec doc / Spec revision и отсутствие неразрешённых внешних
 действий.
 
+Вход `C11 → G01` выполняет операция `enter_publication_boundary`: она проверяет
+implementation gate и решение из неизменяемого ledger, одной transaction intent
+создаёт новый publication run, записывает в него только `run-open.json`,
+устанавливает `activeRunId` и меняет active cycle. `publication-gate.json` на
+этом шаге ещё не существует и создаётся только после запечатывания дерева,
+успешных проверок и классификации внешнего ТЗ ниже.
+
 `G01` строит отдельный Git index от `publishBase`, включает ровно разрешённые
 изменения и удаления, блокирует чужой diff и получает `expectedTreeOid`.
 Проверки выполняются в изолированном checkout именно этого tree и записываются

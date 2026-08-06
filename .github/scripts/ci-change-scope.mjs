@@ -20,6 +20,8 @@ const PROCESS_ONLY_FILE_PATTERNS = [
   /^\.github\/scripts\/copilot-feasibility-spike\.mjs$/,
   /^\.github\/scripts\/copilot-merge-readiness\.mjs$/,
   /^\.github\/scripts\/workflow-docs-check\.mjs$/,
+  /^\.github\/scripts\/workflow-state-policy\.mjs$/,
+  /^\.github\/scripts\/workflow-cycle-store\.mjs$/,
   /^\.github\/scripts\/workflow-spec-review(?:-self-test|-gates|-gates-self-test)?\.mjs$/,
   /^\.github\/workflows\/php-artisan-test\.ya?ml$/,
   /^\.github\/workflows\/release-process-guard\.ya?ml$/,

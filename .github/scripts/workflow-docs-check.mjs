@@ -16,6 +16,16 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, extname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  REQUIRED_GATES,
+  REQUIRED_TRANSITION_PROOFS,
+  mermaidFor,
+  resolveDynamicTarget,
+  stateDescription,
+  validateTopology,
+} from "./workflow-state-policy.mjs";
+
+export { resolveDynamicTarget } from "./workflow-state-policy.mjs";
 
 const DEFAULT_ROOT = process.cwd();
 const REGISTRY_PATH = "docs/workflow/pr-correction/states.json";
@@ -74,17 +84,6 @@ const STATE_KEYS = new Set([
 const EXTERNAL_EXIT_KEYS = new Set(["document", "heading", "purpose", "resumeState"]);
 const GATE_KEYS = new Set(["kind", "issuer", "artifact"]);
 const TRANSITION_PROOF_KEYS = new Set(["kind", "issuer", "artifact"]);
-const REQUIRED_GATES = Object.freeze({
-  C10: Object.freeze({ kind: "implementation", issuer: "G00", artifact: "implementation-gate.json" }),
-  C11: Object.freeze({ kind: "implementation", issuer: "G00", artifact: "implementation-gate.json" }),
-  G01: Object.freeze({ kind: "implementation", issuer: "G00", artifact: "implementation-gate.json" }),
-  C12: Object.freeze({ kind: "publication", issuer: "G01", artifact: "publication-gate.json" }),
-});
-const REQUIRED_TRANSITION_PROOFS = Object.freeze({
-  G01: Object.freeze({
-    C13: Object.freeze({ kind: "publication_noop", issuer: "G01", artifact: "no-op-proof.json" }),
-  }),
-});
 const COMMON_CONTROLLED_FILES = [
   "AGENTS.md",
   "docs/task-delivery-workflow.md",
@@ -441,16 +440,6 @@ function validateExactStateTargets(registry, id, expected, errors) {
   validateSet("внешние выходы", expected.exits ?? [], state.exits ?? [], `$.states.${id}.exits`, errors);
 }
 
-export function resolveDynamicTarget(currentState, registerName, registers, states) {
-  const blocker = (reason) => ({ ok: false, state: currentState, blocker: reason, owner: "владелец регистра workflow" });
-  if (!isPlainObject(registers) || !Object.hasOwn(registers, registerName)) return blocker(`регистр ${registerName} отсутствует`);
-  const target = registers[registerName];
-  if (typeof target !== "string") return blocker(`регистр ${registerName} должен быть строкой`);
-  if (!isPlainObject(states) || !Object.hasOwn(states, target)) return blocker(`регистр ${registerName} содержит неизвестное состояние ${target}`);
-  if (currentState === "D02" && target === "C10") return blocker("D02 не может возобновить цикл прямо в C10");
-  return { ok: true, state: target, target };
-}
-
 export function validateRegistry(registry, adapters = {}) {
   const errors = validateSchemaShape(registry);
   if (errors.length > 0) return errors;
@@ -542,11 +531,7 @@ export function validateRegistry(registry, adapters = {}) {
     }
   }
 
-  validateExactStateTargets(registry, "C08", { next: ["C07", "D01", "P03"] }, errors);
-  validateExactStateTargets(registry, "P03", { next: ["P03", "C07", "D01", "B01", "X03", "C09"] }, errors);
-  validateExactStateTargets(registry, "C09", { next: ["G00", "D01", "D02", "X03"] }, errors);
-  validateExactStateTargets(registry, "G00", { next: ["C10", "D01", "D02", "B01"], exits: ["main_process_spec_revision"] }, errors);
-  validateExactStateTargets(registry, "X03", { next: ["X03", "B01"], dynamicNext: ["return_state"], exits: ["main_process_no_result_closure", "main_process_materialized_route"] }, errors);
+  errors.push(...validateTopology(registry));
   for (const forbidden of ["C09", "G00", "C10"]) {
     if (states.D01?.next.includes(forbidden)) errors.push(issue("D01_BYPASS", "$.states.D01.next", `переход в ${forbidden} запрещён`));
   }
@@ -1136,31 +1121,11 @@ function readRegistry(root = DEFAULT_ROOT) {
 }
 
 function printState(id) {
-  const state = readRegistry().states[id];
-  if (!state) throw new Error(`Неизвестное состояние ${id}`);
-  console.log(`Состояние: ${id} — ${state.name}`);
-  console.log(`Исполнитель: ${state.actor}`);
-  console.log(`Документ: ${state.document}`);
-  console.log(`Следующие состояния: ${state.next.join(", ") || "нет"}`);
-  if (state.requiredGate) console.log(`Обязательный шлюз: ${state.requiredGate.kind} / ${state.requiredGate.issuer} / ${state.requiredGate.artifact}`);
-  if (state.requiredTransitionProofs) {
-    for (const [target, proof] of Object.entries(state.requiredTransitionProofs)) {
-      console.log(`Доказательство перехода ${id} -> ${target}: ${proof.kind} / ${proof.issuer} / ${proof.artifact}`);
-    }
-  }
-  if (state.dynamicNext?.length) console.log(`Динамический возврат: ${state.dynamicNext.join(", ")}`);
-  if (state.exits?.length) console.log(`Выходы из цикла: ${state.exits.join(", ")}`);
+  console.log(stateDescription(readRegistry(), id));
 }
 
 function printMermaid() {
-  const registry = readRegistry();
-  console.log("flowchart TD");
-  for (const [id, state] of Object.entries(registry.states)) console.log(`    ${id}["${id} ${state.name.replaceAll('"', "'")}"]`);
-  for (const [id, state] of Object.entries(registry.states)) {
-    for (const target of state.next) console.log(`    ${id} --> ${target}`);
-    for (const target of state.dynamicNext ?? []) console.log(`    ${id} -. "${target}" .-> DYNAMIC_${id}_${target}["DYNAMIC:${target}"]`);
-    for (const target of state.exits ?? []) console.log(`    ${id} --> EXIT_${target}["EXIT:${target}"]`);
-  }
+  console.log(mermaidFor(readRegistry()));
 }
 
 function failOnErrors(errors) {
