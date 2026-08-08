@@ -13,7 +13,7 @@ class Bitrix24OpenLineIdCompatibilityCommand extends Command
         {--artifact= : Путь для проверяемого JSON artifact}
         {--migrate : Выполнить collision-safe migration после успешного preflight}';
 
-    protected $description = 'Проверить и явно мигрировать неканонические LINE_ID во всех доступных источниках';
+    protected $description = 'Проверить и явно мигрировать неканонические LINE_ID для портала переданного registry';
 
     public function handle(Bitrix24OpenLineIdCompatibilityService $service): int
     {
@@ -55,8 +55,24 @@ class Bitrix24OpenLineIdCompatibilityCommand extends Command
                 ->values()
                 ->all(),
         );
+        $portalScope = is_string($report['portal_scope'] ?? null)
+            ? $report['portal_scope']
+            : 'не определён';
+        $otherPortals = is_array($report['out_of_scope']['portals'] ?? null)
+            ? $report['out_of_scope']['portals']
+            : [];
+        $this->line('Портал текущего запуска: '.$portalScope);
+        $this->line(
+            'Другие порталы: '.($otherPortals === [] ? 'нет' : implode(', ', $otherPortals)),
+        );
+
+        if ($otherPortals !== []) {
+            $this->warn('Для перечисленных порталов нужны отдельные compatibility-запуски с их registry.');
+        }
+
         $this->line('Migration candidates: '.count($report['migrations'] ?? []));
         $this->line('Collisions: '.count($report['collisions'] ?? []));
+        $this->line('Блокирующие активные аренды: '.count($report['active_lease_blocks'] ?? []));
         $this->line('Invalid: '.count($report['invalid'] ?? []));
 
         if (($report['ready'] ?? false) !== true) {
