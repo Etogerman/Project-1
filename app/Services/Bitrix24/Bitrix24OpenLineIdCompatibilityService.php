@@ -59,12 +59,13 @@ final class Bitrix24OpenLineIdCompatibilityService
         }
 
         $invalid = [];
-        $databaseEntries = $this->databaseEntries();
-        $profileDatabaseEntries = $this->profileDatabaseEntries();
-        $entries = [...$databaseEntries, ...$profileDatabaseEntries];
+        $entries = [];
         $sourceCounts = [
-            'database' => count($databaseEntries),
-            'profile_database' => count($profileDatabaseEntries),
+            'database' => 0,
+            'profile_database' => 0,
+            'current_registry' => 0,
+            'previous_registry' => 0,
+            'active_leases' => 0,
         ];
         $documents = [];
         $sourceExists = [];
@@ -76,6 +77,7 @@ final class Bitrix24OpenLineIdCompatibilityService
         }
 
         $registryPortals = [];
+        $registryEntries = [];
 
         foreach (['current_registry', 'previous_registry'] as $source) {
             $portal = $this->registryPortal(
@@ -89,32 +91,36 @@ final class Bitrix24OpenLineIdCompatibilityService
                 $registryPortals[$source] = $portal;
             }
 
-            $fileEntries = $this->registryEntries(
+            $registryEntries[$source] = $this->registryEntries(
                 $source,
                 $documents[$source],
                 $portal ?? '',
                 $sourceExists[$source],
                 $invalid,
             );
-
-            $sourceCounts[$source] = count($fileEntries);
-            array_push($entries, ...$fileEntries);
         }
 
-        $uniqueRegistryPortals = array_values(array_unique(array_values($registryPortals)));
+        $portalScope = $this->resolvePortalScope(
+            $registryPortals,
+            $sourceExists,
+            $invalid,
+        );
 
-        if (count($uniqueRegistryPortals) > 1) {
-            $invalid[] = [
-                'source' => 'registry_portal',
-                'locator' => 'current_registry/previous_registry',
-                'line_id' => 'registry_portal_mismatch',
-            ];
+        foreach ($registryEntries as $source => $fileEntries) {
+            $this->validateEntries($fileEntries, $invalid);
+
+            if ($portalScope !== null
+                && ($registryPortals[$source] ?? null) === $portalScope
+            ) {
+                $sourceCounts[$source] = count($fileEntries);
+                array_push($entries, ...$fileEntries);
+            }
         }
 
         $leaseDocument = $documents['active_leases'];
-        $leasePortal = count($uniqueRegistryPortals) === 1 ? $uniqueRegistryPortals[0] : '';
+        $leasePortal = $portalScope ?? '';
 
-        if ($leaseDocument !== [] && count($uniqueRegistryPortals) !== 1) {
+        if ($leaseDocument !== [] && $portalScope === null) {
             $invalid[] = [
                 'source' => 'active_leases',
                 'locator' => 'portal_domain',
@@ -128,36 +134,73 @@ final class Bitrix24OpenLineIdCompatibilityService
             $leasePortal,
             $invalid,
         );
-        $sourceCounts['active_leases'] = count($leaseEntries);
-        array_push($entries, ...$leaseEntries);
+        $this->validateEntries($leaseEntries, $invalid);
 
-        foreach ($entries as $entry) {
-            if ($entry['canonical_line_id'] === null) {
-                $invalid[] = [
-                    'source' => $entry['source'],
-                    'locator' => $entry['locator'],
-                    'line_id' => $entry['line_id'],
-                ];
-            }
+        if ($portalScope !== null) {
+            $sourceCounts['active_leases'] = count($leaseEntries);
+            array_push($entries, ...$leaseEntries);
+        }
 
-            if (in_array($entry['source'], ['database', 'profile_database'], true)
-                && $entry['portal'] === ''
-            ) {
-                $invalid[] = [
-                    'source' => $entry['source'],
-                    'locator' => $entry['locator'],
-                    'line_id' => 'invalid_portal',
-                ];
-            }
+        $databaseEntries = $this->databaseEntries();
+        $profileDatabaseEntries = $this->profileDatabaseEntries();
+        $outOfScope = [
+            'portals' => [],
+            'source_counts' => [
+                'database' => 0,
+                'profile_database' => 0,
+            ],
+            'entries' => [],
+        ];
 
-            if (! Bitrix24OpenLineRoute::isValidConnectorCode($entry['connector_code'])) {
-                $invalid[] = [
-                    'source' => $entry['source'],
-                    'locator' => $entry['locator'],
-                    'line_id' => 'invalid_connector_code',
-                ];
+        foreach ([
+            'database' => $databaseEntries,
+            'profile_database' => $profileDatabaseEntries,
+        ] as $source => $databaseSourceEntries) {
+            foreach ($databaseSourceEntries as $entry) {
+                $portal = (string) ($entry['portal'] ?? '');
+
+                if ($portal === '') {
+                    $this->validateEntries([$entry], $invalid);
+                    $invalid[] = [
+                        'source' => $source,
+                        'locator' => (string) ($entry['locator'] ?? ''),
+                        'line_id' => 'invalid_portal',
+                    ];
+
+                    continue;
+                }
+
+                if ($portalScope !== null && $portal === $portalScope) {
+                    $this->validateEntries([$entry], $invalid);
+                    $sourceCounts[$source]++;
+                    $entries[] = $entry;
+
+                    continue;
+                }
+
+                $outOfScope['source_counts'][$source]++;
+                $outOfScope['portals'][] = $portal;
+                $outOfScope['entries'][] = $this->outOfScopeEntry($entry);
             }
         }
+
+        $outOfScope['portals'] = array_values(array_unique($outOfScope['portals']));
+        sort($outOfScope['portals'], SORT_STRING);
+        usort(
+            $outOfScope['entries'],
+            fn (array $left, array $right): int => strcmp(
+                implode('|', [
+                    (string) ($left['portal'] ?? ''),
+                    (string) ($left['source'] ?? ''),
+                    (string) ($left['locator'] ?? ''),
+                ]),
+                implode('|', [
+                    (string) ($right['portal'] ?? ''),
+                    (string) ($right['source'] ?? ''),
+                    (string) ($right['locator'] ?? ''),
+                ]),
+            ),
+        );
 
         [$migrations, $collisions] = $this->analyzeEntries($entries);
         $activeLeaseBlocks = $this->activeLeaseBlocks(
@@ -167,14 +210,17 @@ final class Bitrix24OpenLineIdCompatibilityService
         );
 
         return [
-            'schema_version' => 1,
+            'schema_version' => 2,
             'generated_at' => $snapshotAt->toAtomString(),
             'storage_directory' => $storageDirectory,
-            'ready' => $invalid === []
+            'portal_scope' => $portalScope,
+            'ready' => $portalScope !== null
+                && $invalid === []
                 && $collisions === []
                 && $activeLeaseBlocks === [],
             'source_counts' => $sourceCounts,
             'entries' => $entries,
+            'out_of_scope' => $outOfScope,
             'migrations' => $migrations,
             'collisions' => $collisions,
             'active_lease_blocks' => $activeLeaseBlocks,
@@ -310,6 +356,7 @@ final class Bitrix24OpenLineIdCompatibilityService
                 );
 
                 if (($lockedReport['ready'] ?? false) !== true
+                    || ($lockedReport['portal_scope'] ?? null) !== ($report['portal_scope'] ?? null)
                     || ($lockedReport['source_hashes'] ?? null) !== ($report['source_hashes'] ?? null)
                     || ($lockedReport['entries'] ?? null) !== ($report['entries'] ?? null)
                     || ($lockedReport['migrations'] ?? null) !== ($report['migrations'] ?? null)
@@ -525,6 +572,117 @@ final class Bitrix24OpenLineIdCompatibilityService
         return [
             'profile:'.(string) $profile->profile_key,
             $profileCallbackBaseUrl,
+        ];
+    }
+
+    /**
+     * @param  array<string, string>  $registryPortals
+     * @param  array<string, bool>  $sourceExists
+     * @param  list<array<string, string>>  $invalid
+     */
+    private function resolvePortalScope(
+        array $registryPortals,
+        array $sourceExists,
+        array &$invalid,
+    ): ?string {
+        $currentExists = ($sourceExists['current_registry'] ?? false) === true;
+        $previousExists = ($sourceExists['previous_registry'] ?? false) === true;
+        $currentPortal = $registryPortals['current_registry'] ?? null;
+        $previousPortal = $registryPortals['previous_registry'] ?? null;
+
+        if (is_string($currentPortal)
+            && is_string($previousPortal)
+            && $currentPortal !== $previousPortal
+        ) {
+            $invalid[] = [
+                'source' => 'registry_portal',
+                'locator' => 'current_registry/previous_registry',
+                'line_id' => 'registry_portal_mismatch',
+            ];
+
+            return null;
+        }
+
+        $portalScope = null;
+
+        if ($currentExists) {
+            if (is_string($currentPortal)
+                && (! $previousExists || is_string($previousPortal))
+            ) {
+                $portalScope = $currentPortal;
+            }
+        } elseif ($previousExists && is_string($previousPortal)) {
+            $portalScope = $previousPortal;
+        }
+
+        if ($portalScope === null) {
+            $invalid[] = [
+                'source' => 'registry_portal',
+                'locator' => 'current_registry/previous_registry',
+                'line_id' => 'registry_portal_unresolved',
+            ];
+        }
+
+        return $portalScope;
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $entries
+     * @param  list<array<string, string>>  $invalid
+     */
+    private function validateEntries(array $entries, array &$invalid): void
+    {
+        foreach ($entries as $entry) {
+            if (($entry['canonical_line_id'] ?? null) === null) {
+                $invalid[] = [
+                    'source' => (string) ($entry['source'] ?? ''),
+                    'locator' => (string) ($entry['locator'] ?? ''),
+                    'line_id' => (string) ($entry['line_id'] ?? ''),
+                ];
+            }
+
+            if (! Bitrix24OpenLineRoute::isValidConnectorCode(
+                (string) ($entry['connector_code'] ?? ''),
+            )) {
+                $invalid[] = [
+                    'source' => (string) ($entry['source'] ?? ''),
+                    'locator' => (string) ($entry['locator'] ?? ''),
+                    'line_id' => 'invalid_connector_code',
+                ];
+            }
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $entry
+     * @return array<string, mixed>
+     */
+    private function outOfScopeEntry(array $entry): array
+    {
+        $canonicalLineId = $entry['canonical_line_id'] ?? null;
+        $issues = [];
+
+        if (! is_string($canonicalLineId)) {
+            $issues[] = 'invalid_line_id';
+        }
+
+        if (! Bitrix24OpenLineRoute::isValidConnectorCode(
+            (string) ($entry['connector_code'] ?? ''),
+        )) {
+            $issues[] = 'invalid_connector_code';
+        }
+
+        sort($issues, SORT_STRING);
+
+        return [
+            'source' => (string) ($entry['source'] ?? ''),
+            'locator' => (string) ($entry['locator'] ?? ''),
+            'portal' => (string) ($entry['portal'] ?? ''),
+            'line_id' => (string) ($entry['line_id'] ?? ''),
+            'canonical_line_id' => is_string($canonicalLineId) ? $canonicalLineId : null,
+            'needs_migration' => is_string($canonicalLineId)
+                && (string) ($entry['line_id'] ?? '') !== $canonicalLineId,
+            'issues' => $issues,
         ];
     }
 

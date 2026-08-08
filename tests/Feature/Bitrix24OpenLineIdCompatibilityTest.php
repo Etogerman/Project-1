@@ -295,7 +295,7 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
 
     public function test_same_connector_on_another_portal_does_not_block_migration(): void
     {
-        $this->insertNonCanonicalDatabaseRoute('014', portal: 'portal-b.example.test');
+        $routeId = $this->insertNonCanonicalDatabaseRoute('014', portal: 'portal-b.example.test');
         $this->writeJson(
             'route_registry.json',
             $this->registry([], 'portal-a.example.test'),
@@ -312,7 +312,191 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
             ->preflight($this->storageDirectory);
 
         $this->assertTrue($preflight['ready']);
+        $this->assertSame('portal-a.example.test', $preflight['portal_scope']);
+        $this->assertSame([], $preflight['migrations']);
         $this->assertSame([], $preflight['active_lease_blocks']);
+        $this->assertSame(['portal-b.example.test'], $preflight['out_of_scope']['portals']);
+        $this->assertSame([
+            [
+                'source' => 'database',
+                'locator' => 'route:'.$routeId,
+                'portal' => 'portal-b.example.test',
+                'line_id' => '014',
+                'canonical_line_id' => '14',
+                'needs_migration' => true,
+                'issues' => [],
+            ],
+        ], $preflight['out_of_scope']['entries']);
+    }
+
+    public function test_migration_changes_only_database_rows_from_registry_portal(): void
+    {
+        $portalARouteId = $this->insertNonCanonicalDatabaseRoute(
+            '014',
+            portal: 'portal-a.example.test',
+            callbackBaseUrl: 'https://portal-a-owner.example.test',
+        );
+        $portalBRouteId = $this->insertNonCanonicalDatabaseRoute(
+            '015',
+            portal: 'portal-b.example.test',
+            callbackBaseUrl: 'https://portal-b-owner.example.test',
+        );
+        $this->writeJson(
+            'route_registry.json',
+            $this->registry([], 'portal-a.example.test'),
+        );
+        $artifactPath = $this->storageDirectory.'/portal-a-migration.json';
+
+        $artifact = app(Bitrix24OpenLineIdCompatibilityService::class)
+            ->migrate($this->storageDirectory, $artifactPath);
+
+        $this->assertSame(2, $artifact['schema_version']);
+        $this->assertSame('portal-a.example.test', $artifact['portal_scope']);
+        $this->assertTrue($artifact['ready']);
+        $this->assertTrue($artifact['migration_applied']);
+        $this->assertSame(['portal-b.example.test'], $artifact['out_of_scope']['portals']);
+        $this->assertDatabaseHas('bitrix24_open_line_routes', [
+            'id' => $portalARouteId,
+            'line_id' => '14',
+        ]);
+        $this->assertDatabaseHas('bitrix24_open_line_routes', [
+            'id' => $portalBRouteId,
+            'line_id' => '015',
+        ]);
+        $this->assertSame(1, $this->readJson('route_registry.json')['schema_version']);
+    }
+
+    public function test_each_foreign_portal_requires_its_own_registry_run(): void
+    {
+        $portalARouteId = $this->insertNonCanonicalDatabaseRoute(
+            '014',
+            portal: 'portal-a.example.test',
+            callbackBaseUrl: 'https://portal-a-owner.example.test',
+        );
+        $portalBRouteId = $this->insertNonCanonicalDatabaseRoute(
+            '015',
+            portal: 'portal-b.example.test',
+            callbackBaseUrl: 'https://portal-b-owner.example.test',
+        );
+        $service = app(Bitrix24OpenLineIdCompatibilityService::class);
+        $this->writeJson(
+            'route_registry.json',
+            $this->registry([], 'portal-a.example.test'),
+        );
+        $service->migrate($this->storageDirectory, $this->storageDirectory.'/portal-a.json');
+
+        $this->writeJson(
+            'route_registry.json',
+            $this->registry([], 'portal-b.example.test'),
+        );
+        $artifact = $service->migrate(
+            $this->storageDirectory,
+            $this->storageDirectory.'/portal-b.json',
+        );
+
+        $this->assertSame('portal-b.example.test', $artifact['portal_scope']);
+        $this->assertTrue($artifact['migration_applied']);
+        $this->assertSame(['portal-a.example.test'], $artifact['out_of_scope']['portals']);
+        $this->assertDatabaseHas('bitrix24_open_line_routes', [
+            'id' => $portalARouteId,
+            'line_id' => '14',
+        ]);
+        $this->assertDatabaseHas('bitrix24_open_line_routes', [
+            'id' => $portalBRouteId,
+            'line_id' => '15',
+        ]);
+    }
+
+    public function test_foreign_only_migration_writes_proof_without_mutating_sources(): void
+    {
+        $routeId = $this->insertNonCanonicalDatabaseRoute(
+            '014',
+            portal: 'portal-b.example.test',
+        );
+        $this->writeJson(
+            'route_registry.json',
+            $this->registry([], 'portal-a.example.test'),
+        );
+        $registryBefore = (string) file_get_contents(
+            $this->storageDirectory.'/route_registry.json',
+        );
+        $artifactPath = $this->storageDirectory.'/foreign-only.json';
+
+        $artifact = app(Bitrix24OpenLineIdCompatibilityService::class)
+            ->migrate($this->storageDirectory, $artifactPath);
+
+        $this->assertTrue($artifact['ready']);
+        $this->assertFalse($artifact['migration_applied']);
+        $this->assertSame([], $artifact['migrations']);
+        $this->assertTrue($artifact['out_of_scope']['entries'][0]['needs_migration']);
+        $this->assertDatabaseHas('bitrix24_open_line_routes', [
+            'id' => $routeId,
+            'line_id' => '014',
+        ]);
+        $this->assertSame(
+            $registryBefore,
+            file_get_contents($this->storageDirectory.'/route_registry.json'),
+        );
+        $this->assertSame([], glob($this->storageDirectory.'/*.backup.*') ?: []);
+    }
+
+    public function test_canonical_foreign_entry_is_disclosed_without_claiming_coverage(): void
+    {
+        $routeId = $this->insertNonCanonicalDatabaseRoute(
+            '14',
+            portal: 'portal-b.example.test',
+        );
+        $this->writeJson(
+            'route_registry.json',
+            $this->registry([], 'portal-a.example.test'),
+        );
+
+        $preflight = app(Bitrix24OpenLineIdCompatibilityService::class)
+            ->preflight($this->storageDirectory);
+
+        $this->assertTrue($preflight['ready']);
+        $this->assertSame(['portal-b.example.test'], $preflight['out_of_scope']['portals']);
+        $this->assertSame([
+            [
+                'source' => 'database',
+                'locator' => 'route:'.$routeId,
+                'portal' => 'portal-b.example.test',
+                'line_id' => '14',
+                'canonical_line_id' => '14',
+                'needs_migration' => false,
+                'issues' => [],
+            ],
+        ], $preflight['out_of_scope']['entries']);
+    }
+
+    public function test_out_of_scope_invalid_values_are_reported_without_blocking_scoped_portal(): void
+    {
+        $routeId = $this->insertNonCanonicalDatabaseRoute(
+            'not-a-line-id',
+            portal: 'portal-b.example.test',
+            connectorCode: 'invalid connector',
+        );
+        $this->writeJson(
+            'route_registry.json',
+            $this->registry([], 'portal-a.example.test'),
+        );
+
+        $preflight = app(Bitrix24OpenLineIdCompatibilityService::class)
+            ->preflight($this->storageDirectory);
+
+        $this->assertTrue($preflight['ready']);
+        $this->assertSame([], $preflight['invalid']);
+        $this->assertSame([
+            [
+                'source' => 'database',
+                'locator' => 'route:'.$routeId,
+                'portal' => 'portal-b.example.test',
+                'line_id' => 'not-a-line-id',
+                'canonical_line_id' => null,
+                'needs_migration' => false,
+                'issues' => ['invalid_connector_code', 'invalid_line_id'],
+            ],
+        ], $preflight['out_of_scope']['entries']);
     }
 
     public function test_connector_registration_lease_matching_line_and_connector_has_one_additive_block(): void
@@ -377,6 +561,7 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
             ->preflight($this->storageDirectory);
 
         $this->assertFalse($preflight['ready']);
+        $this->assertNull($preflight['portal_scope']);
         $this->assertContains([
             'source' => 'current_registry',
             'locator' => 'portal_domain',
@@ -399,11 +584,144 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
             ->preflight($this->storageDirectory);
 
         $this->assertFalse($preflight['ready']);
+        $this->assertNull($preflight['portal_scope']);
         $this->assertContains([
             'source' => 'registry_portal',
             'locator' => 'current_registry/previous_registry',
             'line_id' => 'registry_portal_mismatch',
         ], $preflight['invalid']);
+    }
+
+    public function test_existing_invalid_current_registry_cannot_fall_back_to_previous(): void
+    {
+        file_put_contents($this->storageDirectory.'/route_registry.json', '{invalid-json');
+        $this->writeJson(
+            'route_registry.previous.json',
+            $this->registry([], 'portal-a.example.test'),
+        );
+
+        $preflight = app(Bitrix24OpenLineIdCompatibilityService::class)
+            ->preflight($this->storageDirectory);
+
+        $this->assertFalse($preflight['ready']);
+        $this->assertNull($preflight['portal_scope']);
+        $this->assertContains(
+            'invalid_json',
+            array_column($preflight['invalid'], 'line_id'),
+        );
+        $this->assertContains(
+            'registry_portal_unresolved',
+            array_column($preflight['invalid'], 'line_id'),
+        );
+    }
+
+    public function test_blocked_scoped_migration_does_not_overwrite_historical_artifact(): void
+    {
+        file_put_contents($this->storageDirectory.'/route_registry.json', '{invalid-json');
+        $this->writeJson(
+            'route_registry.previous.json',
+            $this->registry([], 'portal-a.example.test'),
+        );
+        $artifactPath = $this->storageDirectory.'/historical-v1.json';
+        $historicalArtifact = '{"schema_version":1,"ready":true}';
+        file_put_contents($artifactPath, $historicalArtifact);
+
+        try {
+            app(Bitrix24OpenLineIdCompatibilityService::class)
+                ->migrate($this->storageDirectory, $artifactPath);
+            $this->fail('Invalid current registry must block migration.');
+        } catch (Bitrix24OpenLineIdCompatibilityException $exception) {
+            $this->assertSame(
+                'openlines_line_id_compatibility_blocked',
+                $exception->errorCode,
+            );
+        }
+
+        $this->assertSame($historicalArtifact, file_get_contents($artifactPath));
+        $this->assertSame([], glob($this->storageDirectory.'/*.backup.*') ?: []);
+    }
+
+    public function test_existing_invalid_previous_registry_blocks_valid_current(): void
+    {
+        $this->writeJson(
+            'route_registry.json',
+            $this->registry([], 'portal-a.example.test'),
+        );
+        file_put_contents(
+            $this->storageDirectory.'/route_registry.previous.json',
+            '{invalid-json',
+        );
+
+        $preflight = app(Bitrix24OpenLineIdCompatibilityService::class)
+            ->preflight($this->storageDirectory);
+
+        $this->assertFalse($preflight['ready']);
+        $this->assertNull($preflight['portal_scope']);
+        $this->assertContains(
+            'invalid_json',
+            array_column($preflight['invalid'], 'line_id'),
+        );
+    }
+
+    public function test_missing_current_registry_can_use_valid_previous_registry(): void
+    {
+        $routeId = $this->insertNonCanonicalDatabaseRoute(
+            '014',
+            portal: 'portal-a.example.test',
+        );
+        $this->writeJson(
+            'route_registry.previous.json',
+            $this->registry([], 'portal-a.example.test'),
+        );
+
+        $artifact = app(Bitrix24OpenLineIdCompatibilityService::class)
+            ->migrate(
+                $this->storageDirectory,
+                $this->storageDirectory.'/previous-only.json',
+            );
+
+        $this->assertSame('portal-a.example.test', $artifact['portal_scope']);
+        $this->assertTrue($artifact['ready']);
+        $this->assertTrue($artifact['migration_applied']);
+        $this->assertDatabaseHas('bitrix24_open_line_routes', [
+            'id' => $routeId,
+            'line_id' => '14',
+        ]);
+        $this->assertFileDoesNotExist($this->storageDirectory.'/route_registry.json');
+    }
+
+    public function test_missing_current_and_previous_registries_fail_closed(): void
+    {
+        $preflight = app(Bitrix24OpenLineIdCompatibilityService::class)
+            ->preflight($this->storageDirectory);
+
+        $this->assertFalse($preflight['ready']);
+        $this->assertNull($preflight['portal_scope']);
+        $this->assertContains([
+            'source' => 'registry_portal',
+            'locator' => 'current_registry/previous_registry',
+            'line_id' => 'registry_portal_unresolved',
+        ], $preflight['invalid']);
+    }
+
+    public function test_registry_portal_is_normalized_before_database_partitioning(): void
+    {
+        $routeId = $this->insertNonCanonicalDatabaseRoute(
+            '014',
+            portal: 'portal-a.example.test',
+        );
+        $this->writeJson(
+            'route_registry.json',
+            $this->registry([], ' PORTAL-A.EXAMPLE.TEST. '),
+        );
+
+        $preflight = app(Bitrix24OpenLineIdCompatibilityService::class)
+            ->preflight($this->storageDirectory);
+
+        $this->assertTrue($preflight['ready']);
+        $this->assertSame('portal-a.example.test', $preflight['portal_scope']);
+        $this->assertSame('route:'.$routeId, $preflight['migrations'][0]['locator']);
+        $this->assertSame([], $preflight['out_of_scope']['portals']);
     }
 
     public function test_nonempty_lease_file_without_registry_portal_fails_closed(): void
@@ -421,6 +739,18 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
             'locator' => 'portal_domain',
             'line_id' => 'lease_portal_unresolved',
         ], $preflight['invalid']);
+    }
+
+    public function test_missing_lease_file_is_a_legitimate_empty_source(): void
+    {
+        $this->writeJson('route_registry.json', $this->registry([]));
+
+        $preflight = app(Bitrix24OpenLineIdCompatibilityService::class)
+            ->preflight($this->storageDirectory);
+
+        $this->assertTrue($preflight['ready']);
+        $this->assertSame(0, $preflight['source_counts']['active_leases']);
+        $this->assertSame([], $preflight['active_lease_blocks']);
     }
 
     public function test_expired_lease_still_participates_in_structural_collision_detection(): void
@@ -521,6 +851,7 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
     public function test_invalid_database_portal_and_connector_fail_closed(): void
     {
         $routeId = $this->insertNonCanonicalDatabaseRoute('014');
+        $this->writeJson('route_registry.json', $this->registry([]));
         DB::table('bitrix24_open_line_routes')
             ->where('id', $routeId)
             ->update([
@@ -627,6 +958,7 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
     public function test_invalid_database_line_id_blocks_preflight_and_migration(): void
     {
         $routeId = $this->insertNonCanonicalDatabaseRoute('not-a-line-id');
+        $this->writeJson('route_registry.json', $this->registry([]));
         $artifactPath = $this->storageDirectory.'/invalid-database-line-id.json';
         $service = app(Bitrix24OpenLineIdCompatibilityService::class);
 
@@ -661,6 +993,7 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
             '014',
             Bitrix24OpenLineRoute::STATUS_MISCONFIGURED,
         );
+        $this->writeJson('route_registry.json', $this->registry([]));
         $artifactPath = $this->storageDirectory.'/misconfigured-line-id.json';
 
         $artifact = app(Bitrix24OpenLineIdCompatibilityService::class)
@@ -715,6 +1048,7 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
             telegramLineId: '014',
             maxLineId: null,
         );
+        $this->writeJson('route_registry.json', $this->registry([]));
         $artifactPath = $this->storageDirectory.'/legacy-profile-line-id.json';
         $service = app(Bitrix24OpenLineIdCompatibilityService::class);
 
@@ -744,12 +1078,71 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
         $this->assertSame([], $service->preflight($this->storageDirectory)['migrations']);
     }
 
+    public function test_profile_database_entries_are_partitioned_by_registry_portal(): void
+    {
+        $portalAProfile = $this->insertLegacyProfile(
+            telegramLineId: '014',
+            maxLineId: null,
+            portal: 'portal-a.example.test',
+        );
+        $portalBProfile = $this->insertLegacyProfile(
+            telegramLineId: '015',
+            maxLineId: null,
+            profileCallbackBaseUrl: 'https://portal-b-profile.example.test',
+            ownerCallbackBaseUrl: 'https://portal-b-owner.example.test',
+            portal: 'portal-b.example.test',
+        );
+        $this->writeJson(
+            'route_registry.json',
+            $this->registry([], 'portal-a.example.test'),
+        );
+
+        $artifact = app(Bitrix24OpenLineIdCompatibilityService::class)
+            ->migrate(
+                $this->storageDirectory,
+                $this->storageDirectory.'/profile-portal-a.json',
+            );
+
+        $this->assertTrue($artifact['ready']);
+        $this->assertSame(1, $artifact['source_counts']['profile_database']);
+        $this->assertSame(1, $artifact['out_of_scope']['source_counts']['profile_database']);
+        $this->assertSame('14', $portalAProfile->fresh()->telegram_line_id);
+        $this->assertSame('015', $portalBProfile->fresh()->telegram_line_id);
+    }
+
+    public function test_out_of_scope_database_changes_do_not_change_scoped_hashes(): void
+    {
+        $routeId = $this->insertNonCanonicalDatabaseRoute(
+            '014',
+            portal: 'portal-b.example.test',
+        );
+        $this->writeJson(
+            'route_registry.json',
+            $this->registry([], 'portal-a.example.test'),
+        );
+        $service = app(Bitrix24OpenLineIdCompatibilityService::class);
+        $before = $service->preflight($this->storageDirectory);
+
+        DB::table('bitrix24_open_line_routes')
+            ->where('id', $routeId)
+            ->update(['line_id' => '015']);
+        $after = $service->preflight($this->storageDirectory);
+
+        $this->assertSame($before['source_hashes'], $after['source_hashes']);
+        $this->assertSame($before['entries'], $after['entries']);
+        $this->assertNotSame(
+            $before['out_of_scope']['entries'],
+            $after['out_of_scope']['entries'],
+        );
+    }
+
     public function test_invalid_legacy_profile_line_id_blocks_preflight_and_migration(): void
     {
         $profile = $this->insertLegacyProfile(
             telegramLineId: 'not-a-line-id',
             maxLineId: null,
         );
+        $this->writeJson('route_registry.json', $this->registry([]));
         $artifactPath = $this->storageDirectory.'/invalid-legacy-profile-line-id.json';
         $service = app(Bitrix24OpenLineIdCompatibilityService::class);
 
@@ -781,6 +1174,7 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
             telegramLineId: '014',
             maxLineId: '14',
         );
+        $this->writeJson('route_registry.json', $this->registry([]));
         $artifactPath = $this->storageDirectory.'/legacy-profile-collision.json';
         $service = app(Bitrix24OpenLineIdCompatibilityService::class);
 
@@ -984,6 +1378,28 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
         ], $oversizedFile['invalid']);
     }
 
+    public function test_command_explains_portal_scope_and_separate_foreign_runs(): void
+    {
+        $this->insertNonCanonicalDatabaseRoute(
+            '014',
+            portal: 'portal-b.example.test',
+        );
+        $this->writeJson(
+            'route_registry.json',
+            $this->registry([], 'portal-a.example.test'),
+        );
+
+        $this->artisan('bitrix24:openlines-line-id-compatibility', [
+            '--storage-dir' => $this->storageDirectory,
+        ])
+            ->expectsOutputToContain('Портал текущего запуска: portal-a.example.test')
+            ->expectsOutputToContain('Другие порталы: portal-b.example.test')
+            ->expectsOutputToContain(
+                'Для перечисленных порталов нужны отдельные compatibility-запуски с их registry.',
+            )
+            ->assertSuccessful();
+    }
+
     /**
      * @param  array<string, array<string, mixed>>  $owners
      * @return array<string, mixed>
@@ -1099,9 +1515,10 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
         ?string $maxLineId,
         string $profileCallbackBaseUrl = 'https://local-1.example.test',
         string $ownerCallbackBaseUrl = 'https://local-1.example.test',
+        string $portal = 'stagecrm.fvds.ru',
     ): Bitrix24Profile {
         $profile = Bitrix24Profile::query()->create([
-            'portal_domain' => 'stagecrm.fvds.ru',
+            'portal_domain' => $portal,
             'profile_key' => Bitrix24Profile::PROFILE_KEY_STAGING,
             'profile_type' => Bitrix24Profile::TYPE_FULL_LIVE,
             'display_name' => 'Staging',
