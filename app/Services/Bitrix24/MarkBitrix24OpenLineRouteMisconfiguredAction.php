@@ -3,6 +3,7 @@
 namespace App\Services\Bitrix24;
 
 use App\Models\Bitrix24OpenLineRoute;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Str;
 
 final class MarkBitrix24OpenLineRouteMisconfiguredAction
@@ -82,6 +83,61 @@ final class MarkBitrix24OpenLineRouteMisconfiguredAction
         );
     }
 
+    public function handleDeferredExpected(
+        int $routeId,
+        int $expectedStateVersion,
+        int $expectedProfileId,
+        int $expectedChannelId,
+        int $expectedCallbackOwnerId,
+        string $expectedPortalDomain,
+        string $expectedConnectorCode,
+        string $expectedLineId,
+        string $expectedSourceId,
+        string $expectedStatus,
+        ?string $message,
+    ): ?Bitrix24OpenLineRoute {
+        return $this->snapshotLock->run(
+            fn (): ?Bitrix24OpenLineRoute => $this->routeOperationLock->runShortStateTransition(
+                $routeId,
+                function (?Bitrix24OpenLineRoute $route) use (
+                    $expectedCallbackOwnerId,
+                    $expectedChannelId,
+                    $expectedConnectorCode,
+                    $expectedLineId,
+                    $expectedPortalDomain,
+                    $expectedProfileId,
+                    $expectedSourceId,
+                    $expectedStateVersion,
+                    $expectedStatus,
+                    $message,
+                ): ?Bitrix24OpenLineRoute {
+                    if (! $this->matchesDeferredExpectedState(
+                        $route,
+                        $expectedStateVersion,
+                        $expectedProfileId,
+                        $expectedChannelId,
+                        $expectedCallbackOwnerId,
+                        $expectedPortalDomain,
+                        $expectedConnectorCode,
+                        $expectedLineId,
+                        $expectedSourceId,
+                        $expectedStatus,
+                    )) {
+                        return null;
+                    }
+
+                    if (filled($route->mutation_operation_id)) {
+                        throw new LockTimeoutException(
+                            Bitrix24OpenLineRouteOperationLock::BUSY_MESSAGE,
+                        );
+                    }
+
+                    return $this->mark($route, $message);
+                },
+            ),
+        );
+    }
+
     private function mark(
         ?Bitrix24OpenLineRoute $route,
         ?string $message,
@@ -116,5 +172,29 @@ final class MarkBitrix24OpenLineRouteMisconfiguredAction
             && (string) $route->line_id === (string) $expectedRoute->line_id
             && (string) $route->source_id === (string) $expectedRoute->source_id
             && (string) $route->status === (string) $expectedRoute->status;
+    }
+
+    private function matchesDeferredExpectedState(
+        ?Bitrix24OpenLineRoute $route,
+        int $expectedStateVersion,
+        int $expectedProfileId,
+        int $expectedChannelId,
+        int $expectedCallbackOwnerId,
+        string $expectedPortalDomain,
+        string $expectedConnectorCode,
+        string $expectedLineId,
+        string $expectedSourceId,
+        string $expectedStatus,
+    ): bool {
+        return $route instanceof Bitrix24OpenLineRoute
+            && (int) $route->mutation_state_version === $expectedStateVersion
+            && (int) $route->bitrix24_profile_id === $expectedProfileId
+            && (int) $route->channel_id === $expectedChannelId
+            && (int) $route->callback_owner_id === $expectedCallbackOwnerId
+            && (string) $route->portal_domain === $expectedPortalDomain
+            && (string) $route->connector_code === $expectedConnectorCode
+            && (string) $route->line_id === $expectedLineId
+            && (string) $route->source_id === $expectedSourceId
+            && (string) $route->status === $expectedStatus;
     }
 }
