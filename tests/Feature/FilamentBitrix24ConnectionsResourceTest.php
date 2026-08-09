@@ -13,6 +13,7 @@ use App\Models\Bitrix24Profile;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Bitrix24WebhookEvent;
 use App\Models\Channel;
+use App\Models\ChannelConnectionType;
 use App\Models\ContactIdentity;
 use App\Models\Dialog;
 use App\Models\User;
@@ -1041,9 +1042,11 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         $this->assertSame(1, $route->mutation_state_version);
     }
 
-    #[DataProvider('openLineClaimingStatusProvider')]
-    public function test_generic_save_acquires_shared_lease_before_relinquishing_line(string $status): void
-    {
+    #[DataProvider('openLineClaimReleaseProvider')]
+    public function test_generic_save_acquires_shared_lease_with_persisted_identity_before_relinquishing_line(
+        string $status,
+        string $nextChannelTypeCode,
+    ): void {
         $admin = $this->makeAdmin();
         $profile = $this->makeProfile([
             'portal_domain' => 'crm.release-claim.test',
@@ -1069,6 +1072,21 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
             'source_id' => 'SOURCE_BEFORE',
             'status' => $status,
         ]);
+        $nextChannelType = ChannelConnectionType::query()
+            ->where('code', $nextChannelTypeCode)
+            ->firstOrFail();
+
+        $channel->forceFill([
+            'channel_connection_type_id' => $nextChannelType->id,
+            'platform' => $nextChannelType->platform,
+            'connection_type' => $nextChannelType->connection_kind,
+        ])->save();
+        $channel->refresh();
+
+        $this->assertSame($nextChannelType->id, $channel->channel_connection_type_id);
+        $this->assertSame($nextChannelType->platform, $channel->platform);
+        $this->assertSame($nextChannelType->connection_kind, $channel->connection_type);
+
         $client = $this->mock(Bitrix24OpenLinesRouteRegistryClient::class);
         $client->shouldReceive('acquireLineLease')
             ->once()
@@ -1121,6 +1139,7 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
 
         $this->assertSame(Bitrix24OpenLineRoute::STATUS_INACTIVE, $route->status);
         $this->assertNull($route->line_owner_key);
+        $this->assertSame(Bitrix24OpenLineRoute::channelTypeForChannel($channel), $route->channel_type);
         $this->assertSame('abc_telegram', $route->connector_code);
         $this->assertSame('18', $route->line_id);
     }
@@ -1178,13 +1197,27 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
     }
 
     /**
-     * @return array<string, array{string}>
+     * @return array<string, array{string, string}>
      */
-    public static function openLineClaimingStatusProvider(): array
+    public static function openLineClaimReleaseProvider(): array
     {
         return [
-            'active' => [Bitrix24OpenLineRoute::STATUS_ACTIVE],
-            'legacy' => [Bitrix24OpenLineRoute::STATUS_LEGACY],
+            'active without channel retype' => [
+                Bitrix24OpenLineRoute::STATUS_ACTIVE,
+                ChannelConnectionType::CODE_TELEGRAM_BOT,
+            ],
+            'legacy without channel retype' => [
+                Bitrix24OpenLineRoute::STATUS_LEGACY,
+                ChannelConnectionType::CODE_TELEGRAM_BOT,
+            ],
+            'active after channel retype to max' => [
+                Bitrix24OpenLineRoute::STATUS_ACTIVE,
+                ChannelConnectionType::CODE_MAX_BOT,
+            ],
+            'legacy after channel retype to telegram account' => [
+                Bitrix24OpenLineRoute::STATUS_LEGACY,
+                ChannelConnectionType::CODE_TELEGRAM_ACCOUNT,
+            ],
         ];
     }
 
