@@ -8,6 +8,7 @@ use App\Data\Bots\IncomingBotMessage;
 use App\Jobs\DedupeBitrix24ContactPhonesJob;
 use App\Jobs\ExportMessageToBitrix24OpenLinesJob;
 use App\Jobs\LogBitrix24RawContactPhoneSnapshotJob;
+use App\Jobs\MarkBitrix24OpenLineRouteMisconfiguredJob;
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24MessageExport;
 use App\Models\Bitrix24OpenLineRoute;
@@ -29,6 +30,7 @@ use App\Services\Bitrix24\BuildBitrix24OpenLinesMessagePayloadAction;
 use App\Services\Bitrix24\DedupeBitrix24ContactPhonesAction;
 use App\Services\Bitrix24\ExportMessageToBitrix24OpenLinesAction;
 use App\Services\Bitrix24\LogBitrix24RawContactPhoneSnapshotAction;
+use App\Services\Bitrix24\MarkBitrix24OpenLineRouteMisconfiguredAction;
 use App\Services\Bitrix24\QueueBitrix24LiveMessageExportAction;
 use App\Services\Bitrix24\RepairStaleBitrix24ContactForLiveExportAction;
 use App\Services\Bitrix24\ResolveCurrentBitrix24ProfileAction;
@@ -42,6 +44,7 @@ use App\Services\Bots\StorePhoneCaptureConfirmationAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Schema;
@@ -892,50 +895,7 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'text' => 'Manual reply в неактивную линию',
         ]);
 
-        Http::fake(function (Request $request) use ($userCode) {
-            if ($request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json') {
-                return Http::response([
-                    'result' => [
-                        [
-                            'CHAT_ID' => '162490',
-                            'CONNECTOR_ID' => 'abrikosoff_max',
-                        ],
-                    ],
-                ], 200);
-            }
-
-            if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
-                return Http::response([
-                    'result' => [
-                        'ID' => (string) $request['ID'],
-                        'IM' => [
-                            [
-                                'VALUE' => 'imol|'.$userCode,
-                                'VALUE_TYPE' => 'IMOL',
-                            ],
-                        ],
-                    ],
-                ], 200);
-            }
-
-            if ($request->url() === 'https://client-endpoint.example/rest/imopenlines.dialog.get.json') {
-                return Http::response([
-                    'result' => [
-                        'id' => '162490',
-                        'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|71034|DEAL|136062',
-                    ],
-                ], 200);
-            }
-
-            if ($request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json') {
-                return Http::response([
-                    'error' => 'NOT_ACTIVE_LINE',
-                    'error_description' => 'Линия c таким ID неактивна или не существует',
-                ], 400);
-            }
-
-            return Http::response(['error' => 'Unexpected request'], 500);
-        });
+        $this->fakeInactiveLineSendFailureResponses($userCode);
 
         try {
             app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
@@ -960,6 +920,156 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
             'failure_uncertain' => false,
             'failure_reason' => 'Линия c таким ID неактивна или не существует',
         ]);
+    }
+
+    public function test_inactive_line_demotion_is_deferred_without_masking_transport_failure_when_snapshot_is_busy(): void
+    {
+        if (DB::getDriverName() !== 'pgsql') {
+            $this->markTestSkipped('The production registry snapshot lock is PostgreSQL-specific.');
+        }
+
+        $this->makeActiveConnection();
+        $userCode = 'abrikosoff_max|14|abrikosoff-dialog:397|101155';
+        $dialog = $this->createLiveReadyDialog(
+            platform: Channel::PLATFORM_MAX,
+            contactAttributes: [
+                'bitrix24_contact_id' => '71035',
+            ],
+            dialogAttributes: [
+                'bitrix24_open_line_user_code_override' => $userCode,
+                'bitrix24_open_line_resolved_chat_id_override' => '162491',
+                'bitrix24_open_line_binding_verified_at' => now(),
+            ],
+        );
+        $route = Bitrix24OpenLineRoute::query()->findOrFail($dialog->bitrix24_open_line_route_id);
+        $message = $this->makeMessage($dialog, [
+            'direction' => Message::DIRECTION_OUTBOUND,
+            'message_kind' => Message::KIND_OUTBOUND_MANUAL_REPLY,
+            'sent_by_type' => Message::SENT_BY_TYPE_OPERATOR,
+            'text' => 'Manual reply при занятом snapshot lock',
+        ]);
+        $this->fakeInactiveLineSendFailureResponses(
+            $userCode,
+            chatId: '162491',
+            contactId: '71035',
+        );
+
+        $defaultConnection = (string) config('database.default');
+        $concurrentConnection = 'bitrix24_live_export_snapshot_concurrent';
+        config([
+            'database.connections.'.$concurrentConnection => config(
+                'database.connections.'.$defaultConnection,
+            ),
+        ]);
+        DB::purge($concurrentConnection);
+        $connection = DB::connection($concurrentConnection);
+        $connection->selectOne(
+            'select pg_advisory_lock(hashtext(?), hashtext(?)) as acquired',
+            [
+                'ab-connector',
+                'bitrix24-open-lines-route-registry-snapshot',
+            ],
+            false,
+        );
+        $caughtException = null;
+
+        try {
+            app(ExportMessageToBitrix24OpenLinesAction::class)->handle($message);
+        } catch (Bitrix24LiveExportTransportException $exception) {
+            $caughtException = $exception;
+        } finally {
+            $connection->selectOne(
+                'select pg_advisory_unlock(hashtext(?), hashtext(?)) as released',
+                [
+                    'ab-connector',
+                    'bitrix24-open-lines-route-registry-snapshot',
+                ],
+                false,
+            );
+            DB::purge($concurrentConnection);
+            config()->set('database.connections.'.$concurrentConnection, null);
+        }
+
+        $this->assertInstanceOf(Bitrix24LiveExportTransportException::class, $caughtException);
+        $this->assertSame(
+            Bitrix24MessageExport::FAILURE_MESSAGE_SEND_FAILED,
+            $caughtException->failureCode,
+        );
+        $this->assertSame(Bitrix24OpenLineRoute::STATUS_ACTIVE, $route->fresh()->status);
+
+        $queuedJob = null;
+        Queue::assertPushed(
+            MarkBitrix24OpenLineRouteMisconfiguredJob::class,
+            function (MarkBitrix24OpenLineRouteMisconfiguredJob $job) use (
+                &$queuedJob,
+                $route,
+            ): bool {
+                $queuedJob = $job;
+
+                return $job->routeId === (int) $route->getKey()
+                    && $job->expectedStateVersion === (int) $route->fresh()->mutation_state_version;
+            },
+        );
+
+        $this->assertInstanceOf(MarkBitrix24OpenLineRouteMisconfiguredJob::class, $queuedJob);
+        $queuedJob->handle(app(MarkBitrix24OpenLineRouteMisconfiguredAction::class));
+
+        $route->refresh();
+
+        $this->assertSame(Bitrix24OpenLineRoute::STATUS_MISCONFIGURED, $route->status);
+        $this->assertSame('Линия c таким ID неактивна или не существует', $route->last_error_message);
+        $this->assertNotNull($route->last_error_at);
+    }
+
+    private function fakeInactiveLineSendFailureResponses(
+        string $userCode,
+        string $chatId = '162490',
+        string $contactId = '71034',
+    ): void {
+        Http::fake(function (Request $request) use ($chatId, $contactId, $userCode) {
+            if ($request->url() === 'https://client-endpoint.example/rest/imopenlines.crm.chat.get.json') {
+                return Http::response([
+                    'result' => [
+                        [
+                            'CHAT_ID' => $chatId,
+                            'CONNECTOR_ID' => 'abrikosoff_max',
+                        ],
+                    ],
+                ], 200);
+            }
+
+            if ($request->url() === 'https://client-endpoint.example/rest/crm.contact.get.json') {
+                return Http::response([
+                    'result' => [
+                        'ID' => (string) $request['ID'],
+                        'IM' => [
+                            [
+                                'VALUE' => 'imol|'.$userCode,
+                                'VALUE_TYPE' => 'IMOL',
+                            ],
+                        ],
+                    ],
+                ], 200);
+            }
+
+            if ($request->url() === 'https://client-endpoint.example/rest/imopenlines.dialog.get.json') {
+                return Http::response([
+                    'result' => [
+                        'id' => $chatId,
+                        'entity_data_2' => 'LEAD|0|COMPANY|0|CONTACT|'.$contactId.'|DEAL|136062',
+                    ],
+                ], 200);
+            }
+
+            if ($request->url() === 'https://client-endpoint.example/rest/imconnector.send.messages.json') {
+                return Http::response([
+                    'error' => 'NOT_ACTIVE_LINE',
+                    'error_description' => 'Линия c таким ID неактивна или не существует',
+                ], 400);
+            }
+
+            return Http::response(['error' => 'Unexpected request'], 500);
+        });
     }
 
     public function test_max_manual_reply_requires_confirmed_current_chat_before_connector_mirror_send(): void
@@ -6565,6 +6675,11 @@ class Bitrix24OpenLinesLiveExportTest extends TestCase
 
         config()->set('bitrix24.features.fake_happy_path_enabled', true);
         config()->set('bitrix24.duplicate_phone_diagnostic.enabled', true);
+
+        $registryClient = Mockery::mock(Bitrix24OpenLinesRouteRegistryClient::class);
+        $registryClient->shouldNotReceive('acquireLineLease');
+        $registryClient->shouldNotReceive('releaseLineLease');
+        $this->app->instance(Bitrix24OpenLinesRouteRegistryClient::class, $registryClient);
 
         $dialog = $this->createLiveReadyDialog(
             contactAttributes: [

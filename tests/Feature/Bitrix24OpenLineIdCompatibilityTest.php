@@ -1272,6 +1272,126 @@ class Bitrix24OpenLineIdCompatibilityTest extends TestCase
         $this->assertFileDoesNotExist($artifactPath);
     }
 
+    public function test_registry_preflight_matches_runtime_reader_schema(): void
+    {
+        $ownerKeyMismatch = $this->owner('local-1', '14');
+        $ownerKeyMismatch['owner_profile_key'] = 'local-2';
+
+        $invalidCallback = $this->owner('local-1', '14');
+        $invalidCallback['owner_callback_base_url'] = 'http://127.0.0.1/callback';
+
+        $missingConnector = $this->owner('local-1', '14');
+        $missingConnector['connectors'] = [];
+
+        $invalidConnector = $this->owner('local-1', '14');
+        $invalidConnector['connectors']['abrikosoff_telegram']['unexpected'] = true;
+
+        $routeKeyMismatch = $this->owner('local-1', '14');
+        $routeKeyMismatch['routes']['wrong:14'] = $routeKeyMismatch['routes']['abrikosoff_telegram:14'];
+        unset($routeKeyMismatch['routes']['abrikosoff_telegram:14']);
+
+        $invalidActive = $this->owner('local-1', '14');
+        $invalidActive['routes']['abrikosoff_telegram:14']['active'] = 'true';
+
+        $variants = [
+            'schema version' => [
+                ...$this->registry([]),
+                'schema_version' => 2,
+            ],
+            'owner key' => $this->registry(['local-1' => $ownerKeyMismatch]),
+            'callback URL' => $this->registry(['local-1' => $invalidCallback]),
+            'connector catalog' => $this->registry(['local-1' => $missingConnector]),
+            'connector payload' => $this->registry(['local-1' => $invalidConnector]),
+            'route key' => $this->registry(['local-1' => $routeKeyMismatch]),
+            'route active flag' => $this->registry(['local-1' => $invalidActive]),
+        ];
+
+        foreach ($variants as $variant => $registry) {
+            $this->writeJson('route_registry.json', $registry);
+
+            $preflight = app(Bitrix24OpenLineIdCompatibilityService::class)
+                ->preflight($this->storageDirectory);
+
+            $this->assertFalse($preflight['ready'], $variant);
+            $this->assertNotEmpty(
+                array_filter(
+                    $preflight['invalid'],
+                    fn (array $entry): bool => ($entry['source'] ?? null) === 'current_registry',
+                ),
+                $variant,
+            );
+        }
+    }
+
+    public function test_registry_preflight_enforces_runtime_reader_limits(): void
+    {
+        $owners = [];
+
+        for ($index = 1; $index <= 101; $index++) {
+            $owners['local-'.$index] = $this->owner('local-'.$index, (string) $index);
+        }
+
+        $tooManyConnectorsOwner = $this->owner('local-1', '14');
+        $tooManyConnectorsOwner['connectors'] = [];
+
+        for ($index = 1; $index <= 501; $index++) {
+            $connectorCode = 'connector_'.$index;
+            $tooManyConnectorsOwner['connectors'][$connectorCode] = [
+                'connector_code' => $connectorCode,
+                'connector_type' => 'telegram',
+            ];
+        }
+
+        $tooManyRoutesOwner = $this->owner('local-1', '14');
+        $tooManyRoutesOwner['routes'] = [];
+
+        for ($lineId = 1; $lineId <= 501; $lineId++) {
+            $tooManyRoutesOwner['routes']['abrikosoff_telegram:'.$lineId] = [
+                'connector_code' => 'abrikosoff_telegram',
+                'line_id' => (string) $lineId,
+                'line_name' => 'Telegram '.$lineId,
+                'active' => true,
+            ];
+        }
+
+        $variants = [
+            'too_many_owners' => $this->registry($owners),
+            'too_many_connectors' => $this->registry([
+                'local-1' => $tooManyConnectorsOwner,
+            ]),
+            'too_many_routes' => $this->registry([
+                'local-1' => $tooManyRoutesOwner,
+            ]),
+        ];
+
+        foreach ($variants as $expectedCode => $registry) {
+            $this->writeJson('route_registry.json', $registry);
+
+            $preflight = app(Bitrix24OpenLineIdCompatibilityService::class)
+                ->preflight($this->storageDirectory);
+
+            $this->assertFalse($preflight['ready'], $expectedCode);
+            $this->assertContains(
+                $expectedCode,
+                array_column($preflight['invalid'], 'line_id'),
+                $expectedCode,
+            );
+        }
+
+        $oversizedRegistry = $this->registry([]);
+        $oversizedRegistry['padding'] = str_repeat('x', 1048576);
+        $this->writeJson('route_registry.json', $oversizedRegistry);
+
+        $oversized = app(Bitrix24OpenLineIdCompatibilityService::class)
+            ->preflight($this->storageDirectory);
+
+        $this->assertFalse($oversized['ready']);
+        $this->assertContains(
+            'invalid_registry_file',
+            array_column($oversized['invalid'], 'line_id'),
+        );
+    }
+
     public function test_lease_preflight_matches_runtime_reader_schema(): void
     {
         $this->writeJson('route_registry.json', $this->registry([]));

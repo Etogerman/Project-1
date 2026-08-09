@@ -5,8 +5,10 @@ namespace App\Services\Bitrix24;
 use App\Data\Bitrix24\Bitrix24CurrentOpenLineChatData;
 use App\Data\Bitrix24\Bitrix24OpenLinesIdentityDecisionData;
 use App\Data\Bitrix24\Bitrix24OpenLinesRouteData;
+use App\Jobs\MarkBitrix24OpenLineRouteMisconfiguredJob;
 use App\Models\Bitrix24Connection;
 use App\Models\Bitrix24MessageExport;
+use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Channel;
 use App\Models\Contact;
@@ -14,6 +16,7 @@ use App\Models\Dialog;
 use App\Models\Message;
 use App\Services\Bots\QueueDeferredParameterAutoReplyAction;
 use App\Services\Contacts\ResolveRootContactAction;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Str;
 use Throwable;
 
@@ -78,6 +81,21 @@ class ExportMessageToBitrix24OpenLinesAction
 
         $route = $this->resolveBitrix24OpenLinesRouteAction->handle($dialog);
 
+        if ($this->fakeHappyPathEnabled()) {
+            return $this->runWithAuthority->handleLocalOnly(
+                $route,
+                fn (): Message => $this->exportFakeHappyPath(
+                    $message,
+                    $dialog,
+                    $rootContact,
+                    $bitrix24ContactId,
+                    $route,
+                    $retryAfterSync,
+                    $liveBatchUuid,
+                ),
+            );
+        }
+
         return $this->runWithAuthority->handle(
             $route,
             'live_message_export',
@@ -91,37 +109,6 @@ class ExportMessageToBitrix24OpenLinesAction
                 $rootContact,
                 $route,
             ): Message {
-                if ($this->fakeHappyPathEnabled()) {
-                    $liveExport = $this->claimLiveExport(
-                        $message,
-                        $rootContact->id,
-                        $bitrix24ContactId,
-                        $liveBatchUuid,
-                    );
-
-                    if (! $liveExport instanceof Bitrix24MessageExport) {
-                        return $message->fresh() ?? $message;
-                    }
-
-                    return $this->completeSuccessfulExport(
-                        message: $message,
-                        dialog: $dialog,
-                        rootContactId: $rootContact->id,
-                        bitrix24ContactId: $bitrix24ContactId,
-                        connectorCode: $route->connectorCode,
-                        lineId: $route->lineId,
-                        routeId: $route->routeId,
-                        retryAfterSync: $retryAfterSync,
-                        chatKey: $this->fakeLiveChatKey($dialog),
-                        operation: 'openlines_live_exported_fake',
-                        transportMethod: Bitrix24MessageExport::TRANSPORT_FAKE_HAPPY_PATH,
-                        responsePayload: [
-                            'fake_mode' => true,
-                            'result' => true,
-                        ],
-                    );
-                }
-
                 return $this->exportClaimedRouteUnderAuthority(
                     $message,
                     $dialog,
@@ -133,6 +120,45 @@ class ExportMessageToBitrix24OpenLinesAction
                     $retryAfterSyncReason,
                 );
             },
+        );
+    }
+
+    private function exportFakeHappyPath(
+        Message $message,
+        Dialog $dialog,
+        Contact $rootContact,
+        string $bitrix24ContactId,
+        Bitrix24OpenLinesRouteData $route,
+        bool $retryAfterSync,
+        ?string $liveBatchUuid,
+    ): Message {
+        $liveExport = $this->claimLiveExport(
+            $message,
+            $rootContact->id,
+            $bitrix24ContactId,
+            $liveBatchUuid,
+        );
+
+        if (! $liveExport instanceof Bitrix24MessageExport) {
+            return $message->fresh() ?? $message;
+        }
+
+        return $this->completeSuccessfulExport(
+            message: $message,
+            dialog: $dialog,
+            rootContactId: $rootContact->id,
+            bitrix24ContactId: $bitrix24ContactId,
+            connectorCode: $route->connectorCode,
+            lineId: $route->lineId,
+            routeId: $route->routeId,
+            retryAfterSync: $retryAfterSync,
+            chatKey: $this->fakeLiveChatKey($dialog),
+            operation: 'openlines_live_exported_fake',
+            transportMethod: Bitrix24MessageExport::TRANSPORT_FAKE_HAPPY_PATH,
+            responsePayload: [
+                'fake_mode' => true,
+                'result' => true,
+            ],
         );
     }
 
@@ -556,7 +582,41 @@ class ExportMessageToBitrix24OpenLinesAction
             return;
         }
 
-        $this->markRouteMisconfiguredAction->handle($routeId, $exception->getMessage());
+        try {
+            $this->markRouteMisconfiguredAction->handle($routeId, $exception->getMessage());
+        } catch (LockTimeoutException) {
+            $this->deferRouteMisconfiguredTransition(
+                $routeId,
+                $exception->getMessage(),
+            );
+        }
+    }
+
+    private function deferRouteMisconfiguredTransition(int $routeId, ?string $message): void
+    {
+        $expectedRoute = Bitrix24OpenLineRoute::query()->find($routeId);
+
+        if (! $expectedRoute instanceof Bitrix24OpenLineRoute) {
+            return;
+        }
+
+        try {
+            MarkBitrix24OpenLineRouteMisconfiguredJob::dispatch(
+                routeId: (int) $expectedRoute->getKey(),
+                expectedStateVersion: (int) $expectedRoute->mutation_state_version,
+                expectedProfileId: (int) $expectedRoute->bitrix24_profile_id,
+                expectedChannelId: (int) $expectedRoute->channel_id,
+                expectedCallbackOwnerId: (int) $expectedRoute->callback_owner_id,
+                expectedPortalDomain: (string) $expectedRoute->portal_domain,
+                expectedConnectorCode: (string) $expectedRoute->connector_code,
+                expectedLineId: (string) $expectedRoute->line_id,
+                expectedSourceId: (string) $expectedRoute->source_id,
+                expectedStatus: (string) $expectedRoute->status,
+                message: $message,
+            )->delay(now()->addSeconds(5));
+        } catch (Throwable $exception) {
+            report($exception);
+        }
     }
 
     private function isInactiveOpenLineFailure(Bitrix24LiveExportTransportException $exception): bool

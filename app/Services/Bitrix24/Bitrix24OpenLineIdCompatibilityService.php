@@ -13,9 +13,17 @@ use Throwable;
 
 final class Bitrix24OpenLineIdCompatibilityService
 {
+    private const REGISTRY_SCHEMA_VERSION = 1;
+
+    private const MAX_OWNERS = 100;
+
+    private const MAX_CONNECTORS_PER_OWNER = 500;
+
+    private const MAX_ROUTES_PER_OWNER = 500;
+
     private const MAX_LINE_LEASES = 1000;
 
-    private const MAX_LINE_LEASE_FILE_BYTES = 1048576;
+    private const MAX_REGISTRY_FILE_BYTES = 1048576;
 
     private const OPENLINES_CALLBACK_PATH = '/callbacks/bitrix24/openlines';
 
@@ -69,11 +77,14 @@ final class Bitrix24OpenLineIdCompatibilityService
         ];
         $documents = [];
         $sourceExists = [];
+        $sourceReadable = [];
 
         foreach (self::FILES as $source => $fileName) {
             $path = $storageDirectory.DIRECTORY_SEPARATOR.$fileName;
             $sourceExists[$source] = is_file($path);
+            $invalidCount = count($invalid);
             $documents[$source] = $this->readOptionalJson($path, $source, $invalid);
+            $sourceReadable[$source] = count($invalid) === $invalidCount;
         }
 
         $registryPortals = [];
@@ -91,13 +102,21 @@ final class Bitrix24OpenLineIdCompatibilityService
                 $registryPortals[$source] = $portal;
             }
 
-            $registryEntries[$source] = $this->registryEntries(
-                $source,
-                $documents[$source],
-                $portal ?? '',
-                $sourceExists[$source],
-                $invalid,
-            );
+            $registryEntries[$source] = $sourceReadable[$source]
+                && $this->validRegistryDocumentForCompatibility(
+                    $source,
+                    $documents[$source],
+                    $sourceExists[$source],
+                    $invalid,
+                )
+                    ? $this->registryEntries(
+                        $source,
+                        $documents[$source],
+                        $portal ?? '',
+                        $sourceExists[$source],
+                        $invalid,
+                    )
+                    : [];
         }
 
         $portalScope = $this->resolvePortalScope(
@@ -718,6 +737,299 @@ final class Bitrix24OpenLineIdCompatibilityService
     }
 
     /**
+     * Match the production registry reader while allowing only the raw,
+     * non-canonical LINE_ID/key pair that this compatibility pass migrates.
+     *
+     * @param  array<string, mixed>  $document
+     * @param  list<array<string, string>>  $invalid
+     */
+    private function validRegistryDocumentForCompatibility(
+        string $source,
+        array $document,
+        bool $sourceExists,
+        array &$invalid,
+    ): bool {
+        if (! $sourceExists) {
+            return true;
+        }
+
+        $valid = true;
+
+        if ((int) ($document['schema_version'] ?? 0) !== self::REGISTRY_SCHEMA_VERSION) {
+            $this->appendRegistryInvalid($invalid, $source, 'schema_version', 'invalid_registry_schema');
+            $valid = false;
+        }
+
+        $owners = $document['owners'] ?? null;
+
+        if (! is_array($owners)) {
+            $this->appendRegistryInvalid($invalid, $source, 'owners', 'invalid_owners');
+
+            return false;
+        }
+
+        if (count($owners) > self::MAX_OWNERS) {
+            $this->appendRegistryInvalid($invalid, $source, 'owners', 'too_many_owners');
+            $valid = false;
+        }
+
+        $seenRouteKeys = [];
+        $seenLineIds = [];
+        $seenConnectorTypes = [];
+
+        foreach ($owners as $ownerKey => $owner) {
+            $ownerLocator = 'owner:'.(string) $ownerKey;
+
+            if (! is_string($ownerKey)
+                || preg_match('/^[a-zA-Z0-9._-]{1,128}$/', $ownerKey) !== 1
+                || ! is_array($owner)
+            ) {
+                $this->appendRegistryInvalid($invalid, $source, $ownerLocator, 'invalid_owner');
+                $valid = false;
+
+                continue;
+            }
+
+            if (! is_scalar($owner['owner_profile_key'] ?? null)
+                || trim((string) $owner['owner_profile_key']) !== $ownerKey
+            ) {
+                $this->appendRegistryInvalid($invalid, $source, $ownerLocator, 'invalid_owner');
+                $valid = false;
+            }
+
+            if (! is_scalar($owner['owner_callback_base_url'] ?? null)
+                || ! $this->validRegistryCallbackBaseUrl(
+                    (string) ($owner['owner_callback_base_url'] ?? ''),
+                )
+            ) {
+                $this->appendRegistryInvalid(
+                    $invalid,
+                    $source,
+                    $ownerLocator.'/owner_callback_base_url',
+                    'invalid_owner_callback',
+                );
+                $valid = false;
+            }
+
+            $routes = $owner['routes'] ?? null;
+
+            if (! is_array($routes)) {
+                $this->appendRegistryInvalid($invalid, $source, $ownerLocator.'/routes', 'invalid_routes');
+                $valid = false;
+
+                continue;
+            }
+
+            if (count($routes) > self::MAX_ROUTES_PER_OWNER) {
+                $this->appendRegistryInvalid($invalid, $source, $ownerLocator.'/routes', 'too_many_routes');
+                $valid = false;
+            }
+
+            $connectors = [];
+            $hasConnectorCatalog = array_key_exists('connectors', $owner);
+
+            if ($hasConnectorCatalog) {
+                if (! is_array($owner['connectors'])) {
+                    $this->appendRegistryInvalid(
+                        $invalid,
+                        $source,
+                        $ownerLocator.'/connectors',
+                        'invalid_connectors',
+                    );
+                    $valid = false;
+                } else {
+                    if (count($owner['connectors']) > self::MAX_CONNECTORS_PER_OWNER) {
+                        $this->appendRegistryInvalid(
+                            $invalid,
+                            $source,
+                            $ownerLocator.'/connectors',
+                            'too_many_connectors',
+                        );
+                        $valid = false;
+                    }
+
+                    foreach ($owner['connectors'] as $connectorKey => $connector) {
+                        $connectorLocator = $ownerLocator.'/connector:'.(string) $connectorKey;
+
+                        if ((! is_string($connectorKey) && ! is_int($connectorKey))
+                            || ! is_array($connector)
+                            || array_diff(
+                                array_keys($connector),
+                                ['connector_code', 'connector_type'],
+                            ) !== []
+                            || ! is_scalar($connector['connector_code'] ?? null)
+                            || ! is_scalar($connector['connector_type'] ?? null)
+                        ) {
+                            $this->appendRegistryInvalid(
+                                $invalid,
+                                $source,
+                                $connectorLocator,
+                                'invalid_connector',
+                            );
+                            $valid = false;
+
+                            continue;
+                        }
+
+                        $connectorCode = trim((string) $connector['connector_code']);
+                        $connectorType = trim((string) $connector['connector_type']);
+
+                        if (! Bitrix24OpenLineRoute::isValidConnectorCode($connectorCode)
+                            || (string) $connectorKey !== $connectorCode
+                            || ! in_array($connectorType, ['telegram', 'max'], true)
+                        ) {
+                            $this->appendRegistryInvalid(
+                                $invalid,
+                                $source,
+                                $connectorLocator,
+                                'invalid_connector',
+                            );
+                            $valid = false;
+
+                            continue;
+                        }
+
+                        if (isset($seenConnectorTypes[$connectorCode])
+                            && $seenConnectorTypes[$connectorCode] !== $connectorType
+                        ) {
+                            $this->appendRegistryInvalid(
+                                $invalid,
+                                $source,
+                                $connectorLocator,
+                                'connector_type_conflict',
+                            );
+                            $valid = false;
+                        }
+
+                        $connectors[$connectorCode] = true;
+                        $seenConnectorTypes[$connectorCode] = $connectorType;
+                    }
+                }
+            }
+
+            foreach ($routes as $routeKey => $route) {
+                $routeLocator = $ownerLocator.'/route:'.(string) $routeKey;
+
+                if (! is_string($routeKey)
+                    || ! is_array($route)
+                    || ! is_scalar($route['connector_code'] ?? null)
+                    || ! is_scalar($route['line_id'] ?? null)
+                ) {
+                    $this->appendRegistryInvalid($invalid, $source, $routeLocator, 'invalid_route');
+                    $valid = false;
+
+                    continue;
+                }
+
+                $connectorCode = trim((string) $route['connector_code']);
+                $lineId = (string) $route['line_id'];
+                $canonicalLineId = Bitrix24OpenLineRoute::canonicalLineId($lineId);
+
+                if (! Bitrix24OpenLineRoute::isValidConnectorCode($connectorCode)
+                    || $canonicalLineId === null
+                    || $routeKey !== $connectorCode.':'.$lineId
+                    || ! array_key_exists('active', $route)
+                    || ! is_bool($route['active'])
+                    || (isset($route['line_name']) && ! is_scalar($route['line_name']))
+                    || strlen((string) ($route['line_name'] ?? '')) > 255
+                ) {
+                    $this->appendRegistryInvalid($invalid, $source, $routeLocator, 'invalid_route');
+                    $valid = false;
+
+                    continue;
+                }
+
+                if (isset($seenRouteKeys[$routeKey])) {
+                    $this->appendRegistryInvalid(
+                        $invalid,
+                        $source,
+                        $routeLocator,
+                        'duplicate_route_key',
+                    );
+                    $valid = false;
+                }
+
+                $seenRouteKeys[$routeKey] = true;
+
+                if ($hasConnectorCatalog && ! isset($connectors[$connectorCode])) {
+                    $this->appendRegistryInvalid(
+                        $invalid,
+                        $source,
+                        $routeLocator,
+                        'missing_connector',
+                    );
+                    $valid = false;
+                }
+
+                if (isset($seenLineIds[$lineId])) {
+                    $this->appendRegistryInvalid(
+                        $invalid,
+                        $source,
+                        $routeLocator,
+                        'duplicate_line_id',
+                    );
+                    $valid = false;
+                }
+
+                $seenLineIds[$lineId] = true;
+            }
+        }
+
+        return $valid;
+    }
+
+    /**
+     * @param  list<array<string, string>>  $invalid
+     */
+    private function appendRegistryInvalid(
+        array &$invalid,
+        string $source,
+        string $locator,
+        string $code,
+    ): void {
+        $invalid[] = [
+            'source' => $source,
+            'locator' => $locator,
+            'line_id' => $code,
+        ];
+    }
+
+    private function validRegistryCallbackBaseUrl(string $callbackBaseUrl): bool
+    {
+        $callbackBaseUrl = trim($callbackBaseUrl);
+        $parts = parse_url($callbackBaseUrl);
+
+        if (! is_array($parts)
+            || $callbackBaseUrl === ''
+            || strlen($callbackBaseUrl) > 2048
+            || mb_strtolower((string) ($parts['scheme'] ?? '')) !== 'https'
+            || trim((string) ($parts['host'] ?? '')) === ''
+            || isset($parts['query'])
+            || isset($parts['fragment'])
+            || isset($parts['user'])
+            || isset($parts['pass'])
+        ) {
+            return false;
+        }
+
+        $host = mb_strtolower(trim((string) $parts['host'], '[]'));
+
+        if (in_array($host, ['localhost', '127.0.0.1', '::1'], true)) {
+            return false;
+        }
+
+        if (filter_var($host, FILTER_VALIDATE_IP) === false) {
+            return true;
+        }
+
+        return filter_var(
+            $host,
+            FILTER_VALIDATE_IP,
+            FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE,
+        ) !== false;
+    }
+
+    /**
      * @param  array<string, mixed>  $document
      * @param  list<array<string, string>>  $invalid
      * @return list<array<string, mixed>>
@@ -1220,18 +1532,18 @@ final class Bitrix24OpenLineIdCompatibilityService
             return [];
         }
 
-        if ($source === 'active_leases') {
-            $fileSize = @filesize($path);
+        $fileSize = @filesize($path);
 
-            if (! is_int($fileSize) || $fileSize > self::MAX_LINE_LEASE_FILE_BYTES) {
-                $invalid[] = [
-                    'source' => $source,
-                    'locator' => $path,
-                    'line_id' => 'invalid_lease_file',
-                ];
+        if (! is_int($fileSize) || $fileSize > self::MAX_REGISTRY_FILE_BYTES) {
+            $invalid[] = [
+                'source' => $source,
+                'locator' => $path,
+                'line_id' => $source === 'active_leases'
+                    ? 'invalid_lease_file'
+                    : 'invalid_registry_file',
+            ];
 
-                return [];
-            }
+            return [];
         }
 
         try {
