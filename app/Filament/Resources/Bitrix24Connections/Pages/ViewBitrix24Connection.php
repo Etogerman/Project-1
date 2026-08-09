@@ -669,10 +669,21 @@ class ViewBitrix24Connection extends ViewRecord
         $claimsExternalLine = in_array($form['status'], Bitrix24OpenLineRoute::claimingStatuses(), true)
             && $form['connector_code'] !== ''
             && $form['line_id'] !== '';
-        $hasValidClaimIdentity = $claimsExternalLine
+        $storedClaimsExternalLine = $preflightRoute instanceof Bitrix24OpenLineRoute
+            && $preflightRoute->claimsExternalLine();
+        $requiresClaimAuthority = $claimsExternalLine || $storedClaimsExternalLine;
+        $hasValidClaimIdentity = $requiresClaimAuthority
             && is_string($connectorType)
             && Bitrix24OpenLineRoute::isValidConnectorCode($form['connector_code'])
             && Bitrix24OpenLineRoute::isValidLineId($form['line_id']);
+
+        if ($requiresClaimAuthority && ! $hasValidClaimIdentity) {
+            $this->failOpenLineRouteSave(
+                'Сохранённый маршрут заполнен не полностью для безопасного изменения владения LINE_ID.',
+            );
+
+            return;
+        }
 
         if ($hasValidClaimIdentity && ! $owner instanceof Bitrix24CallbackOwner) {
             $this->failOpenLineRouteSave('Для маршрута, удерживающего LINE_ID, нужен активный callback-владелец.');
@@ -680,7 +691,7 @@ class ViewBitrix24Connection extends ViewRecord
             return;
         }
 
-        $guardsOwnerIdentity = $claimsExternalLine
+        $guardsOwnerIdentity = $requiresClaimAuthority
             && $owner instanceof Bitrix24CallbackOwner;
         $requiresOwnershipLease = $hasValidClaimIdentity
             && $owner instanceof Bitrix24CallbackOwner;
