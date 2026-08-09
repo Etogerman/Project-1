@@ -663,15 +663,18 @@ class ViewBitrix24Connection extends ViewRecord
         $snapshotLock = app(Bitrix24OpenLinesRouteRegistrySnapshotLock::class);
         $mutationFence = app(Bitrix24OpenLineRouteMutationFence::class);
         $owner = $this->resolveActiveCallbackOwner($profile, $form['callback_owner_id']);
-        $connectorType = Bitrix24OpenLineRoute::openLinesConnectorTypeForChannelType(
-            Bitrix24OpenLineRoute::channelTypeForChannel($channel),
-        );
         $claimsExternalLine = in_array($form['status'], Bitrix24OpenLineRoute::claimingStatuses(), true)
             && $form['connector_code'] !== ''
             && $form['line_id'] !== '';
         $storedClaimsExternalLine = $preflightRoute instanceof Bitrix24OpenLineRoute
             && $preflightRoute->claimsExternalLine();
         $requiresClaimAuthority = $claimsExternalLine || $storedClaimsExternalLine;
+        $claimAuthorityChannelType = $storedClaimsExternalLine && ! $claimsExternalLine
+            ? (string) $preflightRoute->channel_type
+            : Bitrix24OpenLineRoute::channelTypeForChannel($channel);
+        $connectorType = Bitrix24OpenLineRoute::openLinesConnectorTypeForChannelType(
+            $claimAuthorityChannelType,
+        );
         $hasValidClaimIdentity = $requiresClaimAuthority
             && is_string($connectorType)
             && Bitrix24OpenLineRoute::isValidConnectorCode($form['connector_code'])
