@@ -13,6 +13,7 @@ use App\Models\Bitrix24Profile;
 use App\Models\Bitrix24SyncLog;
 use App\Models\Bitrix24WebhookEvent;
 use App\Models\Channel;
+use App\Models\ChannelConnectionType;
 use App\Models\ContactIdentity;
 use App\Models\Dialog;
 use App\Models\User;
@@ -20,6 +21,7 @@ use App\Services\Bitrix24\AutoSetupBitrix24OpenLineRouteAction;
 use App\Services\Bitrix24\Bitrix24ApiClient;
 use App\Services\Bitrix24\Bitrix24ApiException;
 use App\Services\Bitrix24\Bitrix24AuthRefreshException;
+use App\Services\Bitrix24\Bitrix24OpenLineMutationAuthority;
 use App\Services\Bitrix24\Bitrix24OpenLineMutationTarget;
 use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryClient;
 use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistryException;
@@ -1038,6 +1040,185 @@ class FilamentBitrix24ConnectionsResourceTest extends TestCase
         $route->refresh();
         $this->assertSame('SOURCE_FROM_CONCURRENT_OPERATION', $route->source_id);
         $this->assertSame(1, $route->mutation_state_version);
+    }
+
+    #[DataProvider('openLineClaimReleaseProvider')]
+    public function test_generic_save_acquires_shared_lease_with_persisted_identity_before_relinquishing_line(
+        string $status,
+        string $nextChannelTypeCode,
+    ): void {
+        $admin = $this->makeAdmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'crm.release-claim.test',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+        $owner = $profile->callbackOwners()->firstOrFail();
+        $route = Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
+            'connector_code' => 'abc_telegram',
+            'line_id' => '18',
+            'callback_owner_id' => $owner->id,
+            'source_id' => 'SOURCE_BEFORE',
+            'status' => $status,
+        ]);
+        $nextChannelType = ChannelConnectionType::query()
+            ->where('code', $nextChannelTypeCode)
+            ->firstOrFail();
+
+        $channel->forceFill([
+            'channel_connection_type_id' => $nextChannelType->id,
+            'platform' => $nextChannelType->platform,
+            'connection_type' => $nextChannelType->connection_kind,
+        ])->save();
+        $channel->refresh();
+
+        $this->assertSame($nextChannelType->id, $channel->channel_connection_type_id);
+        $this->assertSame($nextChannelType->platform, $channel->platform);
+        $this->assertSame($nextChannelType->connection_kind, $channel->connection_type);
+
+        $client = $this->mock(Bitrix24OpenLinesRouteRegistryClient::class);
+        $client->shouldReceive('acquireLineLease')
+            ->once()
+            ->withArgs(fn (
+                Bitrix24Profile $usedProfile,
+                Bitrix24CallbackOwner $usedOwner,
+                string $connectorCode,
+                string $connectorType,
+                string $lineId,
+                int $leaseSeconds,
+                string $scope,
+            ): bool => $usedProfile->is($profile)
+                && $usedOwner->is($owner)
+                && $connectorCode === 'abc_telegram'
+                && $connectorType === 'telegram'
+                && $lineId === '18'
+                && $leaseSeconds >= 180
+                && $scope === Bitrix24OpenLineMutationAuthority::SCOPE_CONNECTOR_REGISTRATION)
+            ->andReturnUsing(function () use ($route, $status): array {
+                $route->refresh();
+
+                $this->assertSame($status, $route->status);
+
+                return [
+                    'lease_token' => str_repeat('d', 64),
+                    'expires_at' => now()->addHour()->toIso8601String(),
+                ];
+            });
+        $client->shouldReceive('releaseLineLease')
+            ->once()
+            ->withArgs(fn (
+                Bitrix24Profile $usedProfile,
+                Bitrix24CallbackOwner $usedOwner,
+                string $lineId,
+                string $leaseToken,
+                string $scope,
+            ): bool => $usedProfile->is($profile)
+                && $usedOwner->is($owner)
+                && $lineId === '18'
+                && $leaseToken === str_repeat('d', 64)
+                && $scope === Bitrix24OpenLineMutationAuthority::SCOPE_CONNECTOR_REGISTRATION);
+
+        Livewire::actingAs($admin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->set("openLineRouteForms.{$channel->id}.status", Bitrix24OpenLineRoute::STATUS_INACTIVE)
+            ->call('saveOpenLineRoute', $channel->id)
+            ->assertSet('openLineRouteErrorMessage', null);
+
+        $route->refresh();
+
+        $this->assertSame(Bitrix24OpenLineRoute::STATUS_INACTIVE, $route->status);
+        $this->assertNull($route->line_owner_key);
+        $this->assertSame(Bitrix24OpenLineRoute::channelTypeForChannel($channel), $route->channel_type);
+        $this->assertSame('abc_telegram', $route->connector_code);
+        $this->assertSame('18', $route->line_id);
+    }
+
+    public function test_generic_save_keeps_line_claim_when_shared_lease_is_busy(): void
+    {
+        $admin = $this->makeAdmin();
+        $profile = $this->makeProfile([
+            'portal_domain' => 'crm.release-claim-busy.test',
+        ]);
+        $connection = $this->makeConnection([
+            'profile_id' => $profile->id,
+            'portal_domain' => $profile->portal_domain,
+        ]);
+        $channel = Channel::factory()->create([
+            'platform' => Channel::PLATFORM_TELEGRAM,
+            'connection_type' => Channel::CONNECTION_TYPE_BOT,
+        ]);
+        $owner = $profile->callbackOwners()->firstOrFail();
+        $route = Bitrix24OpenLineRoute::query()->create([
+            'bitrix24_profile_id' => $profile->id,
+            'channel_id' => $channel->id,
+            'portal_domain' => $profile->portal_domain,
+            'profile_key' => $profile->profile_key,
+            'channel_type' => Bitrix24OpenLineRoute::channelTypeForChannel($channel),
+            'connector_code' => 'abc_telegram',
+            'line_id' => '19',
+            'callback_owner_id' => $owner->id,
+            'source_id' => 'SOURCE_BEFORE',
+            'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
+        ]);
+        $client = $this->mock(Bitrix24OpenLinesRouteRegistryClient::class);
+        $client->shouldReceive('acquireLineLease')
+            ->once()
+            ->andThrow(new Bitrix24OpenLinesRouteRegistryException(
+                'route_registry_connector_busy',
+            ));
+        $client->shouldNotReceive('releaseLineLease');
+
+        Livewire::actingAs($admin)
+            ->test(ViewBitrix24Connection::class, ['record' => $connection->getKey()])
+            ->set("openLineRouteForms.{$channel->id}.status", Bitrix24OpenLineRoute::STATUS_INACTIVE)
+            ->call('saveOpenLineRoute', $channel->id)
+            ->assertSet(
+                'openLineRouteErrorMessage',
+                'Соединитель сейчас изменяется в другом контуре. Повторите попытку после завершения операции.',
+            );
+
+        $route->refresh();
+
+        $this->assertSame(Bitrix24OpenLineRoute::STATUS_ACTIVE, $route->status);
+        $this->assertSame('crm.release-claim-busy.test#19', $route->line_owner_key);
+        $this->assertSame('abc_telegram', $route->connector_code);
+        $this->assertSame('19', $route->line_id);
+    }
+
+    /**
+     * @return array<string, array{string, string}>
+     */
+    public static function openLineClaimReleaseProvider(): array
+    {
+        return [
+            'active without channel retype' => [
+                Bitrix24OpenLineRoute::STATUS_ACTIVE,
+                ChannelConnectionType::CODE_TELEGRAM_BOT,
+            ],
+            'legacy without channel retype' => [
+                Bitrix24OpenLineRoute::STATUS_LEGACY,
+                ChannelConnectionType::CODE_TELEGRAM_BOT,
+            ],
+            'active after channel retype to max' => [
+                Bitrix24OpenLineRoute::STATUS_ACTIVE,
+                ChannelConnectionType::CODE_MAX_BOT,
+            ],
+            'legacy after channel retype to telegram account' => [
+                Bitrix24OpenLineRoute::STATUS_LEGACY,
+                ChannelConnectionType::CODE_TELEGRAM_ACCOUNT,
+            ],
+        ];
     }
 
     public function test_generic_save_cannot_change_existing_route_identity_or_dialog_binding(): void
