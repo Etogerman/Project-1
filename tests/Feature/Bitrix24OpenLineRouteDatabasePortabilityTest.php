@@ -7,10 +7,12 @@ use App\Models\Bitrix24OpenLineRoute;
 use App\Models\Bitrix24Profile;
 use App\Services\Bitrix24\AutoSetupBitrix24OpenLineRouteAction;
 use App\Services\Bitrix24\Bitrix24OpenLineAutoSetupException;
+use App\Services\Bitrix24\Bitrix24OpenLineIdCompatibilityService;
 use App\Services\Bitrix24\Bitrix24OpenLinesRouteRegistrySnapshotLock;
 use App\Services\Bitrix24\MarkBitrix24OpenLineRouteMisconfiguredAction;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Filesystem\Filesystem;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -191,6 +193,59 @@ class Bitrix24OpenLineRouteDatabasePortabilityTest extends TestCase
         $this->assertRouteQueriesArePortable($queries);
     }
 
+    public function test_portal_scoped_line_id_migration_runs_on_sqlite(): void
+    {
+        $routeId = $this->insertRoute();
+        DB::connection(self::CONNECTION)
+            ->table('bitrix24_open_line_routes')
+            ->where('id', $routeId)
+            ->update([
+                'line_id' => '014',
+                'line_owner_key' => 'stagecrm.fvds.ru#014',
+            ]);
+        $storageDirectory = sys_get_temp_dir()
+            .'/b24-line-id-portability-'.bin2hex(random_bytes(8));
+        mkdir($storageDirectory, 0700, true);
+        file_put_contents(
+            $storageDirectory.'/route_registry.json',
+            json_encode([
+                'schema_version' => 1,
+                'portal_domain' => 'stagecrm.fvds.ru',
+                'updated_at' => now()->toAtomString(),
+                'owners' => [],
+            ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES),
+        );
+        $queries = [];
+
+        DB::listen(function (QueryExecuted $query) use (&$queries): void {
+            if ($query->connectionName === self::CONNECTION) {
+                $queries[] = $query->sql;
+            }
+        });
+
+        try {
+            $artifact = app(Bitrix24OpenLineIdCompatibilityService::class)
+                ->migrate(
+                    $storageDirectory,
+                    $storageDirectory.'/compatibility.json',
+                );
+        } finally {
+            (new Filesystem)->deleteDirectory($storageDirectory);
+        }
+
+        $this->assertTrue($artifact['ready']);
+        $this->assertTrue($artifact['migration_applied']);
+        $this->assertSame('stagecrm.fvds.ru', $artifact['portal_scope']);
+        $this->assertSame(
+            '14',
+            DB::connection(self::CONNECTION)
+                ->table('bitrix24_open_line_routes')
+                ->where('id', $routeId)
+                ->value('line_id'),
+        );
+        $this->assertRouteQueriesArePortable($queries);
+    }
+
     private function createSqliteSchema(): void
     {
         $schema = Schema::connection(self::CONNECTION);
@@ -202,6 +257,10 @@ class Bitrix24OpenLineRouteDatabasePortabilityTest extends TestCase
             $table->string('profile_type');
             $table->string('display_name')->nullable();
             $table->string('callback_base_url')->nullable();
+            $table->string('telegram_connector_code')->nullable();
+            $table->string('telegram_line_id')->nullable();
+            $table->string('max_connector_code')->nullable();
+            $table->string('max_line_id')->nullable();
             $table->timestamps();
         });
 

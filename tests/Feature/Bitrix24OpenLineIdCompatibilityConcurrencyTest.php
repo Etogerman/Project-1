@@ -75,6 +75,15 @@ class Bitrix24OpenLineIdCompatibilityConcurrencyTest extends TestCase
             'line_owner_key' => $profile->portal_domain.'#14',
             'status' => Bitrix24OpenLineRoute::STATUS_ACTIVE,
         ]);
+        file_put_contents(
+            $this->storageDirectory.'/route_registry.json',
+            json_encode([
+                'schema_version' => 1,
+                'portal_domain' => $profile->portal_domain,
+                'updated_at' => now()->toAtomString(),
+                'owners' => [],
+            ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES),
+        );
         $defaultConnection = (string) config('database.default');
         $concurrentConnection = 'bitrix24_compatibility_owner_concurrent';
         config([
