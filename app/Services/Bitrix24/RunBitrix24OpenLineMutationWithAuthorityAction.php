@@ -81,6 +81,24 @@ final class RunBitrix24OpenLineMutationWithAuthorityAction
         );
     }
 
+    public function handleLocalOnly(
+        Bitrix24OpenLinesRouteData $routeData,
+        Closure $callback,
+        bool $requireUsable = true,
+    ): mixed {
+        $route = $this->resolveRoute($routeData, $requireUsable);
+
+        return $this->routeOperationLock->run(
+            (int) $route->bitrix24_profile_id,
+            (int) $route->channel_id,
+            function () use ($callback, $requireUsable, $routeData): mixed {
+                $this->resolveRoute($routeData, $requireUsable);
+
+                return $callback();
+            },
+        );
+    }
+
     private function resolveRoute(
         Bitrix24OpenLinesRouteData $routeData,
         bool $requireUsable,
