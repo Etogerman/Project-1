@@ -878,11 +878,20 @@ function selfTest() {
   escapedStateDocument.states.C01.document = "docs/workflow/../../AGENTS.md";
   assert(hasCode(validateRegistry(escapedStateDocument, adapters), "STATE_DOCUMENT"));
 
-  assert.equal(resolveDynamicTarget("B01", "return_state", { return_state: "C02" }, registry.states).state, "C02");
-  assert.equal(resolveDynamicTarget("B01", "return_state", {}, registry.states).state, "B01");
-  assert.equal(resolveDynamicTarget("B01", "return_state", { return_state: 2 }, registry.states).state, "B01");
-  assert.equal(resolveDynamicTarget("B01", "return_state", { return_state: "C99" }, registry.states).state, "B01");
-  assert.equal(resolveDynamicTarget("D02", "resume_state", { resume_state: "C10" }, registry.states).state, "D02");
+  const b01ResumeFrame = {
+    identity: "frame-b01-c02",
+    sourceState: "C02",
+    holdingState: "B01",
+    register: "return_state",
+    targetState: "C02",
+  };
+  assert.equal(resolveDynamicTarget("B01", "return_state", [b01ResumeFrame], registry.states, b01ResumeFrame.identity).state, "C02");
+  assert.equal(resolveDynamicTarget("B01", "return_state", { return_state: "C10" }, registry.states, "forged").state, "B01");
+  assert.equal(resolveDynamicTarget("B01", "return_state", [b01ResumeFrame], registry.states, "wrong-frame").state, "B01");
+  const d02BypassFrame = { ...b01ResumeFrame, identity: "frame-d02-c10", sourceState: "G00", holdingState: "D02", register: "resume_state", targetState: "C10" };
+  assert.equal(resolveDynamicTarget("D02", "resume_state", [d02BypassFrame], registry.states, d02BypassFrame.identity).state, "D02");
+  const x03BypassFrame = { ...b01ResumeFrame, identity: "frame-x03-c10", sourceState: "D03", holdingState: "X03", targetState: "C10" };
+  assert.equal(resolveDynamicTarget("X03", "return_state", [x03BypassFrame], registry.states, x03BypassFrame.identity).state, "X03");
 
   const contract = Buffer.from("meta\n<!-- IMPLEMENTATION-CONTRACT START -->\nbody\n<!-- IMPLEMENTATION-CONTRACT END -->\ntail\n");
   let specReads = 0;

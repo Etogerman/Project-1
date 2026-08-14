@@ -481,6 +481,18 @@ async function main() {
     const resumedReview = transition({ current: reviewBlocked, expectedIdentity: reviewBlocked.identity, nextState: "P03", nextRunId: "review-2", resumeFrameIdentity: reviewBlockFrame.identity });
     assert.equal(resumedReview.activeRunId, "review-2");
     assert.equal(resumedReview.resumeContexts.length, 0);
+    const c10 = cycle("C10");
+    const implementationBlockFrame = resumeFrame(c10, { holdingState: "B01", targetState: "C10", register: "return_state" });
+    const implementationBlocked = transition({ current: c10, expectedIdentity: c10.identity, nextState: "B01", holdingFrame: implementationBlockFrame });
+    expectThrow(() => transition({ current: implementationBlocked, expectedIdentity: implementationBlocked.identity, nextState: "C10", resumeFrameIdentity: implementationBlockFrame.identity }), "ACTIVE_CYCLE_GATE");
+    const implementationResumed = transition({ current: implementationBlocked, expectedIdentity: implementationBlocked.identity, nextState: "C10", resumeFrameIdentity: implementationBlockFrame.identity, gateEvidence: implementationEvidence });
+    assert.equal(implementationResumed.state, "C10");
+    const d02BypassFrame = resumeFrame(c10, { holdingState: "D02", targetState: "C10" });
+    const forgedD02 = resign({ ...cycle("D02"), resumeContexts: [d02BypassFrame] });
+    expectThrow(() => transition({ current: forgedD02, expectedIdentity: forgedD02.identity, nextState: "C10", resumeFrameIdentity: d02BypassFrame.identity, gateEvidence: implementationEvidence }), "ACTIVE_CYCLE_CAS");
+    const x03BypassFrame = resumeFrame(c10, { holdingState: "X03", targetState: "C10", register: "return_state" });
+    const forgedX03 = resign({ ...cycle("X03"), resumeContexts: [x03BypassFrame] });
+    expectThrow(() => transition({ current: forgedX03, expectedIdentity: forgedX03.identity, nextState: "C10", resumeFrameIdentity: x03BypassFrame.identity, gateEvidence: implementationEvidence }), "ACTIVE_CYCLE_CAS");
     expectThrow(() => transition({ current: c08, expectedIdentity: c08.identity, nextState: "C10" }), "ACTIVE_CYCLE_CAS");
     expectThrow(() => transition({ current: c08, expectedIdentity: H("f"), nextState: "P03", nextRunId: "review-2" }), "ACTIVE_CYCLE_CAS");
     expectThrow(() => transitionActiveCycle({ current: c08, expectedIdentity: c08.identity, nextState: "P03", nextRunId: "review-2", states, operationLock: null, taskRoot: cycleTemporary, owner }), "ACTIVE_CYCLE_LOCK");

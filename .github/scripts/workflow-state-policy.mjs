@@ -11,6 +11,15 @@ const REGISTRY_PATH = "docs/workflow/pr-correction/states.json";
 const STATE_ID = /^[BCDGXP]\d{2}$/;
 const DYNAMIC_REGISTERS = new Set(["return_state", "resume_state"]);
 
+export const DYNAMIC_TARGET_POLICY = Object.freeze({
+  B01: Object.freeze({
+    return_state: Object.freeze(["C02", "P03", "G00", "C10", "C11", "G01", "C12", "C13", "P02", "X03"]),
+  }),
+  C05: Object.freeze({ resume_state: Object.freeze(["P01", "P02"]) }),
+  D02: Object.freeze({ resume_state: Object.freeze(["C04", "C05", "C06", "G00", "C12"]) }),
+  X03: Object.freeze({ return_state: Object.freeze(["B01", "D01", "P03", "C09", "D02", "B02", "D03", "X02", "X03"]) }),
+});
+
 export const ACTIVE_RUN_POLICY = Object.freeze({
   P03: "review",
   G01: "publication",
@@ -180,14 +189,25 @@ export function transitionTargetForOperation(operationKind, currentState, facts,
   return target;
 }
 
-export function resolveDynamicTarget(currentState, registerName, registers, states) {
+export function resolveDynamicTarget(currentState, registerName, resumeContexts, states, resumeFrameIdentity = null) {
   const blocker = (reason) => ({ ok: false, state: currentState, blocker: reason, owner: "владелец регистра workflow" });
   if (!DYNAMIC_REGISTERS.has(registerName)) return blocker(`регистр ${registerName} не разрешён`);
-  if (registers === null || typeof registers !== "object" || Array.isArray(registers) || !Object.hasOwn(registers, registerName)) return blocker(`регистр ${registerName} отсутствует`);
-  const target = registers[registerName];
-  if (typeof target !== "string" || !Object.hasOwn(states, target)) return blocker(`регистр ${registerName} содержит неизвестное состояние ${target}`);
-  if (currentState === "D02" && target === "C10") return blocker("D02 не может возобновить цикл прямо в C10");
-  return { ok: true, state: target, target };
+  if (!Object.hasOwn(states, currentState) || !(states[currentState].dynamicNext ?? []).includes(registerName)) {
+    return blocker(`${currentState} не объявляет динамический переход ${registerName}`);
+  }
+  if (!Array.isArray(resumeContexts) || resumeContexts.length === 0) return blocker("верхний resume frame отсутствует");
+  const frame = resumeContexts.at(-1);
+  if (frame === null || typeof frame !== "object" || Array.isArray(frame)) return blocker("верхний resume frame повреждён");
+  if (typeof resumeFrameIdentity !== "string" || resumeFrameIdentity === "" || frame.identity !== resumeFrameIdentity) {
+    return blocker("identity верхнего resume frame не подтверждена");
+  }
+  if (frame.holdingState !== currentState || frame.register !== registerName) return blocker("resume frame относится к другому динамическому переходу");
+  if (typeof frame.sourceState !== "string" || !Object.hasOwn(states, frame.sourceState)) return blocker("resume frame содержит неизвестное исходное состояние");
+  const target = frame.targetState;
+  if (typeof target !== "string" || !Object.hasOwn(states, target)) return blocker(`resume frame содержит неизвестное состояние ${target}`);
+  const allowedTargets = DYNAMIC_TARGET_POLICY[currentState]?.[registerName] ?? [];
+  if (!allowedTargets.includes(target)) return blocker(`${currentState} не может возобновить цикл в ${target}`);
+  return { ok: true, state: target, target, frame };
 }
 
 export function validateTopology(registry) {
@@ -202,6 +222,11 @@ export function validateTopology(registry) {
     count += state.transitionCount;
     for (const target of state.next ?? []) if (!Object.hasOwn(states, target)) errors.push(issue("UNKNOWN_STATE_TARGET", `$.states.${id}.next`, target));
     for (const name of state.dynamicNext ?? []) if (!DYNAMIC_REGISTERS.has(name)) errors.push(issue("UNKNOWN_DYNAMIC_TARGET", `$.states.${id}.dynamicNext`, name));
+    const dynamicPolicy = DYNAMIC_TARGET_POLICY[id] ?? {};
+    if (!sameSet(state.dynamicNext ?? [], Object.keys(dynamicPolicy))) errors.push(issue("DYNAMIC_POLICY", `$.states.${id}.dynamicNext`, "dynamicNext не совпадает с канонической policy"));
+    for (const [name, targets] of Object.entries(dynamicPolicy)) {
+      for (const target of targets) if (!Object.hasOwn(states, target)) errors.push(issue("DYNAMIC_POLICY", `$.states.${id}.dynamicNext.${name}`, `неизвестное состояние ${target}`));
+    }
     for (const name of state.exits ?? []) {
       usedExits.add(name);
       if (!exitNames.has(name)) errors.push(issue("UNKNOWN_EXTERNAL_EXIT", `$.states.${id}.exits`, name));

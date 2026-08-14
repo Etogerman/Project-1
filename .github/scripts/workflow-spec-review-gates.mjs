@@ -36,6 +36,7 @@ import {
   activeRunKind,
   completedRunForTransition,
   pushResumeFrame,
+  resolveDynamicTarget,
   resumeFromTop,
 } from "./workflow-state-policy.mjs";
 
@@ -912,10 +913,16 @@ export function transitionActiveCycle({
   if (current.identity !== expectedIdentity) fail("active cycle identity изменилась", "ACTIVE_CYCLE_CAS");
   if (!states || !Object.hasOwn(states, nextState)) fail("целевое состояние неизвестно", "ACTIVE_CYCLE_CAS");
   const direct = Array.isArray(states[current.state].next) && states[current.state].next.includes(nextState);
-  const dynamicNames = new Set(states[current.state].dynamicNext ?? []);
   const topFrame = current.resumeContexts.at(-1) ?? null;
   const frameTargetsNext = topFrame !== null && topFrame.holdingState === current.state && topFrame.targetState === nextState;
-  const dynamic = frameTargetsNext && dynamicNames.has(topFrame.register);
+  const dynamicResolution = topFrame === null ? null : resolveDynamicTarget(
+    current.state,
+    topFrame.register,
+    current.resumeContexts,
+    states,
+    resumeFrameIdentity,
+  );
+  const dynamic = dynamicResolution?.ok === true && dynamicResolution.target === nextState;
   if (!direct && !dynamic) fail(`переход ${current.state} -> ${nextState} не разрешён`, "ACTIVE_CYCLE_CAS");
   if (dynamic && (resumeFrameIdentity === null || resumeFrameIdentity !== topFrame.identity)) fail("динамический возврат требует identity верхнего resume frame", "ACTIVE_CYCLE_RESUME");
   if (resumeFrameIdentity !== null && !frameTargetsNext) fail("resume frame не соответствует переходу", "ACTIVE_CYCLE_RESUME");
@@ -981,6 +988,10 @@ export function transitionActiveCycle({
       || holdingFrame.signalIdentity !== current.signalContext.identity
       || holdingFrame.sourceContextIdentity !== current.sourceContext.identity) {
       fail("holdingFrame относится к другому переходу", "ACTIVE_CYCLE_RESUME");
+    }
+    if ((states[nextState].dynamicNext ?? []).length > 0) {
+      const policyProbe = resolveDynamicTarget(nextState, holdingFrame.register, [holdingFrame], states, holdingFrame.identity);
+      if (!policyProbe.ok) fail(`holdingFrame нарушает dynamic policy: ${policyProbe.blocker}`, "ACTIVE_CYCLE_RESUME");
     }
     const pushed = pushResumeFrame(resumeContexts, holdingFrame);
     if (!pushed.ok && nextState !== "B01") fail("resume stack переполнен", "ACTIVE_CYCLE_RESUME_OVERFLOW");
@@ -1130,7 +1141,7 @@ export async function compareAndSetActiveCycle({
         try {
           rmdirSync(createdRunDirectory);
         } catch {
-          // Каталог с артефактами не удаляется автоматически.
+          // The artifact directory is intentionally retained.
         }
       }
       throw error;

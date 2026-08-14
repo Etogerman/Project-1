@@ -990,7 +990,9 @@ function preserveQuarantinedOperationAndBlock({ root, intent, current, operation
   const frame = frameForHolding({
     current,
     holdingState: targetState,
-    targetState: current.state === "B01" ? (current.resumeContexts.at(-1)?.targetState ?? "C02") : current.state,
+    targetState: current.state === "B01"
+      ? (current.resumeContexts.at(-1)?.targetState ?? "C02")
+      : (states[current.state]?.next ?? []).includes("B01") ? current.state : "C02",
     signalIdentity: current.signalContext.identity,
     reason: `operation_conflict:${intent.operationId}`,
   });

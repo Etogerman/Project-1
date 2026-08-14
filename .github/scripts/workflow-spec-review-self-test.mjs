@@ -231,21 +231,22 @@ function makeTreeWritable(path) {
   }
 }
 
-function processExists(pid) {
+function processStatus(pid) {
   try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error?.code === "EPERM";
+    return execFileSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" }).trim() || null;
+  } catch {
+    return null;
   }
 }
 
 async function waitForProcessExit(pid, timeoutMs = 2_000) {
   const deadline = Date.now() + timeoutMs;
-  while (processExists(pid) && Date.now() < deadline) {
+  let status = processStatus(pid);
+  while (status !== null && !/^Z/.test(status) && Date.now() < deadline) {
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+    status = processStatus(pid);
   }
-  return !processExists(pid);
+  return status === null || /^Z/.test(status);
 }
 
 async function main() {
@@ -529,8 +530,8 @@ async function main() {
     assert.equal(PROCESS_POLICY.maxParallel, 1);
     console.log("workflow-spec-review self-test passed");
   } finally {
-    // Дождаться завершения последних асинхронных снимков process-monitor,
-    // прежде чем удалять дерево, которое они проверяли.
+    // Let the final asynchronous process-monitor snapshots finish before
+    // removing the tree they inspect.
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 300));
     makeTreeWritable(temporary);
     rmSync(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 25 });

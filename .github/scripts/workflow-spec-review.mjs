@@ -677,7 +677,7 @@ export function resolveExecutable(command, environment = process.env) {
       accessSync(physical, fsConstants.X_OK);
       return physical;
     } catch {
-      // Проверяется следующий PATH-кандидат.
+      // Continue with the next PATH candidate.
     }
   }
   fail(`исполняемый файл ${command} не найден`, "PROCESS_EXECUTABLE");
@@ -764,7 +764,7 @@ function probeWithPs(pid, timeoutMs = 2_000) {
       try {
         process.kill(-child.pid, "SIGKILL");
       } catch {
-        // Probe уже завершился.
+        // The probe has already exited.
       }
       const error = new Error(`PID ${pid}: ps identity timeout`);
       error.code = "PROCESS_IDENTITY";
@@ -776,7 +776,7 @@ function probeWithPs(pid, timeoutMs = 2_000) {
         try {
           process.kill(-child.pid, "SIGKILL");
         } catch {
-          // Probe уже завершился.
+          // The probe has already exited.
         }
         const error = new Error(`PID ${pid}: ps identity превысила лимит вывода`);
         error.code = "PROCESS_IDENTITY";
@@ -830,7 +830,7 @@ function probeGroupWithPs(pgid, timeoutMs = 2_000) {
       try {
         process.kill(-child.pid, "SIGKILL");
       } catch {
-        // Probe уже завершился.
+        // The probe has already exited.
       }
       const error = new Error(`PGID ${pgid}: ps group identity timeout`);
       error.code = "PROCESS_IDENTITY";
@@ -842,7 +842,7 @@ function probeGroupWithPs(pgid, timeoutMs = 2_000) {
         try {
           process.kill(-child.pid, "SIGKILL");
         } catch {
-          // Probe уже завершился.
+          // The probe has already exited.
         }
         const error = new Error(`PGID ${pgid}: ps group identity превысила лимит вывода`);
         error.code = "PROCESS_IDENTITY";
@@ -900,7 +900,7 @@ export async function readSystemProcessGroupIdentities(pgid) {
         const identity = parseProcStat(Number(entry), readFileSync(`/proc/${entry}/stat`, "utf8"));
         if (identity.pgid === pgid) identities.push(identity);
       } catch {
-        // Процесс мог завершиться во время обхода /proc.
+        // The process may have exited while traversing /proc.
       }
     }
     return identities;
@@ -1139,7 +1139,7 @@ export function startProcessGroup(command, args, options = {}) {
                   mergeKnownMembers(members);
                 }
               }).catch(() => {
-                // Root exit проверяется повторно в close/drain path.
+                // Root exit is verified again in the close/drain path.
               }).finally(() => {
                 identityMonitorBusy = false;
               });
