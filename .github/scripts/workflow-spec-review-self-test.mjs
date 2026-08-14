@@ -24,12 +24,15 @@ import {
   PROCESS_POLICY,
   assertCanonicalPrompt,
   assertNodeVersion,
+  buildQualification,
   buildClaudeArgs,
+  buildReviewFinalArtifacts,
   buildReviewerEnvironment,
   executeReviewRun,
   jcsIdentity,
   openReviewRun,
   parseReviewerResponse,
+  prepareQualificationArtifacts,
   readStrictPrompt,
   scanSecrets,
   sha256Bytes,
@@ -82,17 +85,27 @@ async function expectReject(promise, code = null) {
   return caught;
 }
 
-function writeExecutable(path, modePath) {
+function writeExecutable(path, modePath, mcpPidPath) {
   writeFileSync(path, `#!/usr/bin/env node
 const fs = require("node:fs");
 const path = require("node:path");
+const { spawn } = require("node:child_process");
 const args = process.argv.slice(2);
-if (args[0] === "--version") { console.log("claude-self-test-1"); process.exit(0); }
+const mode = fs.existsSync(${JSON.stringify(modePath)}) ? fs.readFileSync(${JSON.stringify(modePath)}, "utf8").trim() : "valid";
+if (args[0] === "--version") {
+  if (mode === "mcp-preflight") {
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "boost:mcp"], { detached: false, stdio: "ignore" });
+    fs.writeFileSync(${JSON.stringify(mcpPidPath)}, String(child.pid));
+    child.unref();
+    process.exit(0);
+  }
+  console.log("claude-self-test-1");
+  process.exit(0);
+}
 if (args[0] === "auth" && args[1] === "status") { console.log("oauth_token"); process.exit(0); }
 const printIndex = args.lastIndexOf("--print");
 const prompt = printIndex === -1 ? "" : args[printIndex + 1];
 if (prompt.includes("WORKFLOW_SPEC_REVIEW_READ_SMOKE_OK")) { console.log("WORKFLOW_SPEC_REVIEW_READ_SMOKE_OK"); process.exit(0); }
-const mode = fs.existsSync(${JSON.stringify(modePath)}) ? fs.readFileSync(${JSON.stringify(modePath)}, "utf8").trim() : "valid";
 if (mode === "invalid") { console.log("invalid response"); process.exit(0); }
 if (mode === "oauth") { console.log(process.env.CLAUDE_CODE_OAUTH_TOKEN); process.exit(0); }
 if (mode === "error") { console.error("review failed"); process.exit(2); }
@@ -218,6 +231,23 @@ function makeTreeWritable(path) {
   }
 }
 
+function processExists(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+async function waitForProcessExit(pid, timeoutMs = 2_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (processExists(pid) && Date.now() < deadline) {
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+  }
+  return !processExists(pid);
+}
+
 async function main() {
   const temporary = mkdtempSync(join(tmpdir(), "workflow-spec-review-self-test-"));
   try {
@@ -260,8 +290,9 @@ async function main() {
     const source = createSourceRepository(temporary, promptSource);
     const settings = createSettings(temporary);
     const modePath = join(temporary, "fake-mode");
+    const mcpPidPath = join(temporary, "mcp-child.pid");
     const executable = join(temporary, "fake-claude");
-    writeExecutable(executable, modePath);
+    writeExecutable(executable, modePath, mcpPidPath);
     writeFileSync(modePath, "valid\n");
     const environment = { ...process.env, HOME: settings.home, PATH: process.env.PATH, TMPDIR: temporary };
     const task = createTaskRoot(temporary);
@@ -344,6 +375,66 @@ async function main() {
     assert.equal(summary.reviewManifestIdentity, manifest.identity);
     assert.equal(readFileSync(join(runRoot, "capture", "stdout.bin"), "utf8").includes("gemini"), false);
 
+    const reviewManifestBytes = readFileSync(join(runRoot, "review-manifest.json"));
+    const blockingClaudeBytes = response(manifest.identity, [finding]);
+    const disposition = (decision, target, rationale) => ({
+      source: "claude",
+      findingId: finding.id,
+      priority: finding.priority,
+      decision,
+      target,
+      evidenceRefs: ["current/a.md:1"],
+      rationale,
+    });
+    const correctionQualification = buildQualification({
+      reviewManifestBytes,
+      claudeBytes: blockingClaudeBytes,
+      dispositions: [disposition("confirmed_current_scope", "C07", "Пробел подтверждён в текущем объёме")],
+    });
+    assert.equal(correctionQualification.outcome.state, "C07");
+    expectThrow(() => buildReviewFinalArtifacts({
+      revisionRoot: task.revisionRoot,
+      reviewManifestBytes,
+      claudeBytes: blockingClaudeBytes,
+      qualificationBytes: Buffer.from(`${JSON.stringify(correctionQualification)}\n`),
+      consolidatedBytes: Buffer.from("не должен использоваться\n"),
+    }), "FINAL_QUALIFICATION");
+    const decisionQualification = buildQualification({
+      reviewManifestBytes,
+      claudeBytes: blockingClaudeBytes,
+      dispositions: [disposition("confirmed_scope_or_risk", "D01", "Нужно решение по объёму")],
+    });
+    assert.equal(decisionQualification.outcome.state, "D01");
+    expectThrow(() => buildReviewFinalArtifacts({
+      revisionRoot: task.revisionRoot,
+      reviewManifestBytes,
+      claudeBytes: blockingClaudeBytes,
+      qualificationBytes: Buffer.from(`${JSON.stringify(decisionQualification)}\n`),
+      consolidatedBytes: Buffer.from("не должен использоваться\n"),
+    }), "FINAL_QUALIFICATION");
+    const rejectedQualification = buildQualification({
+      reviewManifestBytes,
+      claudeBytes: blockingClaudeBytes,
+      dispositions: [disposition("rejected_with_evidence", null, "Замечание опровергнуто проверяемыми данными")],
+    });
+    assert.equal(rejectedQualification.outcome.state, "C09");
+
+    const preparedQualification = prepareQualificationArtifacts({
+      taskRoot: task.taskRoot,
+      cycleId: "cycle-1",
+      revision: 1,
+      runId: "valid-run",
+      dispositions: [],
+    });
+    const contradictoryConsolidated = Buffer.from(preparedQualification.consolidatedBytes.toString("utf8").replace("Состояние: C09.", "Состояние: C07."));
+    expectThrow(() => buildReviewFinalArtifacts({
+      revisionRoot: task.revisionRoot,
+      reviewManifestBytes: preparedQualification.reviewManifestBytes,
+      claudeBytes: preparedQualification.claudeBytes,
+      qualificationBytes: preparedQualification.qualificationBytes,
+      consolidatedBytes: contradictoryConsolidated,
+    }), "FINAL_QUALIFICATION");
+
     assertMissingAndExtraRejected(runOpen, validateReviewRunOpen, "REVIEW_RUN_OPEN");
     assertMissingAndExtraRejected(launchIntent, validateLaunchIntent, "LAUNCH_INTENT");
     assertMissingAndExtraRejected(started, validateStartedArtifact, "REVIEW_STARTED");
@@ -371,6 +462,18 @@ async function main() {
     assert.equal(existsSync(join(task.taskRoot, "runs")), false);
     assert.equal(existsSync(join(task.taskRoot, "final")), false);
 
+    const mcpRun = "mcp-preflight";
+    openRun({ task, runId: mcpRun, sourceContextIdentity: sourceContext.identity });
+    writeFileSync(modePath, "mcp-preflight\n");
+    const mcpResult = await executeReviewRun({ ...common, runId: mcpRun, preflightMonitorIntervalMs: 1_000 });
+    assert.equal(mcpResult.status, "blocked");
+    assert.equal(mcpResult.target, "B01");
+    assert.equal(JSON.parse(readFileSync(join(mcpResult.runRoot, "capture", "preparation-error.json"), "utf8")).errorCode, "CLIENT_MCP_POLICY");
+    const mcpPid = Number.parseInt(readFileSync(mcpPidPath, "utf8"), 10);
+    assert(Number.isInteger(mcpPid) && mcpPid > 0);
+    assert.equal(await waitForProcessExit(mcpPid), true);
+    writeFileSync(modePath, "valid\n");
+
     const settingsRun = "settings-changed";
     openRun({ task, runId: settingsRun, sourceContextIdentity: sourceContext.identity });
     await expectReject(executeReviewRun({
@@ -388,7 +491,7 @@ async function main() {
       runId: executableRun,
       beforeClientStart: () => writeFileSync(executable, `${readFileSync(executable, "utf8")}\n`),
     }), "PROCESS_EXECUTABLE_CHANGED");
-    writeExecutable(executable, modePath);
+    writeExecutable(executable, modePath, mcpPidPath);
 
     const oauthRun = "oauth-output";
     openRun({ task, runId: oauthRun, sourceContextIdentity: sourceContext.identity });

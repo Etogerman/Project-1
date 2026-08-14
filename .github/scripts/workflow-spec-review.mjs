@@ -1017,6 +1017,15 @@ export function startProcessGroup(command, args, options = {}) {
     for (const member of members) if (!byPid.has(member.pid)) byPid.set(member.pid, member);
     knownProcessIdentities = [...byPid.values()].sort((left, right) => left.pid - right.pid);
   };
+  const inspectGroupSnapshot = async (phase, members) => {
+    if (typeof options.inspectGroupSnapshot !== "function") return;
+    await options.inspectGroupSnapshot({
+      phase,
+      members: structuredClone(members),
+      processIdentity: structuredClone(processIdentity),
+      controllerPgid,
+    });
+  };
   const signalVerifiedGroup = async (signal) => {
     if (processIdentity === null || controllerPgid === null) fail("process identity не зафиксирована", "PROCESS_IDENTITY");
     const currentMembers = await readSystemProcessGroupIdentities(processIdentity.pgid);
@@ -1119,6 +1128,7 @@ export function startProcessGroup(command, args, options = {}) {
             const target = current.find((member) => member.pid === targetPid);
             if (target && target.pgid !== processIdentity.pgid) fail("target получил чужую PGID", "PROCESS_IDENTITY");
             mergeKnownMembers(current);
+            await inspectGroupSnapshot("started", current);
             identityMonitor = setInterval(() => {
               if (identityMonitorBusy || processIdentity === null) return;
               identityMonitorBusy = true;
@@ -1175,6 +1185,7 @@ export function startProcessGroup(command, args, options = {}) {
           if (!root) fail("supervisor исчез до финального снимка группы", "PROCESS_IDENTITY");
           assertSignalTargetIdentity(processIdentity, root, controllerPgid);
           mergeKnownMembers(current);
+          await inspectGroupSnapshot("outcome", current);
           child.stdin.end("ACK\n");
         })().catch((error) => {
           identityMismatch = true;
@@ -1238,28 +1249,46 @@ export function startProcessGroup(command, args, options = {}) {
 }
 
 async function runShort(command, args, options) {
-  const processGroup = startProcessGroup(command, args, {
+  let mcpDetected = false;
+  let processGroup = null;
+  const inspectMcpSnapshot = async ({ members }) => {
+    if (await descendantsContainMcp(new Set(members.map((member) => member.pid)), { includeRoots: true })) {
+      mcpDetected = true;
+      processGroup?.terminate("policy");
+    }
+  };
+  processGroup = startProcessGroup(command, args, {
     cwd: options.cwd,
     env: options.env,
     timeoutMs: options.timeoutMs ?? 180_000,
     killGraceMs: options.killGraceMs ?? 10_000,
     signal: options.signal,
+    inspectGroupSnapshot: inspectMcpSnapshot,
   });
-  let mcpDetected = false;
   let monitorRunning = false;
-  const monitor = setInterval(async () => {
-    if (monitorRunning) return;
+  let monitorStopped = false;
+  let monitorPromise = Promise.resolve();
+  const monitorTick = () => {
+    if (monitorStopped || monitorRunning) return;
     monitorRunning = true;
-    if (await descendantsContainMcp(new Set([processGroup.child.pid]))) {
-      mcpDetected = true;
-      processGroup.terminate("policy");
-    }
-    monitorRunning = false;
-  }, options.monitorIntervalMs ?? 250);
+    monitorPromise = (async () => {
+      if (await descendantsContainMcp(new Set([processGroup.child.pid]))) {
+        mcpDetected = true;
+        processGroup.terminate("policy");
+      }
+    })().finally(() => {
+      monitorRunning = false;
+    });
+  };
+  const monitor = setInterval(monitorTick, options.monitorIntervalMs ?? 250);
+  monitorTick();
   const result = await processGroup.done;
+  monitorStopped = true;
   clearInterval(monitor);
+  await monitorPromise;
   if (result.cancelled) fail(`${basename(command)} preflight отменён пользователем`, "CLIENT_CANCELLED");
-  if (result.code !== 0 || result.error || result.timedOut || result.outputExceeded || result.identityMismatch || result.residualProcessDetected || !result.drainComplete || mcpDetected) {
+  if (mcpDetected) fail(`${basename(command)} preflight запустил запрещённый MCP-процесс`, "CLIENT_MCP_POLICY");
+  if (result.code !== 0 || result.error || result.timedOut || result.outputExceeded || result.identityMismatch || result.residualProcessDetected || !result.drainComplete) {
     fail(`${basename(command)} preflight завершился ошибкой`, "CLIENT_PREFLIGHT");
   }
   for (const value of options.forbiddenValues ?? []) {
@@ -1272,13 +1301,13 @@ async function runShort(command, args, options) {
   return output.trim();
 }
 
-async function clientPreflight({ commands, reviewRoot, environments, selfTest, signal, overallDeadlineAt, preflightTimeoutMs = null }) {
+async function clientPreflight({ commands, reviewRoot, environments, selfTest, signal, overallDeadlineAt, preflightTimeoutMs = null, monitorIntervalMs = null }) {
   const phaseDeadlineAt = Math.min(
     overallDeadlineAt ?? Number.POSITIVE_INFINITY,
     Date.now() + (preflightTimeoutMs ?? (selfTest ? 5_000 : PROCESS_POLICY.preflightSeconds * 1_000)),
   );
   const budget = () => Math.max(1, remainingBudget(phaseDeadlineAt, "preflight"));
-  const preflightOptions = { cwd: reviewRoot, killGraceMs: selfTest ? 100 : 10_000, monitorIntervalMs: selfTest ? 50 : 250, signal };
+  const preflightOptions = { cwd: reviewRoot, killGraceMs: selfTest ? 100 : 10_000, monitorIntervalMs: monitorIntervalMs ?? (selfTest ? 50 : 250), signal };
   const claudeOptions = { ...preflightOptions, env: environments.claude, forbiddenValues: [environments.claude.CLAUDE_CODE_OAUTH_TOKEN] };
   const claudeVersion = await runShort(commands.claude, ["--version"], { ...claudeOptions, timeoutMs: budget() });
   const auth = await runShort(commands.claude, ["auth", "status"], { ...claudeOptions, timeoutMs: budget() });
@@ -1394,14 +1423,14 @@ async function processTable() {
   }
 }
 
-async function descendantsContainMcp(rootPids) {
+async function descendantsContainMcp(rootPids, { includeRoots = false } = {}) {
   const table = await processTable();
   if (table === null) return true;
   const rows = table.split("\n").map((line) => {
     const match = line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/);
     return match ? { pid: Number(match[1]), ppid: Number(match[2]), command: match[3] } : null;
   }).filter(Boolean);
-  const descendants = new Set();
+  const descendants = new Set(includeRoots ? rootPids : []);
   let changed = true;
   while (changed) {
     changed = false;
@@ -1756,7 +1785,7 @@ function recordPreparationBlock({ taskRoot, cycleId, revision, runId, error }) {
 
 export async function executeReviewRun(options) {
   const selfTest = options.selfTest === true;
-  const selfTestOnlyOptions = ["commands", "environment", "settingsPaths", "nodeVersion", "hardTimeoutMs", "overallTimeoutMs", "snapshotTimeoutMs", "preflightTimeoutMs", "beforeClientStart"];
+  const selfTestOnlyOptions = ["commands", "environment", "settingsPaths", "nodeVersion", "hardTimeoutMs", "overallTimeoutMs", "snapshotTimeoutMs", "preflightTimeoutMs", "preflightMonitorIntervalMs", "beforeClientStart"];
   if (!selfTest && selfTestOnlyOptions.some((key) => Object.hasOwn(options, key))) {
     fail("подмена reviewer runtime разрешена только в offline self-test", "SELF_TEST_OVERRIDE");
   }
@@ -1826,7 +1855,16 @@ export async function executeReviewRun(options) {
     const initialSecretScan = scanSecrets(snapshot.reviewRoot);
     let preflight;
     try {
-      preflight = await clientPreflight({ commands, reviewRoot: snapshot.reviewRoot, environments, selfTest, signal: controller.signal, overallDeadlineAt, preflightTimeoutMs: selfTest ? options.preflightTimeoutMs : null });
+      preflight = await clientPreflight({
+        commands,
+        reviewRoot: snapshot.reviewRoot,
+        environments,
+        selfTest,
+        signal: controller.signal,
+        overallDeadlineAt,
+        preflightTimeoutMs: selfTest ? options.preflightTimeoutMs : null,
+        monitorIntervalMs: selfTest ? options.preflightMonitorIntervalMs : null,
+      });
     } catch (error) {
       const status = !overallTimedOut && externalSignal?.aborted === true ? "cancelled_by_user" : "blocked";
       writeFileSync(join(snapshot.capture, "preparation-error.json"), `${JSON.stringify({ schemaVersion: 1, reviewRunId: runId, phase: "preflight", status, errorCode: error?.code ?? "CLIENT_PREFLIGHT" }, null, 2)}\n`, { flag: "wx", mode: 0o600 });
@@ -2099,6 +2137,7 @@ export function buildQualification({ reviewManifestBytes, claudeBytes, dispositi
 
 function consolidatedFor(manifest, qualification, parsed, author) {
   nonemptyString(author, "author", "QUALIFICATION");
+  if (/[\r\n]/.test(author)) fail("author должен быть одной строкой", "QUALIFICATION");
   const lines = ["# Сводный вывод внешнего ревью ТЗ", "", manifest.identity, "", "## Замечания и решения", ""];
   const findings = [
     ...parsed.claude.findings.map((finding) => ({ source: "claude", finding })),
@@ -2141,6 +2180,7 @@ export function prepareQualificationArtifacts({ taskRoot, cycleId, revision, run
   const validated = validateQualification(qualification, { reviewManifestBytes, claudeBytes });
   const qualificationBytes = Buffer.from(`${JSON.stringify(qualification, null, 2)}\n`);
   const consolidatedBytes = consolidatedFor(validated.manifest, qualification, validated.parsed, author);
+  validateConsolidated(consolidatedBytes, reviewManifest.identity, qualification, validated.parsed);
   if (Date.now() - qualificationStartedAt > PROCESS_POLICY.qualificationSeconds * 1_000 || Date.now() > Date.parse(started.overallDeadlineAt)) {
     fail("qualification превысила фазовый или общий deadline", "QUALIFICATION_TIMEOUT");
   }
@@ -2168,8 +2208,9 @@ export function prepareQualificationArtifacts({ taskRoot, cycleId, revision, run
 export function buildReviewFinalArtifacts({ revisionRoot, reviewManifestBytes, claudeBytes, qualificationBytes, consolidatedBytes }) {
   const reviewManifest = validateReviewManifest(JSON.parse(reviewManifestBytes.toString("utf8")));
   const qualification = JSON.parse(qualificationBytes.toString("utf8"));
-  validateQualification(qualification, { reviewManifestBytes, claudeBytes });
+  const validated = validateQualification(qualification, { reviewManifestBytes, claudeBytes });
   if (qualification.outcome.state !== "C09") fail("review-final разрешён только для исхода C09", "FINAL_QUALIFICATION");
+  validateConsolidated(consolidatedBytes, reviewManifest.identity, qualification, validated.parsed);
   const tzPath = join(revisionRoot, "tz.md");
   const authorReviewPath = join(revisionRoot, "author-review.md");
   assertRegularFile(tzPath, "FINAL_PROVENANCE");
@@ -2231,26 +2272,29 @@ export function verifyFinalDirectory(finalRoot) {
     || fileHash(join(finalRoot, "author-review.md")) !== reviewManifest.hashes.author_review) {
     fail("итоговый набор смешивает разные identity, ревизии или результаты", "FINAL_PROVENANCE");
   }
-  validateQualification(JSON.parse(readFileSync(join(finalRoot, "qualification.json"), "utf8")), {
+  const qualification = JSON.parse(readFileSync(join(finalRoot, "qualification.json"), "utf8"));
+  const validated = validateQualification(qualification, {
     reviewManifestBytes: readFileSync(join(finalRoot, "review-manifest.json")),
     claudeBytes: readFileSync(join(finalRoot, "claude.md")),
   });
-  validateConsolidated(join(finalRoot, "consolidated.md"), manifest.reviewIdentity);
+  validateConsolidated(readFileSync(join(finalRoot, "consolidated.md")), manifest.reviewIdentity, qualification, validated.parsed);
   return manifest;
 }
 
-function validateConsolidated(path, identity) {
-  const bytes = readFileSync(path);
+function validateConsolidated(bytes, identity, qualification, parsed) {
+  if (!Buffer.isBuffer(bytes) || bytes.length === 0 || bytes.includes(0)) {
+    fail("сводный вывод пуст или содержит NUL", "FINAL_QUALIFICATION");
+  }
   let text;
   try {
     text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch {
     fail("сводный вывод не является строгим UTF-8", "FINAL_QUALIFICATION");
   }
-  const identityLines = text.split(/\r?\n/).filter((line) => line === identity);
-  if (text.trim() === "" || identityLines.length !== 1) {
-    fail("сводный вывод должен содержать identity запуска отдельной строкой ровно один раз", "FINAL_QUALIFICATION");
-  }
+  const authorMatch = text.match(/\nАвтор квалификации: ([^\r\n]+)\.\n$/);
+  if (authorMatch === null) fail("сводный вывод не содержит канонического автора квалификации", "FINAL_QUALIFICATION");
+  const expected = consolidatedFor({ identity }, qualification, parsed, authorMatch[1]);
+  if (!bytes.equals(expected)) fail("сводный вывод не совпадает с машинно проверенной квалификацией", "FINAL_QUALIFICATION");
   return true;
 }
 
@@ -2315,12 +2359,12 @@ export function finalizeReviewCycle({ taskRoot, cycleId, revision, runId }) {
     fail("review относится к другой ревизии ТЗ или авторского ревью", "FINAL_PROVENANCE");
   }
   const qualification = JSON.parse(readFileSync(join(results, "qualification.json"), "utf8"));
-  validateQualification(qualification, {
+  const validated = validateQualification(qualification, {
     reviewManifestBytes,
     claudeBytes: readFileSync(join(results, "claude.md")),
   });
   if (qualification.outcome.state !== "C09") fail("финализация разрешена только для исхода C09", "FINAL_QUALIFICATION");
-  validateConsolidated(join(results, "consolidated.md"), reviewManifest.identity);
+  validateConsolidated(readFileSync(join(results, "consolidated.md")), reviewManifest.identity, qualification, validated.parsed);
   if (!readFileSync(join(results, "claude.md")).equals(readFileSync(join(capture, "stdout.bin")))) {
     fail("accepted results не совпадают с захваченным stdout", "FINAL_PROVENANCE");
   }

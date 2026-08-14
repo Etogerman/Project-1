@@ -1849,7 +1849,22 @@ async function selfTest() {
     ].join("\n"));
     const qualification = buildQualification({ reviewManifestBytes, claudeBytes, dispositions: [] });
     const qualificationBytes = jsonBytes(qualification);
-    const consolidatedBytes = Buffer.from(`# Сводный вывод\n\n${reviewManifest.identity}\n\nСостояние: C09.\n`);
+    const consolidatedBytes = Buffer.from([
+      "# Сводный вывод внешнего ревью ТЗ",
+      "",
+      reviewManifest.identity,
+      "",
+      "## Замечания и решения",
+      "",
+      "Замечаний нет.",
+      "",
+      "## Итог",
+      "",
+      "Состояние: C09.",
+      "Основание: Все замечания квалифицированы, блокеров текущего объёма нет.",
+      "Автор квалификации: Self-test.",
+      "",
+    ].join("\n"));
     const final = buildReviewFinalArtifacts({
       revisionRoot,
       reviewManifestBytes,
