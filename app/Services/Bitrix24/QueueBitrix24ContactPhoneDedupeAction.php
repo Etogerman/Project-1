@@ -12,6 +12,7 @@ class QueueBitrix24ContactPhoneDedupeAction
 
     public function __construct(
         private readonly ResolveRootContactAction $resolveRootContactAction,
+        private readonly Bitrix24OpenLineScopedMutation $scopedMutation,
     ) {}
 
     public function handle(Contact|int $contact): bool
@@ -22,6 +23,7 @@ class QueueBitrix24ContactPhoneDedupeAction
             return false;
         }
 
+        $this->scopedMutation->assertCurrent();
         DedupeBitrix24ContactPhonesJob::dispatch($rootContact->id)
             ->delay(now()->addSeconds(self::INITIAL_DELAY_SECONDS))
             ->afterCommit();

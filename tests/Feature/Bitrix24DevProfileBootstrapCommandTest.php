@@ -124,7 +124,7 @@ class Bitrix24DevProfileBootstrapCommandTest extends TestCase
 
         $this->assertSame('https://new-tunnel.trycloudflare.com', $profile->callback_base_url);
         $this->assertSame('client-id-ivan', $profile->client_id);
-        $this->assertSame(['max-line-ivan', 'telegram-line-ivan'], $profile->openLineRoutes()->pluck('line_id')->sort()->values()->all());
+        $this->assertSame(['13', '14'], $profile->openLineRoutes()->pluck('line_id')->sort()->values()->all());
     }
 
     public function test_command_marks_rotated_profile_ready_after_fresh_install_callback_reaches_new_ingress(): void
@@ -318,8 +318,8 @@ class Bitrix24DevProfileBootstrapCommandTest extends TestCase
 
     private function createOpenLineRoutes(
         Bitrix24Profile $profile,
-        string $telegramLineId = 'telegram-line-ivan',
-        string $maxLineId = 'max-line-ivan',
+        string $telegramLineId = '13',
+        string $maxLineId = '14',
     ): void {
         $telegram = Channel::factory()->create([
             'platform' => Channel::PLATFORM_TELEGRAM,

@@ -42,11 +42,13 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         config()->set('bitrix24.application.client_secret', 'local.secret');
         config()->set('bitrix24.features.openlines_enabled', true);
         config()->set('bitrix24.openlines.telegram_connector_code', 'abrikosoff_telegram');
-        config()->set('bitrix24.openlines.telegram_line_id', 'line-telegram');
+        config()->set('bitrix24.openlines.telegram_line_id', '13');
         config()->set('bitrix24.openlines.max_connector_code', 'abrikosoff_max');
-        config()->set('bitrix24.openlines.max_line_id', 'line-max');
+        config()->set('bitrix24.openlines.max_line_id', '14');
         config()->set('bitrix24.openlines.session_finish_event_names', ['OnSessionFinish']);
         config()->set('bitrix24.http.retry_sleep_milliseconds', 0);
+
+        $this->fakeBitrix24OpenLineMutationLeases();
     }
 
     public function test_openlines_operator_message_is_delivered_to_telegram_stored_locally_and_acked(): void
@@ -71,7 +73,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 'bitrix-chat-1',
@@ -123,7 +125,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             parse_str($request->body(), $payload);
 
             return ($payload['CONNECTOR'] ?? null) === 'abrikosoff_telegram'
-                && ($payload['LINE'] ?? null) === 'line-telegram'
+                && ($payload['LINE'] ?? null) === '13'
                 && ($payload['MESSAGES'][0]['chat']['id'] ?? null) === 'abrikosoff-dialog:'.$dialog->id
                 && ($payload['MESSAGES'][0]['im']['message_id'] ?? null) === 'bitrix-im-101'
                 && ($payload['MESSAGES'][0]['message']['id'][0] ?? null) === '7001';
@@ -173,7 +175,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 23,
@@ -196,7 +198,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
 
         $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
         $this->assertSame(
-            'abrikosoff_telegram|line-telegram|abrikosoff-dialog:'.$dialog->id.'|15',
+            'abrikosoff_telegram|13|abrikosoff-dialog:'.$dialog->id.'|15',
             $dialog->bitrix24_open_line_user_code_override,
         );
         $this->assertSame('23', $dialog->bitrix24_open_line_resolved_chat_id_override);
@@ -263,7 +265,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 23,
@@ -297,7 +299,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
 
         $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
         $this->assertSame(
-            'abrikosoff_telegram|line-telegram|abrikosoff-dialog:'.$dialog->id.'|19',
+            'abrikosoff_telegram|13|abrikosoff-dialog:'.$dialog->id.'|19',
             $dialog->bitrix24_open_line_user_code_override,
         );
         $this->assertSame('26', $dialog->bitrix24_open_line_resolved_chat_id_override);
@@ -364,7 +366,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 23,
@@ -391,7 +393,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
 
         $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
         $this->assertSame(
-            'abrikosoff_telegram|line-telegram|abrikosoff-dialog:'.$dialog->id.'|19',
+            'abrikosoff_telegram|13|abrikosoff-dialog:'.$dialog->id.'|19',
             $dialog->bitrix24_open_line_user_code_override,
         );
         $this->assertSame('26', $dialog->bitrix24_open_line_resolved_chat_id_override);
@@ -453,7 +455,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 23,
@@ -487,7 +489,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
 
         $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
         $this->assertSame(
-            'abrikosoff_telegram|line-telegram|abrikosoff-dialog:'.$dialog->id.'|19',
+            'abrikosoff_telegram|13|abrikosoff-dialog:'.$dialog->id.'|19',
             $dialog->bitrix24_open_line_user_code_override,
         );
         $this->assertSame('26', $dialog->bitrix24_open_line_resolved_chat_id_override);
@@ -549,7 +551,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 23,
@@ -576,7 +578,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
 
         $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
         $this->assertSame(
-            'abrikosoff_telegram|line-telegram|abrikosoff-dialog:'.$dialog->id.'|19',
+            'abrikosoff_telegram|13|abrikosoff-dialog:'.$dialog->id.'|19',
             $dialog->bitrix24_open_line_user_code_override,
         );
         $this->assertSame('26', $dialog->bitrix24_open_line_resolved_chat_id_override);
@@ -637,7 +639,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 23,
@@ -660,7 +662,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
 
         $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
         $this->assertSame(
-            'abrikosoff_telegram|line-telegram|abrikosoff-dialog:'.$dialog->id.'|19',
+            'abrikosoff_telegram|13|abrikosoff-dialog:'.$dialog->id.'|19',
             $dialog->bitrix24_open_line_user_code_override,
         );
         $this->assertSame('26', $dialog->bitrix24_open_line_resolved_chat_id_override);
@@ -711,7 +713,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 23,
@@ -780,7 +782,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 23,
@@ -875,7 +877,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 23,
@@ -966,7 +968,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 23,
@@ -1035,7 +1037,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 23,
@@ -1200,7 +1202,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 23,
@@ -1271,7 +1273,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 23,
@@ -1320,7 +1322,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             parse_str($request->body(), $payload);
 
             return ($payload['CONNECTOR'] ?? null) === 'abrikosoff_telegram'
-                && ($payload['LINE'] ?? null) === 'line-telegram'
+                && ($payload['LINE'] ?? null) === '13'
                 && ($payload['MESSAGES'][0]['chat']['id'] ?? null) === 'abrikosoff-dialog:'.$dialog->id
                 && ($payload['MESSAGES'][0]['im']['message_id'] ?? null) === 'bitrix-im-inbound-recheck-fallthrough-1'
                 && ($payload['MESSAGES'][0]['message']['id'][0] ?? null) === '7109';
@@ -1370,7 +1372,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 23,
@@ -1443,7 +1445,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 23,
@@ -1525,7 +1527,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 23,
@@ -1548,7 +1550,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
 
         $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
         $this->assertSame(
-            'abrikosoff_telegram|line-telegram|abrikosoff-dialog:'.$dialog->id.'|19',
+            'abrikosoff_telegram|13|abrikosoff-dialog:'.$dialog->id.'|19',
             $dialog->bitrix24_open_line_user_code_override,
         );
         $this->assertSame('26', $dialog->bitrix24_open_line_resolved_chat_id_override);
@@ -1622,7 +1624,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 23,
@@ -1649,7 +1651,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
 
         $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
         $this->assertSame(
-            'abrikosoff_telegram|line-telegram|abrikosoff-dialog:'.$dialog->id.'|19',
+            'abrikosoff_telegram|13|abrikosoff-dialog:'.$dialog->id.'|19',
             $dialog->bitrix24_open_line_user_code_override,
         );
         $this->assertSame('26', $dialog->bitrix24_open_line_resolved_chat_id_override);
@@ -1704,7 +1706,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 23,
@@ -1762,7 +1764,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 23,
@@ -1785,7 +1787,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
 
         $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
         $this->assertSame(
-            'abrikosoff_telegram|line-telegram|abrikosoff-dialog:'.$dialog->id.'|19',
+            'abrikosoff_telegram|13|abrikosoff-dialog:'.$dialog->id.'|19',
             $dialog->bitrix24_open_line_user_code_override,
         );
         $this->assertSame('26', $dialog->bitrix24_open_line_resolved_chat_id_override);
@@ -1844,7 +1846,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 162907,
@@ -1940,7 +1942,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 162907,
@@ -2015,7 +2017,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 23,
@@ -2084,7 +2086,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 23,
@@ -2107,7 +2109,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
 
         $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
         $this->assertSame(
-            'abrikosoff_telegram|line-telegram|abrikosoff-dialog:'.$dialog->id.'|19',
+            'abrikosoff_telegram|13|abrikosoff-dialog:'.$dialog->id.'|19',
             $dialog->bitrix24_open_line_user_code_override,
         );
         $this->assertSame('26', $dialog->bitrix24_open_line_resolved_chat_id_override);
@@ -2153,7 +2155,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 23,
@@ -2176,7 +2178,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
 
         $this->assertSame(Bitrix24WebhookEvent::STATUS_PROCESSED, $event->processing_status);
         $this->assertSame(
-            'abrikosoff_telegram|line-telegram|abrikosoff-dialog:'.$dialog->id.'|15',
+            'abrikosoff_telegram|13|abrikosoff-dialog:'.$dialog->id.'|15',
             $dialog->bitrix24_open_line_user_code_override,
         );
         $this->assertSame('23', $dialog->bitrix24_open_line_resolved_chat_id_override);
@@ -2220,7 +2222,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 'bitrix-chat-old-dialog',
@@ -2267,7 +2269,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'foreign_connector',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 'bitrix-chat-1',
@@ -2316,7 +2318,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
 
         foreach ([
             'missing-connector' => [
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
             ],
             'missing-line' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
@@ -2378,7 +2380,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_max',
-                'LINE' => 'line-max',
+                'LINE' => '14',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 'bitrix-max-chat',
@@ -2433,7 +2435,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 'bitrix-chat-blocked-tg',
@@ -2476,7 +2478,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             parse_str($request->body(), $payload);
 
             return ($payload['CONNECTOR'] ?? null) === 'abrikosoff_telegram'
-                && ($payload['LINE'] ?? null) === 'line-telegram'
+                && ($payload['LINE'] ?? null) === '13'
                 && ($payload['MESSAGES'][0]['chat']['id'] ?? null) === 'abrikosoff-dialog:'.$dialog->id
                 && ($payload['MESSAGES'][0]['user']['id'] ?? null) === 'telegram_bot:channel:'.$dialog->channel_id.':user:telegram-user-'.$dialog->contact_id
                 && ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'Система: Сообщение не отправлено. Клиент заблокировал бота.';
@@ -2490,7 +2492,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             parse_str($request->body(), $payload);
 
             return ($payload['CONNECTOR'] ?? null) === 'abrikosoff_telegram'
-                && ($payload['LINE'] ?? null) === 'line-telegram'
+                && ($payload['LINE'] ?? null) === '13'
                 && ($payload['MESSAGES'][0]['chat']['id'] ?? null) === 'abrikosoff-dialog:'.$dialog->id
                 && ($payload['MESSAGES'][0]['message']['id'][0] ?? null) === 'abrikosoff-openlines-blocked:bitrix-im-blocked-tg';
         });
@@ -2518,7 +2520,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_max',
-                'LINE' => 'line-max',
+                'LINE' => '14',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 'bitrix-chat-blocked-max',
@@ -2561,7 +2563,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             parse_str($request->body(), $payload);
 
             return ($payload['CONNECTOR'] ?? null) === 'abrikosoff_max'
-                && ($payload['LINE'] ?? null) === 'line-max'
+                && ($payload['LINE'] ?? null) === '14'
                 && ($payload['MESSAGES'][0]['chat']['id'] ?? null) === 'abrikosoff-dialog:'.$dialog->id
                 && ($payload['MESSAGES'][0]['message']['text'] ?? null) === 'Система: Сообщение не отправлено. Клиент заблокировал бота.';
         });
@@ -2574,7 +2576,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             parse_str($request->body(), $payload);
 
             return ($payload['CONNECTOR'] ?? null) === 'abrikosoff_max'
-                && ($payload['LINE'] ?? null) === 'line-max'
+                && ($payload['LINE'] ?? null) === '14'
                 && ($payload['MESSAGES'][0]['chat']['id'] ?? null) === 'abrikosoff-dialog:'.$dialog->id
                 && ($payload['MESSAGES'][0]['message']['id'][0] ?? null) === 'abrikosoff-openlines-blocked:bitrix-im-blocked-max';
         });
@@ -2603,7 +2605,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_max',
-                'LINE' => 'line-max',
+                'LINE' => '14',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 'bitrix-chat-max-suspended',
@@ -2696,7 +2698,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
                 'data' => [
                     'CONNECTOR' => 'abrikosoff_telegram',
-                    'LINE' => 'line-telegram',
+                    'LINE' => '13',
                     'DATA' => [[
                         'im' => [
                             'chat_id' => 'bitrix-chat-'.$bitrixMessageId,
@@ -2740,7 +2742,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 'bitrix-chat-blocked-retry',
@@ -2862,7 +2864,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 'bitrix-chat-dup',
@@ -2922,7 +2924,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 'bitrix-chat-ack-fail',
@@ -2979,7 +2981,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 'bitrix-chat-store-retry',
@@ -3115,7 +3117,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
                 $chatId,
                 $bitrixMessageId,
                 'abrikosoff_telegram',
-                'line-telegram',
+                '13',
             ])),
         ]);
 
@@ -3134,7 +3136,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => $chatId,
@@ -3210,7 +3212,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 'bitrix-chat-echo',
@@ -3276,7 +3278,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 'bitrix-chat-pending',
@@ -3337,7 +3339,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 'bitrix-chat-recheck-echo',
@@ -3427,7 +3429,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 'bitrix-chat-recheck-fallthrough',
@@ -3482,7 +3484,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 'bitrix-chat-invalid',
@@ -3568,7 +3570,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnUpdateMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
             ],
         ]);
 
@@ -3592,7 +3594,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnDeleteMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
             ],
         ]);
 
@@ -3617,7 +3619,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 'bitrix-chat-disabled',
@@ -3669,7 +3671,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 'bitrix-chat-reopen',
@@ -3714,7 +3716,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 'bitrix-chat-no-id',
@@ -3759,7 +3761,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         $event = $this->makeOpenlinesWebhookEvent($connection, 'OnSendMessageCustom', [
             'data' => [
                 'CONNECTOR' => 'abrikosoff_telegram',
-                'LINE' => 'line-telegram',
+                'LINE' => '13',
                 'DATA' => [[
                     'im' => [
                         'chat_id' => 'bitrix-chat-echo',
@@ -3843,7 +3845,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_SYNCED,
             'bitrix24_sync_pending' => false,
         ]);
-        $channel = $this->findChannelByOpenLineRoute($profile, 'abrikosoff_telegram', 'line-telegram');
+        $channel = $this->findChannelByOpenLineRoute($profile, 'abrikosoff_telegram', '13');
 
         if (! $channel instanceof Channel) {
             $channel = Channel::factory()->create([
@@ -3873,7 +3875,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             'bitrix24_live_chat_id' => 'abrikosoff-dialog:'.$dialog->id,
         ])->save();
 
-        $this->pinDialogOpenLineRoute($dialog, $profile, 'abrikosoff_telegram', 'line-telegram');
+        $this->pinDialogOpenLineRoute($dialog, $profile, 'abrikosoff_telegram', '13');
 
         Message::factory()->create([
             'dialog_id' => $dialog->id,
@@ -3905,9 +3907,10 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         Dialog $dialog,
         Bitrix24Profile $profile,
         string $connectorCode = 'abrikosoff_telegram',
-        string $lineId = 'line-telegram',
+        string $lineId = '13',
     ): Bitrix24OpenLineRoute {
         $dialog->loadMissing('channel');
+        $owner = $this->ensureActiveBitrix24CallbackOwner($profile);
 
         $route = Bitrix24OpenLineRoute::query()
             ->where('bitrix24_profile_id', $profile->id)
@@ -3917,6 +3920,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
         if (! $route instanceof Bitrix24OpenLineRoute) {
             $route = Bitrix24OpenLineRoute::query()->create([
                 'bitrix24_profile_id' => $profile->id,
+                'callback_owner_id' => $owner->id,
                 'channel_id' => $dialog->channel_id,
                 'portal_domain' => $profile->portal_domain,
                 'profile_key' => $profile->profile_key,
@@ -3930,6 +3934,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             ]);
         } else {
             $route->forceFill([
+                'callback_owner_id' => $owner->id,
                 'source_id' => $dialog->channel->platform === Channel::PLATFORM_MAX
                     ? $profile->max_source_id
                     : $profile->telegram_source_id,
@@ -3954,7 +3959,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             'bitrix24_sync_status' => Contact::BITRIX24_SYNC_STATUS_SYNCED,
             'bitrix24_sync_pending' => false,
         ]);
-        $channel = $this->findChannelByOpenLineRoute($profile, 'abrikosoff_max', 'line-max');
+        $channel = $this->findChannelByOpenLineRoute($profile, 'abrikosoff_max', '14');
 
         if (! $channel instanceof Channel) {
             $channel = Channel::factory()->create([
@@ -3980,7 +3985,7 @@ class Bitrix24OpenLinesInboundBridgeTest extends TestCase
             'bitrix24_live_chat_id' => 'abrikosoff-dialog:'.$dialog->id,
         ])->save();
 
-        $this->pinDialogOpenLineRoute($dialog, $profile, 'abrikosoff_max', 'line-max');
+        $this->pinDialogOpenLineRoute($dialog, $profile, 'abrikosoff_max', '14');
 
         Message::factory()->create([
             'dialog_id' => $dialog->id,

@@ -12,6 +12,7 @@ class QueueBitrix24ContactSyncAction
     public function __construct(
         private readonly ResolveRootContactAction $resolveRootContactAction,
         private readonly IsContactReadyForBitrix24SyncAction $isContactReadyForBitrix24SyncAction,
+        private readonly Bitrix24OpenLineScopedMutation $scopedMutation,
     ) {}
 
     public function handle(Contact|int $contact, bool $suppressDialogContinuation = false): Bitrix24ContactSyncQueueResultData
@@ -45,8 +46,11 @@ class QueueBitrix24ContactSyncAction
             $attributes['bitrix24_sync_status'] = Contact::BITRIX24_SYNC_STATUS_PENDING;
         }
 
-        $rootContact->forceFill($attributes)->save();
+        $this->scopedMutation->run(
+            fn () => $rootContact->forceFill($attributes)->save(),
+        );
 
+        $this->scopedMutation->assertCurrent();
         SyncContactToBitrix24Job::dispatch($rootContact->id, $suppressDialogContinuation);
 
         return new Bitrix24ContactSyncQueueResultData(
