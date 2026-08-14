@@ -114,7 +114,7 @@ console.log(manifest.identity);
 console.log("REVIEW_FINDINGS");
 console.log("[]");
 console.log("REVIEW_CHECKED_SCOPE");
-console.log('["tz.md","author-review.md","base...head diff","current worktree snapshot"]');
+console.log('["tz.md","base...head diff","current worktree snapshot"]');
 console.log("REVIEW_UNCHECKED_SCOPE");
 console.log('["runtime execution"]');
 console.log("REVIEW_VERDICT");
@@ -375,6 +375,7 @@ async function main() {
     assert.equal(processResult.reviewManifestIdentity, manifest.identity);
     assert.equal(summary.reviewManifestIdentity, manifest.identity);
     assert.equal(readFileSync(join(runRoot, "capture", "stdout.bin"), "utf8").includes("gemini"), false);
+    assert.equal(existsSync(join(successful.reviewRoot, "input", "author-review.md")), false);
 
     const reviewManifestBytes = readFileSync(join(runRoot, "review-manifest.json"));
     const blockingClaudeBytes = response(manifest.identity, [finding]);

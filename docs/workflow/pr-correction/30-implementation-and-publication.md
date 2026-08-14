@@ -55,6 +55,9 @@ implementation gate и решение из неизменяемого ledger, о
 
 `G01` строит отдельный Git index от `publishBase`, включает ровно разрешённые
 изменения и удаления, блокирует чужой diff и получает `expectedTreeOid`.
+До первой Git-команды канонический realpath и repository identity переданного
+repo сверяются с source context активного publication run; другой checkout или
+fork запрещён даже при совпадающих base и списке файлов.
 Проверки выполняются в изолированном checkout именно этого tree и записываются
 в строгий `checks-manifest.json`; shell, командная строка вместо argv и
 неуспешная проверка запрещают публикацию.

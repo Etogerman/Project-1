@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
   closeSync,
@@ -44,7 +45,6 @@ import {
   jcsIdentity,
   prepareQualificationArtifacts,
   sha256Bytes,
-  validateLaunchIntent,
   validateReviewManifest,
   validateReviewRunOpen,
   verifyFinalDirectory,
@@ -57,6 +57,14 @@ const OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const STATE_ID = /^[BCDGXP]\d{2}$/;
 const ACTIONS = new Set(["commit", "push"]);
+const IMPLEMENTATION_DECISION_POLICY = Object.freeze({
+  decisionState: "D01",
+  decisionKind: "implementation_authorization",
+  requestedAction: "реализовать и подготовить публикацию",
+  answer: "разрешено",
+  authorizedActions: Object.freeze(["commit", "push"]),
+  validUntilState: "C12",
+});
 const SUCCESSFUL_CHECK_CONCLUSION = "success";
 const OPERATION_KINDS = new Set([
   "open_cycle", "register_signal", "record_decision", "open_revision",
@@ -246,7 +254,11 @@ export function validateReviewSnapshot(value) {
   if (value.sourceKind === "pull_request") integer(value.pullRequestNumber, "pullRequestNumber", { minimum: 1 }, "REVIEW_SNAPSHOT");
   else if (value.pullRequestNumber !== null) fail("commit snapshot требует pullRequestNumber=null", "REVIEW_SNAPSHOT");
   for (const key of ["baseOid", "inputHeadOid", "inputTreeOid"]) oid(value[key], key, "REVIEW_SNAPSHOT");
-  for (const key of ["titleSha256", "bodySha256"]) nullableSha(value[key], key, "REVIEW_SNAPSHOT");
+  if (value.sourceKind === "pull_request") {
+    for (const key of ["titleSha256", "bodySha256"]) sha(value[key], key, "REVIEW_SNAPSHOT");
+  } else if (value.titleSha256 !== null || value.bodySha256 !== null) {
+    fail("commit snapshot требует titleSha256/bodySha256=null", "REVIEW_SNAPSHOT");
+  }
   text(String(value.providerRevision), "providerRevision", "REVIEW_SNAPSHOT");
   exactIdentity(value, "review snapshot", "REVIEW_SNAPSHOT");
   return value;
@@ -407,6 +419,36 @@ export function validateSignalLedger(value) {
   return value;
 }
 
+export function validateSignalCaptureAgreement({ ledger, sourceContext }) {
+  validateSignalLedger(ledger);
+  validateSourceContext(sourceContext);
+  const review = ledger.reviewSnapshot;
+  const evidence = ledger.signalEvidence;
+  if (ledger.signalContext.evidenceIdentity !== evidence.identity) fail("signalContext не связан с signalEvidence", "SIGNAL_CAPTURE_AGREEMENT");
+  for (const [field, expected] of [
+    ["sourceKind", review.sourceKind],
+    ["repositoryFullName", review.repositoryFullName],
+    ["pullRequestNumber", review.pullRequestNumber],
+    ["baseOid", review.baseOid],
+    ["inputHeadOid", review.inputHeadOid],
+    ["inputTreeOid", review.inputTreeOid],
+  ]) {
+    if (sourceContext[field] !== expected) fail(`sourceContext.${field} не совпадает с review snapshot`, "SIGNAL_CAPTURE_AGREEMENT");
+  }
+  for (const [field, expected] of [
+    ["repositoryFullName", review.repositoryFullName],
+    ["pullRequestNumber", review.pullRequestNumber],
+    ["inputHeadOid", review.inputHeadOid],
+    ["inputTreeOid", review.inputTreeOid],
+  ]) {
+    if (evidence[field] !== expected) fail(`signalEvidence.${field} не совпадает с review snapshot`, "SIGNAL_CAPTURE_AGREEMENT");
+  }
+  if (canonicalJson(evidence.baseCandidates) !== canonicalJson([review.baseOid])) {
+    fail("signalEvidence.baseCandidates не фиксирует единственный base review snapshot", "SIGNAL_CAPTURE_AGREEMENT");
+  }
+  return { reviewSnapshot: review.identity, sourceContext: sourceContext.identity, signalEvidence: evidence.identity };
+}
+
 export function validateDecision(value) {
   exactKeys(value, ["schemaVersion", "cycleId", "decisionId", "decisionState", "decisionKind", "requestedAction", "answer", "authorizedActions", "sourceContextIdentity", "revision", "evidenceRef", "evidenceSha256", "decidedBy", "recordedBy", "decidedAt", "identity"], "decision", "DECISION");
   if (value.schemaVersion !== 1) fail("decision schemaVersion должен быть 1", "DECISION");
@@ -418,6 +460,12 @@ export function validateDecision(value) {
   text(value.answer, "answer", "DECISION");
   exactSortedStrings(value.authorizedActions, "authorizedActions", {}, "DECISION");
   if (value.authorizedActions.some((action) => !ACTIONS.has(action))) fail("authorizedActions содержит неизвестное действие", "DECISION");
+  for (const [field, expected] of Object.entries(IMPLEMENTATION_DECISION_POLICY)) {
+    if (field === "validUntilState") continue;
+    if (field === "authorizedActions") {
+      if (canonicalJson(value.authorizedActions) !== canonicalJson(expected)) fail("authorizedActions не соответствуют уровню решения", "DECISION");
+    } else if (value[field] !== expected) fail(`${field} не соответствует каноническому разрешению реализации`, "DECISION");
+  }
   sha(value.sourceContextIdentity, "sourceContextIdentity", "DECISION");
   integer(value.revision, "revision", { minimum: 0 }, "DECISION");
   text(value.evidenceRef, "evidenceRef", "DECISION");
@@ -502,6 +550,7 @@ export function validateExecutionCeiling(value, { decision = null } = {}) {
   exactSortedStrings(value.authorizedActions, "authorizedActions", {}, "EXECUTION_CEILING");
   if (value.authorizedActions.some((action) => !ACTIONS.has(action))) fail("execution ceiling содержит неизвестное действие", "EXECUTION_CEILING");
   if (!STATE_ID.test(value.validUntilState)) fail("validUntilState невалиден", "EXECUTION_CEILING");
+  if (value.validUntilState !== IMPLEMENTATION_DECISION_POLICY.validUntilState) fail("execution ceiling имеет неверную границу действия", "EXECUTION_CEILING");
   sha(value.decisionIdentity, "decisionIdentity", "EXECUTION_CEILING");
   if (decision) {
     validateDecision(decision);
@@ -514,6 +563,7 @@ export function validateExecutionCeiling(value, { decision = null } = {}) {
 
 export function executionCeilingFromDecision(decision, validUntilState) {
   validateDecision(decision);
+  if (validUntilState !== IMPLEMENTATION_DECISION_POLICY.validUntilState) fail("решение не разрешает запрошенную границу execution ceiling", "EXECUTION_CEILING");
   return buildIdentityArtifact({
     schemaVersion: 1,
     cycleId: decision.cycleId,
@@ -934,14 +984,14 @@ function openCycleUnderLock({ root, cycleId, ledger, sourceContext, owner, opera
   });
 }
 
-function frameForHolding({ current, holdingState, targetState, signalIdentity, reason }) {
+function frameForHolding({ current, holdingState, targetState, signalIdentity, reason, stopMode = null, frameOwner = null }) {
   const policy = targetState === "C12" ? "restore_exact" : ["P03", "G01"].includes(targetState) ? "new" : "none";
   return buildIdentityArtifact({
     schemaVersion: 1,
     frameId: `resume-${sha256Bytes(Buffer.from(canonicalJson([current.identity, holdingState, targetState, signalIdentity, reason]))).slice(0, 24)}`,
     cycleId: current.cycleId,
     revision: current.revision,
-    register: holdingState === "B01" ? "return_state" : "resume_state",
+    register: ["B01", "X03"].includes(holdingState) ? "return_state" : "resume_state",
     sourceState: current.state,
     holdingState,
     targetState,
@@ -950,9 +1000,9 @@ function frameForHolding({ current, holdingState, targetState, signalIdentity, r
     gateIdentity: null,
     requestedAction: null,
     executor: "agent",
-    owner: holdingState === "D01" ? "user" : "provider/operator",
+    owner: frameOwner ?? (["D01", "X03"].includes(holdingState) ? "user" : "provider/operator"),
     unblockEvent: reason,
-    stopMode: holdingState === "D01" ? "decision_required" : "blocked",
+    stopMode: stopMode ?? (holdingState === "D01" ? "decision_required" : "blocked"),
     signalIdentity,
     sourceContextIdentity: current.sourceContext.identity,
   });
@@ -997,7 +1047,8 @@ function preserveQuarantinedOperationAndBlock({ root, intent, current, operation
     reason: `operation_conflict:${intent.operationId}`,
   });
   const pushed = pushResumeFrame(current.resumeContexts, frame);
-  const resumeContexts = pushed.ok ? pushed.stack : structuredClone(current.resumeContexts);
+  if (!pushed.ok) fail("operation conflict не может создать возобновляемый B01: resume stack переполнен", "OPERATION_QUARANTINE");
+  const resumeContexts = pushed.stack;
   const blocked = buildIdentityArtifact({
     ...current,
     state: targetState,
@@ -1182,6 +1233,7 @@ export async function registerSignalCycle({ taskRoot, cycleId, signalId, capture
       exactKeys(captured, ["providerRevision", "ledger", "sourceContext"], "provider capture", "SIGNAL_CAPTURE");
       validateSignalLedger(captured.ledger);
       validateSourceContext(captured.sourceContext);
+      validateSignalCaptureAgreement({ ledger: captured.ledger, sourceContext: captured.sourceContext });
       if (captured.ledger.signalEvidence.checkRunId !== null && captured.ledger.ciSnapshot === null) {
         fail("сигнал обязательной CI-проверки не содержит CI snapshot", "MUTABLE_SNAPSHOT_EVIDENCE");
       }
@@ -1202,12 +1254,11 @@ export async function registerSignalCycle({ taskRoot, cycleId, signalId, capture
       }
       previousRevision = captured.providerRevision;
     }
-    if (latest !== null && !existsSync(join(root, "active-cycle.json"))) {
-      openCycleUnderLock({ root, cycleId, ledger: latest.ledger, sourceContext: latest.sourceContext, owner: operationOwner, operationLock, states });
-    }
-    const current = readActiveCycle(root, states);
-    const blocked = blockSignalUnderLock({ root, current, owner: operationOwner, operationLock, states, signalIdentity: latest.ledger.signalContext.identity, reason: "provider_snapshot_stable", returnState: "C02" });
-    return { status: "blocked", state: "B01", returnState: "C02", owner: "provider/operator", unblockEvent: "provider_snapshot_stable", ...blocked };
+    fail("provider snapshot не стабилизировался за три чтения; signal ledger не создан", "MUTABLE_SNAPSHOT_UNSTABLE", {
+      cycleId,
+      signalId,
+      lastProviderRevision: latest === null ? null : String(latest.providerRevision),
+    });
   } finally {
     releaseOperationLock(operationLock);
   }
@@ -1260,20 +1311,19 @@ function nextCycleForAuthorReview({ current, targetState, reviewRunId, operation
     operationLock,
     taskRoot: root,
     owner,
+    holdingFrame: frame,
     deferRunPath: targetState === "P03",
   });
   let revisionOpen = null;
   if (targetState === "C07") {
     revisionOpen = revisionOpenFor({ current, owner });
     next = buildIdentityArtifact({ ...next, revision: revisionOpen.revision });
-  } else if (targetState === "D01") {
-    next = buildIdentityArtifact({ ...next, resumeContexts: pushed.stack });
   }
   validateActiveCycle(next, { states });
   return { next, revisionOpen };
 }
 
-export async function sealAndOpenReviewTransaction({ taskRoot, findings, prepareReviewRun, states = readRegistry().states }) {
+export async function sealAndOpenReviewTransaction({ taskRoot, findings, states = readRegistry().states }) {
   if (!Array.isArray(findings)) fail("findings должен быть массивом", "AUTHOR_REVIEW_TRANSACTION");
   const root = canonicalTaskRoot(taskRoot);
   const owner = await createOperationOwner(`seal-author-${randomBytes(12).toString("hex")}`);
@@ -1332,33 +1382,7 @@ export async function sealAndOpenReviewTransaction({ taskRoot, findings, prepare
       [`${revisionPrefix}/revision-seal.json`]: jsonBytes(revisionSeal),
     };
     let runOpen = null;
-    let reviewManifest = null;
-    let launchIntent = null;
     if (targetState === "P03") {
-      if (typeof prepareReviewRun !== "function") fail("P03 требует доверенный адаптер подготовки review run", "AUTHOR_REVIEW_TRANSACTION");
-      const prepared = await prepareReviewRun({
-        taskRoot: root,
-        cycleId: current.cycleId,
-        revision: current.revision,
-        reviewRunId,
-        sourceContext: structuredClone(current.sourceContext),
-        revisionSeal: structuredClone(revisionSeal),
-        tzBytes: Buffer.from(tzBytes),
-        authorReviewBytes: Buffer.from(authorReviewBytes),
-        owner: structuredClone(owner),
-      });
-      exactKeys(prepared, ["reviewManifest", "launchIntent"], "prepared review run", "AUTHOR_REVIEW_TRANSACTION");
-      reviewManifest = validateReviewManifest(prepared.reviewManifest, { specBytes: tzBytes, authorReviewBytes });
-      launchIntent = validateLaunchIntent(prepared.launchIntent);
-      if (reviewManifest.base !== current.sourceContext.baseOid || reviewManifest.head !== current.sourceContext.inputHeadOid
-        || launchIntent.cycleId !== current.cycleId || launchIntent.revision !== current.revision
-        || launchIntent.reviewRunId !== reviewRunId || launchIntent.reviewManifestIdentity !== reviewManifest.identity
-        || launchIntent.executableRealPath !== reviewManifest.environmentEvidence.executableRealPath
-        || launchIntent.executableSha256 !== reviewManifest.environmentEvidence.executableSha256
-        || launchIntent.settingsCheckpointSha256 !== reviewManifest.environmentEvidence.settingsCheckpointSha256
-        || launchIntent.processPolicyIdentity !== identityOf(reviewManifest.processPolicy)) {
-        fail("prepared review run относится к другому снимку", "AUTHOR_REVIEW_TRANSACTION");
-      }
       runOpen = buildIdentityArtifact({
         schemaVersion: 1,
         cycleId: current.cycleId,
@@ -1373,10 +1397,6 @@ export async function sealAndOpenReviewTransaction({ taskRoot, findings, prepare
       validateReviewRunOpen(runOpen);
       const runPrefix = `${revisionPrefix}/review-runs/${reviewRunId}`;
       artifacts[`${runPrefix}/run-open.json`] = jsonBytes(runOpen);
-      artifacts[`${runPrefix}/review-manifest.json`] = jsonBytes(reviewManifest);
-      artifacts[`${runPrefix}/launch-intent.json`] = jsonBytes(launchIntent);
-    } else if (prepareReviewRun !== undefined) {
-      fail("prepareReviewRun передан для исхода без внешнего review", "AUTHOR_REVIEW_TRANSACTION");
     }
     if (outcome.revisionOpen !== null) {
       artifacts[`cycles/${current.cycleId}/revision-${outcome.revisionOpen.revision}/revision-open.json`] = jsonBytes(outcome.revisionOpen);
@@ -1402,8 +1422,8 @@ export async function sealAndOpenReviewTransaction({ taskRoot, findings, prepare
       reviewRunId,
       authorReviewResultIdentity: authorReviewResult.identity,
       revisionSealIdentity: revisionSeal.identity,
-      reviewManifestIdentity: reviewManifest?.identity ?? null,
-      launchIntentIdentity: launchIntent?.identity ?? null,
+      reviewManifestIdentity: null,
+      launchIntentIdentity: null,
       activeCycle: transaction.activeCycle,
     };
   } finally {
@@ -1431,14 +1451,12 @@ function nextCycleForQualification({ current, targetState, operationLock, owner,
     operationLock,
     taskRoot: root,
     owner,
-    holdingFrame: effectiveTarget === "B01" ? frame : null,
+    holdingFrame: ["D01", "B01"].includes(effectiveTarget) ? frame : null,
   });
   let revisionOpen = null;
   if (effectiveTarget === "C07") {
     revisionOpen = revisionOpenFor({ current, owner });
     transitioned = buildIdentityArtifact({ ...transitioned, revision: revisionOpen.revision });
-  } else if (effectiveTarget === "D01") {
-    transitioned = buildIdentityArtifact({ ...transitioned, resumeContexts: pushed.stack });
   }
   validateActiveCycle(transitioned, { states });
   return { next: transitioned, targetState: effectiveTarget, revisionOpen };
@@ -1634,26 +1652,98 @@ export async function enterPublicationBoundary({ taskRoot, states = readRegistry
   }
 }
 
-export function validateNoResultClosure(value) {
-  exactKeys(value, ["schemaVersion", "terminalOutcome", "issueClosure", "specClosure", "cleanup", "identity"], "no-result closure", "NO_RESULT_CLOSURE");
-  if (value.schemaVersion !== 1) fail("no-result closure schemaVersion должен быть 1", "NO_RESULT_CLOSURE");
-  for (const key of ["terminalOutcome", "issueClosure", "specClosure", "cleanup"]) {
-    exactKeys(value[key], ["status", "evidenceIdentity"], key, "NO_RESULT_CLOSURE");
-    text(value[key].status, `${key}.status`, "NO_RESULT_CLOSURE");
-    sha(value[key].evidenceIdentity, `${key}.evidenceIdentity`, "NO_RESULT_CLOSURE");
+export function validateReviewTerminalResult(value) {
+  exactKeys(value, ["schemaVersion", "cycleId", "revision", "reviewRunId", "runOpenIdentity", "sourceContextIdentity", "reviewSnapshotIdentity", "status", "target", "returnState", "stopMode", "evidenceKind", "capturedEvidencePath", "evidenceArtifact", "evidenceSha256", "recordedBy", "recordedAt", "identity"], "review terminal result", "REVIEW_TERMINAL_RESULT");
+  if (value.schemaVersion !== 1 || value.revision < 1 || !Number.isInteger(value.revision)) fail("review terminal result revision невалидна", "REVIEW_TERMINAL_RESULT");
+  id(value.cycleId, "cycleId", "REVIEW_TERMINAL_RESULT");
+  id(value.reviewRunId, "reviewRunId", "REVIEW_TERMINAL_RESULT");
+  for (const key of ["runOpenIdentity", "sourceContextIdentity", "reviewSnapshotIdentity", "evidenceSha256"]) sha(value[key], key, "REVIEW_TERMINAL_RESULT");
+  const policy = value.status === "blocked"
+    ? { target: "B01", stopMode: "blocked" }
+    : value.status === "cancelled_by_user" ? { target: "X03", stopMode: "final_cancellation" } : null;
+  if (policy === null || value.target !== policy.target || value.stopMode !== policy.stopMode || value.returnState !== "P03") {
+    fail("review terminal result нарушает terminal policy", "REVIEW_TERMINAL_RESULT");
   }
-  if (value.terminalOutcome.status !== "cancelled_without_materialization") fail("terminalOutcome не доказывает отсутствие materialization", "NO_RESULT_CLOSURE");
-  if (!["closed", "left_open", "not_required"].includes(value.issueClosure.status)) fail("issueClosure.status невалиден", "NO_RESULT_CLOSURE");
-  if (!["closed", "implemented", "not_required"].includes(value.specClosure.status)) fail("specClosure.status невалиден", "NO_RESULT_CLOSURE");
-  if (value.cleanup.status !== "completed") fail("cleanup должен быть завершён", "NO_RESULT_CLOSURE");
-  exactIdentity(value, "no-result closure", "NO_RESULT_CLOSURE");
+  if (!["review_summary", "preparation_error", "launch_error"].includes(value.evidenceKind)) fail("evidenceKind невалиден", "REVIEW_TERMINAL_RESULT");
+  safeRelativePath(value.capturedEvidencePath, "capturedEvidencePath", "REVIEW_TERMINAL_RESULT");
+  if (value.evidenceArtifact !== "terminal-source-evidence.json") fail("evidenceArtifact неканоничен", "REVIEW_TERMINAL_RESULT");
+  validateOwner(value.recordedBy, "recordedBy", "REVIEW_TERMINAL_RESULT");
+  iso(value.recordedAt, "recordedAt", "REVIEW_TERMINAL_RESULT");
+  exactIdentity(value, "review terminal result", "REVIEW_TERMINAL_RESULT");
   return value;
 }
 
-export async function recordNoResultClosure({ taskRoot, closure, states = readRegistry().states }) {
-  validateNoResultClosure(closure);
+function reviewTerminalCapture({ root, current }) {
+  if (current.state !== "P03" || current.activeRunId === null || current.revision < 1) {
+    fail("terminal result требует active P03 review-run", "REVIEW_TERMINAL_RESULT");
+  }
+  const runPrefix = `cycles/${current.cycleId}/revision-${current.revision}/review-runs/${current.activeRunId}`;
+  const runRoot = contained(root, join(root, runPrefix), "review run");
+  const runStat = existsSync(runRoot) ? lstatSync(runRoot) : null;
+  if (!runStat?.isDirectory() || runStat.isSymbolicLink() || realpathSync(runRoot) !== runRoot) fail("review run отсутствует или небезопасен", "REVIEW_TERMINAL_RESULT");
+  const runOpen = validateReviewRunOpen(readRegularJson(join(runRoot, "run-open.json"), "review run-open", "REVIEW_TERMINAL_RESULT"));
+  if (runOpen.cycleId !== current.cycleId || runOpen.revision !== current.revision || runOpen.reviewRunId !== current.activeRunId
+    || runOpen.sourceContextIdentity !== current.sourceContext.identity
+    || runOpen.reviewSnapshotIdentity !== current.sourceContext.reviewSnapshotIdentity) {
+    fail("review run-open не совпадает с active cycle", "REVIEW_TERMINAL_RESULT");
+  }
+  const captureRoot = contained(root, join(runRoot, "capture"), "review capture");
+  const captureStat = existsSync(captureRoot) ? lstatSync(captureRoot) : null;
+  if (!captureStat?.isDirectory() || captureStat.isSymbolicLink() || realpathSync(captureRoot) !== captureRoot) fail("review capture отсутствует или небезопасен", "REVIEW_TERMINAL_RESULT");
+
+  const readCandidate = (name) => {
+    const path = join(captureRoot, name);
+    if (!existsSync(path)) return null;
+    const bytes = readRegularBytes(path, name, "REVIEW_TERMINAL_RESULT");
+    let value;
+    try { value = JSON.parse(bytes.toString("utf8")); } catch { fail(`${name}: невалидный JSON`, "REVIEW_TERMINAL_RESULT"); }
+    return { name, path, bytes, value };
+  };
+
+  const summary = readCandidate("summary.json");
+  if (summary?.value?.identity !== null && summary?.value?.identity !== undefined) {
+    exactKeys(summary.value, ["schemaVersion", "reviewRunId", "reviewManifestIdentity", "client", "status", "processResultIdentity", "responseSha256", "responseValid", "qualificationRequired", "finishedAt", "identity"], "review summary", "REVIEW_TERMINAL_RESULT");
+    if (summary.value.schemaVersion !== 1 || summary.value.reviewRunId !== current.activeRunId || summary.value.client !== "claude") fail("review summary относится к другому запуску", "REVIEW_TERMINAL_RESULT");
+    for (const key of ["reviewManifestIdentity", "processResultIdentity", "responseSha256"]) sha(summary.value[key], `review summary.${key}`, "REVIEW_TERMINAL_RESULT");
+    if (summary.value.responseValid !== false || summary.value.qualificationRequired !== false) fail("terminal review summary не может требовать квалификацию", "REVIEW_TERMINAL_RESULT");
+    iso(summary.value.finishedAt, "review summary.finishedAt", "REVIEW_TERMINAL_RESULT");
+    exactIdentity(summary.value, "review summary", "REVIEW_TERMINAL_RESULT");
+    if (["blocked", "cancelled_by_user"].includes(summary.value.status)) {
+      return { status: summary.value.status, evidenceKind: "review_summary", candidate: summary, runOpen, runPrefix };
+    }
+  }
+
+  const preparation = readCandidate("preparation-error.json");
+  if (preparation !== null) {
+    const value = preparation.value;
+    if (value.phase === "snapshot") {
+      exactKeys(value, ["schemaVersion", "runId", "phase", "errorCode"], "preparation error", "REVIEW_TERMINAL_RESULT");
+      if (value.schemaVersion !== 1 || value.runId !== current.activeRunId) fail("snapshot preparation error относится к другому запуску", "REVIEW_TERMINAL_RESULT");
+      text(value.errorCode, "preparation error.errorCode", "REVIEW_TERMINAL_RESULT");
+      return { status: "blocked", evidenceKind: "preparation_error", candidate: preparation, runOpen, runPrefix };
+    }
+    exactKeys(value, ["schemaVersion", "reviewRunId", "phase", "status", "errorCode"], "preparation error", "REVIEW_TERMINAL_RESULT");
+    if (value.schemaVersion !== 1 || value.reviewRunId !== current.activeRunId || value.phase !== "preflight"
+      || !["blocked", "cancelled_by_user"].includes(value.status)) fail("preflight preparation error невалиден", "REVIEW_TERMINAL_RESULT");
+    text(value.errorCode, "preparation error.errorCode", "REVIEW_TERMINAL_RESULT");
+    return { status: value.status, evidenceKind: "preparation_error", candidate: preparation, runOpen, runPrefix };
+  }
+
+  const launch = readCandidate("launch-error.json");
+  if (launch !== null) {
+    exactKeys(launch.value, ["schemaVersion", "reviewRunId", "reviewManifestIdentity", "errorCode"], "launch error", "REVIEW_TERMINAL_RESULT");
+    if (launch.value.schemaVersion !== 1 || launch.value.reviewRunId !== current.activeRunId) fail("launch error относится к другому запуску", "REVIEW_TERMINAL_RESULT");
+    sha(launch.value.reviewManifestIdentity, "launch error.reviewManifestIdentity", "REVIEW_TERMINAL_RESULT");
+    text(launch.value.errorCode, "launch error.errorCode", "REVIEW_TERMINAL_RESULT");
+    return { status: "blocked", evidenceKind: "launch_error", candidate: launch, runOpen, runPrefix };
+  }
+  fail("review-run не содержит проверяемого terminal evidence", "REVIEW_TERMINAL_RESULT");
+}
+
+export async function recordReviewTerminalTransaction({ taskRoot, expectedStatus = null, states = readRegistry().states }) {
   const root = canonicalTaskRoot(taskRoot);
-  const owner = await createOperationOwner(`no-result-${closure.identity.slice(0, 24)}`);
+  const preliminary = readRegularJson(join(root, "active-cycle.json"), "active-cycle.json", "REVIEW_TERMINAL_RESULT");
+  const owner = await createOperationOwner(`review-terminal-${preliminary.activeRunId ?? "missing-run"}`);
   const operationLock = acquireOperationLock({ taskRoot: root, owner });
   try {
     if (existsSync(join(root, ".operation-intent.json"))) {
@@ -1661,6 +1751,256 @@ export async function recordNoResultClosure({ taskRoot, closure, states = readRe
       return { status: "recovered", activeCycle: readActiveCycle(root, states), recovery };
     }
     const current = readActiveCycle(root, states);
+    const captured = reviewTerminalCapture({ root, current });
+    if (expectedStatus !== null && captured.status !== expectedStatus) fail("CLI result не совпадает с сохранённым terminal evidence", "REVIEW_TERMINAL_RESULT");
+    const target = captured.status === "cancelled_by_user" ? "X03" : "B01";
+    const stopMode = target === "X03" ? "final_cancellation" : "blocked";
+    const terminal = buildIdentityArtifact({
+      schemaVersion: 1,
+      cycleId: current.cycleId,
+      revision: current.revision,
+      reviewRunId: current.activeRunId,
+      runOpenIdentity: captured.runOpen.identity,
+      sourceContextIdentity: current.sourceContext.identity,
+      reviewSnapshotIdentity: current.sourceContext.reviewSnapshotIdentity,
+      status: captured.status,
+      target,
+      returnState: "P03",
+      stopMode,
+      evidenceKind: captured.evidenceKind,
+      capturedEvidencePath: relative(root, captured.candidate.path).split(sep).join("/"),
+      evidenceArtifact: "terminal-source-evidence.json",
+      evidenceSha256: sha256Bytes(captured.candidate.bytes),
+      recordedBy: structuredClone(owner),
+      recordedAt: new Date().toISOString(),
+    });
+    validateReviewTerminalResult(terminal);
+    const frame = frameForHolding({
+      current,
+      holdingState: target,
+      targetState: "P03",
+      signalIdentity: current.signalContext.identity,
+      reason: `review_terminal_${captured.status}:${terminal.identity}`,
+      stopMode,
+      frameOwner: target === "X03" ? "user" : "provider/operator",
+    });
+    const next = transitionActiveCycle({
+      current,
+      expectedIdentity: current.identity,
+      nextState: target,
+      nextRunId: null,
+      states,
+      operationLock,
+      taskRoot: root,
+      owner,
+      holdingFrame: frame,
+    });
+    const result = installCycleTransaction({
+      root,
+      owner,
+      operationLock,
+      operationId: `review-terminal-${terminal.identity.slice(0, 24)}`,
+      kind: "record_review_result",
+      cycleId: current.cycleId,
+      revision: current.revision,
+      sourceState: current.state,
+      targetState: target,
+      expectedActiveCycleIdentity: current.identity,
+      nextActiveCycle: next,
+      artifacts: {
+        [`${captured.runPrefix}/terminal-source-evidence.json`]: captured.candidate.bytes,
+        [`${captured.runPrefix}/terminal-result.json`]: jsonBytes(terminal),
+      },
+      states,
+    });
+    const storedEvidencePath = join(root, captured.runPrefix, terminal.evidenceArtifact);
+    if (fileSha(storedEvidencePath) !== terminal.evidenceSha256) fail("terminal evidence изменилось после transaction", "REVIEW_TERMINAL_RESULT");
+    return { status: "recorded", target, terminalResultIdentity: terminal.identity, activeCycle: result.activeCycle };
+  } finally {
+    releaseOperationLock(operationLock);
+  }
+}
+
+function readGitMaterializationState(repositoryRealPath) {
+  const run = (args, encoding = "utf8") => {
+    try {
+      return execFileSync("git", ["-C", repositoryRealPath, ...args], { encoding, timeout: 10_000, maxBuffer: 16 * 1024 * 1024 });
+    } catch {
+      fail("не удалось получить стабильный Git-снимок materialization", "MATERIALIZATION_SNAPSHOT");
+    }
+  };
+  const headOid = run(["rev-parse", "HEAD"]).trim();
+  const treeOid = run(["rev-parse", "HEAD^{tree}"]).trim();
+  oid(headOid, "repositoryHeadOid", "MATERIALIZATION_SNAPSHOT");
+  oid(treeOid, "repositoryTreeOid", "MATERIALIZATION_SNAPSHOT");
+  const statusBytes = run(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"], null);
+  const statusPaths = statusBytes.toString("utf8").split("\0").filter(Boolean).map((entry) => entry.slice(3)).sort();
+  if (statusPaths.some((path) => path === "" || path.startsWith("/") || path.split("/").includes("..")) || new Set(statusPaths).size !== statusPaths.length) {
+    fail("Git status содержит неоднозначные пути", "MATERIALIZATION_SNAPSHOT");
+  }
+  return { headOid, treeOid, statusSha256: sha256Bytes(statusBytes), statusPaths };
+}
+
+function readCycleArtifactInventory(root, cycleId) {
+  const cycleRoot = contained(root, join(root, "cycles", cycleId), "cycle artifacts");
+  const cycleStat = existsSync(cycleRoot) ? lstatSync(cycleRoot) : null;
+  if (!cycleStat?.isDirectory() || cycleStat.isSymbolicLink() || realpathSync(cycleRoot) !== cycleRoot) fail("cycle artifacts отсутствуют или небезопасны", "MATERIALIZATION_SNAPSHOT");
+  const skipDirectories = new Set(["capture", "review-final", "review-runs", "scratch", "signals"]);
+  const records = [];
+  const walk = (directory) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isSymbolicLink()) fail("cycle artifacts содержат symlink", "MATERIALIZATION_SNAPSHOT");
+      if (entry.isDirectory()) {
+        if (!skipDirectories.has(entry.name)) walk(path);
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+      const artifactPath = relative(root, path).split(sep).join("/");
+      records.push({ path: artifactPath, sha256: fileSha(path) });
+    }
+  };
+  walk(cycleRoot);
+  records.sort((left, right) => left.path.localeCompare(right.path));
+  return records;
+}
+
+export function validateMaterializationSnapshot(value) {
+  exactKeys(value, ["schemaVersion", "cycleId", "sourceContextIdentity", "inputHeadOid", "inputTreeOid", "repositoryHeadOid", "repositoryTreeOid", "repositoryStatusSha256", "repositoryStatusPaths", "artifactInventorySha256", "scannedArtifactPaths", "successfulActionResultIdentities", "materializationEvidencePaths", "indeterminateEvidencePaths", "materialized", "complete", "capturedAt", "identity"], "materialization snapshot", "MATERIALIZATION_SNAPSHOT");
+  if (value.schemaVersion !== 1) fail("materialization snapshot schemaVersion должен быть 1", "MATERIALIZATION_SNAPSHOT");
+  id(value.cycleId, "cycleId", "MATERIALIZATION_SNAPSHOT");
+  for (const key of ["sourceContextIdentity", "repositoryStatusSha256", "artifactInventorySha256"]) sha(value[key], key, "MATERIALIZATION_SNAPSHOT");
+  for (const key of ["inputHeadOid", "inputTreeOid", "repositoryHeadOid", "repositoryTreeOid"]) oid(value[key], key, "MATERIALIZATION_SNAPSHOT");
+  for (const key of ["repositoryStatusPaths", "scannedArtifactPaths", "materializationEvidencePaths", "indeterminateEvidencePaths"]) {
+    exactSortedStrings(value[key], key, {}, "MATERIALIZATION_SNAPSHOT");
+    value[key].forEach((path) => safeRelativePath(path, key, "MATERIALIZATION_SNAPSHOT"));
+  }
+  exactSortedStrings(value.successfulActionResultIdentities, "successfulActionResultIdentities", {}, "MATERIALIZATION_SNAPSHOT");
+  value.successfulActionResultIdentities.forEach((identity) => sha(identity, "successfulActionResultIdentity", "MATERIALIZATION_SNAPSHOT"));
+  if (typeof value.materialized !== "boolean" || typeof value.complete !== "boolean") fail("materialized/complete должны быть boolean", "MATERIALIZATION_SNAPSHOT");
+  const expectedMaterialized = value.repositoryHeadOid !== value.inputHeadOid || value.repositoryTreeOid !== value.inputTreeOid
+    || value.repositoryStatusPaths.length > 0 || value.successfulActionResultIdentities.length > 0 || value.materializationEvidencePaths.length > 0;
+  if (value.materialized !== expectedMaterialized || value.complete !== (value.indeterminateEvidencePaths.length === 0)) {
+    fail("materialization snapshot не выведен из наблюдений", "MATERIALIZATION_SNAPSHOT");
+  }
+  iso(value.capturedAt, "capturedAt", "MATERIALIZATION_SNAPSHOT");
+  exactIdentity(value, "materialization snapshot", "MATERIALIZATION_SNAPSHOT");
+  return value;
+}
+
+function captureMaterializationSnapshot({ root, current }) {
+  const firstGit = readGitMaterializationState(current.sourceContext.repositoryRealPath);
+  const firstInventory = readCycleArtifactInventory(root, current.cycleId);
+  const secondInventory = readCycleArtifactInventory(root, current.cycleId);
+  const secondGit = readGitMaterializationState(current.sourceContext.repositoryRealPath);
+  if (canonicalJson(firstGit) !== canonicalJson(secondGit) || canonicalJson(firstInventory) !== canonicalJson(secondInventory)) {
+    fail("materialization snapshot изменился во время capture", "MATERIALIZATION_SNAPSHOT_UNSTABLE");
+  }
+  const successfulActionResultIdentities = [];
+  const materializationEvidencePaths = [];
+  const indeterminateEvidencePaths = [];
+  for (const record of firstInventory) {
+    const name = record.path.split("/").at(-1);
+    if (/action-result\.json$/iu.test(name)) {
+      const result = readRegularJson(join(root, record.path), record.path, "MATERIALIZATION_SNAPSHOT");
+      validateActionResult(result);
+      if (result.outcome === "success") {
+        successfulActionResultIdentities.push(result.identity);
+        materializationEvidencePaths.push(record.path);
+      }
+      continue;
+    }
+    if (/(?:^|[-_])(?:commit|push|deploy(?:ment)?|external[-_]action|result[-_]route)(?:[-_](?:result|evidence|receipt))?\.json$/iu.test(name)) {
+      indeterminateEvidencePaths.push(record.path);
+    } else if (/action-intent\.json$/iu.test(name)) {
+      indeterminateEvidencePaths.push(record.path);
+    }
+  }
+  successfulActionResultIdentities.sort();
+  materializationEvidencePaths.sort();
+  indeterminateEvidencePaths.sort();
+  const snapshot = buildIdentityArtifact({
+    schemaVersion: 1,
+    cycleId: current.cycleId,
+    sourceContextIdentity: current.sourceContext.identity,
+    inputHeadOid: current.sourceContext.inputHeadOid,
+    inputTreeOid: current.sourceContext.inputTreeOid,
+    repositoryHeadOid: firstGit.headOid,
+    repositoryTreeOid: firstGit.treeOid,
+    repositoryStatusSha256: firstGit.statusSha256,
+    repositoryStatusPaths: firstGit.statusPaths,
+    artifactInventorySha256: identityOf(firstInventory),
+    scannedArtifactPaths: firstInventory.map((record) => record.path),
+    successfulActionResultIdentities,
+    materializationEvidencePaths,
+    indeterminateEvidencePaths,
+    materialized: firstGit.headOid !== current.sourceContext.inputHeadOid || firstGit.treeOid !== current.sourceContext.inputTreeOid
+      || firstGit.statusPaths.length > 0 || successfulActionResultIdentities.length > 0 || materializationEvidencePaths.length > 0,
+    complete: indeterminateEvidencePaths.length === 0,
+    capturedAt: new Date().toISOString(),
+  });
+  validateMaterializationSnapshot(snapshot);
+  return snapshot;
+}
+
+function validateClosureLeg(value, label, statuses) {
+  exactKeys(value, ["status", "evidenceIdentity"], label, "NO_RESULT_CLOSURE");
+  if (!statuses.includes(value.status)) fail(`${label}.status невалиден`, "NO_RESULT_CLOSURE");
+  sha(value.evidenceIdentity, `${label}.evidenceIdentity`, "NO_RESULT_CLOSURE");
+  return value;
+}
+
+export function validateNoResultClosure(value, { activeCycle = null, materializationSnapshot = null } = {}) {
+  exactKeys(value, ["schemaVersion", "cycleId", "sourceContextIdentity", "terminalOutcome", "issueClosure", "specClosure", "cleanup", "identity"], "no-result closure", "NO_RESULT_CLOSURE");
+  if (value.schemaVersion !== 1) fail("no-result closure schemaVersion должен быть 1", "NO_RESULT_CLOSURE");
+  id(value.cycleId, "cycleId", "NO_RESULT_CLOSURE");
+  sha(value.sourceContextIdentity, "sourceContextIdentity", "NO_RESULT_CLOSURE");
+  validateClosureLeg(value.terminalOutcome, "terminalOutcome", ["cancelled_without_materialization"]);
+  validateClosureLeg(value.issueClosure, "issueClosure", ["closed", "left_open", "not_required"]);
+  validateClosureLeg(value.specClosure, "specClosure", ["closed", "implemented", "not_required"]);
+  validateClosureLeg(value.cleanup, "cleanup", ["completed"]);
+  if (value.terminalOutcome.status !== "cancelled_without_materialization") fail("terminalOutcome не доказывает отсутствие materialization", "NO_RESULT_CLOSURE");
+  if (activeCycle !== null && (activeCycle.state !== "X03" || value.cycleId !== activeCycle.cycleId || value.sourceContextIdentity !== activeCycle.sourceContext.identity)) {
+    fail("no-result closure относится к другому active cycle/source", "NO_RESULT_CLOSURE");
+  }
+  if (materializationSnapshot !== null) {
+    validateMaterializationSnapshot(materializationSnapshot);
+    if (materializationSnapshot.materialized || !materializationSnapshot.complete
+      || value.terminalOutcome.evidenceIdentity !== materializationSnapshot.identity
+      || value.cycleId !== materializationSnapshot.cycleId || value.sourceContextIdentity !== materializationSnapshot.sourceContextIdentity) {
+      fail("terminalOutcome не связан с доказанным отсутствием materialization", "NO_RESULT_CLOSURE");
+    }
+  }
+  exactIdentity(value, "no-result closure", "NO_RESULT_CLOSURE");
+  return value;
+}
+
+export async function recordNoResultClosure({ taskRoot, issueClosure, specClosure, cleanup, states = readRegistry().states }) {
+  validateClosureLeg(issueClosure, "issueClosure", ["closed", "left_open", "not_required"]);
+  validateClosureLeg(specClosure, "specClosure", ["closed", "implemented", "not_required"]);
+  validateClosureLeg(cleanup, "cleanup", ["completed"]);
+  const root = canonicalTaskRoot(taskRoot);
+  const owner = await createOperationOwner(`no-result-${randomBytes(12).toString("hex")}`);
+  const operationLock = acquireOperationLock({ taskRoot: root, owner });
+  try {
+    if (existsSync(join(root, ".operation-intent.json"))) {
+      const recovery = recoverOperation(root, { operationLock, owner });
+      return { status: "recovered", activeCycle: readActiveCycle(root, states), recovery };
+    }
+    const current = readActiveCycle(root, states);
+    const materializationSnapshot = captureMaterializationSnapshot({ root, current });
+    if (materializationSnapshot.materialized) fail("materialized result существует; требуется materialized route", "NO_RESULT_MATERIALIZED");
+    if (!materializationSnapshot.complete) fail("отсутствие materialization не доказано", "NO_RESULT_MATERIALIZATION_UNKNOWN");
+    const closure = buildIdentityArtifact({
+      schemaVersion: 1,
+      cycleId: current.cycleId,
+      sourceContextIdentity: current.sourceContext.identity,
+      terminalOutcome: { status: "cancelled_without_materialization", evidenceIdentity: materializationSnapshot.identity },
+      issueClosure: structuredClone(issueClosure),
+      specClosure: structuredClone(specClosure),
+      cleanup: structuredClone(cleanup),
+    });
+    validateNoResultClosure(closure, { activeCycle: current, materializationSnapshot });
     const targetState = transitionTargetForOperation("record_no_result_closure", current.state, {
       exitName: "main_process_no_result_closure",
       closureValid: true,
@@ -1687,10 +2027,13 @@ export async function recordNoResultClosure({ taskRoot, closure, states = readRe
       targetState,
       expectedActiveCycleIdentity: current.identity,
       nextActiveCycle: next,
-      artifacts: { [`cycles/${current.cycleId}/no-result-closure.json`]: jsonBytes(closure) },
+      artifacts: {
+        [`cycles/${current.cycleId}/materialization-snapshots/${materializationSnapshot.identity}.json`]: jsonBytes(materializationSnapshot),
+        [`cycles/${current.cycleId}/no-result-closure.json`]: jsonBytes(closure),
+      },
       states,
     });
-    return { status: "recorded", closureIdentity: closure.identity, activeCycle: result.activeCycle };
+    return { status: "recorded", closureIdentity: closure.identity, materializationSnapshotIdentity: materializationSnapshot.identity, activeCycle: result.activeCycle };
   } finally {
     releaseOperationLock(operationLock);
   }
@@ -1709,16 +2052,19 @@ async function selfTest() {
     const extra = buildIdentityArtifact({ ...structuredClone(value), unexpected: true });
     assert.throws(() => validator(extra));
   };
-  const signalFixture = (repositoryRealPath, cycleId, signalId, providerRevision, payloadSha256 = H("9")) => {
+  const signalFixture = (repositoryRealPath, cycleId, signalId, providerRevision, payloadSha256 = H("9"), sourceOverrides = {}) => {
     repositoryRealPath = realpathSync(repositoryRealPath);
+    const baseOid = sourceOverrides.baseOid ?? O("a");
+    const inputHeadOid = sourceOverrides.inputHeadOid ?? O("b");
+    const inputTreeOid = sourceOverrides.inputTreeOid ?? O("c");
     const reviewSnapshot = buildIdentityArtifact({
       schemaVersion: 1,
       sourceKind: "pull_request",
       repositoryFullName: "Etogerman/Project-1",
       pullRequestNumber: 738,
-      baseOid: O("a"),
-      inputHeadOid: O("b"),
-      inputTreeOid: O("c"),
+      baseOid,
+      inputHeadOid,
+      inputTreeOid,
       titleSha256: H("1"),
       bodySha256: H("2"),
       providerRevision,
@@ -1730,9 +2076,9 @@ async function selfTest() {
       repositoryIdentity: repositoryIdentity({ repositoryFullName: "Etogerman/Project-1", repositoryRealPath }),
       repositoryRealPath,
       pullRequestNumber: 738,
-      baseOid: O("a"),
-      inputHeadOid: O("b"),
-      inputTreeOid: O("c"),
+      baseOid,
+      inputHeadOid,
+      inputTreeOid,
       reviewSnapshotIdentity: reviewSnapshot.identity,
     });
     const signalEvidence = buildIdentityArtifact({
@@ -1743,9 +2089,9 @@ async function selfTest() {
       observedState: "C02",
       repositoryFullName: "Etogerman/Project-1",
       pullRequestNumber: 738,
-      baseCandidates: [O("a")],
-      inputHeadOid: O("b"),
-      inputTreeOid: O("c"),
+      baseCandidates: [baseOid],
+      inputHeadOid,
+      inputTreeOid,
       checkRunId: null,
       reviewDelegationId: null,
       reviewSnapshotIdentity: reviewSnapshot.identity,
@@ -1887,8 +2233,28 @@ async function selfTest() {
   assertMissingAndExtraRejected(success, validateCiSnapshot);
   const invalid = structuredClone(success); invalid.applicableChecks[0].conclusion = "neutral"; invalid.identity = jcsIdentity(invalid);
   assert.throws(() => validateCiSnapshot(invalid));
-  const closure = buildIdentityArtifact({ schemaVersion: 1, terminalOutcome: { status: "cancelled_without_materialization", evidenceIdentity: H("1") }, issueClosure: { status: "not_required", evidenceIdentity: H("2") }, specClosure: { status: "not_required", evidenceIdentity: H("3") }, cleanup: { status: "completed", evidenceIdentity: H("4") } });
-  assert(validateNoResultClosure(closure));
+  const emptyMaterialization = buildIdentityArtifact({
+    schemaVersion: 1,
+    cycleId: "closure-cycle",
+    sourceContextIdentity: H("0"),
+    inputHeadOid: O("a"),
+    inputTreeOid: O("b"),
+    repositoryHeadOid: O("a"),
+    repositoryTreeOid: O("b"),
+    repositoryStatusSha256: H("5"),
+    repositoryStatusPaths: [],
+    artifactInventorySha256: H("6"),
+    scannedArtifactPaths: [],
+    successfulActionResultIdentities: [],
+    materializationEvidencePaths: [],
+    indeterminateEvidencePaths: [],
+    materialized: false,
+    complete: true,
+    capturedAt: now,
+  });
+  assert(validateMaterializationSnapshot(emptyMaterialization));
+  const closure = buildIdentityArtifact({ schemaVersion: 1, cycleId: "closure-cycle", sourceContextIdentity: H("0"), terminalOutcome: { status: "cancelled_without_materialization", evidenceIdentity: emptyMaterialization.identity }, issueClosure: { status: "not_required", evidenceIdentity: H("2") }, specClosure: { status: "not_required", evidenceIdentity: H("3") }, cleanup: { status: "completed", evidenceIdentity: H("4") } });
+  assert(validateNoResultClosure(closure, { materializationSnapshot: emptyMaterialization }));
   assertMissingAndExtraRejected(closure, validateNoResultClosure);
   const missing = structuredClone(closure); delete missing.cleanup; missing.identity = jcsIdentity(missing);
   assert.throws(() => validateNoResultClosure(missing));
@@ -2024,10 +2390,57 @@ async function selfTest() {
     const signalOwner = buildIdentityArtifact({ ...owner, operationId: "register-signal" });
     const stableCapture = signalFixture(signalRoot, "signal-cycle", "signal-1", "provider-1");
     assertMissingAndExtraRejected(stableCapture.ledger.reviewSnapshot, validateReviewSnapshot);
+    for (const field of ["titleSha256", "bodySha256"]) {
+      const unboundPrSnapshot = buildIdentityArtifact({ ...stableCapture.ledger.reviewSnapshot, [field]: null });
+      assert.throws(() => validateReviewSnapshot(unboundPrSnapshot), (error) => error?.code === "REVIEW_SNAPSHOT");
+    }
+    const commitSnapshot = buildIdentityArtifact({
+      ...stableCapture.ledger.reviewSnapshot,
+      sourceKind: "commit",
+      pullRequestNumber: null,
+      titleSha256: null,
+      bodySha256: null,
+    });
+    assert(validateReviewSnapshot(commitSnapshot));
     assertMissingAndExtraRejected(stableCapture.sourceContext, validateSourceContext);
     assertMissingAndExtraRejected(stableCapture.ledger.signalEvidence, validateSignalEvidence);
     assertMissingAndExtraRejected(stableCapture.ledger.signalContext, validateSignalContext);
     assertMissingAndExtraRejected(stableCapture.ledger, validateSignalLedger);
+    for (const [field, value] of [
+      ["repositoryFullName", "Etogerman/Other"],
+      ["pullRequestNumber", 739],
+      ["baseOid", O("d")],
+      ["inputHeadOid", O("e")],
+      ["inputTreeOid", O("f")],
+    ]) {
+      const sourceDraft = { ...stableCapture.sourceContext, [field]: value };
+      if (field === "repositoryFullName") {
+        sourceDraft.repositoryIdentity = repositoryIdentity({
+          repositoryFullName: value,
+          repositoryRealPath: sourceDraft.repositoryRealPath,
+        });
+      }
+      const sourceContext = buildIdentityArtifact(sourceDraft);
+      assert.throws(
+        () => validateSignalCaptureAgreement({ ledger: stableCapture.ledger, sourceContext }),
+        (error) => error?.code === "SIGNAL_CAPTURE_AGREEMENT",
+      );
+    }
+    for (const [field, value] of [
+      ["repositoryFullName", "Etogerman/Other"],
+      ["pullRequestNumber", 739],
+      ["baseCandidates", [O("d")]],
+      ["inputHeadOid", O("e")],
+      ["inputTreeOid", O("f")],
+    ]) {
+      const signalEvidence = buildIdentityArtifact({ ...stableCapture.ledger.signalEvidence, [field]: value });
+      const signalContext = buildIdentityArtifact({ ...stableCapture.ledger.signalContext, evidenceIdentity: signalEvidence.identity });
+      const ledger = buildIdentityArtifact({ ...stableCapture.ledger, signalEvidence, signalContext });
+      assert.throws(
+        () => validateSignalCaptureAgreement({ ledger, sourceContext: stableCapture.sourceContext }),
+        (error) => error?.code === "SIGNAL_CAPTURE_AGREEMENT",
+      );
+    }
     const registered = await registerSignalCycle({
       taskRoot: signalRoot,
       cycleId: "signal-cycle",
@@ -2147,20 +2560,131 @@ async function selfTest() {
     const unstableRoot = join(temporary, "unstable-root");
     mkdirSync(unstableRoot);
     const revisions = ["provider-1", "provider-2", "provider-3"];
-    const unstable = await registerSignalCycle({
-      taskRoot: unstableRoot,
-      cycleId: "unstable-cycle",
-      signalId: "signal-2",
-      captureProvider: async ({ attempt }) => signalFixture(unstableRoot, "unstable-cycle", "signal-2", revisions[attempt - 1]),
-      owner: buildIdentityArtifact({ ...owner, operationId: "unstable-signal" }),
-      states,
-    });
-    assert.equal(unstable.status, "blocked");
-    assert.equal(readActiveCycle(unstableRoot, states).state, "B01");
+    await assert.rejects(
+      registerSignalCycle({
+        taskRoot: unstableRoot,
+        cycleId: "unstable-cycle",
+        signalId: "signal-2",
+        captureProvider: async ({ attempt }) => signalFixture(unstableRoot, "unstable-cycle", "signal-2", revisions[attempt - 1]),
+        owner: buildIdentityArtifact({ ...owner, operationId: "unstable-signal" }),
+        states,
+      }),
+      (error) => error?.code === "MUTABLE_SNAPSHOT_UNSTABLE"
+        && error?.cycleId === "unstable-cycle"
+        && error?.signalId === "signal-2",
+    );
+    assert.equal(existsSync(join(unstableRoot, "active-cycle.json")), false);
+    assert.equal(existsSync(join(unstableRoot, "cycles", "unstable-cycle", "signals")), false);
 
     const closureRoot = join(temporary, "closure-root");
+    const closureRepo = join(temporary, "closure-repo");
     mkdirSync(closureRoot);
-    const closureSignal = signalFixture(closureRoot, "closure-cycle", "closure-signal", "provider-1");
+    mkdirSync(closureRepo);
+    execFileSync("git", ["-C", closureRepo, "init", "-q"]);
+    execFileSync("git", ["-C", closureRepo, "config", "user.email", "self-test@example.invalid"]);
+    execFileSync("git", ["-C", closureRepo, "config", "user.name", "Self Test"]);
+    writeFileSync(join(closureRepo, "tracked.txt"), "unchanged\n");
+    execFileSync("git", ["-C", closureRepo, "add", "."]);
+    execFileSync("git", ["-C", closureRepo, "commit", "-qm", "base"]);
+    const closureHead = execFileSync("git", ["-C", closureRepo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    const closureTree = execFileSync("git", ["-C", closureRepo, "rev-parse", "HEAD^{tree}"], { encoding: "utf8" }).trim();
+    const terminalFixture = async ({ rootName, cycleId, status }) => {
+      const terminalRoot = join(temporary, rootName);
+      mkdirSync(terminalRoot);
+      const terminalSignal = signalFixture(closureRepo, cycleId, `${cycleId}-signal`, "provider-1", H("9"), {
+        baseOid: closureHead,
+        inputHeadOid: closureHead,
+        inputTreeOid: closureTree,
+      });
+      const terminalBase = initialActiveCycle({
+        cycleId,
+        owner,
+        sourceContext: terminalSignal.sourceContext,
+        signalContext: terminalSignal.ledger.signalContext,
+        state: "C02",
+      });
+      const terminalActive = buildIdentityArtifact({ ...terminalBase, revision: 1, state: "P03", activeRunId: "review-1" });
+      const terminalRunRoot = join(terminalRoot, "cycles", cycleId, "revision-1", "review-runs", "review-1");
+      mkdirSync(join(terminalRunRoot, "capture"), { recursive: true });
+      const runOpen = buildIdentityArtifact({
+        schemaVersion: 1,
+        cycleId,
+        revision: 1,
+        reviewRunId: "review-1",
+        revisionSealIdentity: H("1"),
+        sourceContextIdentity: terminalSignal.sourceContext.identity,
+        reviewSnapshotIdentity: terminalSignal.sourceContext.reviewSnapshotIdentity,
+        openedBy: owner,
+        openedAt: now,
+      });
+      validateReviewRunOpen(runOpen);
+      writeFileSync(join(terminalRunRoot, "run-open.json"), jsonBytes(runOpen));
+      writeFileSync(join(terminalRunRoot, "capture", "preparation-error.json"), jsonBytes({
+        schemaVersion: 1,
+        reviewRunId: "review-1",
+        phase: "preflight",
+        status,
+        errorCode: "SELF_TEST_TERMINAL",
+      }));
+      writeFileSync(join(terminalRoot, "active-cycle.json"), jsonBytes(terminalActive));
+      const recorded = await recordReviewTerminalTransaction({ taskRoot: terminalRoot, expectedStatus: status, states });
+      const expectedTarget = status === "cancelled_by_user" ? "X03" : "B01";
+      assert.equal(recorded.target, expectedTarget);
+      const storedActive = readActiveCycle(terminalRoot, states);
+      assert.equal(storedActive.state, expectedTarget);
+      assert.equal(storedActive.activeRunId, null);
+      assert.equal(storedActive.resumeContexts.at(-1).targetState, "P03");
+      const terminalResult = readRegularJson(join(terminalRunRoot, "terminal-result.json"), "terminal result");
+      assert(validateReviewTerminalResult(terminalResult));
+      assert.equal(terminalResult.identity, recorded.terminalResultIdentity);
+      assert.equal(fileSha(join(terminalRunRoot, "terminal-source-evidence.json")), terminalResult.evidenceSha256);
+      return { terminalRoot, terminalRunRoot, terminalResult };
+    };
+    await terminalFixture({ rootName: "terminal-block-root", cycleId: "terminal-block-cycle", status: "blocked" });
+    const cancelledTerminal = await terminalFixture({ rootName: "terminal-cancel-root", cycleId: "terminal-cancel-cycle", status: "cancelled_by_user" });
+    assert.equal(cancelledTerminal.terminalResult.stopMode, "final_cancellation");
+
+    const d01Root = join(temporary, "qualification-d01-root");
+    mkdirSync(d01Root);
+    const d01Signal = signalFixture(closureRepo, "qualification-d01-cycle", "qualification-d01-signal", "provider-1", H("9"), {
+      baseOid: closureHead,
+      inputHeadOid: closureHead,
+      inputTreeOid: closureTree,
+    });
+    const d01Base = initialActiveCycle({
+      cycleId: "qualification-d01-cycle",
+      owner,
+      sourceContext: d01Signal.sourceContext,
+      signalContext: d01Signal.ledger.signalContext,
+      state: "C02",
+    });
+    const d01Current = buildIdentityArtifact({ ...d01Base, revision: 1, state: "P03", activeRunId: "review-1" });
+    mkdirSync(join(d01Root, "cycles", "qualification-d01-cycle", "revision-1", "review-runs", "review-1"), { recursive: true });
+    const d01Owner = buildIdentityArtifact({ ...owner, operationId: "qualification-d01" });
+    const d01Lock = acquireOperationLock({ taskRoot: d01Root, owner: d01Owner });
+    try {
+      const d01Outcome = nextCycleForQualification({
+        current: d01Current,
+        targetState: "D01",
+        operationLock: d01Lock,
+        owner: d01Owner,
+        root: d01Root,
+        states,
+        qualificationIdentity: H("5"),
+      });
+      assert.equal(d01Outcome.next.state, "D01");
+      assert.equal(d01Outcome.next.activeRunId, null);
+      assert.equal(d01Outcome.next.resumeContexts.at(-1).holdingState, "D01");
+      assert.equal(d01Outcome.next.resumeContexts.at(-1).targetState, "C07");
+    } finally {
+      releaseOperationLock(d01Lock);
+    }
+
+    const closureSignal = signalFixture(closureRepo, "closure-cycle", "closure-signal", "provider-1", H("9"), {
+      baseOid: closureHead,
+      inputHeadOid: closureHead,
+      inputTreeOid: closureTree,
+    });
     const closureActive = initialActiveCycle({
       cycleId: "closure-cycle",
       owner,
@@ -2168,11 +2692,44 @@ async function selfTest() {
       signalContext: closureSignal.ledger.signalContext,
       state: "X03",
     });
+    mkdirSync(join(closureRoot, "cycles", "closure-cycle"), { recursive: true });
     writeFileSync(join(closureRoot, "active-cycle.json"), jsonBytes(closureActive));
-    const recordedClosure = await recordNoResultClosure({ taskRoot: closureRoot, closure, states });
+    const closureLegs = {
+      issueClosure: { status: "not_required", evidenceIdentity: H("2") },
+      specClosure: { status: "not_required", evidenceIdentity: H("3") },
+      cleanup: { status: "completed", evidenceIdentity: H("4") },
+    };
+    const recordedClosure = await recordNoResultClosure({ taskRoot: closureRoot, ...closureLegs, states });
     assert.equal(recordedClosure.status, "recorded");
     assert.equal(readActiveCycle(closureRoot, states).state, "X03");
-    assert.equal(readRegularJson(join(closureRoot, "cycles", "closure-cycle", "no-result-closure.json"), "closure").identity, closure.identity);
+    const storedClosure = readRegularJson(join(closureRoot, "cycles", "closure-cycle", "no-result-closure.json"), "closure");
+    assert.equal(storedClosure.identity, recordedClosure.closureIdentity);
+    const storedMaterialization = readRegularJson(join(closureRoot, "cycles", "closure-cycle", "materialization-snapshots", `${recordedClosure.materializationSnapshotIdentity}.json`), "materialization snapshot");
+    assert(validateNoResultClosure(storedClosure, { activeCycle: readActiveCycle(closureRoot, states), materializationSnapshot: storedMaterialization }));
+
+    const materializedRoot = join(temporary, "materialized-closure-root");
+    mkdirSync(materializedRoot);
+    const materializedSignal = signalFixture(closureRepo, "materialized-cycle", "materialized-signal", "provider-1", H("9"), {
+      baseOid: closureHead,
+      inputHeadOid: closureHead,
+      inputTreeOid: closureTree,
+    });
+    const materializedActive = initialActiveCycle({
+      cycleId: "materialized-cycle",
+      owner,
+      sourceContext: materializedSignal.sourceContext,
+      signalContext: materializedSignal.ledger.signalContext,
+      state: "X03",
+    });
+    mkdirSync(join(materializedRoot, "cycles", "materialized-cycle"), { recursive: true });
+    writeFileSync(join(materializedRoot, "active-cycle.json"), jsonBytes(materializedActive));
+    writeFileSync(join(closureRepo, "materialized.txt"), "materialized\n");
+    await assert.rejects(
+      recordNoResultClosure({ taskRoot: materializedRoot, ...closureLegs, states }),
+      (error) => error?.code === "NO_RESULT_MATERIALIZED",
+    );
+    assert.equal(readActiveCycle(materializedRoot, states).state, "X03");
+    assert.equal(existsSync(join(materializedRoot, "cycles", "materialized-cycle", "no-result-closure.json")), false);
 
     const publicationRoot = join(temporary, "publication-root");
     mkdirSync(publicationRoot);
@@ -2240,8 +2797,20 @@ async function selfTest() {
     });
     validateDecision(implementationDecision);
     assertMissingAndExtraRejected(implementationDecision, validateDecision);
+    for (const [field, value] of [
+      ["decisionState", "D02"],
+      ["decisionKind", "implementation_denial"],
+      ["requestedAction", "только проверить"],
+      ["answer", "отказано"],
+      ["authorizedActions", ["push"]],
+    ]) {
+      const denied = buildIdentityArtifact({ ...implementationDecision, [field]: value });
+      assert.throws(() => validateDecision(denied), (error) => error?.code === "DECISION");
+      assert.throws(() => executionCeilingFromDecision(denied, "C12"), (error) => error?.code === "DECISION");
+    }
     const publicationExecutionCeiling = executionCeilingFromDecision(implementationDecision, "C12");
     assert(validateExecutionCeiling(publicationExecutionCeiling, { decision: implementationDecision }));
+    assert.throws(() => executionCeilingFromDecision(implementationDecision, "C13"), (error) => error?.code === "EXECUTION_CEILING");
     assertMissingAndExtraRejected(
       publicationExecutionCeiling,
       (value) => validateExecutionCeiling(value, { decision: implementationDecision }),
@@ -2297,88 +2866,17 @@ async function selfTest() {
     });
     assertMissingAndExtraRejected(authorRevisionOpen, validateRevisionOpen);
     writeFileSync(join(authorRevisionRoot, "revision-open.json"), jsonBytes(authorRevisionOpen));
-    const executableSha256 = fileSha(process.execPath);
-    const processPolicy = {
-      ...PROCESS_POLICY,
-      clients: {
-        claude: {
-          resolvedExecutable: process.execPath,
-          executableSha256,
-          allowedDescendantExecutables: [],
-        },
-      },
-    };
-    const settingsCheckpointSha256 = H("a");
     const preparedAuthor = await sealAndOpenReviewTransaction({
       taskRoot: authorRoot,
       findings: [],
       states,
-      prepareReviewRun: async ({ cycleId, revision, reviewRunId }) => {
-        const clients = {
-          claude: {
-            authMode: "oauth_token",
-            binary: "claude",
-            model: "claude-opus-4-6",
-            mcp: "disabled",
-            settingsPath: join(authorRoot, "settings.json"),
-            settingsConfigurationSha256: H("b"),
-            tools: ["Read", "Glob", "Grep"],
-            transport: "official-cli",
-            version: "self-test",
-            preflight: { auth: "oauth_token-confirmed", readSmoke: true, settingsStable: true },
-          },
-        };
-        const reviewManifest = buildIdentityArtifact({
-          schemaVersion: 1,
-          base: authorSignal.sourceContext.baseOid,
-          head: authorSignal.sourceContext.inputHeadOid,
-          counts: { current: 1, base: 1 },
-          algorithms: { tree: "sha256(git-ls-tree-r-z-full-tree)", files: "sha256(exact-bytes)", clients: "sha256(canonical-json)" },
-          hashes: {
-            current: H("1"),
-            base_tree: H("2"),
-            patch: H("3"),
-            spec: sha256Bytes(authorTz),
-            author_review: sha256Bytes(authorReview),
-            prompt: CANONICAL_REVIEW_PROMPT_SHA256,
-            clients: identityOf(clients),
-          },
-          clients,
-          processPolicy,
-          environmentEvidence: {
-            settingsCheckpointSha256,
-            executableRealPath: process.execPath,
-            executableSha256,
-            secretScanPolicyIdentity: H("4"),
-            mcpPolicyIdentity: H("5"),
-            outputRedactionPolicyIdentity: H("6"),
-          },
-        });
-        const launchIntent = buildIdentityArtifact({
-          schemaVersion: 1,
-          cycleId,
-          revision,
-          reviewRunId,
-          reviewManifestIdentity: reviewManifest.identity,
-          client: "claude",
-          executableRealPath: process.execPath,
-          executableSha256,
-          argv: ["--version"],
-          cwd: authorRoot,
-          scratchIdentity: H("7"),
-          settingsCheckpointSha256,
-          processPolicyIdentity: identityOf(processPolicy),
-          createdAt: now,
-        });
-        return { reviewManifest, launchIntent };
-      },
     });
     assert.equal(preparedAuthor.status, "sealed");
     assert.equal(preparedAuthor.target, "P03");
     assert.equal(readActiveCycle(authorRoot, states).activeRunId, preparedAuthor.reviewRunId);
     assert.deepEqual(
       readdirSync(join(authorRevisionRoot, "review-runs", preparedAuthor.reviewRunId)).sort(),
-      ["launch-intent.json", "review-manifest.json", "run-open.json"],
+      ["run-open.json"],
     );
     const storedAuthorResult = readRegularJson(join(authorRevisionRoot, "author-review-result.json"), "author result");
     const storedRevisionSeal = readRegularJson(join(authorRevisionRoot, "revision-seal.json"), "revision seal");

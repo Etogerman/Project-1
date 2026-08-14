@@ -26,7 +26,7 @@ export const ACTIVE_RUN_POLICY = Object.freeze({
   C12: "publication",
 });
 
-export const HOLDING_STATES = new Set(["C05", "B01", "B02", "D02", "X03"]);
+export const HOLDING_STATES = new Set(["C05", "B01", "B02", "D01", "D02", "X03"]);
 export const MAX_RESUME_DEPTH = 8;
 
 export const REQUIRED_STATE_TARGETS = Object.freeze({

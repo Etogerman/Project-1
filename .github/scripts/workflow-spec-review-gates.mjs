@@ -30,6 +30,7 @@ import {
   sha256Bytes,
   startProcessGroup,
   validateSafeInvocation,
+  verifyFinalDirectory,
 } from "./workflow-spec-review.mjs";
 import {
   HOLDING_STATES,
@@ -522,6 +523,41 @@ function assertPublicationRunOpen(runRoot, { cycleId, revision, publicationRunId
   return artifact;
 }
 
+function publicationSourceContext({ taskRoot, runOpen, cycleId, revision, publicationRunId }) {
+  const root = canonicalTaskRoot(taskRoot, "TREE_SEAL_REPOSITORY");
+  const activePath = join(root, "active-cycle.json");
+  const activeStat = existsSync(activePath) ? lstatSync(activePath) : null;
+  if (!activeStat?.isFile() || activeStat.isSymbolicLink()) fail("active-cycle.json отсутствует или небезопасен", "TREE_SEAL_REPOSITORY");
+  let active;
+  try { active = JSON.parse(readFileSync(activePath, "utf8")); } catch { fail("active-cycle.json содержит невалидный JSON", "TREE_SEAL_REPOSITORY"); }
+  validateActiveCycle(active, { taskRoot: root });
+  if (active.cycleId !== cycleId || active.revision !== revision || active.state !== "G01" || active.activeRunId !== publicationRunId) {
+    fail("active cycle не совпадает с publication run", "TREE_SEAL_REPOSITORY");
+  }
+  const source = active.sourceContext;
+  exactKeys(source, ["schemaVersion", "sourceKind", "repositoryFullName", "repositoryIdentity", "repositoryRealPath", "pullRequestNumber", "baseOid", "inputHeadOid", "inputTreeOid", "reviewSnapshotIdentity", "identity"], "publication source context", "TREE_SEAL_REPOSITORY");
+  if (source.schemaVersion !== 1 || !["pull_request", "commit"].includes(source.sourceKind)) fail("publication source kind невалиден", "TREE_SEAL_REPOSITORY");
+  nonempty(source.repositoryFullName, "publication source repositoryFullName", "TREE_SEAL_REPOSITORY");
+  sha(source.repositoryIdentity, "publication source repositoryIdentity", "TREE_SEAL_REPOSITORY");
+  if (source.sourceKind === "pull_request") positiveInteger(source.pullRequestNumber, "publication source pullRequestNumber", "TREE_SEAL_REPOSITORY");
+  else if (source.pullRequestNumber !== null) fail("commit source требует pullRequestNumber=null", "TREE_SEAL_REPOSITORY");
+  for (const key of ["baseOid", "inputHeadOid", "inputTreeOid"]) oid(source[key], `publication source ${key}`, "TREE_SEAL_REPOSITORY");
+  sha(source.reviewSnapshotIdentity, "publication source reviewSnapshotIdentity", "TREE_SEAL_REPOSITORY");
+  const sourcePath = resolve(source.repositoryRealPath);
+  const sourceStat = existsSync(sourcePath) ? lstatSync(sourcePath) : null;
+  if (!sourceStat?.isDirectory() || sourceStat.isSymbolicLink() || realpathSync(sourcePath) !== sourcePath) {
+    fail("publication source repositoryRealPath неканоничен", "TREE_SEAL_REPOSITORY");
+  }
+  const expectedRepositoryIdentity = sha256Bytes(Buffer.from(canonicalJson({
+    repositoryFullName: source.repositoryFullName,
+    repositoryRealPath: sourcePath,
+  })));
+  if (source.repositoryIdentity !== expectedRepositoryIdentity || source.identity !== runOpen.sourceContextIdentity) {
+    fail("publication run не связан с каноническим source context", "TREE_SEAL_REPOSITORY");
+  }
+  return source;
+}
+
 function validateEvidence(value, label) {
   exactKeys(value, ["value", "source", "evidenceRefs"], label, "SPEC_CLASSIFICATION");
   if (typeof value.value !== "boolean") fail(`${label}.value должен быть boolean`, "SPEC_CLASSIFICATION");
@@ -818,6 +854,49 @@ function validatePolicyEvidence(value, expected, label, code) {
   return value;
 }
 
+function readStoredImplementationDecision(root, current, identity, code) {
+  const decisionRoot = join(root, "cycles", current.cycleId, "decisions");
+  const stat = existsSync(decisionRoot) ? lstatSync(decisionRoot) : null;
+  if (!stat?.isDirectory() || stat.isSymbolicLink() || realpathSync(decisionRoot) !== decisionRoot) {
+    fail("implementation decision ledger отсутствует или небезопасен", code);
+  }
+  for (const name of readdirSync(decisionRoot).sort()) {
+    if (!name.endsWith(".json")) continue;
+    safeRelativePath(name, "implementation decision path", code);
+    const path = join(decisionRoot, name);
+    const fileStat = lstatSync(path);
+    if (!fileStat.isFile() || fileStat.isSymbolicLink()) fail("implementation decision небезопасен", code);
+    let decision;
+    try { decision = JSON.parse(readFileSync(path, "utf8")); } catch { fail("implementation decision содержит невалидный JSON", code); }
+    if (decision?.identity !== identity) continue;
+    exactKeys(decision, ["schemaVersion", "cycleId", "decisionId", "decisionState", "decisionKind", "requestedAction", "answer", "authorizedActions", "sourceContextIdentity", "revision", "evidenceRef", "evidenceSha256", "decidedBy", "recordedBy", "decidedAt", "identity"], "implementation decision", code);
+    exactIdentity(decision, "implementation decision", code);
+    if (decision.schemaVersion !== 1 || decision.cycleId !== current.cycleId || decision.revision !== current.revision
+      || decision.sourceContextIdentity !== current.sourceContext.identity || decision.decisionState !== "D01"
+      || decision.decisionKind !== "implementation_authorization"
+      || decision.requestedAction !== "реализовать и подготовить публикацию" || decision.answer !== "разрешено"
+      || canonicalJson(decision.authorizedActions) !== canonicalJson(["commit", "push"])
+      || decision.decidedBy?.kind !== "user") {
+      fail("implementation decision не является каноническим утвердительным разрешением", code);
+    }
+    safeId(decision.cycleId, "implementation decision.cycleId", code);
+    safeId(decision.decisionId, "implementation decision.decisionId", code);
+    positiveInteger(decision.revision, "implementation decision.revision", code);
+    nonempty(decision.evidenceRef, "implementation decision.evidenceRef", code);
+    sha(decision.sourceContextIdentity, "implementation decision.sourceContextIdentity", code);
+    sha(decision.evidenceSha256, "implementation decision.evidenceSha256", code);
+    exactKeys(decision.decidedBy, ["kind", "identityHint"], "implementation decision.decidedBy", code);
+    exactKeys(decision.decidedBy.identityHint, ["kind", "stableSubject", "identity"], "implementation decision.identityHint", code);
+    nonempty(decision.decidedBy.identityHint.kind, "implementation decision.identityHint.kind", code);
+    nonempty(decision.decidedBy.identityHint.stableSubject, "implementation decision.identityHint.stableSubject", code);
+    exactIdentity(decision.decidedBy.identityHint, "implementation decision.identityHint", code);
+    validateOwner(decision.recordedBy, "implementation decision.recordedBy", code);
+    if (typeof decision.decidedAt !== "string" || !decision.decidedAt.endsWith("Z") || !Number.isFinite(Date.parse(decision.decidedAt))) fail("implementation decision.decidedAt невалиден", code);
+    return decision;
+  }
+  fail("implementation decision отсутствует в ledger", code);
+}
+
 function readStoredPolicyArtifact({ root, current, nextState, nextRunId, policy, reference, label, code }) {
   validatePolicyEvidence(reference, policy, label, code);
   const cycleSegments = ["cycles", current.cycleId, `revision-${current.revision}`];
@@ -858,6 +937,31 @@ function readStoredPolicyArtifact({ root, current, nextState, nextRunId, policy,
     for (const key of ["reviewFinalManifestSha256", "tzSha256", "implementationSpecClassificationIdentity", "implementationDecisionIdentity"]) sha(artifact[key], `${label}.${key}`, code);
     oid(artifact.base, `${label}.base`, code);
     oid(artifact.inputHead, `${label}.inputHead`, code);
+    const revisionRoot = join(root, ...cycleSegments);
+    const finalRoot = join(revisionRoot, "review-final");
+    let verifiedFinal;
+    try { verifiedFinal = verifyFinalDirectory(finalRoot); } catch { fail(`${label}: review-final не прошёл полную проверку`, code); }
+    const finalManifestBytes = readFileSync(join(finalRoot, "manifest.json"));
+    if (verifiedFinal.identity !== JSON.parse(finalManifestBytes.toString("utf8")).identity) fail(`${label}: review-final изменился после проверки`, code);
+    const tzBytes = readFileSync(join(revisionRoot, "tz.md"));
+    let classification;
+    try { classification = JSON.parse(readFileSync(join(revisionRoot, "implementation-spec-classification.json"), "utf8")); }
+    catch { fail(`${label}: implementation classification отсутствует или повреждена`, code); }
+    const decision = readStoredImplementationDecision(root, current, artifact.implementationDecisionIdentity, code);
+    try {
+      validateImplementationGate(artifact, {
+        finalManifestBytes,
+        tzBytes,
+        classification,
+        cycleId: current.cycleId,
+        revision: current.revision,
+        base: current.sourceContext.baseOid,
+        inputHead: current.sourceContext.inputHeadOid,
+        implementationDecisionIdentity: decision.identity,
+      });
+    } catch {
+      fail(`${label}: исходные артефакты implementation gate не прошли проверку`, code);
+    }
   } else if (policy.kind === "publication") {
     exactKeys(artifact, ["schemaVersion", "cycleId", "revision", "implementationGateIdentity", "tzSha256", "publishBase", "expectedTreeOid", "validatedDiffSha256", "publishedFiles", "implementationSpecClassificationIdentity", "publicationSpecClassificationIdentity", "specStatus", "specRevision", "checksSha256", "executionCeilingIdentity", "issuedBy", "allowedStates", "identity"], label, code);
     common();
@@ -994,8 +1098,8 @@ export function transitionActiveCycle({
       if (!policyProbe.ok) fail(`holdingFrame нарушает dynamic policy: ${policyProbe.blocker}`, "ACTIVE_CYCLE_RESUME");
     }
     const pushed = pushResumeFrame(resumeContexts, holdingFrame);
-    if (!pushed.ok && nextState !== "B01") fail("resume stack переполнен", "ACTIVE_CYCLE_RESUME_OVERFLOW");
-    resumeContexts = pushed.ok ? pushed.stack : resumeContexts;
+    if (!pushed.ok) fail("resume stack переполнен", "ACTIVE_CYCLE_RESUME_OVERFLOW");
+    resumeContexts = pushed.stack;
   } else if (holdingFrame !== null) fail("holdingFrame передан вне входа в holding state", "ACTIVE_CYCLE_RESUME");
   if (HOLDING_STATES.has(current.state) && !frameTargetsNext && direct && topFrame?.holdingState === current.state) resumeContexts = current.resumeContexts.slice(0, -1);
   const next = {
@@ -1189,12 +1293,18 @@ export async function sealExpectedTree({ repo, publishBase, publishedFiles, task
   oid(publishBase, "publishBase", "TREE_SEAL");
   nonemptyStringArray(publishedFiles, "publishedFiles", { allowEmpty: true, sorted: true }, "TREE_SEAL");
   publishedFiles.forEach((path, index) => safeRelativePath(path, `publishedFiles[${index}]`, "TREE_SEAL"));
-  const repository = resolve(repo);
   const runRoot = canonicalPublicationRunRoot({ taskRoot, cycleId, revision, publicationRunId, publicationRunRoot });
-  assertPublicationRunOpen(runRoot, { cycleId, revision, publicationRunId, publishBase });
+  const runOpen = assertPublicationRunOpen(runRoot, { cycleId, revision, publicationRunId, publishBase });
+  const sourceContext = publicationSourceContext({ taskRoot, runOpen, cycleId, revision, publicationRunId });
+  const repositoryPath = resolve(repo);
+  const repositoryStat = existsSync(repositoryPath) ? lstatSync(repositoryPath) : null;
+  const repository = repositoryStat?.isDirectory() && !repositoryStat.isSymbolicLink() ? realpathSync(repositoryPath) : null;
+  if (repository === null || repository !== sourceContext.repositoryRealPath) {
+    fail("repo не совпадает с repositoryRealPath publication source context", "TREE_SEAL_REPOSITORY");
+  }
   const phaseDeadlineAt = Date.now() + PROCESS_POLICY.snapshotCommandSeconds * 1_000;
   const budget = () => remainingPhaseBudget(phaseDeadlineAt, "запечатывание tree", "TREE_SEAL");
-  const status = await runBounded("git", ["-C", repository, "status", "--porcelain=v1", "-z", "--untracked-files=all"], { cwd: repository, env: process.env, timeoutMs: budget() });
+  const status = await runBounded("git", ["-C", repository, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"], { cwd: repository, env: process.env, timeoutMs: budget() });
   const actualPaths = parseStatusPaths(status.stdout);
   if (canonicalJson(actualPaths) !== canonicalJson(publishedFiles)) fail(`чужие или пропущенные изменения: ${actualPaths.join(", ")}`, "TREE_SEAL");
   const indexPath = join(runRoot, `publication-index-${randomBytes(6).toString("hex")}`);
@@ -1204,8 +1314,8 @@ export async function sealExpectedTree({ repo, publishBase, publishedFiles, task
   const tree = await runBounded("git", ["-C", repository, "write-tree"], { cwd: repository, env, timeoutMs: budget() });
   const expectedTreeOid = tree.stdout.toString("utf8").trim();
   oid(expectedTreeOid, "expectedTreeOid", "TREE_SEAL");
-  const diff = await runBounded("git", ["-C", repository, "diff", "--binary", "--full-index", "--no-ext-diff", publishBase, expectedTreeOid, "--"], { cwd: repository, env, timeoutMs: budget() });
-  const names = await runBounded("git", ["-C", repository, "diff", "--name-only", "-z", "--no-ext-diff", publishBase, expectedTreeOid, "--"], { cwd: repository, env, timeoutMs: budget() });
+  const diff = await runBounded("git", ["-C", repository, "diff", "--binary", "--full-index", "--no-ext-diff", "--no-renames", publishBase, expectedTreeOid, "--"], { cwd: repository, env, timeoutMs: budget() });
+  const names = await runBounded("git", ["-C", repository, "diff", "--name-only", "-z", "--no-ext-diff", "--no-renames", publishBase, expectedTreeOid, "--"], { cwd: repository, env, timeoutMs: budget() });
   const sealedPaths = names.stdout.toString("utf8").split("\0").filter(Boolean).sort();
   if (canonicalJson(sealedPaths) !== canonicalJson(publishedFiles)) fail("запечатанный tree не совпадает с publishedFiles", "TREE_SEAL");
   return { indexPath, expectedTreeOid, diffBytes: diff.stdout, validatedDiffSha256: sha256Bytes(diff.stdout) };

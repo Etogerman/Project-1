@@ -30,7 +30,15 @@ import {
   validateSpecClassification,
   writeArtifactAtomically,
 } from "./workflow-spec-review-gates.mjs";
-import { canonicalJson, sha256Bytes } from "./workflow-spec-review.mjs";
+import {
+  PROCESS_POLICY,
+  buildQualification,
+  buildReviewFinalArtifacts,
+  buildReviewIdentity,
+  canonicalJson,
+  sha256Bytes,
+  verifyFinalDirectory,
+} from "./workflow-spec-review.mjs";
 
 const H = (value) => String(value).repeat(64).slice(0, 64);
 const O = (value) => String(value).repeat(40).slice(0, 40);
@@ -196,11 +204,78 @@ function cycle(state, activeRunId = ["P03", "G01", "C12"].includes(state) ? "run
     activeRunId,
     lastCompletedRun: null,
     owner,
-    sourceContext: resign({ kind: "source", stableSubject: "self-test" }),
+    sourceContext: resign({ kind: "source", stableSubject: "self-test", baseOid: O("a"), inputHeadOid: O("b"), inputTreeOid: O("c") }),
     signalContext: resign({ kind: "signal", stableSubject: "self-test" }),
     resumeContexts: [],
     lockPath: ".operation.lock",
   });
+}
+
+function writeVerifiedFinalFixture(revisionRoot, sourceContext) {
+  const tzBytes = Buffer.from("tz");
+  const authorReviewBytes = Buffer.from("author review");
+  writeFileSync(join(revisionRoot, "tz.md"), tzBytes);
+  writeFileSync(join(revisionRoot, "author-review.md"), authorReviewBytes);
+  const executableSha256 = sha256Bytes(readFileSync(process.execPath));
+  const clients = {
+    claude: {
+      authMode: "oauth_token",
+      binary: "claude",
+      model: "claude-opus-4-6",
+      mcp: "disabled",
+      settingsPath: join(revisionRoot, "settings.json"),
+      settingsConfigurationSha256: H("a"),
+      tools: ["Read", "Glob", "Grep"],
+      transport: "official-cli",
+      version: "self-test",
+      preflight: { auth: "oauth_token-confirmed", readSmoke: true, settingsStable: true },
+    },
+  };
+  const processPolicy = {
+    ...PROCESS_POLICY,
+    clients: { claude: { resolvedExecutable: process.execPath, executableSha256, allowedDescendantExecutables: [] } },
+  };
+  const promptBytes = readFileSync(new URL("../../docs/workflow/pr-correction/external-spec-review-prompt.md", import.meta.url));
+  const reviewManifest = buildReviewIdentity({
+    base: sourceContext.baseOid,
+    head: sourceContext.inputHeadOid,
+    currentTreeBytes: Buffer.from("current"),
+    baseTreeBytes: Buffer.from("base"),
+    patchBytes: Buffer.from("patch"),
+    specBytes: tzBytes,
+    authorReviewBytes,
+    promptBytes,
+    clients,
+    counts: { current: 1, base: 1 },
+    processPolicy,
+  }).manifest;
+  const reviewManifestBytes = jsonBytes(reviewManifest);
+  const claudeBytes = Buffer.from([
+    reviewManifest.identity,
+    "REVIEW_FINDINGS", "[]",
+    "REVIEW_CHECKED_SCOPE", '["ТЗ"]',
+    "REVIEW_UNCHECKED_SCOPE", '["runtime"]',
+    "REVIEW_VERDICT", "блокеров нет", "",
+  ].join("\n"));
+  const qualification = buildQualification({ reviewManifestBytes, claudeBytes, dispositions: [] });
+  const consolidatedBytes = Buffer.from([
+    "# Сводный вывод внешнего ревью ТЗ", "", reviewManifest.identity, "",
+    "## Замечания и решения", "", "Замечаний нет.", "", "## Итог", "",
+    "Состояние: C09.", "Основание: Все замечания квалифицированы, блокеров текущего объёма нет.",
+    "Автор квалификации: Self-test.", "",
+  ].join("\n"));
+  const final = buildReviewFinalArtifacts({
+    revisionRoot,
+    reviewManifestBytes,
+    claudeBytes,
+    qualificationBytes: jsonBytes(qualification),
+    consolidatedBytes,
+  });
+  const finalRoot = join(revisionRoot, "review-final");
+  mkdirSync(finalRoot);
+  for (const [name, bytes] of Object.entries(final)) writeFileSync(join(finalRoot, name), bytes);
+  verifyFinalDirectory(finalRoot);
+  return { finalManifestBytes: final["manifest.json"], tzBytes };
 }
 
 function resumeFrame(current, { holdingState, targetState, savedRunId = current.activeRunId, gateIdentity = null, register = "resume_state" }) {
@@ -228,6 +303,34 @@ function resumeFrame(current, { holdingState, targetState, savedRunId = current.
 
 function git(repo, args) {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
+}
+
+function publicationSourceContextFor(repo, publishBase) {
+  const repositoryRealPath = realpathSync(repo);
+  const repositoryFullName = "self-test/Project-1";
+  return resign({
+    schemaVersion: 1,
+    sourceKind: "commit",
+    repositoryFullName,
+    repositoryIdentity: sha256Bytes(Buffer.from(canonicalJson({ repositoryFullName, repositoryRealPath }))),
+    repositoryRealPath,
+    pullRequestNumber: null,
+    baseOid: publishBase,
+    inputHeadOid: publishBase,
+    inputTreeOid: git(repo, ["rev-parse", `${publishBase}^{tree}`]),
+    reviewSnapshotIdentity: H("e"),
+  });
+}
+
+function activatePublicationRun({ taskRoot, repo, publishBase, publicationRunId, owner }) {
+  const sourceContext = publicationSourceContextFor(repo, publishBase);
+  const active = resign({
+    ...cycle("G01", publicationRunId),
+    owner,
+    sourceContext,
+  });
+  writeFileSync(join(taskRoot, "active-cycle.json"), jsonBytes(active));
+  return sourceContext;
 }
 
 async function main() {
@@ -411,7 +514,36 @@ async function main() {
     mkdirSync(publicationRoot, { recursive: true });
     mkdirSync(otherPublicationRoot, { recursive: true });
     mkdirSync(noOpRoot, { recursive: true });
-    writeFileSync(join(cycleRoot, "implementation-gate.json"), jsonBytes(validGate));
+    const c11Fixture = cycle("C11");
+    const finalFixture = writeVerifiedFinalFixture(cycleRoot, c11Fixture.sourceContext);
+    writeFileSync(join(cycleRoot, "implementation-spec-classification.json"), jsonBytes(implementationClassification));
+    const decisionRoot = join(cycleTemporary, "cycles", "cycle-1", "decisions");
+    mkdirSync(decisionRoot, { recursive: true });
+    const implementationDecision = resign({
+      schemaVersion: 1,
+      cycleId: "cycle-1",
+      decisionId: "implementation-decision",
+      decisionState: "D01",
+      decisionKind: "implementation_authorization",
+      requestedAction: "реализовать и подготовить публикацию",
+      answer: "разрешено",
+      authorizedActions: ["commit", "push"],
+      sourceContextIdentity: c11Fixture.sourceContext.identity,
+      revision: 11,
+      evidenceRef: "chat:self-test",
+      evidenceSha256: H("8"),
+      decidedBy: { kind: "user", identityHint: resign({ kind: "user", stableSubject: "operator-self-test" }) },
+      recordedBy: owner,
+      decidedAt: "2026-08-03T00:00:00.000Z",
+    });
+    writeFileSync(join(decisionRoot, "implementation-decision.json"), jsonBytes(implementationDecision));
+    const deepGate = resign({
+      ...validGate,
+      reviewFinalManifestSha256: sha256Bytes(finalFixture.finalManifestBytes),
+      tzSha256: sha256Bytes(finalFixture.tzBytes),
+      implementationDecisionIdentity: implementationDecision.identity,
+    });
+    writeFileSync(join(cycleRoot, "implementation-gate.json"), jsonBytes(deepGate));
     writeFileSync(join(publicationRoot, "publication-gate.json"), jsonBytes(publication));
     writeFileSync(join(otherPublicationRoot, "publication-gate.json"), jsonBytes(publication));
     writeFileSync(join(noOpRoot, "no-op-proof.json"), jsonBytes(correctedProof));
@@ -440,12 +572,33 @@ async function main() {
     assert.equal(transition({ current: p03, expectedIdentity: p03.identity, nextState: "P03", nextRunId: "other" }).activeRunId, "review-1");
     const c09 = transition({ current: p03, expectedIdentity: p03.identity, nextState: "C09" });
     assert.equal(c09.activeRunId, null);
-    const c11 = cycle("C11");
-    const implementationEvidence = { ...states.G01.requiredGate, identity: validGate.identity };
+    const c11 = c11Fixture;
+    const implementationEvidence = { ...states.G01.requiredGate, identity: deepGate.identity };
     const publicationEvidence = { ...states.C12.requiredGate, identity: publication.identity };
     const noOpEvidence = { ...states.G01.requiredTransitionProofs.C13, identity: correctedProof.identity };
     expectThrow(() => transition({ current: c11, expectedIdentity: c11.identity, nextState: "G01", nextRunId: "publish-1" }), "ACTIVE_CYCLE_GATE");
     expectThrow(() => transition({ current: c11, expectedIdentity: c11.identity, nextState: "G01", nextRunId: "publish-1", gateEvidence: { ...implementationEvidence, identity: H("b") } }), "ACTIVE_CYCLE_GATE");
+    const deniedDecision = resign({ ...implementationDecision, decisionId: "denied-implementation", answer: "отказано" });
+    writeFileSync(join(decisionRoot, "denied-implementation.json"), jsonBytes(deniedDecision));
+    const deniedGate = resign({ ...deepGate, implementationDecisionIdentity: deniedDecision.identity });
+    writeFileSync(join(cycleRoot, "implementation-gate.json"), jsonBytes(deniedGate));
+    expectThrow(() => transition({
+      current: c11,
+      expectedIdentity: c11.identity,
+      nextState: "G01",
+      nextRunId: "publish-1",
+      gateEvidence: { ...states.G01.requiredGate, identity: deniedGate.identity },
+    }), "ACTIVE_CYCLE_GATE");
+    const forgedGate = resign({ ...deepGate, reviewFinalManifestSha256: H("f") });
+    writeFileSync(join(cycleRoot, "implementation-gate.json"), jsonBytes(forgedGate));
+    expectThrow(() => transition({
+      current: c11,
+      expectedIdentity: c11.identity,
+      nextState: "G01",
+      nextRunId: "publish-1",
+      gateEvidence: { ...states.G01.requiredGate, identity: forgedGate.identity },
+    }), "ACTIVE_CYCLE_GATE");
+    writeFileSync(join(cycleRoot, "implementation-gate.json"), jsonBytes(deepGate));
     const g01 = transition({ current: c11, expectedIdentity: c11.identity, nextState: "G01", nextRunId: "publish-1", gateEvidence: implementationEvidence });
     expectThrow(() => transition({ current: g01, expectedIdentity: g01.identity, nextState: "C12" }), "ACTIVE_CYCLE_GATE");
     const c12 = transition({ current: g01, expectedIdentity: g01.identity, nextState: "C12", gateEvidence: publicationEvidence });
@@ -487,6 +640,18 @@ async function main() {
     expectThrow(() => transition({ current: implementationBlocked, expectedIdentity: implementationBlocked.identity, nextState: "C10", resumeFrameIdentity: implementationBlockFrame.identity }), "ACTIVE_CYCLE_GATE");
     const implementationResumed = transition({ current: implementationBlocked, expectedIdentity: implementationBlocked.identity, nextState: "C10", resumeFrameIdentity: implementationBlockFrame.identity, gateEvidence: implementationEvidence });
     assert.equal(implementationResumed.state, "C10");
+    const fullResumeStack = Array.from({ length: 8 }, (_, index) => resign({
+      ...resumeFrame(c10, { holdingState: "B01", targetState: "C10", register: "return_state" }),
+      frameId: `full-stack-${index}`,
+    }));
+    const fullStackCycle = resign({ ...c10, resumeContexts: fullResumeStack });
+    const overflowFrame = resumeFrame(fullStackCycle, { holdingState: "B01", targetState: "C10", register: "return_state" });
+    expectThrow(() => transition({
+      current: fullStackCycle,
+      expectedIdentity: fullStackCycle.identity,
+      nextState: "B01",
+      holdingFrame: overflowFrame,
+    }), "ACTIVE_CYCLE_RESUME_OVERFLOW");
     const d02BypassFrame = resumeFrame(c10, { holdingState: "D02", targetState: "C10" });
     const forgedD02 = resign({ ...cycle("D02"), resumeContexts: [d02BypassFrame] });
     expectThrow(() => transition({ current: forgedD02, expectedIdentity: forgedD02.identity, nextState: "C10", resumeFrameIdentity: d02BypassFrame.identity, gateEvidence: implementationEvidence }), "ACTIVE_CYCLE_CAS");
@@ -563,15 +728,21 @@ async function main() {
     const base = git(repo, ["rev-parse", "HEAD"]);
     writeFileSync(join(repo, "a.txt"), "changed\n");
     writeFileSync(join(repo, "b.txt"), "new\n");
+    const publicationSource = activatePublicationRun({ taskRoot, repo, publishBase: base, publicationRunId: "publish-1", owner: runtimeOwner });
     await expectReject(sealExpectedTree({ repo, publishBase: base, publishedFiles: ["a.txt", "b.txt"], ...publicationPath }), "PUBLICATION_RUN_OPEN");
     const runOpen = openPublicationRun({
       ...publicationPath,
       implementationGateIdentity: validGate.identity,
-      sourceContextIdentity: cycle("C11").sourceContext.identity,
+      sourceContextIdentity: publicationSource.identity,
       publishBase: base,
       openedBy: runtimeOwner,
     });
     assert(validatePublicationRunOpen(runOpen));
+    const foreignRepo = join(temporary, "foreign-repo");
+    execFileSync("git", ["clone", "-q", repo, foreignRepo]);
+    writeFileSync(join(foreignRepo, "a.txt"), "changed\n");
+    writeFileSync(join(foreignRepo, "b.txt"), "new\n");
+    await expectReject(sealExpectedTree({ repo: foreignRepo, publishBase: base, publishedFiles: ["a.txt", "b.txt"], ...publicationPath }), "TREE_SEAL_REPOSITORY");
     const sealed = await sealExpectedTree({ repo, publishBase: base, publishedFiles: ["a.txt", "b.txt"], ...publicationPath });
     assert.equal(sealed.validatedDiffSha256, sha256Bytes(sealed.diffBytes));
     const manifest = await runExactTreeChecks({
@@ -596,6 +767,7 @@ async function main() {
     git(noOpRepo, ["add", "."]);
     git(noOpRepo, ["commit", "-qm", "base"]);
     const noOpBase = git(noOpRepo, ["rev-parse", "HEAD"]);
+    const noOpSource = activatePublicationRun({ taskRoot, repo: noOpRepo, publishBase: noOpBase, publicationRunId: "publish-2", owner: runtimeOwner });
     openPublicationRun({
       taskRoot,
       cycleId: "cycle-1",
@@ -603,7 +775,7 @@ async function main() {
       publicationRunId: "publish-2",
       publicationRunRoot: noOpRunRoot,
       implementationGateIdentity: validGate.identity,
-      sourceContextIdentity: cycle("C11").sourceContext.identity,
+      sourceContextIdentity: noOpSource.identity,
       publishBase: noOpBase,
       openedBy: runtimeOwner,
     });
@@ -619,6 +791,41 @@ async function main() {
     });
     assert.equal(noOpSealed.validatedDiffSha256, gateConstants.EMPTY_DIFF_SHA256);
     assert.equal(noOpSealed.diffBytes.length, 0);
+    const renameRepo = join(temporary, "rename-repo");
+    const renameRunRoot = join(taskRoot, "cycles", "cycle-1", "revision-11", "publication-runs", "publish-rename");
+    mkdirSync(renameRepo);
+    mkdirSync(renameRunRoot, { recursive: true });
+    git(renameRepo, ["init", "-q"]);
+    git(renameRepo, ["config", "user.email", "self-test@example.invalid"]);
+    git(renameRepo, ["config", "user.name", "Self Test"]);
+    writeFileSync(join(renameRepo, "old.txt"), "rename me\n");
+    git(renameRepo, ["add", "."]);
+    git(renameRepo, ["commit", "-qm", "base"]);
+    const renameBase = git(renameRepo, ["rev-parse", "HEAD"]);
+    git(renameRepo, ["mv", "old.txt", "renamed.txt"]);
+    const renameSource = activatePublicationRun({ taskRoot, repo: renameRepo, publishBase: renameBase, publicationRunId: "publish-rename", owner: runtimeOwner });
+    openPublicationRun({
+      taskRoot,
+      cycleId: "cycle-1",
+      revision: 11,
+      publicationRunId: "publish-rename",
+      publicationRunRoot: renameRunRoot,
+      implementationGateIdentity: validGate.identity,
+      sourceContextIdentity: renameSource.identity,
+      publishBase: renameBase,
+      openedBy: runtimeOwner,
+    });
+    const renameSealed = await sealExpectedTree({
+      repo: renameRepo,
+      publishBase: renameBase,
+      publishedFiles: ["old.txt", "renamed.txt"],
+      taskRoot,
+      cycleId: "cycle-1",
+      revision: 11,
+      publicationRunId: "publish-rename",
+      publicationRunRoot: renameRunRoot,
+    });
+    assert.notEqual(renameSealed.validatedDiffSha256, gateConstants.EMPTY_DIFF_SHA256);
     const artifactPath = join(runRoot, "artifact.json");
     writeArtifactAtomically(artifactPath, publicationChecks);
     assert.deepEqual(JSON.parse(readFileSync(artifactPath, "utf8")), publicationChecks);

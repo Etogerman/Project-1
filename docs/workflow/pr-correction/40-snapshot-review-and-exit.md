@@ -139,3 +139,12 @@
 No-result выход обязан пройти доказательство отсутствия результата, Terminal
 outcome, Issue Closure, Spec Closure и cleanup. Materialized-выход возвращает
 работу в обычное закрытие stream. Возобновляемая пауза closure не запускает.
+
+Доказательство materialization формируется самим исполняемым контуром и
+привязывается к текущим cycle и source context. Capture дважды сверяет
+неизменность Git `HEAD`, дерева и полного `status --no-renames`, а также
+инвентаря JSON-артефактов cycle; подтверждённый успешный action-result считается
+materialized результатом. Изменённый или грязный Git-снимок, materialization
+evidence либо неоднозначный action-intent запрещают no-result closure. Снимок
+materialization и closure записываются одной атомарной transaction; caller не
+может подменить terminal evidence собственным hash.

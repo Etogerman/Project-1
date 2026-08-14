@@ -1286,8 +1286,8 @@ async function runShort(command, args, options) {
   monitorStopped = true;
   clearInterval(monitor);
   await monitorPromise;
-  if (result.cancelled) fail(`${basename(command)} preflight отменён пользователем`, "CLIENT_CANCELLED");
   if (mcpDetected) fail(`${basename(command)} preflight запустил запрещённый MCP-процесс`, "CLIENT_MCP_POLICY");
+  if (result.cancelled) fail(`${basename(command)} preflight отменён пользователем`, "CLIENT_CANCELLED");
   if (result.code !== 0 || result.error || result.timedOut || result.outputExceeded || result.identityMismatch || result.residualProcessDetected || !result.drainComplete) {
     fail(`${basename(command)} preflight завершился ошибкой`, "CLIENT_PREFLIGHT");
   }
@@ -1598,7 +1598,6 @@ async function buildSnapshot({ repo, base, head, taskRoot, cycleId, revision, ru
   const patch = await git(repo, ["diff", "--binary", "--full-index", "--no-ext-diff", base, head, "--"], commandBudget);
   writeFileSync(join(reviewRoot, "input", "changes.patch"), patch, { flag: "wx" });
   copyFileSync(join(revisionRoot, "tz.md"), join(reviewRoot, "input", "tz.md"));
-  copyFileSync(join(revisionRoot, "author-review.md"), join(reviewRoot, "input", "author-review.md"));
   copyFileSync(join(repo, PROMPT_PATH), join(reviewRoot, "input", "prompt.md"));
   return { runRoot, runOpen, capture, reviewRoot, results, current, baseTree, patch, revisionRoot };
 }
@@ -2509,7 +2508,14 @@ async function main(argv) {
   process.once("SIGINT", cancel);
   process.once("SIGTERM", cancel);
   try {
-    console.log(JSON.stringify(await executeReviewRun({ taskRoot, signal: controller.signal })));
+    const result = await executeReviewRun({ taskRoot, signal: controller.signal });
+    if (["blocked", "cancelled_by_user"].includes(result.status)) {
+      const { recordReviewTerminalTransaction } = await import("./workflow-cycle-store.mjs");
+      const terminal = await recordReviewTerminalTransaction({ taskRoot, expectedStatus: result.status });
+      console.log(JSON.stringify({ ...result, terminal }));
+    } else {
+      console.log(JSON.stringify(result));
+    }
   } finally {
     process.removeListener("SIGINT", cancel);
     process.removeListener("SIGTERM", cancel);
@@ -2517,11 +2523,11 @@ async function main(argv) {
 }
 
 if (resolve(process.argv[1] ?? "") === SELF_PATH) {
-  try {
-    if (process.argv[2] === "--process-supervisor") await superviseProcess(process.argv.slice(3));
-    else await main(process.argv.slice(2));
-  } catch (error) {
+  const operation = process.argv[2] === "--process-supervisor"
+    ? superviseProcess(process.argv.slice(3))
+    : main(process.argv.slice(2));
+  operation.catch((error) => {
     console.error(`Error: workflow-spec-review [${error?.code ?? "UNEXPECTED"}]: ${error instanceof Error ? error.message : "неизвестная ошибка"}`);
     process.exitCode = 1;
-  }
+  });
 }
