@@ -1,4 +1,4 @@
 interface:
-  display_name: "AB Connector Skill Authoring"
-  short_description: "Create AB Connector project skills"
-  default_prompt: "Use $ab-connector-skill-authoring to design a focused AB Connector repo skill."
+  display_name: "Создание навыков AB Connector"
+  short_description: "Создаёт навыки проекта AB Connector"
+  default_prompt: "Используй $ab-connector-skill-authoring, чтобы спроектировать узкий навык репозитория AB Connector."

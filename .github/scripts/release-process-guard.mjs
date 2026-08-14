@@ -18,6 +18,10 @@ const PROCESS_ONLY_FILE_PATTERNS = [
   /^\.github\/scripts\/copilot-feasibility-spike\.mjs$/,
   /^\.github\/workflows\/copilot-feasibility-spike\.ya?ml$/,
   /^\.github\/scripts\/copilot-merge-readiness\.mjs$/,
+  /^\.github\/scripts\/workflow-docs-check\.mjs$/,
+  /^\.github\/scripts\/workflow-state-policy\.mjs$/,
+  /^\.github\/scripts\/workflow-cycle-store\.mjs$/,
+  /^\.github\/scripts\/workflow-spec-review(?:-self-test|-gates|-gates-self-test)?\.mjs$/,
   /^\.github\/workflows\/copilot-merge-readiness\.ya?ml$/,
   /^phpunit\.xml$/,
   /^scripts\/ci-run-phpunit-shard\.sh$/,
@@ -33,7 +37,7 @@ const LATIN_PATTERN = /[A-Za-z]/;
 const ENGLISH_PR_HEADING_PATTERN =
   /^\s{0,3}#{1,6}\s*(Summary|Overview|Description|Why|Validation|Testing|Tests|Checks|Delivery note|Implementation|Changes|Root cause|Impact)\s*$/gim;
 const ALLOWED_TECHNICAL_TERMS_PATTERN =
-  /\b(codex|Copilot|Copilot CLI|Copilot Requests|CLI|PAT|token|secret|workflow_dispatch|GITHUB_TOKEN|COPILOT_GITHUB_TOKEN|READY_TO_MERGE|BLOCKED|shadow|verdict|merge-readiness|PR|MCP|CI|UI|URL|API|JSON|YAML|TOML|PHP|SQL|HTTP|HTTPS|Docker|Laravel|Boost|Filament|Livewire|Bitrix24|AB Connector|Spec repo|Spec doc|Spec revision|Staging PR|Staging smoke|Staging Post-Deploy Smoke|rev-check|public smoke|admin smoke|dev-only|validated diff|clean-main-PR|workflow|runtime|main|staging|draft|ready|merge|commit|branch|pull request|release-process-guard|ab-readiness-check|copilot-feasibility-spike|copilot-merge-readiness|php-artisan-test)\b/gi;
+  /\b(codex|Copilot|Copilot CLI|Copilot Requests|CLI|PAT|token|secret|workflow_dispatch|GITHUB_TOKEN|COPILOT_GITHUB_TOKEN|READY_TO_MERGE|BLOCKED|shadow|verdict|merge-readiness|PR|MCP|CI|UI|URL|API|JSON|YAML|TOML|PHP|SQL|HTTP|HTTPS|Docker|Laravel|Boost|Filament|Livewire|Bitrix24|AB Connector|Spec repo|Spec doc|Spec revision|Staging PR|Staging smoke|Staging Post-Deploy Smoke|rev-check|public smoke|admin smoke|dev-only|validated diff|clean-main-PR|workflow|runtime|main|staging|draft|ready|merge|commit|branch|pull request|release-process-guard|ab-readiness-check|copilot-feasibility-spike|copilot-merge-readiness|workflow-docs-check|workflow-state-policy|workflow-cycle-store|workflow-spec-review|php-artisan-test)\b/gi;
 
 function isProcessOnlyFile(filename) {
   return PROCESS_ONLY_FILE_PATTERNS.some((pattern) => pattern.test(filename));
@@ -758,6 +762,10 @@ function runSelfTest() {
   assert.equal(isProcessOnlyFile(".github/scripts/copilot-feasibility-spike.mjs"), true);
   assert.equal(isProcessOnlyFile(".github/workflows/copilot-feasibility-spike.yml"), true);
   assert.equal(isProcessOnlyFile(".github/scripts/copilot-merge-readiness.mjs"), true);
+  assert.equal(isProcessOnlyFile(".github/scripts/workflow-spec-review.mjs"), true);
+  assert.equal(isProcessOnlyFile(".github/scripts/workflow-spec-review-self-test.mjs"), true);
+  assert.equal(isProcessOnlyFile(".github/scripts/workflow-spec-review-gates.mjs"), true);
+  assert.equal(isProcessOnlyFile(".github/scripts/workflow-spec-review-gates-self-test.mjs"), true);
   assert.equal(isProcessOnlyFile(".github/workflows/copilot-merge-readiness.yml"), true);
   assert.equal(isProcessOnlyFile("phpunit.xml"), true);
   assert.equal(isProcessOnlyFile("scripts/ci-run-phpunit-shard.sh"), true);

@@ -1,82 +1,79 @@
 ---
 name: ab-connector-skill-authoring
-description: Create or update AB Connector repo skills under .agents/skills. Use when the user asks to design, add, change, review, or decide whether to create a Codex skill for AB Connector workflows, project process, delivery checks, release gates, spec sync, local MVP handoff, or agent collaboration.
+description: Создавать и изменять навыки репозитория AB Connector в .agents/skills. Использовать, когда пользователь просит спроектировать, создать, добавить, изменить, провести ревью или решить, нужно ли создавать навык Codex для рабочих процессов AB Connector, процесса проекта, проверок доставки, контрольных точек релиза, синхронизации ТЗ, передачи локального MVP или взаимодействия агентов.
 ---
 
-# AB Connector Skill Authoring
+# Создание навыков AB Connector
 
-Use this skill to design focused repo-scoped skills for AB Connector. Keep the work aligned with `AGENTS.md` and `docs/task-delivery-workflow.md`.
+Используйте этот навык для проектирования узких навыков уровня репозитория AB Connector. Согласуйте работу с `AGENTS.md`, `docs/workflow/README.md`, модулем текущего состояния и оставшимися этапами в `docs/task-delivery-workflow.md`.
 
-## Workflow
+## Порядок работы
 
-1. Classify the request.
-   - If the user asks for analysis, a plan, review, or skill text only, work read-only.
-   - If the user asks to create or update skill files, treat it as a policy/docs-only stream unless the requested skill adds scripts that change runtime behavior.
-   - Do not edit files without explicit user command and a clear scope.
+1. Классифицируйте запрос.
+   - Если пользователь просит только анализ, план, ревью или текст навыка, работайте в режиме только для чтения.
+   - Если пользователь просит создать или изменить файлы навыка, считайте это потоком policy/docs-only, кроме случая, когда запрошенный навык добавляет скрипты, меняющие поведение runtime.
+   - Не изменяйте файлы без явной команды пользователя и чётких границ задачи.
 
-2. Decide whether a skill is the right surface.
-   - Use `AGENTS.md` for durable repo-wide rules that must apply to every task.
-   - Use a skill for repeatable workflows with triggers, steps, checks, or routing.
-   - Use docs when the content is reference material rather than an invocation workflow.
-   - Use MCP/connectors when the workflow needs live external systems.
-   - Use a plugin only when the workflow should be distributed as an installable bundle.
+2. Определите, подходит ли навык для этой задачи.
+   - Используйте `AGENTS.md` для долговечных правил всего репозитория, обязательных в каждой задаче.
+   - Используйте навык для повторяемого процесса с условиями срабатывания, шагами, проверками или маршрутизацией.
+   - Используйте документацию, когда материал является справочным, а не исполняемым процессом.
+   - Используйте MCP или коннекторы, когда процессу нужны действующие внешние системы.
+   - Используйте плагин, только когда процесс должен распространяться как устанавливаемый пакет.
 
-3. Define the skill contract before writing files.
-   - Skill name: lowercase hyphen-case, under 64 characters.
-   - Location: `.agents/skills/<skill-name>/SKILL.md`.
-   - Scope: one job per skill.
-   - Triggers: include all trigger conditions in the YAML `description`.
-   - Anti-scope: state what the skill must not do in the body.
-   - Inputs and outputs: name the expected source docs, checks, and final answer shape.
+3. До записи файлов определите контракт навыка.
+   - Имя навыка: строчные буквы и дефисы, не более 64 символов.
+   - Расположение: `.agents/skills/<skill-name>/SKILL.md`.
+   - Область: одна задача на навык.
+   - Условия срабатывания: перечислите все условия в YAML-поле `description`.
+   - Границы и запреты: укажите в тексте, чего навык не должен делать.
+   - Входы и результаты: назовите ожидаемые исходные документы, проверки и форму итогового ответа.
 
-4. Keep the skill short.
-   - Do not copy large sections from `AGENTS.md` or `docs/task-delivery-workflow.md`.
-   - Route to canonical docs instead: tell Codex which local files and sections to read.
-   - Prefer imperative steps.
-   - Add scripts only when deterministic repeated automation is needed.
-   - Add references only when the skill needs non-obvious detail that should not live in `SKILL.md`.
+4. Сохраняйте навык коротким.
+   - Не копируйте большие разделы из `AGENTS.md`, модулей состояний или `docs/task-delivery-workflow.md`.
+   - Направляйте к каноническим документам: указывайте Codex, какие локальные файлы и разделы прочитать.
+   - Для модульного процесса выполняйте маршрутизацию по стабильному ID состояния и загружайте только возвращённый документ состояния.
+   - Предпочитайте шаги в повелительной форме.
+   - Добавляйте скрипты только для необходимой повторяемой детерминированной автоматизации.
+   - Добавляйте справочные материалы, только когда навыку нужны неочевидные подробности, которым не место в `SKILL.md`.
 
-5. Preserve AB Connector delivery rules.
-   - New code/runtime streams are staging-first after local MVP and operator decision.
-   - Docs-only/policy-only skills may use the docs-only path from clean `origin/main`.
-   - Skills must not create shortcuts around Spec repo, Spec doc, Spec revision, PR checkpoints, CI, ready, merge, deploy, or smoke gates.
-   - Keep `merge`, close/reopen and terminal outcome user-performed.
-   - Preserve both routes and exact records from `docs/task-delivery-workflow.md`.
-     No-result requires no materialization plus user outcome; both routes require
-     Issue/Spec Closure before cleanup and explicit dormant tails.
-   - If a skill could touch Bitrix24, Open Lines, Telegram, MAX, queues, scheduler, env, config, or runtime, classify it as code/runtime unless proven otherwise.
+5. Сохраняйте правила доставки AB Connector.
+   - Новые потоки code/runtime после локального MVP и решения оператора идут сначала в staging.
+   - Навыки docs-only/policy-only могут использовать путь docs-only из чистого `origin/main`.
+   - Навыки не должны создавать обходы `Spec repo`, `Spec doc`, `Spec revision`, контрольных точек PR, CI, ready, merge, deploy или smoke.
+   - Действия `merge`, закрытие/повторное открытие и выбор конечного результата оставляйте пользователю.
+   - Сохраняйте оба маршрута и точные записи из `docs/task-delivery-workflow.md`. Для результата без материализации нужны доказательство отсутствия материализации и решение пользователя; на обоих маршрутах до очистки обязательны `Issue Closure`, применимый `Spec Closure` и явная фиксация неактивных хвостов.
+   - Если навык может затронуть Bitrix24, Open Lines, Telegram, MAX, очереди, планировщик, env, config или runtime, классифицируйте его как code/runtime, пока не доказано обратное.
 
-6. Write the files.
-   - Prefer initializing with the standard skill creator script when creating a new skill.
-   - Create only required files: usually `SKILL.md` and optionally `agents/openai.yaml`.
-   - Do not add README, changelog, quick reference, or installation docs inside the skill folder.
-   - Fix `agents/openai.yaml` so `interface.default_prompt` explicitly mentions `$<skill-name>`.
+6. Запишите файлы.
+   - При создании нового навыка предпочитайте начальную структуру из стандартного скрипта создания навыков.
+   - Создавайте только необходимые файлы: обычно `SKILL.md` и при необходимости `agents/openai.yaml`.
+   - Не добавляйте README, журнал изменений, краткий справочник или инструкции по установке внутрь каталога навыка.
+   - Настройте `agents/openai.yaml` так, чтобы `interface.default_prompt` явно содержал `$<skill-name>`.
 
-7. Validate.
-   - Run the skill validation script if available.
-   - Check the changed scope internally with git status or a diff summary.
-   - Run `git diff --check`.
-   - Search for leftover placeholder markers before handoff.
-   - Verify that the skill does not permit cleanup before `Issue Closure` and applicable `Spec Closure`.
-   - End with an author self-check: scope, triggers, anti-scope, docs-only status, and next step.
+7. Проверьте результат.
+   - Запустите скрипт проверки навыка, если он доступен.
+   - Проверьте изменённую область через git status или краткое описание diff.
+   - Запустите `git diff --check`.
+   - Перед передачей результата найдите оставшиеся маркеры-заполнители.
+   - Убедитесь, что навык не разрешает очистку до `Issue Closure` и применимого `Spec Closure`.
+   - Завершите авторской самопроверкой: область, условия срабатывания, запреты, статус docs-only и следующий шаг.
 
-## Output
+## Результат
 
-When proposing a skill without writing files, return:
-- skill name;
-- location;
-- trigger description;
-- full `SKILL.md` text;
-- whether `agents/openai.yaml` is useful now;
-- recommended next action.
+При предложении навыка без записи файлов верните:
+- имя навыка;
+- расположение;
+- описание условий срабатывания;
+- полный текст `SKILL.md`;
+- нужен ли сейчас `agents/openai.yaml`;
+- рекомендуемое следующее действие.
 
-When writing files, report:
-- concise user-facing status without file lists by default;
-- whether changes are local, committed, pushed, or in a PR;
-- whether a follow-up is needed;
-- validation results;
-- next docs-only process step.
+При записи файлов сообщите:
+- краткий понятный пользователю статус без списка файлов по умолчанию;
+- являются ли изменения локальными, закоммиченными, отправленными или включёнными в PR;
+- нужен ли следующий шаг;
+- результаты проверок;
+- следующий шаг процесса docs-only.
 
-Show detailed file lists, full diffs, or technical scope breakdowns only when
-the user asks, when there is risk or ambiguity, or when the user cannot choose
-the next step without those details.
+Показывайте подробные списки файлов, полный diff или технический разбор области только по запросу пользователя, при риске или неоднозначности либо когда без этих сведений пользователь не может выбрать следующий шаг.

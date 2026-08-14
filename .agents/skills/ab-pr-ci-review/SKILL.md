@@ -1,6 +1,6 @@
 ---
 name: ab-pr-ci-review
-description: Read-only inspect AB Connector PR/CI/review, independently review a delegated ready code/runtime PR before reading external AI findings, verify the same base/head/title/body snapshot, Russian title/body and guards, Spec fields, result/terminal Issue/Spec Closure, consolidated verdict, and next checkpoint without merging or bypassing gates.
+description: Read-only inspect AB Connector PR/CI/review, classify red CI, review, guard, and metadata signals into the canonical PR correction-cycle state, independently review a delegated ready code/runtime PR before reading external AI findings, verify the same base/head/title/body snapshot, Russian title/body and guards, Spec fields, result/terminal Issue/Spec Closure, consolidated verdict, and next checkpoint without merging or bypassing gates.
 ---
 
 # Проверка PR, CI и review
@@ -47,6 +47,8 @@ Merge в `staging`/`main` и close/reopen Issue выполняет только 
 - PR body;
 - самостоятельным review агента;
 - пакетом независимых проверок одного снимка PR;
+- квалификацией сигнала и определением состояния канонического цикла
+  исправления открытого PR;
 - следующим PR checkpoint или result/terminal Issue/Spec Closure.
 
 По явной команде `готово, проведи независимое ревью` или равнозначной skill
@@ -63,12 +65,16 @@ status, comments/threads или CI status недоступны или неодн
 Используй активные правила:
 
 1. `AGENTS.md`
-2. `docs/task-delivery-workflow.md`
-3. `docs/action-ownership.md`
-4. `.github/PULL_REQUEST_TEMPLATE.md`
-5. `.github/scripts/ab-readiness-check.mjs`
-6. `.github/scripts/release-process-guard.mjs`
-7. GitHub PR state и CI checks, если нужна live-проверка
+2. `docs/workflow/README.md`
+3. Для активного сигнала — только модуль, который возвращает
+   `node .github/scripts/workflow-docs-check.mjs --state <ID>`
+4. `docs/task-delivery-workflow.md` — только для delivery-этапа вне модульного
+   цикла исправления
+5. `docs/action-ownership.md`
+6. `.github/PULL_REQUEST_TEMPLATE.md`
+7. `.github/scripts/ab-readiness-check.mjs`
+8. `.github/scripts/release-process-guard.mjs`
+9. GitHub PR state и CI checks, если нужна live-проверка
 
 Если `docs/agent-routing.md` или `docs/agent-docs-lifecycle.md` существуют только
 как локальные черновики, скажи об этом и не используй их как активные правила.
@@ -128,6 +134,26 @@ review уже попал в контекст до этой фиксации, п�
 выполняется, верни собственные
 findings и статус ожидания без сводного вердикта. После завершения внешнего
 review отдельным шагом прочитай его полностью и сопоставь findings.
+
+## Маршрутизация сигнала исправления
+
+Красный или неоднозначный CI, замечание review, обсуждение, ошибка guard или
+метаданных и блокировка авторской проверки входят в `C01` модульного цикла.
+
+Не загружай общий playbook целиком. Выполни:
+
+```bash
+node .github/scripts/workflow-docs-check.mjs --state <ID>
+```
+
+Полностью прочитай только возвращённый документ и применяй точные переходы из
+него. Общая область цикла и формат handoff находятся в
+`docs/workflow/pr-correction/README.md`; допустимые доказательства — в
+`docs/workflow/shared/evidence-gateway.md`.
+
+Этот skill остаётся в режиме только чтения: он определяет состояние и даёт
+технический вердикт, но не реализует исправление, не меняет метаданные и не
+выполняет GitHub-контрольные действия.
 
 ## Обязательные правила
 
@@ -257,30 +283,21 @@ Staging smoke: https://github.com/.../actions/runs/...
 
 ## Следующий checkpoint
 
-Назови следующий допустимый checkpoint, но не выполняй его.
+Если активного сигнала нет, используй только базовые handoff-правила:
 
-Типовые варианты:
+- draft PR с завершённой авторской самопроверкой передаётся пользователю на
+  проверку CI;
+- зелёный CI того же снимка без blocker-ов ведёт к пользовательскому ready и
+  применимой делегации review;
+- code/runtime ready PR входит в `P02`; docs-only/process-only PR использует
+  выбранный пользователем контур;
+- завершённые проверки одного снимка ведут в `C14`; merge выполняет только
+  пользователь после `X01`.
 
-- draft PR создан -> пользователь или reviewer проверяет PR;
-- draft PR + CI не проверен -> пользователь проверяет CI;
-- draft PR + авторская самопроверка текущего опубликованного снимка отсутствует либо снимок изменился после неё -> агент выполняет или повторяет самопроверку до пользовательского `ready`;
-- code/runtime draft PR + CI зелёный для того же снимка + авторская самопроверка завершена + поля готовности валидны + blocker-ов нет -> пользователь сразу переводит PR в ready, явно делегирует агенту независимую проверку и передаёт PR стороннему ИИ-ревьюеру с требованием самостоятельно зафиксировать строку `Review snapshot`;
-- docs-only/process-only draft PR + CI зелёный для того же снимка + авторская самопроверка завершена + blocker-ов нет -> пользователь сразу переводит PR в ready по `docs-only path`; повторный вызов агента только ради зелёного CI не требуется;
-- docs-only/process-only PR ready + применимые проверки GitHub или выбранная проверка ещё выполняются -> ответственность за следующий переход остаётся у пользователя; после завершения пользователь пишет `готово, проверь PR`;
-- docs-only/process-only PR ready + пользователь написал `готово, проверь PR` -> ответственность переходит агенту; агент проверяет актуальное состояние текущего снимка, CI, выбранной проверки и всех комментариев и обсуждений и даёт технический вердикт;
-- draft PR + CI красный или неоднозначный -> пользователь возвращает задачу агенту, агент разбирает ошибку и предлагает исправление;
-- code/runtime PR ready + текущий снимок изменился после прошлой делегации либо его CI не подтверждён пользователем -> пользователь проверяет применимый CI и повторно делегирует обе проверки текущего снимка;
-- code/runtime PR ready + текущий снимок явно делегирован обеим сторонам + пакет не закрыт -> агент и сторонний ИИ-ревьюер параллельно и независимо проверяют один снимок PR;
-- обе незагрязнённые проверки текущего снимка выполнены + внешний review/comments/threads и актуальный зелёный CI доступны + сводный вердикт ещё не дан -> агент сопоставляет обе проверки и даёт сводный технический вердикт;
-- docs-only/process-only PR + пользователь не запросил полный пакет -> использовать `docs-only path` и выбранный пользователем review-контур;
-- вердикт агента `готово к merge` -> пользователь выполняет merge;
-- вердикт агента `нужны правки` -> рекомендовать исправление в текущем scope;
-- вердикт агента `нужен выбор пользователя` -> показать риск и запросить решение пользователя;
-- review status/comments/threads или CI status недоступны либо неоднозначны -> запросить недостающие данные или решение пользователя;
-- merge или terminal outcome выполнен пользователем -> проверить применимый
-  closure-route; cleanup после обоих checkpoint;
-- PR body невалиден -> рекомендовать отдельный шаг на исправление PR metadata,
-  не исправляя metadata из этого skill.
+Любой красный/неоднозначный CI, замечание, проблема guard или метаданных
+создаёт сигнал `C01`. После этого не выбирай маршрут по этому списку:
+выполни `node .github/scripts/workflow-docs-check.mjs --state <ID>` и следуй
+только возвращённому модулю.
 
 ## Результат
 
@@ -301,5 +318,8 @@ Staging smoke: https://github.com/.../actions/runs/...
 - Issue/Spec Closure status, если PR уже дошёл до этого checkpoint;
 - текущий delivery level;
 - blockers;
+- состояние канонического цикла исправления, если есть активный сигнал;
+- результат квалификации сигнала;
+- следующее состояние, его исполнителя и проверяемое условие перехода;
 - следующий checkpoint;
 - нужна ли отдельная команда пользователя.
